@@ -1,0 +1,51 @@
+# Adapted from agent-sandbox v1.0.8 examples/claude-code-sandbox/template.yaml:
+# gVisor runtime, pinned to the sandbox worker, PVC-backed workspace + ~/.claude.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: claude-agent
+spec:
+  podTemplate:
+    spec:
+      runtimeClassName: gvisor
+      nodeSelector:
+        agentdev/pool: sandboxes
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+      - name: agent
+        image: agentdev/claude-agent:spike
+        imagePullPolicy: Never          # loaded with `kind load`; use a registry for real clusters
+        env:
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef: {name: claude-agent-keys, key: ANTHROPIC_API_KEY, optional: true}
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits:   {cpu: "2", memory: 2Gi}
+        volumeMounts:
+        - {name: workspace,    mountPath: /workspace}
+        - {name: claude-state, mountPath: /home/node/.claude}
+  volumeClaimTemplatesPolicy: Overrides
+  volumeClaimTemplates:
+  - metadata: {name: workspace}
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources: {requests: {storage: 2Gi}}
+  - metadata: {name: claude-state}
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources: {requests: {storage: 512Mi}}
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: claude-agent-pool
+spec:
+  replicas: 1
+  sandboxTemplateRef:
+    name: claude-agent
