@@ -5,3 +5,4 @@ results.md
 .env.local
 .DS_Store
 .env
+.coder/

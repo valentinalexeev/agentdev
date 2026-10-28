@@ -57,7 +57,7 @@ record "Coder stop: 0 workspace pods, home PVC retained"
 t0=$(ms_now)
 cdr start "${WS}" --yes >/dev/null
 wait_for 300 "agent back after start" cdr ssh "${WS}" -- true
-got=$(cdr ssh "${WS}" -- cat ~/marker | tr -d '\r')
+got=$(cdr ssh "${WS}" -- sh -c 'cat ~/marker' | tr -d '\r')
 [[ "${got}" == "${MARK}" ]] || die "home dir lost across stop/start (got '${got}')"
 record "Coder start → agent ready in $(( ($(ms_now)-t0)/1000 ))s; home dir intact"
 
