@@ -37,6 +37,10 @@ spec:
         readinessProbe:
           exec: {command: [pg_isready, -U, coder]}
           periodSeconds: 5
+          # local-path on a laptop VM can stall for seconds during checkpoints;
+          # a 1s probe then pulls Postgres out of the Service and Coder errors.
+          timeoutSeconds: 5
+          failureThreshold: 6
         resources:
           requests: {cpu: 100m, memory: 256Mi}
         volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
