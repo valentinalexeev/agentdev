@@ -1,0 +1,24 @@
+# Coder Helm values for the spike.
+coder:
+  env:
+  - name: CODER_PG_CONNECTION_URL
+    valueFrom:
+      secretKeyRef: {name: coder-db, key: url}
+  # Workspace agents dial this from inside the cluster. The host reaches the
+  # same server at http://localhost:8080 via the NodePort mapping.
+  - name: CODER_ACCESS_URL
+    value: http://coder.coder.svc.cluster.local
+  - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+    value: "false"
+  - name: CODER_TELEMETRY_ENABLE
+    value: "false"
+  # Expose controller metrics so a later autoscaling/KEDA experiment has something to read.
+  - name: CODER_PROMETHEUS_ENABLE
+    value: "true"
+  service:
+    type: NodePort
+    httpNodePort: "30080"
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+  serviceAccount:
+    workspacePerms: true      # lets templates create pods/PVCs in the coder namespace

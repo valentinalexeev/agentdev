@@ -1,0 +1,52 @@
+# Throwaway in-cluster Postgres for Coder (spike only; use managed Postgres for real).
+# Official image instead of Bitnami, whose free images were moved to bitnamilegacy.
+apiVersion: v1
+kind: Secret
+metadata: {name: coder-db, namespace: coder}
+stringData:
+  password: coder-spike
+  url: postgres://coder:coder-spike@postgres.coder.svc.cluster.local:5432/coder?sslmode=disable
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: postgres-data, namespace: coder}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 2Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: postgres, namespace: coder}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17
+        env:
+        - {name: POSTGRES_USER, value: coder}
+        - {name: POSTGRES_DB, value: coder}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: coder-db, key: password}}
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+        ports: [{containerPort: 5432}]
+        readinessProbe:
+          exec: {command: [pg_isready, -U, coder]}
+          periodSeconds: 5
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+        volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: postgres-data}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres, namespace: coder}
+spec:
+  selector: {app: postgres}
+  ports: [{port: 5432}]
