@@ -1,0 +1,6 @@
+results.md
+*.log
+.terraform/
+*.tfstate*
+.env.local
+.DS_Store
