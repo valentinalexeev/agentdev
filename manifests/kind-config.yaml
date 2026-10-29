@@ -13,6 +13,10 @@ nodes:
   - containerPort: 30080
     hostPort: 8080
     protocol: TCP
+  # Gitea (MVP forge): NodePort 30300 -> http://localhost:3000 on the host
+  - containerPort: 30300
+    hostPort: 3000
+    protocol: TCP
 - role: worker
   labels:
     agentdev/pool: sandboxes
