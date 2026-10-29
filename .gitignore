@@ -6,3 +6,4 @@ results.md
 .DS_Store
 .env
 .coder/
+.secrets/
