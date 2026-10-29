@@ -7,3 +7,4 @@ results.md
 .env
 .coder/
 .secrets/
+__pycache__/
