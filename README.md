@@ -1,4 +1,58 @@
-# agentdev spike — kind + gVisor + agent-sandbox + Coder
+# agentdev
+
+## MVP: a team of Claude Code agents working a forge
+
+A kind cluster runs one long-lived Claude Code worker per agent. Each worker is logged into **its own
+forge account** (and optionally its own Claude account) and runs a loop:
+
+1. open issue **assigned to me** with no PR yet → branch `agent/<me>/issue-N`, run `claude -p`, push, open PR
+2. new **comments / reviews from others** on my open PRs → check out the branch, run `claude -p`, push, reply
+
+```mermaid
+flowchart LR
+  you((you)) -- issues, reviews --> gitea[Gitea<br/>owner/playground]
+  subgraph cluster [kind cluster]
+    gitea
+    subgraph gv [gVisor sandboxes]
+      alice[agent-alice-0<br/>claude CLI + loop]
+      bob[agent-bob-0<br/>claude CLI + loop]
+    end
+  end
+  alice -- poll, push, PR, reply --> gitea
+  bob -- poll, push, PR, reply --> gitea
+```
+
+```bash
+cd ~/Work/agentdev
+echo 'ANTHROPIC_API_KEY=...' > .env         # shared Claude credential (gitignored)
+./run.sh                                     # 00 prereqs, 01 cluster+gVisor, 05 Gitea, 06 agents
+open http://localhost:3000                   # login owner / SpikePassw0rd!
+# file an issue in owner/playground, assign it to alice or bob, then review the PR they open
+kubectl --context kind-agentdev -n coding-agents logs -f -l app=coding-agent --prefix
+./99-teardown.sh
+```
+
+**Agents and accounts.** `AGENTS="alice bob"` in `config.env`. Adding a name creates a Gitea user, gives it
+write access to the repo, mints a token (`.secrets/<name>.token`) and a StatefulSet `agent-<name>`.
+Claude credential per agent: put `ANTHROPIC_API_KEY=...` or `CLAUDE_CODE_OAUTH_TOKEN=...` (from
+`claude setup-token`, i.e. a Claude subscription login) in `.secrets/<name>.claude`; otherwise the shared
+key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs, so restarts don't redo work.
+
+| File | Role |
+|---|---|
+| `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
+| `manifests/agent.yaml.tmpl` | one agent = Secret + StatefulSet under gVisor |
+| `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
+| `06-agents.sh` | builds the worker image, deploys every agent |
+
+**MVP limits.** Polling (20 s), not webhooks. Gitea only; GitHub needs a second `api` layer in the loop
+(the rest is the same). Agents work one item at a time. No merge, no CI gate: you review and merge.
+
+---
+
+## Earlier spike: kind + gVisor + agent-sandbox + Coder
+
+Steps `02`–`04` (`./run.sh 02 03 04`) evaluated sandbox orchestration and interactive workspaces.
 
 A throwaway, dedicated kind cluster (`agentdev`) that answers one question:
 can a fully open-source Kubernetes stack give a personal agentic dev environment

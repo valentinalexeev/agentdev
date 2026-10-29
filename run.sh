@@ -5,8 +5,9 @@
 #   ANTHROPIC_API_KEY=... ./run.sh   also runs a real headless Claude Code turn in step 03
 set -euo pipefail
 cd "$(dirname "$0")"
+[[ -f .env ]] && { set -a; source .env; set +a; }
 : > results.md
-steps=("$@"); [[ ${#steps[@]} -eq 0 ]] && steps=(00 01 02 03 04)
+steps=("$@"); [[ ${#steps[@]} -eq 0 ]] && steps=(00 01 05 06)   # MVP. Spike layers: ./run.sh 02 03 04
 for s in "${steps[@]}"; do
   f=$(ls ${s}-*.sh 2>/dev/null | head -1) || true
   [[ -n "${f}" ]] || { echo "no step ${s}"; exit 1; }
