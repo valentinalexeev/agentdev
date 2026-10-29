@@ -1,0 +1,53 @@
+# One coding agent = one StatefulSet with one replica. Rendered per agent by 06-agents.sh (envsubst).
+# Its identity is the two secrets: a forge account token and a Claude credential.
+apiVersion: v1
+kind: Secret
+metadata: {name: agent-${AGENT}, namespace: ${AGENTS_NS}}
+stringData:
+  FORGE_TOKEN: "${FORGE_TOKEN}"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agent-${AGENT}
+  namespace: ${AGENTS_NS}
+  labels: {app: coding-agent, agent: "${AGENT}"}
+spec:
+  replicas: 1
+  serviceName: agent-${AGENT}
+  selector: {matchLabels: {agent: "${AGENT}"}}
+  template:
+    metadata: {labels: {app: coding-agent, agent: "${AGENT}"}}
+    spec:
+      runtimeClassName: gvisor
+      nodeSelector: {agentdev/pool: sandboxes}
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsNonRoot: true, fsGroup: 1000}
+      containers:
+      - name: agent
+        image: ${WORKER_IMAGE}
+        imagePullPolicy: Never
+        env:
+        - {name: FORGE_URL,    value: "http://gitea.forge.svc.cluster.local:3000"}
+        - {name: FORGE_USER,   value: "${AGENT}"}
+        - {name: REPO,         value: "${REPO}"}
+        - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
+        - name: FORGE_TOKEN
+          valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: FORGE_TOKEN}}
+        # Claude credential: per-agent secret if present, otherwise the shared one.
+        # Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, subscription login).
+        # Later envFrom entries win, so a per-agent secret overrides the shared one.
+        envFrom:
+        - secretRef: {name: claude-shared, optional: true}
+        - secretRef: {name: claude-${AGENT}, optional: true}
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits:   {cpu: "2", memory: 2Gi}
+        volumeMounts:
+        - {name: state,  mountPath: /state}
+        - {name: claude, mountPath: /home/node/.claude}
+  volumeClaimTemplates:
+  - metadata: {name: state}
+    spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}
+  - metadata: {name: claude}
+    spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 256Mi}}}
