@@ -66,6 +66,11 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - Commit and push as you go (semantic commit messages: `feat:`, `fix:`, `docs:`, `chore:`, `ci:` with optional scope).
 - Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `./run.sh` steps, e2e
   observations), what remains open, files shared with other open PRs.
+- **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
+  `gh api -X POST repos/valentinalexeev/agentdev/pulls/NN/requested_reviewers -f "reviewers[]=valentinalexeev"`
+  (`gh pr edit --add-reviewer` needs `read:org`, which the bot token lacks).
+- Stacked PRs are merged with the async endpoint `PUT .../pulls/NN/merge-async` (`sha` pinned,
+  `merge_action=direct_merge`), which merges the whole downstack, so every PR in the stack must be approved on its head.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
   result in the PR. Blocking findings are fixed first.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
