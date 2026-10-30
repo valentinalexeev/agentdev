@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unit test for the agent loop's job machinery (#20): slot limit, no duplicate runs per item, slot release,
 # wake on job completion. Runs the real start_job/running_jobs/is_running from agent-loop.sh with stub work.
-#   bash images/worker/test/jobs.test.sh
+#   bash images/worker/test/jobs.test.sh      (Linux, bash >= 4, flock: e.g. inside the worker image)
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
@@ -42,4 +42,6 @@ git -C "${WORK}" worktree add -q -b agent/issue-71 "${STATE}/work/issue-71" main
 export d; d=$(worktree agent/issue-71 main); check "worktree reuses a branch checked out at an old path" "[[ -n \"\${d}\" && -d \"\${d}\" ]] && [[ \$(git -C \"\${d}\" branch --show-current) == agent/issue-71 ]]"
 export d2; d2=$(worktree agent/issue-71 main); check "second call returns the same tree" "[[ \"\${d2}\" == \"\${d}\" ]]"
 export d3; d3=$(worktree agent/issue-72 main); check "a new branch gets its own tree" "[[ -d \"\${d3}\" && \"\${d3}\" != \"\${d}\" ]]"
+export d4; mkdir -p "${STATE}/work/agent_issue-73/junk"   # leftover dir git does not know
+d4=$(worktree agent/issue-73 main); check "a stale non-worktree dir is replaced" "[[ -n \"\${d4}\" && ! -e \"\${d4}/junk\" ]] && [[ \$(git -C \"\${d4}\" branch --show-current) == agent/issue-73 ]]"
 exit "${fail}"

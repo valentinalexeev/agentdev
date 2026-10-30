@@ -43,6 +43,8 @@ sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses
     fi
     git -C "${WORK}" remote set-url origin "$(clone_url)"
     git -C "${WORK}" fetch -q --prune origin
+    # the shared clone never holds a branch, so every branch is free for its own worktree (pre-#20 clones did)
+    git -C "${WORK}" checkout -q --detach 2>/dev/null || true
     git -C "${WORK}" config user.name  "${FORGE_USER}"
     git -C "${WORK}" config user.email "${FORGE_USER}@agents.local"
     # Build and test leftovers never belong in a PR, even in repos without a .gitignore. info/exclude is shared by
@@ -103,6 +105,10 @@ worktree() {
       | awk -v ref="refs/heads/${branch}" '/^worktree /{w=substr($0,10)} $0=="branch " ref{print w; exit}')
     if [[ -n "${existing}" && "${existing}" != "${dir}" ]]; then
       git -C "${WORK}" worktree move "${existing}" "${dir}" 2>/dev/null || dir="${existing}"
+    fi
+    # a leftover directory that git no longer knows as a worktree (crashed add, pruned) would fail forever
+    if [[ -d "${dir}" && -z "${existing}" ]] && ! git -C "${WORK}" worktree list --porcelain | grep -qxF "worktree ${dir}"; then
+      rm -rf "${dir}"
     fi
     if [[ -d "${dir}" ]]; then
       git -C "${dir}" checkout -q -B "${branch}" "${from}" && git -C "${dir}" reset -q --hard "${from}" && git -C "${dir}" clean -qfd
@@ -192,6 +198,7 @@ ${result}
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+    [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
     # anything already on the PR at this point is ours; start the feedback cursor after it
@@ -201,6 +208,9 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     comment "${n}" "🤖 I could not produce a change for this.
 
 ${result}"
+    # done for now: without this the dispatcher would restart it at once (hot loop, repeated comments).
+    # To retry, open a new issue (re-pickup of an issue is not supported yet).
+    touch "${STATE}/seen/issue-${n}.done"
   fi
 }
 

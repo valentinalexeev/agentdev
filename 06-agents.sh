@@ -54,7 +54,7 @@ for a in ${AGENTS}; do
     WAKE_TOKEN="$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" REGISTER_TOKEN="${REGISTER_TOKEN}" \
     WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
     IMAGE_PULL_POLICY=Never FORGE_KIND=gitea FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" MAX_CONCURRENT="${MAX_CONCURRENT}" \
-    envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
+    AGENT_MEMORY_LIMIT="$(( MAX_CONCURRENT + 1 ))Gi" envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
   # pick up a rebuilt image / changed secret
   k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
   ok "${a} deployed (${cred})"
