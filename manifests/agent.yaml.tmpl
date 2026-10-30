@@ -65,8 +65,9 @@ spec:
         ports: [{name: webhook, containerPort: 8080}]
         resources:
           requests: {cpu: 200m, memory: 512Mi}
-          # each parallel item runs its own claude CLI (~1Gi peak), plus the loop and webhook listener
-          limits:   {cpu: "2", memory: ${AGENT_MEMORY_LIMIT}}
+          # each parallel item runs its own claude CLI (~1Gi peak), plus the loop and webhook listener:
+          # 3Gi fits MAX_CONCURRENT=2; raise it by ~1Gi per extra slot
+          limits:   {cpu: "2", memory: 3Gi}
         volumeMounts:
         - {name: state,  mountPath: /state}
         - {name: claude, mountPath: /home/node/.claude}
