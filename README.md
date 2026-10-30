@@ -44,9 +44,16 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | `manifests/agent.yaml.tmpl` | one agent = Secret + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
 | `06-agents.sh` | builds the worker image, deploys every agent |
+| `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
+
+**Connect another repo (#31).** Copy `examples/project.yaml`, set `forge.repo` to an existing repo and list the
+agents, then run `scripts/bootstrap-project.sh my-project.yaml`. It creates the agent accounts and branch
+protection, adds labels, proposes the process files (`AGENTS.md`, issue and PR templates) **in a PR** for you to
+merge, deploys the agents and waits until each one posts a readiness report (forge, tracker, Claude) on an
+"agentdev: project connected" issue. Safe to re-run. v1: Gitea and forge issues only.
 
 **MVP limits.** Polling (20 s), not webhooks. Gitea only; GitHub needs a second `api` layer in the loop
-(the rest is the same). Agents work one item at a time. No merge, no CI gate: you review and merge.
+(the rest is the same). No merge, no CI gate: you review and merge.
 
 ---
 

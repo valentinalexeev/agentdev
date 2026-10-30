@@ -1,0 +1,8 @@
+[
+  {"name": "agent",          "color": "8a63d2", "description": "Created or handled by an agentdev agent"},
+  {"name": "in-progress",    "color": "fbca04", "description": "An agent is working on it"},
+  {"name": "needs-decision", "color": "d93f0b", "description": "Waits for an owner decision (question in a comment)"},
+  {"name": "blocked",        "color": "b60205", "description": "Blocked by another issue or external factor"},
+  {"name": "bug",            "color": "d73a4a", "description": "Something isn't working"},
+  {"name": "enhancement",    "color": "a2eeef", "description": "New feature or request"}
+]

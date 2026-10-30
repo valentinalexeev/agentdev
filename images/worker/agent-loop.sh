@@ -302,6 +302,30 @@ if [[ -n "${ROUTER_URL:-}" ]]; then
 fi
 log "starting: repo=${REPO} forge=${FORGE_URL} poll=${POLL_SECONDS}s webhooks=$([[ -n "${ROUTER_URL:-}" ]] && echo "via ${ROUTER_URL}" || echo off) claude=$(claude --version 2>/dev/null)"
 api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
+
+# Readiness report (#31): with READY_ISSUE set (by scripts/bootstrap-project.sh), check every service this agent
+# needs once and post the result on that issue. Reported once per issue (state on the PVC), not on every restart.
+ready_check() {
+  local issue=$1 marker="${STATE}/seen/ready-${1}" lines=() ok=1 perm claude_out
+  [[ -e "${marker}" ]] && return
+  perm=$(api GET "/repos/${REPO}" | jq -r '.permissions.push // false' 2>/dev/null)
+  if [[ "${perm}" == true ]]; then lines+=("- ✅ forge: ${FORGE_URL}, push access to ${REPO}")
+  else lines+=("- ❌ forge: no push access to ${REPO}"); ok=0; fi
+  if api GET "/repos/${REPO}/issues?state=open&type=issues&limit=1" >/dev/null; then lines+=("- ✅ tracker: issues of ${REPO}")
+  else lines+=("- ❌ tracker: cannot list issues of ${REPO}"); ok=0; fi
+  if claude_out=$(cd /tmp && timeout 120 claude -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
+    lines+=("- ✅ claude: $(claude --version 2>/dev/null)")
+  else lines+=("- ❌ claude: ${claude_out:0:200}"); ok=0; fi
+  if [[ -n "${ROUTER_URL:-}" ]]; then lines+=("- ✅ webhooks: via ${ROUTER_URL}"); else lines+=("- ➖ webhooks: off (polling every ${POLL_SECONDS}s)"); fi
+  lines+=("- ➖ mcp: not configured for this agent yet (#14)")
+  local head="🤖 agent \`${FORGE_USER}\`: **ready**"; (( ok )) || head="🤖 agent \`${FORGE_USER}\`: **not ready**"
+  comment "${issue}" "${head}
+
+$(printf '%s\n' "${lines[@]}")
+max_concurrent=${MAX_CONCURRENT}" && (( ok )) && touch "${marker}"
+  log "readiness reported on #${issue}: $( (( ok )) && echo ready || echo NOT ready)"
+}
+[[ -n "${READY_ISSUE:-}" ]] && ready_check "${READY_ISSUE}"
 while true; do
   handle_issues
   handle_feedback
