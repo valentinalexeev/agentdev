@@ -49,8 +49,24 @@ So project separation is enforced by the gateway, not just by what the agent's c
 - **Per-user OAuth end to end.** The API has the pieces (`/oauth/authorize/{gateway}`, callback, Dynamic
   Client Registration, per-gateway status), but it needs a real OAuth-protected MCP server and a browser
   login. Verify with the first real OAuth MCP (e.g. a GitHub or Google Workspace MCP) before relying on it.
-- **SSO for ContextForge itself** via authentik (OIDC is supported per its docs; wire it up with #12/#17).
+- **SSO for ContextForge itself** via authentik: not run in the spike (needs authentik, #12 phase 1). Plan below.
 - Behaviour under load, upgrades between versions, multi-replica (needs Redis).
+
+## SSO with authentik (plan, owner question on PR #24)
+
+ContextForge `v1.1.0` has a generic OIDC provider (`SSO_GENERIC_*`: issuer, client id/secret, authorization,
+token, userinfo and JWKS URLs, scope), group-to-role mapping (`SSO_GENERIC_GROUPS_CLAIM`,
+`SSO_GENERIC_ADMIN_GROUPS`, `SSO_GENERIC_ROLE_MAPPINGS`, synced on login) and user provisioning controls
+(`SSO_AUTO_CREATE_USERS`, `SSO_TRUSTED_DOMAINS`, `SSO_REQUIRE_ADMIN_APPROVAL`). authentik is a standard OIDC
+provider, so:
+
+- one authentik per instance, one OIDC application per component (agentdev UI/API, ContextForge admin);
+- the authentik group `agentdev-owners` maps to ContextForge admin; others get no admin access;
+- agents never use SSO: they keep API tokens scoped to their project's virtual server, minted by agentdev's API;
+- the local ContextForge admin remains as break-glass only (`SSO_PRESERVE_ADMIN_AUTH=true`).
+
+Verify when authentik is deployed in #12 phase 1: log in to the ContextForge admin through authentik as a
+member of `agentdev-owners` (admin) and as a non-member (no admin).
 
 ## Consequences and caveats
 
