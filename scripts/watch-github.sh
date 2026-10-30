@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Session monitor for valentinalexeev/agentdev (CLAUDE.md §0, §3: queue = assignee, merge = owner Approve).
-# Polls every POLL seconds and prints one line per NEW event; emits a JCODE_CHECKPOINT so the agent wakes.
-# Watches: owner reviews on open PRs, owner comments on issues/PRs, issues (un)assigned to the bot,
+# Session monitor for the AI agent working on this repo (CLAUDE.md §0, §3: queue = assignee, merge = owner Approve).
+# Polls every WATCH_POLL_SECONDS and prints one line per NEW event; emits a JCODE_CHECKPOINT so the agent wakes.
+# Watches: owner reviews on open PRs, owner comments on issues/PRs, issue assignments,
 # PR open/close/merge, CI runs, bot token expiry, and the local coding-agent pods.
-set -uo pipefail
+# Settings come from config.env (GITHUB_REPO, GITHUB_OWNER, GITHUB_BOT_ENV, CLUSTER_NAME, AGENTS_NS, ...);
+# override any of them per run, e.g. GITHUB_REPO=me/other ./scripts/watch-github.sh
+source "$(dirname "$0")/../lib.sh"
+set +e   # a failed poll must not stop the monitor
 # shellcheck disable=SC1090
-source ~/.config/github-bot/env.sh
-R=valentinalexeev/agentdev
-OWNER=valentinalexeev
-POLL=${POLL:-60}
-SEEN=${SEEN:-${JCODE_SCRATCH_DIR:-$HOME/.jcode/scratch}/gh-watch/seen}
+source "${GITHUB_BOT_ENV}" || die "bot environment not found: ${GITHUB_BOT_ENV}"
+R="${GITHUB_REPO}"
+OWNER="${GITHUB_OWNER}"
+POLL="${WATCH_POLL_SECONDS}"
+SEEN=${SEEN:-${JCODE_SCRATCH_DIR:-$HOME/.jcode/scratch}/gh-watch/${R//\//_}.seen}
 mkdir -p "$(dirname "$SEEN")"; touch "$SEEN"
 
 events() {
@@ -34,7 +37,7 @@ events() {
   gh api "repos/$R/actions/runs?per_page=10" -q '.workflow_runs[] | select(.status=="completed") |
     "ci|\(.id)|CI \(.name) \(.conclusion) on \(.head_branch) \(.head_sha[:7])"' 2>/dev/null
   # local agents (pods not Running/Ready show up as a new event)
-  kubectl --context kind-agentdev --request-timeout=10s -n coding-agents get pods -l app=coding-agent --no-headers 2>/dev/null |
+  k -n "${AGENTS_NS}" --request-timeout=10s get pods -l app=coding-agent --no-headers 2>/dev/null |
     awk '{print "pod|"$1"-"$2"-"$3"-"$4"|agent pod "$1" "$2" "$3" restarts="$4}'
 }
 
