@@ -8,6 +8,24 @@ stringData:
   FORGE_SECRETS: "${FORGE_SECRETS}"   # e.g. gitea=<secret> or github=<secret>, comma-separated
   REGISTER_TOKEN: "${REGISTER_TOKEN}"
 ---
+# Scale to zero (#35): the router may read agent StatefulSets and change their replica count, nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: webhook-router-scaler, namespace: ${AGENTS_NS}}
+rules:
+- {apiGroups: [apps], resources: [statefulsets], verbs: [get, list]}
+- {apiGroups: [apps], resources: [statefulsets/scale], verbs: [get, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: webhook-router-scaler, namespace: ${AGENTS_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: webhook-router-scaler}
+subjects: [{kind: ServiceAccount, name: webhook-router, namespace: ${AGENTS_NS}}]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}}
@@ -18,13 +36,15 @@ spec:
     metadata:
       labels: {app: webhook-router}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: webhook-router
+      automountServiceAccountToken: true   # scaling agent StatefulSets (#35), Role above
       securityContext: {runAsUser: 1000, runAsNonRoot: true}
       containers:
       - name: router
         image: ${ROUTER_IMAGE}               # ghcr.io/valentinalexeev/agentdev-router:<tag> (#28)
         imagePullPolicy: ${IMAGE_PULL_POLICY}
         envFrom: [{secretRef: {name: webhook-router}}]
+        env: [{name: K8S_NAMESPACE, value: "${AGENTS_NS}"}]
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         resources:
