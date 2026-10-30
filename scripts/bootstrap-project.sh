@@ -31,6 +31,7 @@ tracker=$(y .tracker);           [[ "${tracker:-forge-issues}" == forge-issues ]
 pack=$(y .process);              pack=${pack:-default}
 pack_dir="${SPIKE_DIR}/process/${pack}"; [[ -d "${pack_dir}" ]] || die "no process pack ${pack} in process/"
 AGENTS=$(yq -r '.agents[].name' "${spec}" | xargs); [[ -n "${AGENTS}" ]] || die "spec: at least one agent is required"
+for a in ${AGENTS}; do [[ "${a}" =~ ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$ ]] || die "spec: agent name '${a}' must be lowercase letters, digits and dashes (used in Kubernetes names)"; done
 MAX_CONCURRENT=$(yq -r '.max_concurrent // 2' "${spec}")
 export REPO FORGE_ADMIN_USER AGENTS MAX_CONCURRENT
 log "Project ${project}: ${REPO} on ${FORGE_HOST_URL}, agents: ${AGENTS}, process pack: ${pack}"
@@ -46,21 +47,28 @@ for a in ${AGENTS}; do
   forge_agent_account "${a}" "${REPO}" "${SPIKE_DIR}/.secrets/${a}.token" || die "no token for ${a}"
   ok "${a}: collaborator, token in .secrets/${a}.token"
 done
-forge_branch_protection "${REPO}" "${base}" "${FORGE_ADMIN_USER}"
-ok "${base}: only ${FORGE_ADMIN_USER}'s approval merges, stale approvals dismissed, no direct pushes"
+if ga GET "/repos/${REPO}/branch_protections/${base}" >/dev/null 2>&1 && [[ "${REPLACE_BRANCH_PROTECTION:-}" != 1 ]]; then
+  warn "${base} already has a branch protection rule: kept as is (REPLACE_BRANCH_PROTECTION=1 replaces it with agentdev's)"
+else
+  forge_branch_protection "${REPO}" "${base}" "${FORGE_ADMIN_USER}"
+  ok "${base}: only ${FORGE_ADMIN_USER}'s approval merges, stale approvals dismissed, no direct pushes"
+fi
 forge_labels "${REPO}" "${pack_dir}/labels.json"
 ok "labels from process pack ${pack}"
 
 log "2. Process pack (PR, not a push to ${base})"
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
-git clone -q "${FORGE_HOST_URL%%://*}://${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}@${FORGE_HOST_URL#*://}/${REPO}.git" "${tmp}/r"
+# credentials via env-provided git config, never in the URL (argv, .git/config, error output)
+auth=$(printf '%s:%s' "${FORGE_ADMIN_USER}" "${FORGE_ADMIN_PASSWORD}" | base64 | tr -d '\n')
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: Basic ${auth}"
+git clone -q "${FORGE_HOST_URL}/${REPO}.git" "${tmp}/r"
 added=()
 while IFS= read -r f; do
   rel=${f#"${pack_dir}/files/"}
   [[ -e "${tmp}/r/${rel}" ]] && continue
   mkdir -p "$(dirname "${tmp}/r/${rel}")"; cp "${f}" "${tmp}/r/${rel}"; added+=("${rel}")
 done < <(find "${pack_dir}/files" -type f | sort)
-open_pr=$(ga GET "/repos/${REPO}/pulls?state=open&limit=50" | jq -r '.[] | select(.head.ref=="agentdev/bootstrap") | .number' | head -1)
+open_pr=$(ga GET "/repos/${REPO}/pulls?state=open&limit=50&head=${REPO%%/*}:agentdev/bootstrap" | jq -r '.[] | select(.head.ref=="agentdev/bootstrap") | .number' | head -1)
 if (( ${#added[@]} == 0 )); then
   ok "repo already has every process file"
 elif [[ -n "${open_pr}" ]]; then
@@ -80,9 +88,10 @@ Review and merge like any PR. Edit \`AGENTS.md\` below the line for project-spec
     '{title:"chore: add agentdev process files", head:"agentdev/bootstrap", base:$b, body:$d}')" | jq -r .number)
   ok "PR #${pr} proposes: ${added[*]}"
 fi
+unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 auth   # not for later steps or child scripts
 
 log "3. Readiness issue"
-ready=$(ga GET "/repos/${REPO}/issues?state=open&type=issues&limit=50" | jq -r '.[] | select(.title=="agentdev: project connected") | .number' | head -1)
+ready=$(ga GET "/repos/${REPO}/issues?state=open&type=issues&limit=50&q=agentdev%3A%20project%20connected" | jq -r '.[] | select(.title=="agentdev: project connected") | .number' | head -1)
 if [[ -z "${ready}" ]]; then
   ready=$(ga POST "/repos/${REPO}/issues" "$(jq -n --arg a "${AGENTS}" '{title:"agentdev: project connected",
     body:("Each agent of this project posts a readiness report here after checking the forge, the tracker and Claude.\nAgents: " + $a + "\n\nClose this issue once all agents report ready.")}')" | jq -r .number)

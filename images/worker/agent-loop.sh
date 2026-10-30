@@ -306,8 +306,8 @@ api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
 # Readiness report (#31): with READY_ISSUE set (by scripts/bootstrap-project.sh), check every service this agent
 # needs once and post the result on that issue. Reported once per issue (state on the PVC), not on every restart.
 ready_check() {
-  local issue=$1 marker="${STATE}/seen/ready-${1}" lines=() ok=1 perm claude_out
-  [[ -e "${marker}" ]] && return
+  local issue=$1 marker="${STATE}/seen/ready-${1}" lines=() ok=1 perm claude_out body sum
+  [[ "$(cat "${marker}" 2>/dev/null)" == ready* ]] && return
   perm=$(api GET "/repos/${REPO}" | jq -r '.permissions.push // false' 2>/dev/null)
   if [[ "${perm}" == true ]]; then lines+=("- ✅ forge: ${FORGE_URL}, push access to ${REPO}")
   else lines+=("- ❌ forge: no push access to ${REPO}"); ok=0; fi
@@ -315,15 +315,26 @@ ready_check() {
   else lines+=("- ❌ tracker: cannot list issues of ${REPO}"); ok=0; fi
   if claude_out=$(cd /tmp && timeout 120 claude -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
     lines+=("- ✅ claude: $(claude --version 2>/dev/null)")
-  else lines+=("- ❌ claude: ${claude_out:0:200}"); ok=0; fi
+  else
+    log "readiness: claude check failed: ${claude_out}"   # full text only in the pod log, never on the issue
+    lines+=("- ❌ claude: the check call failed (see the agent's log)"); ok=0
+  fi
   if [[ -n "${ROUTER_URL:-}" ]]; then lines+=("- ✅ webhooks: via ${ROUTER_URL}"); else lines+=("- ➖ webhooks: off (polling every ${POLL_SECONDS}s)"); fi
   lines+=("- ➖ mcp: not configured for this agent yet (#14)")
   local head="🤖 agent \`${FORGE_USER}\`: **ready**"; (( ok )) || head="🤖 agent \`${FORGE_USER}\`: **not ready**"
-  comment "${issue}" "${head}
+  body="${head}
 
 $(printf '%s\n' "${lines[@]}")
-max_concurrent=${MAX_CONCURRENT}" && (( ok )) && touch "${marker}"
-  log "readiness reported on #${issue}: $( (( ok )) && echo ready || echo NOT ready)"
+max_concurrent=${MAX_CONCURRENT}"
+  # post only when the result changed: a crash loop or redeploy must not repeat the same "not ready"
+  sum="$( (( ok )) && echo ready || echo not-ready) $(md5sum <<<"${body}" | cut -c1-12)"
+  if [[ "$(cat "${marker}" 2>/dev/null)" == "${sum}" ]]; then log "readiness unchanged since last report on #${issue}"; return; fi
+  if comment "${issue}" "${body}"; then
+    echo "${sum}" > "${marker}"
+    log "readiness reported on #${issue}: $( (( ok )) && echo ready || echo NOT ready)"
+  else
+    log "could not post the readiness report on #${issue}"
+  fi
 }
 [[ -n "${READY_ISSUE:-}" ]] && ready_check "${READY_ISSUE}"
 while true; do
