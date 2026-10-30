@@ -8,13 +8,6 @@ stringData:
   FORGE_SECRETS: "${FORGE_SECRETS}"   # e.g. gitea=<secret> or github=<secret>, comma-separated
   REGISTER_TOKEN: "${REGISTER_TOKEN}"
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
-data:
-  router.js: |
-${ROUTER_JS}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}}
@@ -24,22 +17,19 @@ spec:
   template:
     metadata:
       labels: {app: webhook-router}
-      annotations: {agentdev/router-hash: "${ROUTER_HASH}"}   # restart when router.js changes
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsUser: 1000, runAsNonRoot: true}
       containers:
       - name: router
-        image: node:24-bookworm-slim
-        command: [node, /app/router.js]
+        image: ${ROUTER_IMAGE}               # ghcr.io/valentinalexeev/agentdev-router:<tag> (#28)
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
         envFrom: [{secretRef: {name: webhook-router}}]
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         resources:
           requests: {cpu: 20m, memory: 32Mi}
           limits:   {cpu: 500m, memory: 128Mi}
-        volumeMounts: [{name: app, mountPath: /app}]
-      volumes: [{name: app, configMap: {name: webhook-router}}]
 ---
 apiVersion: v1
 kind: Service

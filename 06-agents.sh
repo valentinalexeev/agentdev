@@ -7,9 +7,10 @@
 source "$(dirname "$0")/lib.sh"
 need envsubst
 
-log "Building and loading ${WORKER_IMAGE}"
+log "Building and loading ${WORKER_IMAGE} and ${ROUTER_IMAGE}"
 "${CONTAINER_ENGINE}" build -q -t "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker" >/dev/null
-kind load docker-image "${WORKER_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
+"${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
+kind load docker-image "${WORKER_IMAGE}" "${ROUTER_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
 ok "image loaded"
 
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -29,12 +30,11 @@ GITEA_WEBHOOK_SECRET=$(secret_file "${SPIKE_DIR}/.secrets/router-gitea.secret")
 REGISTER_TOKEN=$(secret_file "${SPIKE_DIR}/.secrets/router-register.token")
 
 log "Webhook router"
-ROUTER_JS=$(sed 's/^/    /' "${SPIKE_DIR}/images/router/router.js")
-ROUTER_HASH=$(shasum -a 256 "${SPIKE_DIR}/images/router/router.js" | cut -c1-12)
 AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="gitea=${GITEA_WEBHOOK_SECRET}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
-  ROUTER_JS="${ROUTER_JS}" ROUTER_HASH="${ROUTER_HASH}" \
-  envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_JS} ${ROUTER_HASH}' \
+  ROUTER_IMAGE="${ROUTER_IMAGE}" IMAGE_PULL_POLICY=Never \
+  envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_IMAGE} ${IMAGE_PULL_POLICY}' \
   < "${SPIKE_DIR}/manifests/router.yaml.tmpl" | k apply -f - >/dev/null
+k -n "${AGENTS_NS}" rollout restart deploy/webhook-router >/dev/null   # pick up a rebuilt local image
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
 ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
 

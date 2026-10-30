@@ -8,9 +8,11 @@ cluster_name: agentdev
 kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
 
 agents_ns: coding-agents
-image_registry: "{{ gcp_region }}-docker.pkg.dev/{{ gcp_project }}/agentdev"
-worker_image: "{{ image_registry }}/worker:{{ worker_image_tag }}"
-worker_image_tag: latest            # set to the pushed tag/digest in real runs
+# Published images (#28). Pin a release tag (vX.Y.Z) or a digest in real deployments.
+image_registry: ghcr.io/valentinalexeev
+image_tag: main
+worker_image: "{{ image_registry }}/agentdev-worker:{{ image_tag }}"
+router_image: "{{ image_registry }}/agentdev-router:{{ image_tag }}"
 
 # Forge the agents work on. GitHub becomes the default once #2 lands; until then a Gitea URL.
 forge_kind: github

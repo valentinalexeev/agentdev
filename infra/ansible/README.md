@@ -5,7 +5,7 @@ Installs the webhook router and the agents onto the cluster from `infra/terrafor
 
 ## Prerequisites
 - Terraform applied (`infra/terraform/README.md`), and `$(terraform -chdir=../terraform output -raw get_credentials)` run.
-- The worker image pushed to Artifact Registry and `worker_image_tag` set (CI does this later).
+- Images published on GHCR (#28): `ghcr.io/valentinalexeev/agentdev-worker` and `agentdev-router`; set `image_tag` (a release tag or `main`).
 - Secret values in Secret Manager (added by you or the management UI #12, never by Ansible):
 
 | Secret | Value |
@@ -23,7 +23,7 @@ Installs the webhook router and the agents onto the cluster from `infra/terrafor
 cd infra/ansible
 ansible-galaxy collection install -r requirements.yml
 ansible-playbook deploy.yml --check --diff     # dry run
-ansible-playbook deploy.yml -e worker_image_tag=<tag>
+ansible-playbook deploy.yml -e image_tag=<tag>
 ```
 Settings live in `group_vars/all.yml` (project, region/zone, agents, forge). Secret values are read at run
 time and every task that handles one uses `no_log`.

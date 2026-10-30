@@ -34,9 +34,8 @@ only the bootstrap. Requested in #11.
    `terraform apply plan.bin`.
 5. **Cluster access:** `$(terraform output -raw get_credentials)`; check `kubectl get nodes` (system pool up,
    agent pool at 0 nodes is expected).
-6. **Images:** build and push the worker image to `$(terraform output -raw image_registry)/worker:<tag>`
-   (`gcloud auth configure-docker <region>-docker.pkg.dev` first). The router runs on `node:24-bookworm-slim`
-   with its code in a ConfigMap, so it needs no image of its own.
+6. **Images:** use the published images `ghcr.io/valentinalexeev/agentdev-worker` and `agentdev-router` (#28),
+   pinned to a release tag. No local build or registry push is needed.
 7. **Secret values** (the owner, or you with the owner's values; never echo them): fill the Secret Manager
    entries listed in `infra/ansible/README.md` (`claude-shared`, `router-register-token`,
    `github-app-webhook-secret`, `agent-<name>-forge-token`).
@@ -44,7 +43,7 @@ only the bootstrap. Requested in #11.
    ```bash
    cd infra/ansible
    ansible-playbook deploy.yml --check --diff
-   ansible-playbook deploy.yml -e worker_image_tag=<tag>
+   ansible-playbook deploy.yml -e image_tag=<tag>
    ```
 9. **Verify:**
    - `kubectl -n coding-agents get pods` → `webhook-router` and `agent-<name>-0` Running.

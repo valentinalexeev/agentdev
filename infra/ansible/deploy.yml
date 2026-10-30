@@ -73,8 +73,8 @@
             AGENTS_NS: "{{ agents_ns }}"
             FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
             REGISTER_TOKEN: "{{ register_token }}"
-            ROUTER_JS: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | indent(4, first=true) }}"
-            ROUTER_HASH: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | hash('sha256') | truncate(12, end='') }}"
+            ROUTER_IMAGE: "{{ router_image }}"
+            IMAGE_PULL_POLICY: IfNotPresent
           replace: []
       no_log: true
 
