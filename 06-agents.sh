@@ -34,7 +34,10 @@ for a in ${AGENTS}; do
   else die "${a} has no Claude credential: add .secrets/${a}.claude or set ANTHROPIC_API_KEY"
   fi
   [[ -n "${secret:-}" ]] || die "${a}: no Claude secret selected"
-  AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" AGENTS_NS="${AGENTS_NS}" \
+  # one webhook secret per agent, kept across runs so the registered hook stays valid
+  wh="${SPIKE_DIR}/.secrets/${a}.webhook"
+  [[ -s "${wh}" ]] || { openssl rand -hex 32 > "${wh}"; chmod 600 "${wh}"; }
+  AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" WEBHOOK_SECRET="$(cat "${wh}")" AGENTS_NS="${AGENTS_NS}" \
     WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
     envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
   # pick up a rebuilt image / changed secret
@@ -43,6 +46,23 @@ for a in ${AGENTS}; do
 done
 for a in ${AGENTS}; do
   k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
+done
+
+log "Webhooks (${REPO} -> each agent)"
+ga() {  # ga METHOD PATH [body]  as the forge owner
+  curl -fsS -u "${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}" -X "$1" -H 'Content-Type: application/json' \
+    "${FORGE_HOST_URL}/api/v1$2" ${3:+-d "$3"}
+}
+for a in ${AGENTS}; do
+  url="http://agent-${a}.${AGENTS_NS}.svc.cluster.local:8080/"
+  # idempotent: drop this agent's hook (matched by URL), then create it with the current secret
+  for id in $(ga GET "/repos/${REPO}/hooks" | jq -r --arg u "${url}" '.[] | select(.config.url == $u) | .id'); do
+    ga DELETE "/repos/${REPO}/hooks/${id}" >/dev/null
+  done
+  ga POST "/repos/${REPO}/hooks" "$(jq -n --arg u "${url}" --arg s "$(cat "${SPIKE_DIR}/.secrets/${a}.webhook")" \
+    '{type:"gitea", active:true, events:["issues","issue_assign","issue_comment","pull_request","pull_request_assign","pull_request_comment","pull_request_review_approved","pull_request_review_rejected","pull_request_review_comment"],
+      config:{url:$u, content_type:"json", secret:$s}}')" >/dev/null
+  ok "${a}: webhook -> ${url}"
 done
 record "agents running under gVisor: ${AGENTS}"
 k -n "${AGENTS_NS}" get pods -l app=coding-agent

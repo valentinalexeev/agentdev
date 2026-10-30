@@ -10,6 +10,7 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && npm cache clean --force
 
 COPY agent-loop.sh /usr/local/bin/agent-loop
+COPY webhook-listener.js /usr/local/lib/agentdev/webhook-listener.js
 RUN chmod +x /usr/local/bin/agent-loop \
  && mkdir -p /state /home/node/.claude && chown -R 1000:1000 /state /home/node/.claude
 

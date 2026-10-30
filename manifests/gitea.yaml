@@ -32,6 +32,10 @@ spec:
         - {name: GITEA__server__DOMAIN, value: localhost}
         - {name: GITEA__service__DISABLE_REGISTRATION, value: "true"}
         - {name: GITEA__log__LEVEL, value: Warn}
+        # Webhooks to agent pods (#3). Gitea checks both the host name and the resolved IP, so the list holds
+        # the agents' Service names and the cluster Service range; nothing else private is reachable.
+        - {name: GITEA__webhook__ALLOWED_HOST_LIST, value: "*.${AGENTS_NS}.svc.cluster.local,${SERVICE_CIDR}"}
+        - {name: GITEA__webhook__DELIVER_TIMEOUT, value: "5"}
         ports: [{containerPort: 3000}]
         readinessProbe:
           httpGet: {path: /api/healthz, port: 3000}

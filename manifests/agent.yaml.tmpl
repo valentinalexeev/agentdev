@@ -5,6 +5,15 @@ kind: Secret
 metadata: {name: agent-${AGENT}, namespace: ${AGENTS_NS}}
 stringData:
   FORGE_TOKEN: "${FORGE_TOKEN}"
+  WEBHOOK_SECRET: "${WEBHOOK_SECRET}"
+---
+# Forge webhooks for this agent land here (#3); registered by 06-agents.sh.
+apiVersion: v1
+kind: Service
+metadata: {name: agent-${AGENT}, namespace: ${AGENTS_NS}}
+spec:
+  selector: {agent: "${AGENT}"}
+  ports: [{name: webhook, port: 8080, targetPort: webhook}]
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -33,6 +42,8 @@ spec:
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
+        - name: WEBHOOK_SECRET
+          valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: WEBHOOK_SECRET, optional: true}}
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: FORGE_TOKEN}}
         # Claude credential: ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, subscription login).
@@ -40,6 +51,7 @@ spec:
         # ANTHROPIC_API_KEY in the shared secret would override the agent's own OAuth token.
         envFrom:
         - secretRef: {name: ${CLAUDE_SECRET}}
+        ports: [{name: webhook, containerPort: 8080}]
         resources:
           requests: {cpu: 200m, memory: 512Mi}
           limits:   {cpu: "2", memory: 2Gi}
