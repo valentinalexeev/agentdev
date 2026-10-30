@@ -1,6 +1,6 @@
 # ADR 0001: MCP gateway per instance with ContextForge
 
-- **Status:** proposed (spike done; adopt on owner approval of the PR)
+- **Status:** accepted (owner approved PR #24, 2026-10-30)
 - **Issue:** #14 (projects and MCP), related #6 (resource access), #12 (management UI), #17 (multi-tenancy)
 - **Date:** 2026-10-30
 
