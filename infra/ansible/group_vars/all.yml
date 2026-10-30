@@ -1,0 +1,29 @@
+# Settings for installing agentdev onto the GKE cluster from infra/terraform (#11 phase 2).
+# Override per environment with -e or an extra vars file; never put secret values here.
+
+gcp_project: valabs-agentdev
+gcp_region: europe-west4
+gcp_zone: europe-west4-a
+cluster_name: agentdev
+kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
+
+agents_ns: coding-agents
+image_registry: "{{ gcp_region }}-docker.pkg.dev/{{ gcp_project }}/agentdev"
+worker_image: "{{ image_registry }}/worker:{{ worker_image_tag }}"
+worker_image_tag: latest            # set to the pushed tag/digest in real runs
+
+# Forge the agents work on. GitHub becomes the default once #2 lands; until then a Gitea URL.
+forge_kind: github
+forge_url: https://api.github.com
+reviewer: valentinalexeev
+poll_seconds: 60                    # webhooks wake agents; polling is the fallback
+
+# Agents: name, forge login, repos (comma-separated). Secrets per agent are read from Secret Manager:
+#   agent-<name>-forge-token, optional agent-<name>-claude (else the shared claude-shared secret).
+agents:
+  - {name: alice, user: alice, repos: valentinalexeev/agentdev}
+
+# Secret Manager names (containers created by Terraform; values added by the owner or the UI, #12)
+sm_claude_shared: claude-shared
+sm_router_register_token: router-register-token
+sm_forge_webhook_secret: github-app-webhook-secret

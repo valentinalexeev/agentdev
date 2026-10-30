@@ -31,21 +31,25 @@ spec:
     spec:
       runtimeClassName: gvisor
       nodeSelector: {agentdev/pool: sandboxes}
+      # GKE: the agent pool is tainted so only agents land there (kind has no taint; the toleration is harmless)
+      tolerations:
+      - {key: agentdev/pool, operator: Equal, value: sandboxes, effect: NoSchedule}
+      - {key: sandbox.gke.io/runtime, operator: Equal, value: gvisor, effect: NoSchedule}
       automountServiceAccountToken: false
       securityContext: {runAsUser: 1000, runAsNonRoot: true, fsGroup: 1000}
       containers:
       - name: agent
         image: ${WORKER_IMAGE}
-        imagePullPolicy: Never
+        imagePullPolicy: ${IMAGE_PULL_POLICY}   # Never on kind (kind load), IfNotPresent with a registry
         env:
-        - {name: FORGE_URL,    value: "http://gitea.forge.svc.cluster.local:3000"}
+        - {name: FORGE_URL,    value: "${FORGE_URL}"}
         - {name: FORGE_USER,   value: "${AGENT}"}
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
         - {name: ROUTER_URL,   value: "http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"}
         - {name: SELF_URL,     value: "http://agent-${AGENT}.${AGENTS_NS}.svc.cluster.local:8080/"}
-        - {name: FORGE_KIND,   value: "gitea"}
+        - {name: FORGE_KIND,   value: "${FORGE_KIND}"}
         - name: WAKE_TOKEN
           valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: WAKE_TOKEN, optional: true}}
         - name: REGISTER_TOKEN

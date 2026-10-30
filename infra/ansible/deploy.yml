@@ -1,0 +1,161 @@
+# Install agentdev onto the GKE cluster created by infra/terraform (#11 phase 2).
+#
+#   cd infra/ansible
+#   ansible-galaxy collection install -r requirements.yml
+#   $(terraform -chdir=../terraform output -raw get_credentials)     # kube context
+#   ansible-playbook deploy.yml --check --diff                         # dry run
+#   ansible-playbook deploy.yml
+#
+# Uses the same manifests as the kind setup (manifests/*.tmpl), so both environments stay in step.
+# Secrets come from Secret Manager at run time (gcloud as the caller) and are only ever passed to
+# the Kubernetes API: every task that touches one has no_log.
+- name: Deploy agentdev to GKE
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    k8s_common: &k8s
+      context: "{{ kube_context }}"
+  tasks:
+    - name: Check the kube context exists
+      ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
+      changed_when: false
+
+    - name: Read platform secrets from Secret Manager
+      ansible.builtin.command: >-
+        gcloud secrets versions access latest --secret {{ item }} --project {{ gcp_project }}
+      loop:
+        - "{{ sm_claude_shared }}"
+        - "{{ sm_router_register_token }}"
+        - "{{ sm_forge_webhook_secret }}"
+      register: platform_secrets
+      changed_when: false
+      no_log: true
+
+    - name: Keep them in facts (not logged)
+      ansible.builtin.set_fact:
+        claude_shared_env: "{{ platform_secrets.results[0].stdout }}"
+        register_token: "{{ platform_secrets.results[1].stdout }}"
+        forge_webhook_secret: "{{ platform_secrets.results[2].stdout }}"
+      no_log: true
+
+    - name: Namespace
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}"}}
+
+    - name: RuntimeClass gvisor (GKE Sandbox ships it as gvisor already; ensure it exists)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: present
+        definition: {apiVersion: node.k8s.io/v1, kind: RuntimeClass, metadata: {name: gvisor}, handler: gvisor}
+      failed_when: false   # GKE manages this object; an existing one is fine
+
+    # claude-shared holds KEY=VALUE lines (ANTHROPIC_API_KEY=... or CLAUDE_CODE_OAUTH_TOKEN=...)
+    - name: Shared Claude credential
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: claude-shared, namespace: "{{ agents_ns }}"}
+          stringData: "{{ dict(claude_shared_env.splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+      no_log: true
+
+    - name: Webhook router
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
+      vars:
+        vars_router:
+          src: "{{ repo_root }}/manifests/router.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
+            REGISTER_TOKEN: "{{ register_token }}"
+            ROUTER_JS: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | indent(4, first=true) }}"
+            ROUTER_HASH: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | hash('sha256') | truncate(12, end='') }}"
+          replace: []
+      no_log: true
+
+    - name: Per-agent wake tokens (generated once, kept in Secret Manager)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="agent-{{ item.name }}-wake-token"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+          echo created
+        fi
+      args: {executable: /bin/bash}
+      loop: "{{ agents }}"
+      register: wake_created
+      changed_when: "'created' in wake_created.stdout"
+
+    - name: Read per-agent secrets
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p={{ gcp_project }}
+        printf '%s\n' "$(gcloud secrets versions access latest --secret agent-{{ item.name }}-forge-token --project $p)"
+        printf '%s\n' "$(gcloud secrets versions access latest --secret agent-{{ item.name }}-wake-token --project $p)"
+        if gcloud secrets describe agent-{{ item.name }}-claude --project $p >/dev/null 2>&1; then
+          gcloud secrets versions access latest --secret agent-{{ item.name }}-claude --project $p
+        fi
+      args: {executable: /bin/bash}
+      loop: "{{ agents }}"
+      register: agent_secrets
+      changed_when: false
+      no_log: true
+
+    - name: "Agents (own Claude secret if present, else the shared one; exactly one, see #5)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_agent) | from_yaml_all | list }}"
+      vars:
+        lines: "{{ agent_secrets.results[idx].stdout_lines }}"
+        own_claude: "{{ lines[2:] | select('search', '=') | list }}"
+        vars_agent:
+          src: "{{ repo_root }}/manifests/agent.yaml.tmpl"
+          values:
+            AGENT: "{{ item.name }}"
+            AGENTS_NS: "{{ agents_ns }}"
+            FORGE_TOKEN: "{{ lines[0] }}"
+            WAKE_TOKEN: "{{ lines[1] }}"
+            REGISTER_TOKEN: "{{ register_token }}"
+            WORKER_IMAGE: "{{ worker_image }}"
+            IMAGE_PULL_POLICY: IfNotPresent
+            REPO: "{{ item.repos }}"
+            POLL_SECONDS: "{{ poll_seconds }}"
+            FORGE_ADMIN_USER: "{{ reviewer }}"
+            FORGE_KIND: "{{ forge_kind }}"
+            FORGE_URL: "{{ forge_url }}"
+            CLAUDE_SECRET: "{{ ('claude-' + item.name) if own_claude else 'claude-shared' }}"
+          replace: []
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      no_log: true
+
+    - name: Per-agent Claude secrets (only agents that have one)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: "claude-{{ item.name }}", namespace: "{{ agents_ns }}"}
+          stringData: "{{ dict(agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | map('split', '=', 1)) }}"
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      when: agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0
+      no_log: true
+
+    - name: Wait for the router and agents
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: Pod
+        namespace: "{{ agents_ns }}"
+        wait: true
+        wait_condition: {type: Ready, status: "True"}
+        wait_timeout: 600
+        label_selectors: ["{{ item }}"]
+      loop: ["app=webhook-router", "app=coding-agent"]
+      when: not ansible_check_mode
