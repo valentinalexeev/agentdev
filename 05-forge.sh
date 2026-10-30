@@ -4,7 +4,9 @@ source "$(dirname "$0")/lib.sh"
 need jq
 
 log "Gitea"
-k apply -f "${SPIKE_DIR}/manifests/gitea.yaml" >/dev/null
+# only these are substituted (webhook allow-list); other $ signs in the manifest stay literal
+AGENTS_NS="${AGENTS_NS}" SERVICE_CIDR="${SERVICE_CIDR}" envsubst '${AGENTS_NS} ${SERVICE_CIDR}' \
+  < "${SPIKE_DIR}/manifests/gitea.yaml" | k apply -f - >/dev/null
 k -n "${FORGE_NS}" rollout status deploy/gitea --timeout=300s >/dev/null
 wait_for 120 "Gitea answers on ${FORGE_HOST_URL}" curl -fsS "${FORGE_HOST_URL}/api/healthz"
 
