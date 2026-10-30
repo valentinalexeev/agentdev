@@ -8,3 +8,13 @@ results.md
 .coder/
 .secrets/
 __pycache__/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.bin
+*.tfvars
+!example.tfvars
+.terraform.lock.hcl.bak
