@@ -1,0 +1,47 @@
+# Two test MCP servers for the spike: project "alpha" and project "beta", same code, different TOOLSET.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: spike-mcp, namespace: ${NS}}
+data:
+  mcp-server.js: |
+${MCP_JS}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mcp-alpha, namespace: ${NS}}
+spec:
+  selector: {matchLabels: {app: mcp-alpha}}
+  template:
+    metadata: {labels: {app: mcp-alpha}}
+    spec:
+      containers:
+      - {name: mcp, image: node:24-bookworm-slim, imagePullPolicy: IfNotPresent, command: [node, /app/mcp-server.js],
+         env: [{name: TOOLSET, value: alpha}], ports: [{containerPort: 8080}],
+         readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 3},
+         volumeMounts: [{name: app, mountPath: /app}]}
+      volumes: [{name: app, configMap: {name: spike-mcp}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcp-alpha, namespace: ${NS}}
+spec: {selector: {app: mcp-alpha}, ports: [{port: 8080}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mcp-beta, namespace: ${NS}}
+spec:
+  selector: {matchLabels: {app: mcp-beta}}
+  template:
+    metadata: {labels: {app: mcp-beta}}
+    spec:
+      containers:
+      - {name: mcp, image: node:24-bookworm-slim, imagePullPolicy: IfNotPresent, command: [node, /app/mcp-server.js],
+         env: [{name: TOOLSET, value: beta}], ports: [{containerPort: 8080}],
+         readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 3},
+         volumeMounts: [{name: app, mountPath: /app}]}
+      volumes: [{name: app, configMap: {name: spike-mcp}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcp-beta, namespace: ${NS}}
+spec: {selector: {app: mcp-beta}, ports: [{port: 8080}]}
