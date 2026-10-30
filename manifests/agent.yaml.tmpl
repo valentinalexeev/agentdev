@@ -35,12 +35,11 @@ spec:
         - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: FORGE_TOKEN}}
-        # Claude credential: per-agent secret if present, otherwise the shared one.
-        # Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, subscription login).
-        # Later envFrom entries win, so a per-agent secret overrides the shared one.
+        # Claude credential: ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, subscription login).
+        # Exactly one secret per agent (#5): its own if it has one, else the shared one. Never both: an
+        # ANTHROPIC_API_KEY in the shared secret would override the agent's own OAuth token.
         envFrom:
-        - secretRef: {name: claude-shared, optional: true}
-        - secretRef: {name: claude-${AGENT}, optional: true}
+        - secretRef: {name: ${CLAUDE_SECRET}}
         resources:
           requests: {cpu: 200m, memory: 512Mi}
           limits:   {cpu: "2", memory: 2Gi}
