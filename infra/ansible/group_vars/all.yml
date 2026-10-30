@@ -15,6 +15,7 @@ router_image: "{{ image_registry }}/agentdev-router:{{ image_tag }}"
 forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
+max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
 
 # Secret Manager names (containers created by Terraform; values added by the owner or the UI, #12)
 sm_claude_shared: claude-shared

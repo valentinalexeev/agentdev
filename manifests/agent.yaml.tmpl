@@ -46,6 +46,7 @@ spec:
         - {name: FORGE_USER,   value: "${AGENT}"}
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
+        - {name: MAX_CONCURRENT, value: "${MAX_CONCURRENT}"}   # parallel items per agent (#20)
         - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
         - {name: ROUTER_URL,   value: "http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"}
         - {name: SELF_URL,     value: "http://agent-${AGENT}.${AGENTS_NS}.svc.cluster.local:8080/"}
@@ -64,7 +65,9 @@ spec:
         ports: [{name: webhook, containerPort: 8080}]
         resources:
           requests: {cpu: 200m, memory: 512Mi}
-          limits:   {cpu: "2", memory: 2Gi}
+          # each parallel item runs its own claude CLI (~1Gi peak), plus the loop and webhook listener:
+          # 3Gi fits MAX_CONCURRENT=2; raise it by ~1Gi per extra slot
+          limits:   {cpu: "2", memory: 3Gi}
         volumeMounts:
         - {name: state,  mountPath: /state}
         - {name: claude, mountPath: /home/node/.claude}

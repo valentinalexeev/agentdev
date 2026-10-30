@@ -137,6 +137,7 @@
             IMAGE_PULL_POLICY: IfNotPresent
             REPO: "{{ item.repos }}"
             POLL_SECONDS: "{{ poll_seconds }}"
+            MAX_CONCURRENT: "{{ item.max_concurrent | default(max_concurrent) }}"
             FORGE_ADMIN_USER: "{{ reviewer }}"
             FORGE_KIND: "{{ forge_kind }}"
             FORGE_URL: "{{ forge_url }}"

@@ -35,37 +35,111 @@ comment() { api POST "/repos/${REPO}/issues/$1/comments" "$(jq -n --arg b "$2" '
 
 clone_url() { local host=${FORGE_URL#*://}; echo "${FORGE_URL%%://*}://${FORGE_USER}:${FORGE_TOKEN}@${host}/${REPO}.git"; }
 
-sync_repo() {
-  if [[ ! -d "${WORK}/.git" ]]; then
-    git clone -q "$(clone_url)" "${WORK}" || return 1
-  fi
-  git -C "${WORK}" remote set-url origin "$(clone_url)"
-  git -C "${WORK}" fetch -q --prune origin
-  git -C "${WORK}" config user.name  "${FORGE_USER}"
-  git -C "${WORK}" config user.email "${FORGE_USER}@agents.local"
+sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses concurrent ref updates.
+  (
+    flock 9
+    if [[ ! -d "${WORK}/.git" ]]; then
+      git clone -q "$(clone_url)" "${WORK}" || exit 1
+    fi
+    git -C "${WORK}" remote set-url origin "$(clone_url)"
+    git -C "${WORK}" fetch -q --prune origin
+    # the shared clone never holds a branch, so every branch is free for its own worktree (pre-#20 clones did)
+    git -C "${WORK}" checkout -q --detach 2>/dev/null || true
+    git -C "${WORK}" config user.name  "${FORGE_USER}"
+    git -C "${WORK}" config user.email "${FORGE_USER}@agents.local"
+    # Build and test leftovers never belong in a PR, even in repos without a .gitignore. info/exclude is shared by
+    # all worktrees and never committed; rewritten (not appended) so it stays the same size.
+    printf '%s\n' '__pycache__/' '*.pyc' '.pytest_cache/' 'node_modules/' '.venv/' > "${WORK}/.git/info/exclude"
+  ) 9>"${STATE}/git.lock"
+}
+
+# ---------- concurrency (#20) ----------
+# Each item (an issue, or feedback on one PR) runs as a background job in its own git worktree, at most
+# MAX_CONCURRENT at a time. MAX_CONCURRENT=1 is the old one-at-a-time behaviour.
+MAX_CONCURRENT="${MAX_CONCURRENT:-2}"
+JOBS="${STATE}/jobs"; mkdir -p "${JOBS}"
+rm -f "${JOBS}"/*.lock   # a restarted pod has no running jobs
+
+running_jobs() { local n=0 f; for f in "${JOBS}"/*.lock; do [[ -e "$f" ]] && n=$((n+1)); done; echo "$n"; }
+is_running()   { [[ -e "${JOBS}/$1.lock" ]]; }
+# A job that fails is not retried before its backoff expires (60 s, doubling up to 30 min), so a persistent
+# error can't turn the wake-on-finish into a hot loop. A successful run clears the backoff.
+JOB_BACKOFF_MAX="${JOB_BACKOFF_MAX:-1800}"
+backing_off()  { local until=0; [[ -r "${JOBS}/$1.retry" ]] && read -r until _ < "${JOBS}/$1.retry"; (( $(date +%s) < until )); }
+
+# start_job <key> <function> [args...]: run in the background unless the key is already running, backing off
+# after a failure, or all slots are taken. Returns 0 if started, 1 if not (the dispatcher retries later).
+start_job() {
+  local key=$1; shift
+  is_running "${key}" && return 1
+  backing_off "${key}" && return 1
+  (( $(running_jobs) >= MAX_CONCURRENT )) && return 1
+  echo "$$" > "${JOBS}/${key}.lock"
+  (
+    trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"' EXIT
+    set -o pipefail
+    if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
+      rm -f "${JOBS}/${key}.retry"
+    else
+      local delay=60 _until
+      [[ -r "${JOBS}/${key}.retry" ]] && read -r _until delay < "${JOBS}/${key}.retry" && delay=$(( delay * 2 ))
+      (( delay > JOB_BACKOFF_MAX )) && delay=${JOB_BACKOFF_MAX}
+      echo "$(( $(date +%s) + delay )) ${delay}" > "${JOBS}/${key}.retry"
+      echo "[${key}] $(date -u +%H:%M:%S) [${FORGE_USER:-}] job failed; retry in ${delay}s"
+    fi
+  ) &
+  return 0
+}
+
+# worktree <branch> <start-point>: the private working tree for one branch, reset to start-point.
+# Keyed by BRANCH, not by job: git allows a branch in only one worktree, and the issue job and later feedback
+# jobs for the same PR work on the same branch (never at the same time: one job per PR/issue key).
+worktree() {
+  local branch=$1 from=$2 dir existing
+  dir="${STATE}/work/${branch//\//_}"
+  (
+    flock 9
+    git -C "${WORK}" worktree prune
+    # the branch may already be checked out elsewhere (older path layout, or a crashed job): reuse that tree
+    existing=$(git -C "${WORK}" worktree list --porcelain \
+      | awk -v ref="refs/heads/${branch}" '/^worktree /{w=substr($0,10)} $0=="branch " ref{print w; exit}')
+    if [[ -n "${existing}" && "${existing}" != "${dir}" ]]; then
+      git -C "${WORK}" worktree move "${existing}" "${dir}" 2>/dev/null || dir="${existing}"
+    fi
+    # a leftover directory that git no longer knows as a worktree (crashed add, pruned) would fail forever
+    if [[ -d "${dir}" && -z "${existing}" ]] && ! git -C "${WORK}" worktree list --porcelain | grep -qxF "worktree ${dir}"; then
+      rm -rf "${dir}"
+    fi
+    if [[ -d "${dir}" ]]; then
+      git -C "${dir}" checkout -q -B "${branch}" "${from}" && git -C "${dir}" reset -q --hard "${from}" && git -C "${dir}" clean -qfd
+    else
+      mkdir -p "${STATE}/work" && git -C "${WORK}" worktree add -q -B "${branch}" "${dir}" "${from}"
+    fi >/dev/null && echo "${dir}"
+  ) 9>"${STATE}/git.lock"
 }
 
 default_branch() { api GET "/repos/${REPO}" | jq -r .default_branch; }
 
-run_claude() {  # run_claude <prompt>  -> prints result text, returns claude's exit code
-  local out rc
-  out=$(cd "${WORK}" && claude -p "$1" --output-format json --max-turns "${MAX_TURNS}" \
-          --dangerously-skip-permissions 2>"${STATE}/claude.stderr"); rc=$?
+run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code
+  local dir=$1 out rc err
+  err="${dir}.claude.stderr"
+  out=$(cd "${dir}" && claude -p "$2" --output-format json --max-turns "${MAX_TURNS}" \
+          --dangerously-skip-permissions 2>"${err}"); rc=$?
   echo "${out}" | jq -r '.result // empty' 2>/dev/null || echo "${out}"
-  [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${STATE}/claude.stderr")"
+  [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}")"
   return ${rc}
 }
 
-commit_and_push() {  # commit_and_push <branch> <message>  -> 0 if something was pushed
-  local branch=$1 msg=$2
-  git -C "${WORK}" add -A
-  git -C "${WORK}" diff --cached --quiet || git -C "${WORK}" commit -q -m "${msg}"
+commit_and_push() {  # commit_and_push <dir> <branch> <message>  -> 0 if something was pushed
+  local dir=$1 branch=$2 msg=$3
+  git -C "${dir}" add -A
+  git -C "${dir}" diff --cached --quiet || git -C "${dir}" commit -q -m "${msg}"
   # claude may also have committed on its own; push whatever is ahead of the remote
-  if git -C "${WORK}" rev-parse -q --verify "origin/${branch}" >/dev/null &&
-     [[ -z $(git -C "${WORK}" log --oneline "origin/${branch}..HEAD") ]]; then
+  if git -C "${dir}" rev-parse -q --verify "origin/${branch}" >/dev/null &&
+     [[ -z $(git -C "${dir}" log --oneline "origin/${branch}..HEAD") ]]; then
     return 1
   fi
-  git -C "${WORK}" push -q origin "HEAD:${branch}"
+  git -C "${dir}" push -q origin "HEAD:${branch}"
 }
 
 # ---------- 1. new issues -> PRs ----------
@@ -79,20 +153,32 @@ handle_issues() {
   local base; base=$(default_branch)
   # one PR list for the whole pass: an issue whose branch already has a PR (open or closed) is not new work
   local branches; branches=$(api GET "/repos/${REPO}/pulls?state=all&limit=50" | jq -r '.[].head.ref') || return
-  echo "${todo}" | while read -r issue; do
-    local n title body branch
-    n=$(jq -r .number <<<"${issue}"); title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
+  local n title branch
+  jq -r '.[] | [.number, .title] | @tsv' <<<"[${todo//$'\n'/,}]" | while IFS=$'\t' read -r n title; do
     branch="agent/${FORGE_USER}/issue-${n}"
     if grep -qxF "${branch}" <<<"${branches}"; then
       touch "${STATE}/seen/issue-${n}.done"; continue
     fi
-    log "issue #${n}: ${title}"
-    comment "${n}" "🤖 \`${FORGE_USER}\` picked this up and is working on it."
-    sync_repo || { log "clone failed"; continue; }
-    git -C "${WORK}" checkout -q -B "${branch}" "origin/${base}"
-    git -C "${WORK}" clean -qfd
-    local result
-    result=$(run_claude "You are ${FORGE_USER}, an autonomous engineer working in this git repository.
+    is_running "issue-${n}" && continue
+    backing_off "issue-${n}" && continue   # failed recently; retried after its backoff
+    if start_job "issue-${n}" issue_job "${n}" "${base}"; then
+      log "issue #${n}: ${title} (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
+    else
+      log "issue #${n}: waiting for a free slot ($(running_jobs)/${MAX_CONCURRENT} running)"
+    fi
+  done
+}
+
+# one issue -> one PR, in its own worktree (runs as a background job)
+issue_job() {
+  local n=$1 base=$2 issue title body branch dir result
+  issue=$(api GET "/repos/${REPO}/issues/${n}") || return
+  title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
+  branch="agent/${FORGE_USER}/issue-${n}"
+  comment "${n}" "🤖 \`${FORGE_USER}\` picked this up and is working on it."
+  sync_repo || { log "clone failed"; return 1; }
+  dir=$(worktree "${branch}" "origin/${base}") || { log "worktree failed"; return 1; }
+  result=$(run_claude "${dir}" "You are ${FORGE_USER}, an autonomous engineer working in this git repository.
 Resolve issue #${n}.
 
 Title: ${title}
@@ -102,27 +188,30 @@ ${body}
 Make the code changes, run any tests that exist, and keep the change focused.
 Do not push and do not create branches; just leave the work in the working tree (committing is fine).
 Finish with a short summary of what you changed, written for a PR description.")
-    if commit_and_push "${branch}" "fix: ${title} (#${n})"; then
-      local pr
-      pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
-            --arg d "Closes #${n}
+  if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})"; then
+    local pr
+    pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
+          --arg d "Closes #${n}
 
 ${result}
 
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
-            '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
-      request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
-      log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
-      # anything already on the PR at this point is ours; start the feedback cursor after it
-      date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
-    else
-      log "no changes produced for issue #${n}"
-      comment "${n}" "🤖 I could not produce a change for this.
+          '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+    [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; return 1; }  # backoff, retry later
+    request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
+    log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
+    # anything already on the PR at this point is ours; start the feedback cursor after it
+    date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
+  else
+    log "no changes produced for issue #${n}"
+    comment "${n}" "🤖 I could not produce a change for this.
 
 ${result}"
-    fi
-  done
+    # done for now: without this the dispatcher would restart it at once (hot loop, repeated comments).
+    # To retry, open a new issue (re-pickup of an issue is not supported yet).
+    touch "${STATE}/seen/issue-${n}.done"
+  fi
 }
 
 # ---------- 2. feedback on my PRs ----------
@@ -149,38 +238,49 @@ handle_feedback() {
   # comparison uses shell builtins: under gVisor each extra process per PR costs ~1 s.
   jq -r --arg me "${FORGE_USER}" '.[] | select(.user.login == $me) | [.number, .head.ref, .updated_at, .created_at, .title] | @tsv' <<<"${prs}" |
   while IFS=$'\t' read -r pr branch upd created title; do
-    local since fb now last=""
+    local since fb last=""
     [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
     [[ "${last}" == "${upd}" ]] && continue
     # PRs opened before reviewer requests existed: request once (marker in state)
     [[ -e "${STATE}/seen/pr-${pr}.reviewer" ]] || { request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer"; }
     since="${created}"; [[ -r "${STATE}/seen/pr-${pr}" ]] && read -r since < "${STATE}/seen/pr-${pr}"
-    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    is_running "pr-${pr}" && continue   # its job will see this feedback on the next pass
+    backing_off "pr-${pr}" && continue   # failed recently; retried after its backoff
     fb=$(new_feedback "${pr}" "${since}")
     if [[ -z "${fb}" ]]; then echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue; fi
-    log "PR #${pr}: new feedback"
-    sync_repo || continue
-    git -C "${WORK}" checkout -q -B "${branch}" "origin/${branch}"
-    git -C "${WORK}" clean -qfd
-    local result
-    result=$(run_claude "You are ${FORGE_USER}. You opened PR #${pr} (\"${title}\") from this branch.
+    if start_job "pr-${pr}" feedback_job "${pr}" "${branch}" "${title}" "${since}"; then
+      log "PR #${pr}: new feedback (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
+    else
+      log "PR #${pr}: new feedback, waiting for a free slot"
+    fi
+  done
+}
+
+# address feedback on one PR, in that PR's own worktree (runs as a background job)
+feedback_job() {
+  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
+  [[ -z "${fb}" ]] && return
+  sync_repo || return 1
+  dir=$(worktree "${branch}" "origin/${branch}") || { log "worktree failed"; return 1; }
+  result=$(run_claude "${dir}" "You are ${FORGE_USER}. You opened PR #${pr} (\"${title}\") from this branch.
 Reviewers left this feedback:
 
 ${fb}
 
 Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
 Do not push. Finish with a short reply to the reviewers.")
-    if commit_and_push "${branch}" "fix: address review feedback on #${pr}"; then
-      comment "${pr}" "🤖 Pushed an update.
+  if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}"; then
+    comment "${pr}" "🤖 Pushed an update.
 
 ${result}"
-      request_review "${pr}"   # ask the approver to look again
-    else
-      comment "${pr}" "🤖 ${result}"
-    fi
-    echo "${now}" > "${STATE}/seen/pr-${pr}"
-    log "PR #${pr}: replied"
-  done
+    request_review "${pr}"   # ask the approver to look again
+  else
+    comment "${pr}" "🤖 ${result}"
+  fi
+  echo "${now}" > "${STATE}/seen/pr-${pr}"
+  log "PR #${pr}: replied"
 }
 
 # Sleep up to POLL_SECONDS, but return as soon as a webhook was delivered.
