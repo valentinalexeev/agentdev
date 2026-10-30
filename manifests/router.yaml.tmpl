@@ -5,7 +5,7 @@ apiVersion: v1
 kind: Secret
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
 stringData:
-  FORGE_SECRETS: "gitea=${GITEA_WEBHOOK_SECRET}"
+  FORGE_SECRETS: "${FORGE_SECRETS}"   # e.g. gitea=<secret> or github=<secret>, comma-separated
   REGISTER_TOKEN: "${REGISTER_TOKEN}"
 ---
 apiVersion: v1

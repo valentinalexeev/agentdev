@@ -1,0 +1,10 @@
+{#- Renders a manifests/*.tmpl file (envsubst-style ${VAR}) with `values`, then applies literal `replace` pairs.
+    The same templates feed the kind scripts (envsubst) and this playbook, so both environments stay in step. -#}
+{%- set out = namespace(text=lookup('ansible.builtin.file', src)) -%}
+{%- for k, v in values.items() -%}
+{%-   set out.text = out.text | replace('${' ~ k ~ '}', v | string) -%}
+{%- endfor -%}
+{%- for pair in replace -%}
+{%-   set out.text = out.text | replace(pair[0], pair[1]) -%}
+{%- endfor -%}
+{{ out.text }}

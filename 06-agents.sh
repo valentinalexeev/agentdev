@@ -31,9 +31,9 @@ REGISTER_TOKEN=$(secret_file "${SPIKE_DIR}/.secrets/router-register.token")
 log "Webhook router"
 ROUTER_JS=$(sed 's/^/    /' "${SPIKE_DIR}/images/router/router.js")
 ROUTER_HASH=$(shasum -a 256 "${SPIKE_DIR}/images/router/router.js" | cut -c1-12)
-AGENTS_NS="${AGENTS_NS}" GITEA_WEBHOOK_SECRET="${GITEA_WEBHOOK_SECRET}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
+AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="gitea=${GITEA_WEBHOOK_SECRET}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
   ROUTER_JS="${ROUTER_JS}" ROUTER_HASH="${ROUTER_HASH}" \
-  envsubst '${AGENTS_NS} ${GITEA_WEBHOOK_SECRET} ${REGISTER_TOKEN} ${ROUTER_JS} ${ROUTER_HASH}' \
+  envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_JS} ${ROUTER_HASH}' \
   < "${SPIKE_DIR}/manifests/router.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
 ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
@@ -53,6 +53,7 @@ for a in ${AGENTS}; do
   AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" AGENTS_NS="${AGENTS_NS}" \
     WAKE_TOKEN="$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" REGISTER_TOKEN="${REGISTER_TOKEN}" \
     WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
+    IMAGE_PULL_POLICY=Never FORGE_KIND=gitea FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
     envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
   # pick up a rebuilt image / changed secret
   k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
