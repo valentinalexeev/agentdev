@@ -1,0 +1,7 @@
+# Example instance vars. Keep the real file in your deployment repo and pass it with -e @instance.yml.
+gcp_project: my-agentdev
+gcp_zone: europe-west4-a
+image_tag: v0.1.0                 # a release of this repo (strict SemVer)
+reviewer: my-github-login         # whose Approve lets an agent PR merge
+agents:
+  - {name: alice, user: alice, repos: my-org/my-repo}

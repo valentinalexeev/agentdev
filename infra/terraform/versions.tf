@@ -4,11 +4,8 @@ terraform {
     google      = { source = "hashicorp/google", version = "~> 7.0" }
     google-beta = { source = "hashicorp/google-beta", version = "~> 7.0" }
   }
-  # State lives in a GCS bucket created by bootstrap/ (see README). Configure with:
-  #   terraform init -backend-config="bucket=<project_id>-tfstate"
-  backend "gcs" {
-    prefix = "agentdev"
-  }
+  # No backend here: this directory is a reusable module. The deployment repository's root module
+  # declares the backend (a GCS bucket created by bootstrap/), see examples/deployment/gcp-gke.
 }
 
 provider "google" {

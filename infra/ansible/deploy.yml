@@ -17,6 +17,17 @@
     k8s_common: &k8s
       context: "{{ kube_context }}"
   tasks:
+    - name: Instance values come from the deployment repo (see example.vars.yml)
+      ansible.builtin.assert:
+        that:
+          - gcp_project is defined and gcp_project | length > 0
+          - gcp_zone is defined and gcp_zone | length > 0
+          - image_tag is defined and image_tag | length > 0
+          - reviewer is defined and reviewer | length > 0
+          - agents is defined and agents | length > 0
+        fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
+        quiet: true
+
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
       changed_when: false
@@ -73,8 +84,8 @@
             AGENTS_NS: "{{ agents_ns }}"
             FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
             REGISTER_TOKEN: "{{ register_token }}"
-            ROUTER_JS: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | indent(4, first=true) }}"
-            ROUTER_HASH: "{{ lookup('ansible.builtin.file', repo_root + '/images/router/router.js') | hash('sha256') | truncate(12, end='') }}"
+            ROUTER_IMAGE: "{{ router_image }}"
+            IMAGE_PULL_POLICY: IfNotPresent
           replace: []
       no_log: true
 

@@ -1,19 +1,16 @@
 variable "project_id" {
-  description = "GCP project id (#11 default: valabs-agentdev)."
+  description = "GCP project id of this agentdev instance (created by bootstrap/)."
   type        = string
-  default     = "valabs-agentdev"
 }
 
 variable "region" {
-  description = "Region for the cluster, registry and network. Change per environment in a .tfvars file."
+  description = "Region for the cluster, registry and network, e.g. europe-west4."
   type        = string
-  default     = "europe-west4"
 }
 
 variable "zone" {
-  description = "Zone for the zonal GKE cluster (zonal keeps the control plane within the GKE free tier)."
+  description = "Zone for the zonal GKE cluster (zonal keeps the control plane within the GKE free tier), e.g. europe-west4-a."
   type        = string
-  default     = "europe-west4-a"
 }
 
 variable "cluster_name" {
@@ -63,7 +60,6 @@ variable "budget_alert_emails" {
 }
 
 variable "github_repository" {
-  description = "owner/repo allowed to use the automation service account via Workload Identity Federation (GitHub Actions)."
+  description = "owner/repo of the DEPLOYMENT repository whose GitHub Actions on main may use the automation service account (Workload Identity Federation)."
   type        = string
-  default     = "valentinalexeev/agentdev"
 }

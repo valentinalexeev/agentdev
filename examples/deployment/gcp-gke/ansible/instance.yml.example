@@ -1,0 +1,7 @@
+# Copy to instance.yml. No secrets here: values live in Secret Manager (see agentdev infra/ansible/README.md).
+gcp_project: my-agentdev
+gcp_zone: europe-west4-a
+image_tag: v0.1.0                 # same release as terraform/main.tf ref=
+reviewer: my-github-login
+agents:
+  - {name: alice, user: alice, repos: my-org/my-repo}

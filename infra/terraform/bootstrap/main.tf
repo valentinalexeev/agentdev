@@ -2,7 +2,7 @@
 # state bucket the main configuration uses. Local state on purpose: this runs once and changes rarely.
 #
 #   cd infra/terraform/bootstrap
-#   terraform init && terraform apply -var billing_account_id=XXXXXX-XXXXXX-XXXXXX
+#   terraform init && terraform apply -var-file=../../../path/to/bootstrap.tfvars   (see example.tfvars)
 terraform {
   required_version = ">= 1.9"
   required_providers {
@@ -11,8 +11,8 @@ terraform {
 }
 
 variable "project_id" {
-  type    = string
-  default = "valabs-agentdev"
+  description = "GCP project id to create for this agentdev instance."
+  type        = string
 }
 variable "project_name" {
   type    = string
@@ -27,8 +27,8 @@ variable "org_id" {
   default     = ""
 }
 variable "region" {
-  type    = string
-  default = "europe-west4"
+  description = "Region for the state bucket, e.g. europe-west4."
+  type        = string
 }
 
 provider "google" {
@@ -65,5 +65,5 @@ resource "google_storage_bucket" "tfstate" {
 }
 
 output "next" {
-  value = "cd .. && terraform init -backend-config=\"bucket=${google_storage_bucket.tfstate.name}\" && terraform apply -var billing_account_id=${var.billing_account_id}"
+  value = "terraform init -backend-config=\"bucket=${google_storage_bucket.tfstate.name}\" in the main configuration (or the deployment repo root module)"
 }

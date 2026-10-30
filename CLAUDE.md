@@ -98,4 +98,23 @@ what happened, when and how found, impact, immediate actions. Never paste secret
 
 ## Bootstrapping on GCP
 
-See `AGENTS.md` for the step-by-step guide to stand up an agentdev instance on GCP (#11).
+This repository is the **product**. An instance is deployed from a **separate deployment repository**
+(owner decision, #11), never from here. To set one up, copy `examples/deployment/gcp-gke/` into a new
+repository and follow its README and this repo's `AGENTS.md`. Do not hand-roll deployment code, and never put
+instance values (project ids, regions, people, agent lists) into this repository: modules take them as
+required inputs.
+
+## 7. Versioning and releases (strict SemVer)
+
+- Releases are git tags `vMAJOR.MINOR.PATCH` on `main`. Images are published with the same version (#28).
+  Deployments pin a tag; nothing deploys from a branch.
+- **What counts as the public interface:** Terraform module variables and outputs, Ansible instance vars,
+  manifest template variables, image entrypoints and environment variables, the router and listener HTTP API.
+- **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
+  alters behaviour). While the version is `0.x`, breaking changes bump **MINOR** instead.
+- **MINOR:** backwards-compatible features. **PATCH:** backwards-compatible fixes only.
+- Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
+  (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
+  **BREAKING** with the migration step.
+- Cutting a release: a PR that moves `Unreleased` to the new version with the date and bumps any pinned
+  examples; after the owner merges it, the owner (or the bot on explicit permission) pushes the tag.
