@@ -14,7 +14,8 @@ RUN chmod +x /usr/local/bin/agent-loop \
  && mkdir -p /state /home/node/.claude && chown -R 1000:1000 /state /home/node/.claude
 
 # The node image already has UID 1000 ("node"). /state and ~/.claude are PVC-backed.
-ENV HOME=/home/node IS_SANDBOX=1
+# CLAUDE_CONFIG_DIR keeps .claude.json on the PVC too (by default it sits in $HOME and is lost on restart).
+ENV HOME=/home/node IS_SANDBOX=1 CLAUDE_CONFIG_DIR=/home/node/.claude
 WORKDIR /state
 USER 1000
 CMD ["agent-loop"]
