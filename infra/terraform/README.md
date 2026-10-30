@@ -1,6 +1,8 @@
 # agentdev on GCP: Terraform (#11, phase 1)
 
-Creates the infrastructure for a self-hosted agentdev in project `valabs-agentdev` (defaults; everything is a variable).
+Reusable Terraform **module** for the infrastructure of one self-hosted agentdev instance. It has no instance
+values and no backend: a deployment repository (template: `examples/deployment/gcp-gke`) calls it by release
+tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_repository` (see `example.tfvars`).
 
 | What | Notes |
 |---|---|
@@ -16,28 +18,30 @@ Creates the infrastructure for a self-hosted agentdev in project `valabs-agentde
 
 ## First run (owner, once)
 
+From the deployment repository (template `examples/deployment/gcp-gke`):
+
 ```bash
 gcloud auth login && gcloud auth application-default login
 gcloud billing accounts list                     # pick the billing account id
 
-# 1. project, billing link, state bucket (local state)
-cd infra/terraform/bootstrap
+# 1. project, billing link, state bucket (local state), from a checkout of the pinned agentdev release
+cd agentdev/infra/terraform/bootstrap
 terraform init
-terraform apply -var billing_account_id=XXXXXX-XXXXXX-XXXXXX
+terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars     # see bootstrap/example.tfvars
 
-# 2. everything else (state in GCS)
-cd ..
-terraform init -backend-config="bucket=valabs-agentdev-tfstate"
-terraform plan  -var billing_account_id=XXXXXX-XXXXXX-XXXXXX -out plan.bin   # review
+# 2. everything else, in the deployment repo (state in GCS)
+cd <deployment repo>/terraform
+terraform init -backend-config="bucket=<project_id>-tfstate"
+terraform plan  -var-file=instance.tfvars -out plan.bin   # review
 terraform apply plan.bin
 $(terraform output -raw get_credentials)        # kubectl access
 ```
 
-Another region: `-var region=europe-west1 -var zone=europe-west1-b` (or a `.tfvars` file per environment).
+Another region: change `region`/`zone` in the deployment's `instance.tfvars`.
 
 ## Automation credentials
 
-- **GitHub Actions (preferred, no key):** use `google-github-actions/auth` with the values from `terraform output github_actions_auth`. Only workflows on `main` of `valentinalexeev/agentdev` can impersonate the account.
+- **GitHub Actions (preferred, no key):** use `google-github-actions/auth` with the values from `terraform output github_actions_auth`. Only workflows on `main` of the **deployment repository** (`github_repository`) can impersonate the account.
 - **Local fallback (key file):** only if needed, kept outside the repo:
   ```bash
   gcloud iam service-accounts keys create ~/.config/agentdev/automation-key.json \

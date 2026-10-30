@@ -1,0 +1,50 @@
+# Deployment repository CI (copied from agentdev examples/deployment/gcp-gke).
+# PRs: terraform plan + ansible --check, results as a PR comment. main: apply + deploy.
+# Auth: Workload Identity Federation (no keys); values from `terraform output github_actions_auth`,
+# stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT.
+# Protect main (required review + this check), so nothing is applied without the owner's approval.
+name: deploy
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency: {group: deploy, cancel-in-progress: false}   # never two applies at once
+permissions: {contents: read, id-token: write, pull-requests: write}
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: terraform}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -input=false -backend-config="bucket=${{ vars.GCP_PROJECT }}-tfstate"
+      - run: terraform plan -input=false -var-file=instance.tfvars -out=plan.bin
+      - if: github.event_name == 'push'
+        run: terraform apply -input=false plan.bin
+  deploy:
+    needs: infra
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ansible}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: gke-gcloud-auth-plugin}
+      - name: agentdev playbook at the pinned release
+        run: |
+          tag=$(awk '/^image_tag:/{print $2}' instance.yml)
+          git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+          gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: ansible (check on PRs, apply on main)
+        run: |
+          mode=$([ "${{ github.event_name }}" = push ] || echo --check)
+          ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml $mode

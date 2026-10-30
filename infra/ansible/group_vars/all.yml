@@ -1,31 +1,27 @@
-# Settings for installing agentdev onto the GKE cluster from infra/terraform (#11 phase 2).
-# Override per environment with -e or an extra vars file; never put secret values here.
+# Generic defaults for installing agentdev onto a GKE cluster from infra/terraform.
+# Instance values (project, zone, reviewer, agents, image tag) are NOT set here: the deployment repository
+# provides them (see examples/deployment/gcp-gke and example.vars.yml). The playbook stops if one is missing.
+# Never put secret values in vars files.
 
-gcp_project: valabs-agentdev
-gcp_region: europe-west4
-gcp_zone: europe-west4-a
 cluster_name: agentdev
 kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
-
 agents_ns: coding-agents
-# Published images (#28). Pin a release tag (vX.Y.Z) or a digest in real deployments.
+
+# Published images (#28). Deployments pin image_tag to a release (vX.Y.Z, strict SemVer).
 image_registry: ghcr.io/valentinalexeev
-image_tag: main
 worker_image: "{{ image_registry }}/agentdev-worker:{{ image_tag }}"
 router_image: "{{ image_registry }}/agentdev-router:{{ image_tag }}"
 
-# Forge the agents work on. GitHub becomes the default once #2 lands; until then a Gitea URL.
 forge_kind: github
 forge_url: https://api.github.com
-reviewer: valentinalexeev
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
-
-# Agents: name, forge login, repos (comma-separated). Secrets per agent are read from Secret Manager:
-#   agent-<name>-forge-token, optional agent-<name>-claude (else the shared claude-shared secret).
-agents:
-  - {name: alice, user: alice, repos: valentinalexeev/agentdev}
 
 # Secret Manager names (containers created by Terraform; values added by the owner or the UI, #12)
 sm_claude_shared: claude-shared
 sm_router_register_token: router-register-token
 sm_forge_webhook_secret: github-app-webhook-secret
+
+# Required from the deployment (no defaults on purpose):
+#   gcp_project, gcp_zone, image_tag, reviewer,
+#   agents: [{name, user, repos}]   per agent, Secret Manager holds agent-<name>-forge-token
+#                                   and optionally agent-<name>-claude

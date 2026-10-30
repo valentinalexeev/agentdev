@@ -1,0 +1,8 @@
+# Copy to instance.tfvars and fill in. This file holds no secrets, so it can be committed in the
+# (private) deployment repository.
+project_id         = "my-agentdev"
+region             = "europe-west4"
+zone               = "europe-west4-a"
+billing_account_id = "000000-000000-000000"
+github_repository  = "my-org/my-agentdev-deploy"
+budget_amount_usd  = 150
