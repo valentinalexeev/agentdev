@@ -1,0 +1,49 @@
+# Webhook router (#3): the cluster's single webhook endpoint. Rendered by 06-agents.sh (envsubst).
+# Forges deliver here; the router verifies the signature and wakes the registered agents involved.
+# For github.com, expose this Service through an Ingress (one public HTTPS URL for the GitHub App).
+apiVersion: v1
+kind: Secret
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
+stringData:
+  FORGE_SECRETS: "gitea=${GITEA_WEBHOOK_SECRET}"
+  REGISTER_TOKEN: "${REGISTER_TOKEN}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
+data:
+  router.js: |
+${ROUTER_JS}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: webhook-router}}
+  template:
+    metadata:
+      labels: {app: webhook-router}
+      annotations: {agentdev/router-hash: "${ROUTER_HASH}"}   # restart when router.js changes
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsNonRoot: true}
+      containers:
+      - name: router
+        image: node:24-bookworm-slim
+        command: [node, /app/router.js]
+        envFrom: [{secretRef: {name: webhook-router}}]
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        resources:
+          requests: {cpu: 20m, memory: 32Mi}
+          limits:   {cpu: 500m, memory: 128Mi}
+        volumeMounts: [{name: app, mountPath: /app}]
+      volumes: [{name: app, configMap: {name: webhook-router}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
+spec:
+  selector: {app: webhook-router}
+  ports: [{name: http, port: 8080, targetPort: http}]

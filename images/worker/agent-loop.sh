@@ -197,10 +197,10 @@ wait_for_work() {
 }
 : > "${WAKE_FILE}"
 
-if [[ -n "${WEBHOOK_SECRET:-}" ]]; then
+if [[ -n "${ROUTER_URL:-}" ]]; then
   node /usr/local/lib/agentdev/webhook-listener.js &
 fi
-log "starting: repo=${REPO} forge=${FORGE_URL} poll=${POLL_SECONDS}s webhooks=$([[ -n "${WEBHOOK_SECRET:-}" ]] && echo on || echo off) claude=$(claude --version 2>/dev/null)"
+log "starting: repo=${REPO} forge=${FORGE_URL} poll=${POLL_SECONDS}s webhooks=$([[ -n "${ROUTER_URL:-}" ]] && echo "via ${ROUTER_URL}" || echo off) claude=$(claude --version 2>/dev/null)"
 api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
 while true; do
   handle_issues

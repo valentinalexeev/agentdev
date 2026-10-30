@@ -5,9 +5,10 @@ kind: Secret
 metadata: {name: agent-${AGENT}, namespace: ${AGENTS_NS}}
 stringData:
   FORGE_TOKEN: "${FORGE_TOKEN}"
-  WEBHOOK_SECRET: "${WEBHOOK_SECRET}"
+  WAKE_TOKEN: "${WAKE_TOKEN}"        # router -> this agent
+  REGISTER_TOKEN: "${REGISTER_TOKEN}" # this agent -> router (shared by agents of this cluster)
 ---
-# Forge webhooks for this agent land here (#3); registered by 06-agents.sh.
+# The router forwards wake calls here (#3).
 apiVersion: v1
 kind: Service
 metadata: {name: agent-${AGENT}, namespace: ${AGENTS_NS}}
@@ -42,8 +43,13 @@ spec:
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
-        - name: WEBHOOK_SECRET
-          valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: WEBHOOK_SECRET, optional: true}}
+        - {name: ROUTER_URL,   value: "http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"}
+        - {name: SELF_URL,     value: "http://agent-${AGENT}.${AGENTS_NS}.svc.cluster.local:8080/"}
+        - {name: FORGE_KIND,   value: "gitea"}
+        - name: WAKE_TOKEN
+          valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: WAKE_TOKEN, optional: true}}
+        - name: REGISTER_TOKEN
+          valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: REGISTER_TOKEN, optional: true}}
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: FORGE_TOKEN}}
         # Claude credential: ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, subscription login).
