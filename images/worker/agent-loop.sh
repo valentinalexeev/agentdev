@@ -11,6 +11,7 @@ set -uo pipefail
 
 : "${FORGE_URL:?}" "${FORGE_USER:?}" "${FORGE_TOKEN:?}" "${REPO:?}"   # REPO=owner/name
 POLL_SECONDS="${POLL_SECONDS:-30}"
+REVIEWER="${REVIEWER:-${REPO%%/*}}"   # who approves agent PRs; defaults to the repo owner
 MAX_TURNS="${MAX_TURNS:-40}"
 STATE="${STATE_DIR:-/state}"
 WORK="${STATE}/repo"
@@ -22,6 +23,11 @@ api() {  # api METHOD PATH [json-body]
   local m=$1 p=$2; shift 2
   curl -fsS -X "${m}" -H "Authorization: token ${FORGE_TOKEN}" -H 'Content-Type: application/json' \
     "${FORGE_URL}/api/v1${p}" ${1:+-d "$1"}
+}
+
+request_review() {  # (re)request REVIEWER on a PR; also works after a review to ask again
+  api POST "/repos/${REPO}/pulls/$1/requested_reviewers" "$(jq -n --arg r "${REVIEWER}" '{reviewers:[$r]}')" >/dev/null \
+    || log "could not request review from ${REVIEWER} on PR #$1"
 }
 
 comment() { api POST "/repos/${REPO}/issues/$1/comments" "$(jq -n --arg b "$2" '{body:$b}')" >/dev/null; }
@@ -99,7 +105,8 @@ ${result}
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
             '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
-      log "opened PR #${pr} for issue #${n}"
+      request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer"
+      log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
       # anything already on the PR at this point is ours; start the feedback cursor after it
       date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
     else
@@ -133,6 +140,8 @@ handle_feedback() {
   echo "${prs}" | jq -c --arg me "${FORGE_USER}" '.[] | select(.user.login == $me)' | while read -r p; do
     local pr branch since fb now
     pr=$(jq -r .number <<<"${p}"); branch=$(jq -r .head.ref <<<"${p}")
+    # PRs opened before reviewer requests existed: request once (marker in state)
+    [[ -e "${STATE}/seen/pr-${pr}.reviewer" ]] || { request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer"; }
     since=$(cat "${STATE}/seen/pr-${pr}" 2>/dev/null || jq -r .created_at <<<"${p}")
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     fb=$(new_feedback "${pr}" "${since}")
@@ -153,6 +162,7 @@ Do not push. Finish with a short reply to the reviewers.")
       comment "${pr}" "🤖 Pushed an update.
 
 ${result}"
+      request_review "${pr}"   # ask the approver to look again
     else
       comment "${pr}" "🤖 ${result}"
     fi

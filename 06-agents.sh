@@ -32,7 +32,7 @@ for a in ${AGENTS}; do
   else die "${a} has no Claude credential: add .secrets/${a}.claude or set ANTHROPIC_API_KEY"
   fi
   AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" AGENTS_NS="${AGENTS_NS}" \
-    WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" \
+    WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" \
     envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
   # pick up a rebuilt image / changed secret
   k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null

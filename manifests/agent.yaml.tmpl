@@ -32,6 +32,7 @@ spec:
         - {name: FORGE_USER,   value: "${AGENT}"}
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
+        - {name: REVIEWER,     value: "${FORGE_ADMIN_USER}"}
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: agent-${AGENT}, key: FORGE_TOKEN}}
         # Claude credential: per-agent secret if present, otherwise the shared one.
