@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers. Sourced by every step script.
 set -euo pipefail
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
