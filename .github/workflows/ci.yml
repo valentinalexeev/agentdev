@@ -1,0 +1,86 @@
+name: CI
+
+# Scope (issue #1): one run per PR head / main push, superseded runs are cancelled.
+# Every run reports both checks (so branch protection never waits on a skipped workflow),
+# but heavy steps run only when their inputs changed:
+#   lint          shell/manifest checks only if *.sh, manifests/ or the workflow changed; secret scan always
+#   worker-image  docker build only if images/worker/ or the workflow changed
+# Docs-only changes (README, CLAUDE.md, docs/, .github templates) finish in seconds.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || !github.event.pull_request.draft
+    outputs:
+      shell: ${{ steps.f.outputs.shell }}
+      image: ${{ steps.f.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            files=$(git ls-files)   # first push or unknown base: check everything
+          else
+            files=$(git diff --name-only "$BASE"...HEAD)
+          fi
+          printf '%s\n' "$files"
+          has() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
+          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "image=$(has '(^images/worker/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+
+  lint:
+    needs: scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: shellcheck and bash syntax
+        if: needs.scope.outputs.shell == 'true'
+        run: |
+          shellcheck -S warning ./*.sh images/worker/agent-loop.sh
+          for f in ./*.sh images/worker/agent-loop.sh; do bash -n "$f"; done
+      - name: kubeconform (plain manifests and the rendered agent template)
+        if: needs.scope.outputs.shell == 'true'
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary manifests/gitea.yaml manifests/postgres.yaml
+          AGENT=demo AGENTS_NS=coding-agents FORGE_TOKEN=x WORKER_IMAGE=img REPO=o/r POLL_SECONDS=20 FORGE_ADMIN_USER=owner \
+            envsubst < manifests/agent.yaml.tmpl | ./kubeconform -strict -summary -
+
+  worker-image:
+    needs: scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.scope.outputs.image == 'true'
+      - name: build and smoke-test the worker image
+        if: needs.scope.outputs.image == 'true'
+        run: |
+          docker build -t agentdev/worker:ci images/worker
+          docker run --rm --entrypoint claude agentdev/worker:ci --version
+          if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
+          grep -q FORGE_URL err.txt
+      - name: skipped (images/worker unchanged)
+        if: needs.scope.outputs.image != 'true'
+        run: echo "worker image unchanged, build skipped"
