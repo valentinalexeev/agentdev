@@ -1,0 +1,106 @@
+# ContextForge spike (#14): one MCP gateway per agentdev instance, backed by the instance's Postgres.
+# Applied by spikes/contextforge/run.sh into namespace ${NS}. Throwaway; findings go to docs/adr.
+apiVersion: v1
+kind: Secret
+metadata: {name: platform-db, namespace: ${NS}}
+stringData:
+  POSTGRES_PASSWORD: "${PG_ADMIN_PASSWORD}"
+  # one database and login per component on the shared instance (owner decision in #14)
+  init.sql: |
+    CREATE ROLE contextforge LOGIN PASSWORD '${PG_CF_PASSWORD}';
+    CREATE DATABASE contextforge OWNER contextforge;
+    CREATE ROLE agentdev LOGIN PASSWORD '${PG_AGENTDEV_PASSWORD}';
+    CREATE DATABASE agentdev OWNER agentdev;
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: platform-db, namespace: ${NS}}
+spec:
+  serviceName: platform-db
+  replicas: 1
+  selector: {matchLabels: {app: platform-db}}
+  template:
+    metadata: {labels: {app: platform-db}}
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:17
+        imagePullPolicy: IfNotPresent
+        env:
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}
+        ports: [{containerPort: 5432}]
+        readinessProbe:
+          exec: {command: [pg_isready, -U, postgres]}
+          periodSeconds: 5
+          timeoutSeconds: 5
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/postgresql/data}
+        - {name: init, mountPath: /docker-entrypoint-initdb.d}
+      volumes:
+      - name: init
+        secret: {secretName: platform-db, items: [{key: init.sql, path: init.sql}]}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: platform-db, namespace: ${NS}}
+spec:
+  selector: {app: platform-db}
+  ports: [{port: 5432}]
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: contextforge, namespace: ${NS}}
+stringData:
+  DATABASE_URL: "postgresql+psycopg://contextforge:${PG_CF_PASSWORD}@platform-db:5432/contextforge"
+  JWT_SECRET_KEY: "${CF_JWT_SECRET}"
+  AUTH_ENCRYPTION_SECRET: "${CF_ENC_SECRET}"
+  PLATFORM_ADMIN_PASSWORD: "${CF_ADMIN_PASSWORD}"
+  # v1.1.0 refuses weak defaults at start (min 12 chars); set every password-like secret explicitly
+  DEFAULT_USER_PASSWORD: "${CF_DEFAULT_USER_PASSWORD}"
+  BASIC_AUTH_PASSWORD: "${CF_BASIC_AUTH_PASSWORD}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: contextforge, namespace: ${NS}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: contextforge}}
+  template:
+    metadata: {labels: {app: contextforge}}
+    spec:
+      containers:
+      - name: gateway
+        image: ghcr.io/ibm/mcp-context-forge:v1.1.0
+        imagePullPolicy: IfNotPresent
+        envFrom: [{secretRef: {name: contextforge}}]
+        env:
+        - {name: HOST, value: 0.0.0.0}
+        - {name: PORT, value: "4444"}
+        - {name: PLATFORM_ADMIN_EMAIL, value: admin@agentdev.dev}
+        - {name: MCPGATEWAY_UI_ENABLED, value: "true"}
+        - {name: MCPGATEWAY_ADMIN_API_ENABLED, value: "true"}
+        - {name: CACHE_TYPE, value: database}   # no Redis for a single replica
+        # The MCP servers live inside the cluster: allow only the Service range, not all private networks.
+        - {name: SSRF_ALLOWED_NETWORKS, value: '["${SERVICE_CIDR}"]'}
+        - {name: GUNICORN_WORKERS, value: "2"}
+        ports: [{containerPort: 4444}]
+        readinessProbe:
+          httpGet: {path: /health, port: 4444}
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 30
+        resources:
+          requests: {cpu: 100m, memory: 512Mi}
+          limits: {memory: 1536Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: contextforge, namespace: ${NS}}
+spec:
+  selector: {app: contextforge}
+  ports: [{port: 4444}]
