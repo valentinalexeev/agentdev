@@ -54,3 +54,18 @@ for a in ${AGENTS}; do
   ok "${a}: collaborator on ${REPO}, token in .secrets/${a}.token"
 done
 record "Gitea up with repo ${REPO} and agent accounts: ${AGENTS}"
+
+log "Branch protection on ${REPO}:main (#7)"
+# Agents push branches and open PRs; only an approval by the owner lets a PR merge, a new push dismisses it,
+# and nobody pushes to main directly. Idempotent: replace the rule each run.
+ga DELETE "/repos/${REPO}/branch_protections/main" >/dev/null 2>&1 || true
+ga POST "/repos/${REPO}/branch_protections" "$(jq -n --arg o "${FORGE_ADMIN_USER}" '{
+  rule_name: "main",
+  enable_push: false,
+  required_approvals: 1,
+  enable_approvals_whitelist: true, approvals_whitelist_username: [$o],
+  dismiss_stale_approvals: true,
+  block_on_rejected_reviews: true,
+  block_on_outdated_branch: false
+}')" >/dev/null
+ok "main: 1 approval from ${FORGE_ADMIN_USER} required, stale approvals dismissed, no direct pushes"
