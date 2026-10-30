@@ -346,10 +346,12 @@ maybe_stop() {
   if (( $(running_jobs) > 0 )); then idle_since=$(date +%s); return; fi
   (( $(date +%s) - idle_since >= IDLE_SECONDS )) || return
   local r
-  r=$(curl -fsS -X POST -H "Authorization: Bearer ${REGISTER_TOKEN}" -H 'Content-Type: application/json' "${ROUTER_URL}/idle" \
+  r=$(curl -fsS -X POST -H "Authorization: Bearer ${WAKE_TOKEN}" -H 'Content-Type: application/json' "${ROUTER_URL}/idle" \
       -d "$(jq -n --arg a "${AGENT_NAME:-${FORGE_USER}}" --argjson s "$(( idle_since * 1000 ))" '{agent:$a, idleSince:$s}')") \
-    || { log "idle: router unreachable"; idle_since=$(date +%s); return; }
-  if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; sleep 300
+    || { log "idle: router unreachable or refused"; idle_since=$(date +%s); return; }
+  if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then
+    # the pod is being removed: take no new work (a job started now would be killed); the router restarts us on the next event
+    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; exec sleep infinity
   else log "idle: router keeps this agent ($(jq -r .reason <<<"${r}"))"; idle_since=$(date +%s); fi
 }
 while true; do

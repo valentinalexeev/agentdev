@@ -52,6 +52,7 @@ spec:
         env:
         - {name: FORGE_URL,    value: "${FORGE_URL}"}
         - {name: FORGE_USER,   value: "${AGENT}"}
+        - {name: AGENT_NAME,   value: "${AGENT}"}   # router registry key; StatefulSet is agent-<AGENT_NAME> (#35)
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: MAX_CONCURRENT, value: "${MAX_CONCURRENT}"}   # parallel items per agent (#20)

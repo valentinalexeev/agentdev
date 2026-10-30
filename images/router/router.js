@@ -9,8 +9,8 @@
 // The payload never reaches an agent: agents re-read state from the forge API, so a bad route costs one poll.
 //
 // Scale to zero (#35): agents whose StatefulSet is annotated agentdev/scale-to-zero="true" may be stopped.
-//   - An agent idle for its IDLE_SECONDS asks POST /idle; the router scales its StatefulSet to 0 unless a wake was
-//     forwarded to it since the agent's last activity.
+//   - An agent idle for its IDLE_SECONDS asks POST /idle (with its own wake token); the router scales its StatefulSet
+//     to 0 unless a wake was forwarded to it since it became idle.
 //   - A webhook for a person with no live agent: the router looks up stopped agents (annotations agentdev/user,
 //     agentdev/repos, agentdev/forge) and scales the matching one to 1. Nothing is buffered: a starting agent
 //     polls the forge first, so the event's work is found anyway.
@@ -89,7 +89,10 @@ function k8s(method, path, body, contentType = 'application/json') {
   return new Promise((resolve, reject) => {
     const r = mod.request(u, { method, headers, timeout: 5000, ...(tls ? { ca: fs.readFileSync(`${saDir}/ca.crt`) } : {}) }, (res) => {
       let b = ''; res.on('data', (c) => (b += c));
-      res.on('end', () => (res.statusCode < 300 ? resolve(b ? JSON.parse(b) : {}) : reject(new Error(`k8s ${method} ${u.pathname}: HTTP ${res.statusCode}`))));
+      res.on('end', () => {
+        if (res.statusCode >= 300) return reject(new Error(`k8s ${method} ${u.pathname}: HTTP ${res.statusCode}`));
+        try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(new Error(`k8s ${method} ${u.pathname}: bad JSON`)); }
+      });
     });
     r.on('error', reject); r.on('timeout', () => r.destroy(new Error('k8s timeout'))); r.end(data);
   });
@@ -108,14 +111,17 @@ async function scalable() {
 const waking = new Map();   // sts name -> time scaled up (no double scale-ups while the pod starts)
 async function wakeStopped(forge, repo, who) {
   if (!ns) return [];
-  const started = [];
-  for (const s of await scalable()) {
-    if (s.replicas !== 0 || s.forge !== forge || !s.repos.includes(repo) || !who.has(s.user)) continue;
-    if (Date.now() - (waking.get(s.name) || 0) < 120e3) continue;
-    await scaleTo(s.name, 1); waking.set(s.name, Date.now()); stats.scaledUp++; started.push(s.name);
-    log(`scaled ${s.name} 0 -> 1 (${forge} event for ${s.user} in ${repo})`);
-  }
-  return started;
+  // Every opted-in agent that is not live is a candidate, whatever its replica count: an agent being scaled down
+  // (replicas already 0 or pod terminating) must come back for this event. scaleTo(1) is idempotent.
+  const liveNames = new Set(live().map((r) => `agent-${r.agent}`));
+  const todo = (await scalable()).filter((s) => !liveNames.has(s.name) && s.forge === forge && s.repos.includes(repo)
+    && who.has(s.user) && Date.now() - (waking.get(s.name) || 0) >= 120e3);
+  const results = await Promise.allSettled(todo.map((s) => scaleTo(s.name, 1).then(() => {
+    waking.set(s.name, Date.now()); stats.scaledUp++;
+    log(`scaled ${s.name} -> 1 (${forge} event for ${s.user} in ${repo})`); return s.name;
+  })));
+  results.filter((r) => r.status === 'rejected').forEach((r) => { stats.scaleErrors++; log(r.reason.message); });
+  return results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
 }
 
 function readBody(req, limit, cb) {
@@ -145,23 +151,25 @@ http.createServer((req, res) => {
     });
   }
 
-  // An idle agent asks to be stopped (#35). Body: {agent, idleSince (ms epoch)}. Same token as /register.
+  // An idle agent asks to be stopped (#35). Body: {agent, idleSince (ms epoch)}. Authenticated with that agent's own
+  // wake token (from its registration), so one agent cannot stop another.
   if (req.method === 'POST' && req.url === '/idle') {
-    return readBody(req, 4e3, async (body) => {
-      if (!registerToken || !safeEqual(req.headers.authorization || '', `Bearer ${registerToken}`)) return json(res, 401, { error: 'unauthorized' });
+    return readBody(req, 4e3, (body) => (async () => {
       let b; try { b = JSON.parse(body); } catch { return json(res, 400, { error: 'bad json' }); }
-      if (!ns) return json(res, 200, { stopped: false, reason: 'scaling off (no K8S_NAMESPACE)' });
       const r = registry.get(b.agent);
-      if (r && r.lastWake > Number(b.idleSince || 0)) return json(res, 200, { stopped: false, reason: 'woken since idle' });
+      if (!r || !safeEqual(req.headers.authorization || '', `Bearer ${r.token}`)) return json(res, 401, { error: 'unauthorized' });
+      if (!ns) return json(res, 200, { stopped: false, reason: 'scaling off (no K8S_NAMESPACE)' });
+      const woken = () => r.lastWake > Number(b.idleSince || 0);
+      if (woken()) return json(res, 200, { stopped: false, reason: 'woken since idle' });
       const name = `agent-${b.agent}`;
-      try {
-        const s = (await scalable()).find((x) => x.name === name);
-        if (!s) return json(res, 200, { stopped: false, reason: 'scale-to-zero not enabled' });
-        await scaleTo(name, 0); registry.delete(b.agent); waking.delete(name); stats.scaledDown++;
-        log(`scaled ${name} -> 0 (idle)`);
-        return json(res, 200, { stopped: true });
-      } catch (e) { stats.scaleErrors++; log(e.message); return json(res, 500, { error: 'scale failed' }); }
-    });
+      const s = (await scalable()).find((x) => x.name === name);
+      if (!s) return json(res, 200, { stopped: false, reason: 'scale-to-zero not enabled' });
+      if (woken()) return json(res, 200, { stopped: false, reason: 'woken since idle' });   // a wake during the lookup
+      registry.delete(b.agent);   // from here on, events for it scale it up again (wakeStopped)
+      await scaleTo(name, 0); waking.delete(name); stats.scaledDown++;
+      log(`scaled ${name} -> 0 (idle)`);
+      return json(res, 200, { stopped: true });
+    })().catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 500, { error: 'scale failed' }); }));
   }
 
   if (req.method === 'POST' && (req.url === '/' || req.url.startsWith('/hook'))) {
@@ -180,7 +188,7 @@ http.createServer((req, res) => {
           if (started.length) return json(res, 202, { routed: 0, started });
           stats.unrouted++; log(`${f.forge} ${f.event} ${repo}: no agent among [${[...who].join(',')}]`);
           return json(res, 202, { routed: 0 });
-        }, (e) => { stats.scaleErrors++; log(e.message); json(res, 202, { routed: 0 }); });
+        }).catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 202, { routed: 0 }); });
       }
       targets.forEach((r) => { r.lastWake = Date.now(); forward(r, { forge: f.forge, event: f.event, repo }); });
       log(`${f.forge} ${f.event} ${repo} -> ${targets.map((r) => r.agent).join(',')}`);
@@ -189,4 +197,6 @@ http.createServer((req, res) => {
   }
 
   json(res, 404, { error: 'not found' });
-}).listen(port, () => log(`listening on :${port}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}`));
+}).listen(port, () => log(`listening on :${port}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}`));
+// never die on a stray async error: log it (an exit would drop every registration and delivery in flight)
+process.on('unhandledRejection', (e) => log(`unhandled: ${e && e.message}`));
