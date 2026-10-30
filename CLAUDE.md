@@ -95,3 +95,7 @@ what happened, when and how found, impact, immediate actions. Never paste secret
 - **Pinned versions** in `config.env` / Dockerfiles; bump them in their own commit.
 - Shell: `bash`, `set -euo pipefail` via `lib.sh`, passes `shellcheck -S warning` (CI enforces it).
 - No em dashes in prose written by agents.
+
+## Bootstrapping on GCP
+
+See `AGENTS.md` for the step-by-step guide to stand up an agentdev instance on GCP (#11).
