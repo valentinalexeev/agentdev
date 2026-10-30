@@ -27,12 +27,15 @@ for a in ${AGENTS}; do
   if [[ -s "${SPIKE_DIR}/.secrets/${a}.claude" ]]; then
     k -n "${AGENTS_NS}" create secret generic "claude-${a}" --from-env-file="${SPIKE_DIR}/.secrets/${a}.claude" \
       --dry-run=client -o yaml | k apply -f - >/dev/null
-    cred="own Claude credential"
-  elif (( ${#shared[@]} )); then cred="shared Claude credential"
+    cred="own Claude credential"; secret="claude-${a}"
+  elif (( ${#shared[@]} )); then cred="shared Claude credential"; secret="claude-shared"
+    # a per-agent secret left over from an earlier deploy must not linger
+    k -n "${AGENTS_NS}" delete secret "claude-${a}" --ignore-not-found >/dev/null
   else die "${a} has no Claude credential: add .secrets/${a}.claude or set ANTHROPIC_API_KEY"
   fi
+  [[ -n "${secret:-}" ]] || die "${a}: no Claude secret selected"
   AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" AGENTS_NS="${AGENTS_NS}" \
-    WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" \
+    WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
     envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
   # pick up a rebuilt image / changed secret
   k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
