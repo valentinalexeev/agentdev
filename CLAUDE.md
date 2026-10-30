@@ -43,7 +43,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 | Branch, commit, push to a branch | yes | yes |
 | Push to `main` | **no** | via PR |
 | Open / update PR, fix mechanical conflicts | yes | yes |
-| Merge a PR | only on explicit owner permission for that PR and green CI | yes |
+| Merge a PR | only after an owner **Approve** review on the PR's current head commit, and green CI (once CI exists) | yes |
 | Repo settings, secrets, branch protection | **no** | yes |
 
 - **Marking.** Issues the bot creates get the `AI` label. Bodies, comments and PR descriptions start with `🤖 AI agent:`.
@@ -68,6 +68,11 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   observations), what remains open, files shared with other open PRs.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
   result in the PR. Blocking findings are fixed first.
+- **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
+  given on: a push after the approval needs a new approval. Comments, `COMMENTED` reviews, chat messages, emoji and
+  approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
+  (state `APPROVED`, `commit_id` equal to the PR head) right before merging, then merges with that head `sha` pinned.
+  Method: merge commit; the branch is kept unless the owner says otherwise.
 - After a merge: check other open PRs for conflicts with `main`; merge `main` into them if the conflict is two
   independent additions; ask the owner if it is a semantic conflict.
 
