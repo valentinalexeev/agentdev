@@ -94,18 +94,38 @@ the permission prompt if they were running Claude Code interactively.
   people who could make the change themselves. No separate admin role and no account linking is needed.
 - Write access is checked against the forge when the decision is made, using the deciding user's own forge identity
   (they sign in to the UI through authentik, which federates the forge's OAuth, or the decision is taken on the forge
-  itself, see *Forge as an approval surface*). A request that needs more than write access (for example, changing
-  workflows where the forge requires admin or a workflow scope) needs a user who has that right.
+  itself, see *Forge as an approval surface*). The check uses the forge's permission level for the repository:
+  `write` is enough for most requests, while a request the forge itself reserves for `admin` (for example, changing
+  workflows where branch rules require it) needs a user with `admin`.
 - `agentdev-admins` (platform operators) see every project's requests and can **deny** any of them as an emergency
   stop; they approve only in projects where they have write access.
 - If nobody decides before the timeout, the request is denied.
 
 ### Forge as an approval surface
 
-Because the right to approve is write access to the repository, the forge can be the approval surface too: the
-agent comments on its issue or PR "waiting for approval: <request>", and a reply `/approve`, `/approve-job` or
-`/deny` from a user with write access decides it (the forge sidecar checks the commenter's permission through the
-forge API). The UI and the forge show the same request; the first decision wins.
+Because the right to approve is write access to the repository, the forge is an approval surface too. When a request
+is created, the agent comments on its issue or PR "waiting for approval `<id>`: <request>", linking the UI. A reply
+`/approve <id>`, `/approve-job <id>` or `/deny <id>` from a person with the required access decides it. The UI and
+the forge show the same request.
+
+### Decision rules (UI and forge)
+
+1. **Agents never decide.** Decisions from any agentdev agent identity are ignored: every forge account in the
+   instance's agent list (matched by forge account id, not login), forge accounts of type bot, and GitHub Apps. The
+   same holds in the UI for a session federated from such an account. The forge sidecar refuses to post a comment
+   containing a decision command, and the attempt is a security event.
+2. **Bound to one request.** The command must quote the request id, a random nonce. A comment counts only if it was
+   created after the request, on the same issue or PR. Each request is decided once.
+3. **Original text only.** Only a comment's body at creation counts. Edits are ignored, and an edited decision
+   comment is a security event.
+4. **Bound to the content.** A decision covers the request's content hash. If the request changes after it was
+   created, the decision is void.
+5. **Validated by the API, not the pod.** The forge sidecar only relays comment ids. The API fetches the comment
+   from the forge itself, checks rules 1 to 4, and checks the commenter's permission level on the repository when it
+   applies the decision. A compromised pod therefore cannot forge a decision.
+6. **Atomic.** The API moves the `Approval` from `pending` to `decided` with a compare-and-set on its
+   `resourceVersion`. The first valid decision wins; a later one is rejected and logged. The agent then comments on
+   the forge who decided, and where.
 
 ### Flow
 
@@ -147,7 +167,7 @@ sequenceDiagram
 - Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent), so the
   operator, API and sidecar share it without a new database, and it is visible with `kubectl`. Garbage-collected
   after 7 days.
-- Request content shown to the admin is the exact tool input (command line, file path, host), rendered as text, never
+- Request content shown to the approver is the exact tool input (command line, file path, host), rendered as text, never
   as HTML.
 
 ### UI
@@ -156,8 +176,9 @@ sequenceDiagram
   request, the agent, the issue or PR it works on, the reason Claude gave, and the three buttons. Admins get an "all
   projects" view.
 - Agent overview shows "waiting for approval" as a state.
-- Optional notification to the forge: the agent comments on its issue "waiting for approval: <summary>", linking the
-  UI, so owners who live in the forge see it too.
+- The same request also appears on the forge (see *Forge as an approval surface*).
+- **Open question (#67):** whether UI decisions ship in the first version (forge accounts sign in to the UI through
+  authentik) or the UI only shows requests and decisions are taken on the forge.
 
 ### Safety rules
 
@@ -192,8 +213,8 @@ operator turns those log lines into `SecurityEvent` objects; the agent itself ca
 - **Forge:** for medium and high severity, a comment on the issue or PR the agent was working on ("blocked: tried to
   push to `.github/workflows/`"), so the person who wrote the issue sees that their text triggered a guardrail.
 - **Escalation:** high severity (credential path read, push outside the agent's branch, forged gitdir) or more than N
-  events in a job pauses the agent (`spec.paused`, the operator already supports it) and notifies the owners. The
-  owner resumes it from the UI after looking.
+  events in a job pauses the agent (`spec.paused`, the operator already supports it) and notifies the people with write
+  access to the project and `agentdev-admins`. A person with write access resumes it from the UI after looking.
 - **Metrics:** counters per agent and rule for later alerting (#51 observability).
 
 **Persistence (#70):**
