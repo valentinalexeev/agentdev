@@ -1,0 +1,47 @@
+# Interactive session (#38): one short-lived Job per session, rendered by scripts/agent-chat.sh (envsubst).
+# Same worker image as the agents, gVisor, no Kubernetes token. Forge identity: the project's read-only chat account.
+# The Job ends when the session goes idle (agent-chat-session) and is removed after ttlSecondsAfterFinished.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${SESSION}
+  namespace: ${AGENTS_NS}
+  labels: {app: agent-chat, project: "${PROJECT}"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}"}}
+    spec:
+      restartPolicy: Never
+      runtimeClassName: gvisor
+      nodeSelector: {agentdev/pool: sandboxes}
+      tolerations:
+      - {key: agentdev/pool, operator: Equal, value: sandboxes, effect: NoSchedule}
+      - {key: sandbox.gke.io/runtime, operator: Equal, value: gvisor, effect: NoSchedule}
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsNonRoot: true, fsGroup: 1000}
+      containers:
+      - name: chat
+        image: ${WORKER_IMAGE}
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
+        command: [agent-chat-session]
+        env:
+        - {name: FORGE_URL,      value: "${FORGE_URL}"}
+        - {name: FORGE_USER,     value: "${CHAT_USER}"}
+        - {name: REPO,           value: "${REPO}"}
+        - {name: IDLE_SECONDS,   value: "${IDLE_SECONDS}"}
+        - {name: REMOTE_CONTROL, value: "${REMOTE_CONTROL}"}
+        - name: FORGE_TOKEN
+          valueFrom: {secretKeyRef: {name: chat-${PROJECT}, key: FORGE_TOKEN}}
+        envFrom:
+        - secretRef: {name: ${CLAUDE_SECRET}}
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits:   {cpu: "2", memory: 2Gi}
+        volumeMounts:
+        - {name: state, mountPath: /state}
+        - {name: claude, mountPath: /home/node/.claude}
+      volumes:
+      - {name: state, emptyDir: {}}    # a fresh clone per session
+      - {name: claude, emptyDir: {}}
