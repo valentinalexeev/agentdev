@@ -24,6 +24,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Scale to zero, opt-in (`SCALE_TO_ZERO` / `agents[].scale_to_zero`): an agent idle for `IDLE_SECONDS` (900) asks
   the router to stop it; a webhook for a stopped agent makes the router start it again (#35). The router gets a
   namespaced Role limited to reading agent StatefulSets and patching their scale.
+- Interactive sessions (`scripts/agent-chat.sh start|attach|list|stop`): a chat with Claude Code in a project, as a
+  short-lived gVisor Job with a fresh clone and a read + issues/comments forge account (no push). Re-attachable from
+  any terminal with cluster access; ends after 30 min with nobody attached; optional Claude app access (#38, #26).
 
 - Resource control without the UI (#27): `limits:` in the project spec becomes a `ResourceQuota`;
   `scripts/agent-block.sh` stops an agent and keeps it stopped (router and redeploys honour `agentdev/blocked`).

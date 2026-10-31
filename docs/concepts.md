@@ -56,6 +56,15 @@ Optional per agent (`SCALE_TO_ZERO`, #35). An agent with no work for `IDLE_SECON
 router to stop it. When an event for a stopped agent arrives, the router starts it again, and it picks the work up
 from the forge. The router refuses to stop an agent that was woken since it became idle, so work is not cut off.
 
+## Interactive session
+
+An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
+task (#38). It runs as a short-lived pod (same image, gVisor) with a fresh clone of the project and a
+**read-only** forge account (`<project>-chat`): it can read code, comment and file issues, but never push. Ideas
+turn into code only through the normal path: an issue, an agent, a PR, your review. Claude runs inside tmux, so a
+session survives disconnects and can be re-attached from any terminal with cluster access. It ends after 30 minutes
+with nobody attached, or after 8 hours at most.
+
 ## Sandboxing
 
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account
@@ -69,5 +78,5 @@ Open egress and credentials inside the pod are known gaps, tracked in #6 (egress
 | Management UI and API (Go, React, authentik SSO, Postgres) | #12 |
 | MCP tools per project through ContextForge | #14 (ADR 0001) |
 | GitHub as forge, agent identity | #2 |
-| Interactive (chat) sessions in a project | #38 |
+| Interactive sessions in the UI (web terminal), Claude app access | #12, #26 |
 | Remote control, resource control, multi-tenancy | #26, #27, #17 |

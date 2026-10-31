@@ -2,7 +2,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl jq procps python3 \
+ && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl jq procps python3 tmux \
  && rm -rf /var/lib/apt/lists/*
 
 ARG CLAUDE_CODE_VERSION=2.1.312
@@ -10,8 +10,9 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && npm cache clean --force
 
 COPY agent-loop.sh /usr/local/bin/agent-loop
+COPY agent-chat-session.sh /usr/local/bin/agent-chat-session
 COPY webhook-listener.js /usr/local/lib/agentdev/webhook-listener.js
-RUN chmod +x /usr/local/bin/agent-loop \
+RUN chmod +x /usr/local/bin/agent-loop /usr/local/bin/agent-chat-session \
  && mkdir -p /state /home/node/.claude && chown -R 1000:1000 /state /home/node/.claude
 
 # The node image already has UID 1000 ("node"). /state and ~/.claude are PVC-backed.
