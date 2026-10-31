@@ -37,8 +37,8 @@ planned target, [security-model.md](security-model.md).
 |----|------|--------|--------|-------------|
 | R20 | Agent spec can choose any container image | CodeQL #59 | fixed | No image field; image set by the operator (#59) |
 | R21 | Agent spec can mount any Secret (forge or Claude credentials of another agent) | CodeQL #59 | fixed | CEL rules bind secrets to the agent name; reconciler fails closed with phase `invalid` |
-| R22 | `spec.repo` points the agent at an attacker-controlled repository | CodeQL #59 | mitigated | Pattern-checked; only cluster admins (and later `agentdev-admins`) can create Agents |
-| R23 | Creating an Agent gives a pod forge write access | CodeQL #59 | accepted | That is the product; creation restricted by RBAC and, in the API, `agentdev-admins` (#57) |
+| R22 | `spec.repo` points the agent at an attacker-controlled repository | CodeQL #59 | mitigated | Pattern-checked; Agents are created by cluster admins, or through the API (#57) only by `agentdev-admins` or a user with **admin** on that repository, checked live on the forge (fail closed); every attempt is logged as `AGENTDEV_AUDIT`. An admin of a repository can point an agent only at that repository |
+| R23 | Creating an Agent gives a pod forge write access | CodeQL #59 | accepted | That is the product. The API Role may create/patch/delete Agents only (no Secrets): the forge token must already exist as `agent-<name>` (CEL, R21), so the API cannot mint credentials. Creation needs repo admin or `agentdev-admins` (#57); forge user = authentik username for now (`forgeUserOf`) |
 | R24 | **Write credentials to infrastructure** (for example cloud admin for terraform) held by an AI agent | design #69 | **open** | Phase 5 (#69): the agent keeps read-only credentials; a deterministic executor with scoped write credentials applies only an approved plan of the merge commit |
 | R25 | The plan executor runs code of an unreviewed PR (providers, modules) | review #85 | open (design) | Sandboxed like an agent, read-only cloud credentials, writes only to its own prefix in the plan bucket (phase 5) |
 
@@ -52,6 +52,8 @@ planned target, [security-model.md](security-model.md).
 | R33 | UI security headers dropped on some routes; no CSP | review #56 | fixed | Shared header snippet, strict CSP, `frame-ancestors 'none'` (4e1f9be) |
 | R34 | Sign-out left the authentik session alive | review #56 | fixed | `signoutRedirect` (4e1f9be) |
 | R35 | GitHub App manifest built by string templating (injection) | review #61 | fixed | Built with `jq --arg`, strict input validation (db8be52) |
+| R42 | API maps the authentik username to the forge login: a chosen or case-variant name ("Adam") could act as another forge user | review #86 | mitigated | Only lowercase names matching `^[a-z0-9][a-z0-9._-]*$` map to a forge user; requires closed enrollment and no username changes in authentik (admin.md, "Keep the usernames safe"). Intended setup: authentik has no own user database and signs people in through the same company SSO as the forge (for example Google Workspace), so one account gives both names. Stable claim: #88 |
+| R43 | API forge token user must be repo or site admin to read permissions | review #86 | accepted | Read-only scopes (`read:repository`, `read:user`); dedicated service account, admin on agent repositories only |
 
 ## Process
 

@@ -248,6 +248,24 @@ WARNING: Change the password and add MFA immediately after the first login. The 
 NOTE: The first password is also in the Secret `authentik`, but authentik uses it only at the first start. Thus, the
 password that you set in the UI is final.
 
+### Keep the usernames safe
+
+The intended setup: authentik keeps no users and passwords of its own. It signs people in through an external
+identity provider, the same single sign-on that the forge uses (for example Google Workspace). Thus, one company
+account gives the authentik username and the forge login. The API uses the authentik username as the forge login
+(#57). An authentik user who can pick a name can act as the forge user with that name. Thus, keep these settings:
+
+- Connect authentik to the company identity provider as a source, and take the username from it. Use the same
+  identity provider for the forge.
+- Only the identity provider or the administrators make authentik users. Do not add an enrollment flow. The
+  blueprint has none.
+- In **System > Settings**, keep **Allow users to change username** off (the default). The blueprint cannot set
+  this, so check it after each authentik upgrade.
+- Give each person the same username in authentik and on the forge, in lower case.
+
+NOTE: The API refuses a username that has upper case letters or characters other than `a-z`, `0-9`, `.`, `_`, `-`.
+Such a user can read, but cannot change agents. A stable forge-login claim is planned in #88.
+
 ### Reference: authentik
 
 - The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
@@ -258,7 +276,8 @@ password that you set in the UI is final.
 
 ## Management API
 
-The agentdev API (`images/api`, Go, #46) shows the agents of the instance. Phase 1 is read-only. On GKE, refer to #51.
+The agentdev API (`images/api`, Go, #46) shows the agents of the instance. It also pauses, resumes, changes, adds and removes
+agents (#57). On GKE, refer to #51.
 
 ### Deploy the API
 
@@ -282,12 +301,83 @@ NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` mus
 - A blueprint in run.sh step 09 makes the application `agentdev`. It is a public client with the authorization code
   and PKCE.
 - The API gets the keys from authentik in the cluster.
-- The API reads the agents with a read-only Role on the agents namespace.
+- The API reads the agents and writes Agent objects with a Role on the agents namespace.
 
 | Endpoint | Gives |
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57) |
+
+| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
+| `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
+| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. |
+
+### Give the API access to the forge
+
+The API asks the forge for the permission of the user before each change. Do this task before you change agents
+through the API.
+
+WARNING: Do not use a token with write access. The API only reads the permissions of the users.
+
+Gitea tells the permission of another user only to a site admin or to an admin of the repository. With any other
+token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
+example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
+
+1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
+   only.
+2. Put the token in the Secret `agentdev-api-forge`:
+   `kubectl -n agentdev-platform create secret generic agentdev-api-forge --from-literal=FORGE_API_TOKEN=<token>`
+3. Restart the API: `kubectl -n agentdev-platform rollout restart deploy/agentdev-api`
+
+NOTE: Without the Secret, each change that needs the forge gives 503.
+
+### Add an agent through the API
+
+Before you do this task, make sure that the Secret `agent-<name>` exists. If you use `claude-<name>`, make sure that
+this Secret also exists. The API does not make Secrets.
+
+1. Send the request:
+   `curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"name":"carol","repo":"owner/playground"}' http://localhost:8088/api/agents`
+   The API gives 201 and the new agent.
+
+### Pause an agent through the API
+
+1. Send the request:
+   `curl -X PATCH -H "Authorization: Bearer $TOKEN" -d '{"paused":true}' http://localhost:8088/api/agents/carol`
+   The API gives 200 and the agent with `"paused": true`.
+2. To resume the agent, send the same request with `"paused":false`.
+
+### Reference: who can change an agent
+
+The owner decided this rule on #57. The API checks the permission on the forge at the time of each change.
+
+| Action | Permission |
+|---|---|
+| Pause an agent | write access to the repository of the agent, or the authentik group `agentdev-admins` |
+| Resume an agent, change `maxConcurrent` or `scaleToZero` | write access to the repository of the agent |
+| Add or remove an agent | admin access to the repository, or the group `agentdev-admins` |
+
+- The API finds the forge user from the authentik username. At this time, the two names must be the same.
+  If the names are different, the API refuses the change. The function `forgeUserOf` in `images/api/forge.go` does
+  this mapping.
+- The API reads the groups from the `groups` claim of the token (scope `profile`).
+- If the API cannot reach the forge, it refuses the change (503). Only the group `agentdev-admins` can then pause,
+  add and remove agents.
+- The permission check of the API is for Gitea only. For an agent on GitHub, only `agentdev-admins` can pause, add
+  and remove the agent.
+- The API sends requests without a bearer token back with 401. The API does not use cookies.
+- The Role of the API can read, patch, add and delete Agent objects in the agents namespace only. It cannot read
+  Secrets.
+
+### Find the changes to agents (audit)
+
+The API writes one line for each change request, also for a refused request. The line starts with `AGENTDEV_AUDIT`.
+
+1. Run `kubectl -n agentdev-platform logs deploy/agentdev-api | grep AGENTDEV_AUDIT`
+   Each line has `time`, `who` (`sub`, `username`, `forgeUser`, `groups`), `action`, `agent`, `result` (`ok`,
+   `denied`, `invalid`, `error`), `reason`, `request`, `before`, `after` and `grant`.
+
+NOTE: The log of the pod is lost when the pod stops. A permanent store for the audit is #82.
 
 ## Agents as resources (operator)
 
@@ -338,7 +428,7 @@ CAUTION: This procedure removes the pod of the agent. The volumes stay.
 - With `scaleToZero`, the router (not the operator) starts and stops the pod.
 - Field reference: [`images/operator/README.md`](../images/operator/README.md).
 - run.sh step 06 makes Agent objects (#57). The API reads them (`managed: true`).
-- The next work: the UI adds, pauses and removes agents (#57, #4).
+- The API adds, pauses and removes agents (#57). The next work: buttons in the UI (#57 step 4, #4).
 - Agents in the deployment repository with Argo CD or Flux: #58.
 
 ## Web UI

@@ -1,6 +1,6 @@
 // agentdev API (#46, #12): the management API behind authentik OIDC.
-// Phase 1: read-only overview of the agents (state from Kubernetes). Every /api call needs a valid OIDC bearer
-// token from the configured issuer and audience; /healthz is open. Lifecycle actions (#4, #27) come later.
+// Read: overview of the agents (state from Kubernetes). Write (#57 step 3): pause, resume, edit, create, delete Agents. Every /api call needs a valid OIDC bearer
+// token from the configured issuer and audience; /healthz is open.
 package main
 
 import (
@@ -19,6 +19,8 @@ type config struct {
 	Audience  string // OIDC client id of the API
 	Namespace string // agents namespace
 	Addr      string
+	ForgeURL  string // forge API for the live permission check of writes (#57)
+	AdminGrp  string // OIDC group that may create, delete and always pause agents
 }
 
 func env(k, def string) string {
@@ -35,6 +37,8 @@ func main() {
 		Audience:  os.Getenv("OIDC_AUDIENCE"),
 		Namespace: env("AGENTS_NS", "coding-agents"),
 		Addr:      env("ADDR", ":8080"),
+		ForgeURL:  os.Getenv("FORGE_URL"),
+		AdminGrp:  env("ADMIN_GROUP", "agentdev-admins"),
 	}
 	if cfg.Issuer == "" || cfg.Audience == "" {
 		log.Fatal("OIDC_ISSUER and OIDC_AUDIENCE are required")
@@ -48,7 +52,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("kubernetes: %v", err)
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents), ReadHeaderTimeout: 10 * time.Second,
+	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
+	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
+	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp}
+	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
@@ -58,9 +65,10 @@ func main() {
 type verifier func(ctx context.Context, raw string) (*identity, error)
 
 type identity struct {
-	Subject  string `json:"sub"`
-	Username string `json:"preferred_username"`
-	Email    string `json:"email"`
+	Subject  string   `json:"sub"`
+	Username string   `json:"preferred_username"`
+	Email    string   `json:"email"`
+	Groups   []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
 }
 
 // agentLister returns the agents' current state.
@@ -81,7 +89,7 @@ type agent struct {
 	Paused        bool     `json:"paused"`
 }
 
-func routes(verify verifier, agents agentLister) http.Handler {
+func routes(verify verifier, agents agentLister, wr *writer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.Handle("GET /api/me", auth(verify, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +104,18 @@ func routes(verify verifier, agents agentLister) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
+	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
+		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
+		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
+		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
+	}
 	return mux
 }
 
 type ctxIdentity struct{}
+
+// auth accepts only a bearer token in the Authorization header. The API never reads cookies, so a cross-site form or
+// request from another origin cannot act for a logged-in user (CSRF): the browser does not add this header by itself.
 
 func auth(verify verifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
