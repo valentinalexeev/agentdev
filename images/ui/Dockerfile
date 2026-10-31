@@ -1,10 +1,12 @@
 # agentdev UI (#48). Published as ghcr.io/valentinalexeev/agentdev-ui (#28).
-FROM node:24.11.1-bookworm-slim AS build
+# The build output (static files) is the same on every platform, so it is built once on the builder's own platform,
+# not under QEMU per target. Lint, type check and build also run in CI (lint job).
+FROM --platform=$BUILDPLATFORM node:24.11.1-bookworm-slim AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-RUN npm run lint && npm run build
+RUN npm run build
 
 # nginx-unprivileged: non-root (uid 101), port 8080. Its entrypoint renders /etc/nginx/templates/*.template with
 # envsubst at start: the API upstream and /config.json (OIDC issuer, client id) come from the pod's environment.
