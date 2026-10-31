@@ -9,6 +9,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [0.1.0] - 2026-10-31
 
 ### Added
+- GitHub App manifest template and `scripts/github-app.sh` (render, registration page, code conversion) with the
+  deployment's URLs from `instance.yml` `github_app:` (#2).
 - Coding agents on Kubernetes: one Claude Code worker per forge account, polling assigned issues and PR
   feedback, under gVisor (kind locally).
 - Webhook router with agent registration; agents wake on signed forge webhooks, polling as fallback (#3).
