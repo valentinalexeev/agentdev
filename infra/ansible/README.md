@@ -5,7 +5,7 @@ Installs the webhook router and the agents onto the cluster from `infra/terrafor
 
 ## Prerequisites
 - Terraform applied (`infra/terraform/README.md`), and `$(terraform -chdir=../terraform output -raw get_credentials)` run.
-- Images published on GHCR (#28): `ghcr.io/valentinalexeev/agentdev-worker` and `agentdev-router`; set `image_tag` (a release tag or `main`).
+- Images published on GHCR (#28): `ghcr.io/valentinalexeev/agentdev-worker` and `agentdev-router`; set `image_tag` to a release image tag (`0.1.0` for git tag `v0.1.0`) or `main`.
 - Secret values in Secret Manager (added by you or the management UI #12, never by Ansible):
 
 | Secret | Value |
