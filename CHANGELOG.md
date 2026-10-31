@@ -16,6 +16,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 - `examples/deployment/gcp-gke`: template for a separate deployment repository (#11).
 - Router published as its own image; deployments pull `ghcr.io/valentinalexeev/agentdev-{worker,router}` (#28).
 - ADR 0001: ContextForge as the MCP gateway per instance (#14).
+- Agents work on several items in parallel (`MAX_CONCURRENT`, default 2), each in its own git worktree, with
+  backoff on failures (#20).
+- `scripts/bootstrap-project.sh <project.yaml>`: connects an existing repo from one spec. It sets up forge accounts,
+  branch protection and labels, proposes the process pack (`process/default`) by PR, deploys the agents and
+  checks that each agent reports ready on a forge issue (#31).
+- Scale to zero, opt-in (`SCALE_TO_ZERO` / `agents[].scale_to_zero`): an agent idle for `IDLE_SECONDS` (900) asks
+  the router to stop it; a webhook for a stopped agent makes the router start it again (#35). The router gets a
+  namespaced Role limited to reading agent StatefulSets and patching their scale.
 
 ### Changed
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no

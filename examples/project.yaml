@@ -1,0 +1,13 @@
+# Project spec for scripts/bootstrap-project.sh (#31). Instance values only; no secrets in here.
+project: playground
+forge:
+  type: gitea                 # v1: gitea (GitHub after #2)
+  repo: owner/playground      # an existing repo; bootstrap connects it, it does not create it
+  owner: owner                # approves agent PRs; defaults to the repo owner
+tracker: forge-issues         # v1: issues on the same forge
+process: default              # process/<name>: labels + files proposed by PR
+max_concurrent: 2             # items each agent works on in parallel (#20)
+agents:
+  - name: alice
+  - name: bob
+# mcp: {contextforge_project: playground}   # #14, not wired yet
