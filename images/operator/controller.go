@@ -43,6 +43,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// second line of defence behind the CRD rules: never mount another agent's credentials (fail closed)
+	if msg := secretsBound(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "SecretNotBound", Message: msg, ObservedGeneration: a.Generation})
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
 
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
@@ -123,4 +131,16 @@ func equalStatus(x, y v1.AgentStatus) bool {
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
 		Named("agent").Complete(r)
+}
+
+// secretsBound returns why the Agent's Secret references are not allowed, or "". An agent may use only its own
+// token Secret (agent-<name>) and its own Claude Secret (claude-<name>) or the shared one (claude-shared).
+func secretsBound(a *v1.Agent) string {
+	if f := a.Spec.ForgeSecret; f != "" && f != "agent-"+a.Name {
+		return fmt.Sprintf("spec.forgeSecret %q is not this agent's (agent-%s)", f, a.Name)
+	}
+	if c := a.Spec.ClaudeSecret; c != "claude-shared" && c != "claude-"+a.Name {
+		return fmt.Sprintf("spec.claudeSecret %q is neither claude-shared nor claude-%s", c, a.Name)
+	}
+	return ""
 }
