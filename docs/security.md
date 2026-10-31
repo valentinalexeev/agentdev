@@ -28,6 +28,8 @@ planned target, [security-model.md](security-model.md).
 | R13 | Loop pushes without an approval gate | CodeQL #59 | mitigated | Push only to `agent/<name>/*`; merge to main needs the owner's approval (branch protection) |
 | R14 | Issue and repo text sent to the model provider | CodeQL #59 | accepted | Inherent to the product; documented. No automatic redaction (would give false assurance) |
 | R15 | `Write`/`MultiEdit` not covered by path deny rules | CodeQL #59 | mitigated | Claude Code applies `Edit(...)` rules to all writes; real risk was R7 |
+| R16 | A forged worktree admin dir makes pinning fail closed, so that branch stops working until fixed by hand (denial of service, no code runs) | review #59 | open | Self-heal by re-creating the worktree; with #64 |
+| R17 | `WORK/.git` itself is not checked for being a symlink | review #59 | open | Same class as R4 (Claude controls the agent's state volume); closed by #64 |
 
 ## Operator and Agent API
 
