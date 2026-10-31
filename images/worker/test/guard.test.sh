@@ -26,7 +26,8 @@ export AGENT_NAME=alice JOB=issue-7
 evs() { : > "${tmp}/ev"; "$@" > "${tmp}/ev.out"; local rc=$?; grep '^AGENTDEV_SECURITY_EVENT ' "${tmp}/ev.out" > "${tmp}/ev"; return ${rc}; }
 event() {  # event <rule> <severity>: exactly that event, valid JSON, source loop, agent and job filled in
   grep '^AGENTDEV_SECURITY_EVENT ' "${tmp}/ev" | sed 's/^AGENTDEV_SECURITY_EVENT //' |
-    jq -e --arg r "$1" --arg s "$2" 'select(.rule==$r and .severity==$s and .source=="loop" and .agent=="alice" and .job=="issue-7" and (.action|length>0))' >/dev/null
+    jq -c --arg r "$1" --arg s "$2" 'select(.rule==$r and .severity==$s and .source=="loop" and .agent=="alice" and .job=="issue-7" and (.action|length>0))' |
+    grep -q .   # not jq -e: its exit status over several inputs differs between jq 1.6 (image) and 1.7
 }
 # shellcheck disable=SC1090
 source <(sed -n '/^# Guardrails for the Claude run/,/^commit_and_push()/p' "${here}/../agent-loop.sh" | sed '$d')
@@ -69,6 +70,7 @@ check "api() calls the sidecar and sends no token" "grep -qx 'http://127.0.0.1:1
 rm -f "${tmp}/bin/curl"
 # Claude can write into .git: the loop's own git must run no hooks and no config-defined programs
 WORK="${tmp}/clone"; git init -q "${WORK}" && git -C "${WORK}" commit -q --allow-empty -m init
+mkdir -p "${WORK}/.git/hooks"   # git without templates (some distro builds) creates no hooks dir
 printf '#!/bin/sh\ntouch %s/pwned-hook\n' "${tmp}" > "${WORK}/.git/hooks/pre-commit"; chmod +x "${WORK}/.git/hooks/pre-commit"
 echo x > "${WORK}/f"
 check "loop commits run no git hooks" "lgit -C '${WORK}' add -A && lgit -C '${WORK}' -c user.name=a -c user.email=a@b commit -qm t && [[ ! -e '${tmp}/pwned-hook' ]]"
