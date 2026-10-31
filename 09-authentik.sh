@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# authentik (#45, #12): the instance's identity provider, in namespace ${PLATFORM_NS}, on the platform Postgres (08).
+#   ./run.sh 09      deploy (idempotent, after 08)
+# The first admin (akadmin) is the owner: its password is generated into .secrets/platform/authentik-admin.
+# No Redis: authentik >= 2025.10 keeps cache, sessions and tasks in Postgres.
+source "$(dirname "$0")/lib.sh"
+need helm; need openssl
+
+S="${SPIKE_DIR}/.secrets/platform"; mkdir -p "${S}"; chmod 700 "${S}"
+sec() { [[ -s "${S}/$1" ]] || { openssl rand -hex 24 > "${S}/$1"; chmod 600 "${S}/$1"; }; cat "${S}/$1"; }
+k -n "${PLATFORM_NS}" get statefulset platform-db >/dev/null 2>&1 || die "platform Postgres not deployed: run ./run.sh 08 first"
+
+log "Database"
+# init.sql only runs on an empty volume: create the role and database here too, for an existing platform
+pgpw=$(sec pg-authentik)
+k -n "${PLATFORM_NS}" exec -i platform-db-0 -- psql -U postgres -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
+SELECT 'CREATE ROLE authentik LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authentik')\gexec
+ALTER ROLE authentik PASSWORD '${pgpw}';
+SELECT 'CREATE DATABASE authentik OWNER authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='authentik')\gexec
+SQL
+ok "database authentik"
+
+log "authentik ${AUTHENTIK_VERSION} (${PLATFORM_NS})"
+# configuration as one Secret (authentik reads AUTHENTIK_* env); stdin, never argv
+{ printf 'AUTHENTIK_SECRET_KEY=%s\n' "$(sec authentik-secret-key)$(sec authentik-secret-key2)"
+  printf 'AUTHENTIK_POSTGRESQL__HOST=platform-db\nAUTHENTIK_POSTGRESQL__NAME=authentik\nAUTHENTIK_POSTGRESQL__USER=authentik\n'
+  printf 'AUTHENTIK_POSTGRESQL__PASSWORD=%s\n' "${pgpw}"
+  printf 'AUTHENTIK_BOOTSTRAP_PASSWORD=%s\n' "$(sec authentik-admin)"
+  printf 'AUTHENTIK_BOOTSTRAP_EMAIL=%s\n' "${AUTHENTIK_ADMIN_EMAIL}"
+  printf 'AUTHENTIK_ERROR_REPORTING__ENABLED=false\nAUTHENTIK_DISABLE_UPDATE_CHECK=true\n'
+} | k -n "${PLATFORM_NS}" create secret generic authentik --from-env-file=/dev/stdin --dry-run=client -o yaml \
+  | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+
+helm repo add authentik https://charts.goauthentik.io >/dev/null 2>&1 || true
+helm repo update authentik >/dev/null
+helm --kube-context "kind-${CLUSTER_NAME}" upgrade --install authentik authentik/authentik \
+  --namespace "${PLATFORM_NS}" --version "${AUTHENTIK_VERSION}" \
+  -f "${SPIKE_DIR}/manifests/authentik-values.yaml" --wait --timeout 15m >/dev/null
+ok "authentik ready"
+record "authentik ${AUTHENTIK_VERSION} up in ${PLATFORM_NS}"
+echo "  UI: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/authentik-server 9000:80  ->  http://localhost:9000/"
+echo "      login akadmin, password: .secrets/platform/authentik-admin"

@@ -1,0 +1,18 @@
+# authentik Helm values (#45), shared by kind (09-authentik.sh) and GKE. No instance values here: configuration and
+# credentials come from Secret `authentik` (created by 09-authentik.sh, or from Secret Manager on GKE).
+authentik:
+  enabled: false                  # the chart must not create its own config Secret
+  existingSecret: {secretName: authentik}
+global:
+  podLabels: {agentdev/db-client: "true"}     # allowed through the platform-db NetworkPolicy
+  env:
+    - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
+server:
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 1Gi}
+worker:
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 1Gi}
+postgresql: {enabled: false}      # the platform Postgres (platform.yaml.tmpl)
