@@ -9,10 +9,11 @@
 source "$(dirname "$0")/lib.sh"
 need envsubst; need jq
 
-log "Building and loading ${WORKER_IMAGE} and ${ROUTER_IMAGE}"
+log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE} and ${ROUTER_IMAGE}"
 "${CONTAINER_ENGINE}" build -q -t "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker" >/dev/null
+"${CONTAINER_ENGINE}" build -q -t "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge" >/dev/null
 "${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
-kind load docker-image "${WORKER_IMAGE}" "${ROUTER_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
+kind load docker-image "${WORKER_IMAGE}" "${FORGE_IMAGE}" "${ROUTER_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
 ok "image loaded"
 
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null

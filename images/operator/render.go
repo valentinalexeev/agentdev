@@ -77,37 +77,65 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule},
 	}
 	p.AutomountServiceAccountToken = ptr.To(false)
+	// fsGroup 1000: both containers can write the shared /state (the sidecar appends the wake file there)
 	p.SecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true), FSGroup: ptr.To[int64](1000)}
+	// own process namespace per container (the default, set explicitly): the agent container cannot read the
+	// sidecar's /proc/<pid>/environ, which is the point of the sidecar (#64, R4)
+	p.ShareProcessNamespace = ptr.To(false)
+	// the sidecar's own git mirror: only the sidecar mounts it, so nothing the agent writes is read by its git
+	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+	common := []corev1.EnvVar{env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
+		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Env: []corev1.EnvVar{
-			env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
+		// no forge, wake or register token here: those are only in the forge container below (#64)
+		Env: append(append([]corev1.EnvVar{}, common...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
-			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
-			env("FORGE_KIND", forge), env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
+			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", r.D.ForgePublicURL),
-			{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
-			secretKey("FORGE_TOKEN", forgeSecret, false),
-		},
+		),
 		// exactly one Claude credential per agent (#5); MCP token optional (#14)
 		EnvFrom: []corev1.EnvFromSource{
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}},
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-mcp"}, Optional: ptr.To(true)}},
 		},
-		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
 				// 3Gi fits 2 parallel items; ~1Gi per extra slot
 				corev1.ResourceMemory: *resource.NewQuantity(int64(1+maxc)*(1<<30), resource.BinarySI)},
+		},
+	}, {
+		Name:                     "forge",
+		Image:                    r.D.ForgeImage, // never from the Agent, like the worker image
+		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Env: append(append([]corev1.EnvVar{}, common...),
+			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
+			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
+			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"),
+			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
+			secretKey("FORGE_TOKEN", forgeSecret, false),
+		),
+		// the router's wake calls land here; the agent container has no listener any more
+		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
+		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}},
+		// own UID (not the agent's 1000), group 1000 to share /state
+		SecurityContext: &corev1.SecurityContext{RunAsUser: ptr.To[int64](1001), RunAsGroup: ptr.To[int64](1000),
+			RunAsNonRoot: ptr.To(true), AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
+			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
 }

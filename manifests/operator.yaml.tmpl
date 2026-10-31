@@ -36,6 +36,7 @@ spec:
         env:   # cluster-wide agent defaults, as 06-agents.sh takes them from config.env
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
         - {name: WORKER_IMAGE, value: "${WORKER_IMAGE}"}
+        - {name: FORGE_IMAGE, value: "${FORGE_IMAGE}"}
         - {name: IMAGE_PULL_POLICY, value: "${IMAGE_PULL_POLICY}"}
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: FORGE_PUBLIC_URL, value: "${FORGE_PUBLIC_URL}"}

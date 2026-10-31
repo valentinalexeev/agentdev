@@ -20,8 +20,8 @@ import (
 
 // Defaults is the cluster-wide part of an agent (what 06-agents.sh takes from config.env).
 type Defaults struct {
-	WorkerImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
-	PollSeconds, IdleSeconds                                                 string
+	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
+	PollSeconds, IdleSeconds                                                             string
 }
 
 type AgentReconciler struct {

@@ -6,7 +6,23 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- Forge sidecar (#64, security model phase 1, fixes R4 pending e2e): every agent pod gets a `forge` container
+  (`images/forge`, image `ghcr.io/valentinalexeev/agentdev-forge`, UID 1001, own process namespace) that alone holds
+  `FORGE_TOKEN`, `WAKE_TOKEN` and `REGISTER_TOKEN` and does every forge operation for the loop over localhost:
+  allow-listed REST calls, sync and push as git bundles. Pushes only to `agent/<name>/*`, no force, protected paths
+  (`.github/workflows/` and friends, `PROTECTED_PATHS`) refused, size limit (`MAX_PUSH_MB`). The webhook listener
+  moved into the sidecar. **BREAKING** for deployments: the operator needs `FORGE_IMAGE` (Ansible `forge_image`,
+  derived from `image_tag`; kind builds it in `./run.sh 06`); the worker image no longer runs without the sidecar.
+- Security events (#64): every refusal by the forge sidecar (foreign branch, protected path, oversize, API call
+  outside the allow-list or for another repo, non-loopback caller, bad webhook token) and by the loop (redirected or
+  forged worktree, removed git config keys, planted hooks) prints an `AGENTDEV_SECURITY_EVENT {json}` line to stdout.
+- The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
+  missing or wrong `base` cannot let a workflow change through (review of #68).
+
 ### Added
+- Manuals follow ASD-STE100 Simplified Technical English (#75): rules and the project word list in `docs/writing.md`,
+  CLAUDE.md rule for agents and reviewers; the admin guide's *Web UI* section is the first converted page.
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
   ContextForge); `mcp:` in the project spec plus `scripts/mcp-sync.sh` give each agent a token scoped to its
   project's virtual server only; the readiness report counts the tools.
@@ -27,6 +43,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Changed
 - `GET /api/agents` reads Agent objects (#57): adds `managed`, `paused`, `maxConcurrent`, `scaleToZero`; agents still
   deployed as plain StatefulSets are listed with `managed: false`. The API's Role can read Agents.
+- Image builds no longer emulate arm64 for compiling: the api, operator and forge Dockerfiles cross-compile on the builder's
+  platform, and the UI's static build runs once; vet, tests and lint stay in the CI `lint` job. Multi-arch image
+  builds take minutes instead of up to 30 minutes on a cold cache.
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
   there too.
 - `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
@@ -47,6 +66,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   (R4). Until the forge sidecar lands, only trusted people should write issues and reviews for an agent.
 - Security risk register `docs/security.md` (every flagged risk with its status) and the target security model
   `docs/security-model.md` (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI).
+  Approvals belong to the project: anyone with write access to the agent's repository decides, in the UI or with
+  `/approve` on the forge (#67). Every guardrail refusal is reported as a security event, with persistence and SIEM
+  integration (#70, #71).
 - The loop's git ignores global and system git config and pins each worktree's `.git` to the shared clone.
 
 ## [0.1.0] - 2026-10-31

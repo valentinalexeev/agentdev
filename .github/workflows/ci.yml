@@ -77,7 +77,7 @@ jobs:
           PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents API_IMAGE=img OIDC_ISSUER=https://i/ OIDC_DISCOVERY_URL=http://d/ \
             OIDC_AUDIENCE=agentdev envsubst < manifests/api.yaml.tmpl | ./kubeconform -strict -summary -
           ./kubeconform -strict -summary -ignore-missing-schemas images/operator/config/crd/
-          PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img IMAGE_PULL_POLICY=Never \
+          PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img FORGE_IMAGE=img IMAGE_PULL_POLICY=Never \
             FORGE_URL=http://f FORGE_PUBLIC_URL=http://f FORGE_ADMIN_USER=owner BOTBOARD_URL= POLL_SECONDS=20 IDLE_SECONDS=900 \
             envsubst < manifests/operator.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
@@ -96,6 +96,9 @@ jobs:
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName=agentdev-operator paths=./... \
             output:crd:dir=config/crd output:rbac:dir=config/rbac
           git add -N . && git diff --exit-code -- . || { echo "run controller-gen and commit (see images/operator/README.md)"; exit 1; }
+      - name: forge sidecar vet and tests (#64)
+        working-directory: images/forge
+        run: go vet ./... && go test ./...
       - uses: actions/setup-node@v4
         with: {node-version-file: images/ui/package.json, cache: npm, cache-dependency-path: images/ui/package-lock.json}
       - name: UI lint, type check and build (#48)
