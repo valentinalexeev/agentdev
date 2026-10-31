@@ -1,0 +1,42 @@
+# Rendered by the nginx image at start (envsubst of ${VARS} from the environment).
+# Security headers live in a map + per-location include because nginx drops server-level add_header in any
+# location that sets its own.
+map $uri $csp {
+  # tokens sit in sessionStorage: no inline or third-party script; the browser may only call this origin and authentik
+  default "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ${OIDC_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self' ${OIDC_ORIGIN}";
+}
+
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+
+  # runtime config for the SPA; no secrets (public OIDC client). Values are JSON-escaped by 15-env.envsh.
+  location = /config.json {
+    include /etc/nginx/snippets/security.conf;
+    default_type application/json;
+    add_header Cache-Control no-store;
+    return 200 '{"oidcIssuer":${OIDC_ISSUER_JSON},"oidcClientId":${OIDC_CLIENT_ID_JSON}}';
+  }
+
+  # same-origin API: the browser never needs CORS. Resolved per request (variable + resolver), so the UI starts
+  # even while the API is down, and follows a changed Service IP.
+  resolver ${NAMESERVER} valid=30s;
+  location /api/ {
+    set $api ${API_UPSTREAM};
+    proxy_pass $api;
+    proxy_set_header Host $host;
+  }
+
+  location = /healthz { access_log off; return 200 ok; }
+
+  location /assets/ {
+    include /etc/nginx/snippets/security.conf;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+  }
+  # SPA: every other path (including /callback) serves index.html
+  location / {
+    include /etc/nginx/snippets/security.conf;
+    add_header Cache-Control no-cache;
+    try_files $uri /index.html;
+  }
+}

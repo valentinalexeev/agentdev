@@ -1,0 +1,13 @@
+#!/bin/sh
+# Prepare template variables before the image entrypoint renders /etc/nginx/templates (envsubst):
+#   NAMESERVER            the pod's DNS server, for the per-request resolver of /api
+#   OIDC_ORIGIN           scheme://host[:port] of OIDC_ISSUER, allowed in the CSP
+#   *_JSON                JSON string literals for /config.json (no injection through env values)
+NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)
+export NAMESERVER="${NAMESERVER:-127.0.0.11}"
+export OIDC_ORIGIN
+OIDC_ORIGIN=$(printf '%s' "${OIDC_ISSUER:-}" | sed -E 's#^(https?://[^/]+).*#\1#')
+json() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/'//g")"; }
+export OIDC_ISSUER_JSON OIDC_CLIENT_ID_JSON
+OIDC_ISSUER_JSON=$(json "${OIDC_ISSUER:-}")
+OIDC_CLIENT_ID_JSON=$(json "${OIDC_CLIENT_ID:-agentdev}")
