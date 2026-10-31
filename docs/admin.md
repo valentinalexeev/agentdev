@@ -97,7 +97,9 @@ The first admin is **you**: user `akadmin` (email `AUTHENTIK_ADMIN_EMAIL`), pass
 `.secrets/platform/authentik-admin`. Open it with
 `kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443` and https://localhost:9443/ (self-signed;
 session cookies need https). Change the password and add MFA after the first login. The agentdev API and UI
-(#46, #48) will be OIDC applications in it. On GKE the playbook does not deploy it yet (#51).
+(#46, #48) will be OIDC applications in it; they add a NetworkPolicy rule to reach it (the platform namespace is
+deny-by-default). The bootstrap password stays in Secret `authentik` but only applies on first start, so changing
+it in the UI is final. On GKE the playbook does not deploy it yet (#51).
 
 ## Limits and blocking
 

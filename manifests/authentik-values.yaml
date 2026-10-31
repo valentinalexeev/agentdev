@@ -1,5 +1,5 @@
 # authentik Helm values (#45), shared by kind (09-authentik.sh) and GKE. No instance values here: configuration and
-# credentials come from Secret `authentik` (created by 09-authentik.sh, or from Secret Manager on GKE).
+# credentials come from Secret `authentik` (created by 09-authentik.sh; on GKE from Secret Manager, #51).
 authentik:
   enabled: false                  # the chart must not create its own config Secret
   existingSecret: {secretName: authentik}
