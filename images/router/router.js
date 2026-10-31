@@ -105,8 +105,9 @@ async function scalable() {
   return (list.items || []).map((s) => {
     const a = s.metadata.annotations || {};
     return { name: s.metadata.name, enabled: a['agentdev/scale-to-zero'] === 'true', user: a['agentdev/user'],
+      blocked: a['agentdev/blocked'] === 'true',
       forge: a['agentdev/forge'] || 'gitea', repos: (a['agentdev/repos'] || '').split(',').filter(Boolean), replicas: s.spec.replicas };
-  }).filter((s) => s.enabled);
+  }).filter((s) => s.enabled && !s.blocked);   // a blocked agent is never started by events (#27)
 }
 const waking = new Map();   // sts name -> time scaled up (no double scale-ups while the pod starts)
 async function wakeStopped(forge, repo, who) {

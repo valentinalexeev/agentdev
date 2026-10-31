@@ -25,6 +25,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   the router to stop it; a webhook for a stopped agent makes the router start it again (#35). The router gets a
   namespaced Role limited to reading agent StatefulSets and patching their scale.
 
+- Resource control without the UI (#27): `limits:` in the project spec becomes a `ResourceQuota`;
+  `scripts/agent-block.sh` stops an agent and keeps it stopped (router and redeploys honour `agentdev/blocked`).
+
 ### Changed
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no
   instance defaults); the module no longer declares a backend; the deployment's root module does (#11).

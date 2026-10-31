@@ -48,6 +48,15 @@ kubectl -n coding-agents logs deploy/webhook-router | grep scaled
 
 Re-applying the manifests (a redeploy) starts stopped agents once; they stop again after the idle time.
 
+## Limits and blocking
+
+- **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents
+  namespace when you run bootstrap. Kubernetes refuses pods beyond it, whatever starts them. All projects share that
+  namespace until #17, so the quota caps them together.
+- **Block an agent:** `scripts/agent-block.sh block <agent> [reason]` stops it and keeps it stopped: events don't
+  start it (scale to zero), and redeploys keep it at 0. `unblock` starts it again and it picks up waiting work.
+  `list` shows blocked agents. The UI (#12) will set the same `agentdev/blocked` annotation.
+
 ## Webhooks
 
 One webhook per repository points at the router (`06-agents.sh` or bootstrap registers it). The router verifies

@@ -109,6 +109,12 @@ test('an event right after a scale-down brings the agent back (no lost wake)', a
   assert.deepEqual(patches.map((p) => p.slice(0, 2)), [['agent-gina', 1]]);
 });
 
+test('a blocked agent is never started by an event (#27)', async () => {
+  mk('agent-ivy', 'ivy', 0); sts['agent-ivy'].metadata.annotations['agentdev/blocked'] = 'true'; patches.length = 0;
+  assert.deepEqual((await hook(issueFor('ivy'))).body, { routed: 0 });
+  assert.equal(patches.length, 0);
+});
+
 test('a bad response from the Kubernetes API does not crash the router', async () => {
   mk('agent-hal', 'hal', 0); sts['agent-hal'].metadata.annotations['agentdev/repos'] = 'owner/playground';
   badJson = true;
