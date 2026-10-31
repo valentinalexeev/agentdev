@@ -33,6 +33,9 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   **only** when the acceptance criterion is met, with a comment (what was done, checks, PR); partial = stays open
   with a list of what remains; rejected = closed as not planned with a reason.
 - Commits and PRs reference the issue (`#NN`). `Closes #NN` only when the acceptance criterion is met, otherwise `Refs #NN`.
+- **Every question to the owner goes on its issue**, with `needs-decision` and a proposed default, even when it is
+  also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the
+  status comment of the umbrella issue (#12), without reading the chat. Remove the label when the owner decides.
 
 ## 3. Bot and owner
 
