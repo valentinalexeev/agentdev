@@ -70,6 +70,10 @@ type AgentStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="agent name must be at most 40 characters"
+// Secrets are bound to the agent: its own token Secret only, and its own Claude Secret or the shared one. Another
+// agent's credentials can never be named, whoever may write Agents.
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.forgeSecret) || self.spec.forgeSecret == 'agent-' + self.metadata.name",message="spec.forgeSecret must be agent-<agent name>"
+// +kubebuilder:validation:XValidation:rule="self.spec.claudeSecret == 'claude-shared' || self.spec.claudeSecret == 'claude-' + self.metadata.name",message="spec.claudeSecret must be claude-shared or claude-<agent name>"
 type Agent struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

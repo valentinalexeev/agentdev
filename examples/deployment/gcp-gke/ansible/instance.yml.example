@@ -5,3 +5,8 @@ image_tag: "0.1.0"                # same release as terraform/main.tf ref=v0.1.0
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+# GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
+github_app:
+  name: my-agentdev                              # unique on GitHub
+  owner: my-org                                  # omit to own it with your personal account
+  public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment

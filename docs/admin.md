@@ -158,6 +158,33 @@ to the API, so the browser only talks to the UI origin and authentik. The UI ori
 in the authentik blueprint (`manifests/authentik-blueprint-agentdev.yaml`): authentik derives its CORS allow-list
 from those. On GKE: #51.
 
+## GitHub App (registration)
+
+On GitHub the agents act as one GitHub App (#2). Its webhook and redirect URLs belong to the deployment, so the
+manifest is a template (`manifests/github-app-manifest.json.tmpl`) filled from the instance file:
+
+```yaml
+# instance.yml (deployment repo)
+github_app:
+  name: my-agentdev                         # unique on GitHub
+  owner: my-org                             # omit to own it with your personal account
+  public_url: https://agentdev.example.com  # HTTPS address of this deployment's webhook router
+```
+
+```bash
+scripts/github-app.sh render instance.yml        # review the manifest (permissions, events, URLs)
+scripts/github-app.sh form instance.yml          # writes .secrets/github-app/register.html; open it, confirm on github.com
+scripts/github-app.sh convert instance.yml 'URL'   # within 1 h, the full redirect URL: App ID, private key, webhook secret
+```
+
+The webhook URL is `<public_url>/` (the router verifies `X-Hub-Signature-256`). After you confirm, GitHub redirects
+to `<public_url>/github-app/registered?code=...&state=...` (a 404 there is fine: nothing listens yet); pass that whole
+URL to `convert`, which checks `state` against the form it generated and stores the results in `.secrets/github-app/`
+(mode 600). Then install the App on the
+repositories the agents work. Permissions: contents, issues and pull requests write; metadata, checks and statuses
+read. It deliberately has no `workflows` permission: agents cannot change `.github/workflows/`. The private key opens every repository the App is installed on: it goes to Secret Manager (GKE) or a local
+Secret, never into git or an issue. The worker using the App is the rest of #2.
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents

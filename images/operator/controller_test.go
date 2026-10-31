@@ -156,3 +156,25 @@ func TestDeletedAgentIsIgnored(t *testing.T) {
 	r, _ := setup(t)
 	reconcile(t, r, "gone") // NotFound must not error
 }
+
+func TestForeignSecretsRefused(t *testing.T) {
+	for _, mut := range []func(*v1.Agent){
+		func(a *v1.Agent) { a.Spec.ForgeSecret = "agent-bob" },
+		func(a *v1.Agent) { a.Spec.ClaudeSecret = "claude-bob" },
+	} {
+		r, c := setup(t, agent("mallory", mut))
+		reconcile(t, r, "mallory")
+		var s appsv1.StatefulSet
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
+			t.Fatal("rendered a pod with another agent's Secret")
+		}
+		var a v1.Agent
+		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
+		if a.Status.Phase != "invalid" {
+			t.Errorf("phase %q, want invalid", a.Status.Phase)
+		}
+	}
+	r, c := setup(t, agent("carl", func(a *v1.Agent) { a.Spec.ClaudeSecret = "claude-carl"; a.Spec.ForgeSecret = "agent-carl" }))
+	reconcile(t, r, "carl")
+	getSTS(t, c, "carl") // own Secrets are fine
+}
