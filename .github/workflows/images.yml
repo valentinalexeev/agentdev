@@ -4,7 +4,7 @@ name: Images
 #   ghcr.io/<owner>/agentdev-worker   Claude Code CLI + agent loop + webhook listener
 #   ghcr.io/<owner>/agentdev-router   webhook router
 #   ghcr.io/<owner>/agentdev-api      management API (#46)
-# Pull requests build both (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest.
+# Pull requests build all of them (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest.
 # Multi-arch: linux/amd64 (GKE) and linux/arm64 (kind on Apple Silicon).
 on:
   push:
