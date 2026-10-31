@@ -64,6 +64,15 @@ dashboard (#26). Each issue an agent works on is one card that moves through pha
 when the PR is merged or closed, or **blocked** if it could not produce a change. Cards link to the issue or PR.
 Reporting is best effort: if the board is down, agents carry on.
 
+## MCP tools
+
+A project can give its agents **MCP tools** (#14, [ADR 0001](adr/0001-mcp-gateway-contextforge.md)): the `mcp:` section of the
+project spec lists MCP servers, and every agent of that project gets exactly those tools, nothing else. The tools go
+through [ContextForge](https://github.com/IBM/mcp-context-forge), an MCP gateway in namespace `agentdev-platform`
+(with its Postgres). Each project is a virtual server in the gateway; each agent has its own token that only opens
+its project's server, so one project's agents cannot reach another project's tools. The readiness report shows how
+many tools an agent sees.
+
 ## Interactive session
 
 An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
@@ -84,7 +93,6 @@ Open egress and credentials inside the pod are known gaps, tracked in #6 (egress
 | Topic | Issue |
 |---|---|
 | Management UI and API (Go, React, authentik SSO, Postgres) | #12 |
-| MCP tools per project through ContextForge | #14 (ADR 0001) |
 | GitHub as forge, agent identity | #2 |
 | Interactive sessions in the UI (web terminal), Claude app access | #12, #26 |
 | Remote control, resource control, multi-tenancy | #26, #27, #17 |

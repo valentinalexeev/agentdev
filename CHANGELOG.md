@@ -31,8 +31,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   one card per issue through plan, build, review, done/blocked, linking to the issue or PR (#26).
 - Resource control without the UI (#27): `limits:` in the project spec becomes a `ResourceQuota`;
   `scripts/agent-block.sh` stops an agent and keeps it stopped (router and redeploys honour `agentdev/blocked`).
+- MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
+  ContextForge); `mcp:` in the project spec plus `scripts/mcp-sync.sh` give each agent a token scoped to its
+  project's virtual server only; the readiness report counts the tools.
 
 ### Changed
+- Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
+  there too.
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no
   instance defaults); the module no longer declares a backend; the deployment's root module does (#11).
 - **BREAKING** `infra/ansible`: instance values (`gcp_project`, `gcp_zone`, `image_tag`, `reviewer`, `agents`)
