@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
+  renders the StatefulSets and adopts existing ones in place (no restart). `06` installs the operator when missing.
+  **Removed** `manifests/agent.yaml.tmpl` (#57).
+
 ## [0.1.0] - 2026-10-31
 
 ### Added
@@ -48,9 +53,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   with authentik (code + PKCE), agent overview from the API; nginx serves runtime config and proxies `/api`.
 
 ### Changed
-- `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
-  renders the StatefulSets and adopts existing ones in place (no restart). `06` installs the operator when missing.
-  **Removed** `manifests/agent.yaml.tmpl` (#57).
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
   there too.
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no
