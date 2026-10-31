@@ -19,5 +19,8 @@ kubectl -n coding-agents logs deploy/webhook-router
 | Agent stopped and does not come back | scale to zero on, no event for it since | assign or comment; check router log for `scaled ... -> 1` and errors |
 | Same item retried with a delay | the job failed; backoff grows up to a cap | agent log shows the failure and `retry in Ns` |
 | Bootstrap stops at a branch protection warning | the repo already has a rule; it is kept | fine as is, or `REPLACE_BRANCH_PROTECTION=1` |
+| `agent-chat.sh` says the session has no chat yet | the clone failed or Claude did not start | `kubectl -n coding-agents logs <pod>`; check the chat token and the Claude secret |
+| A chat session ended on its own | nobody attached for `IDLE_SECONDS`, or the 8 h cap | start a new one; the clone is fresh each time |
+| A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).
