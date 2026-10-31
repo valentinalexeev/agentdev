@@ -41,7 +41,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
-- Image builds no longer emulate arm64 for compiling: the api and operator Dockerfiles cross-compile on the builder's
+- Image builds no longer emulate arm64 for compiling: the api, operator and forge Dockerfiles cross-compile on the builder's
   platform, and the UI's static build runs once; vet, tests and lint stay in the CI `lint` job. Multi-arch image
   builds take minutes instead of up to 30 minutes on a cold cache.
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports

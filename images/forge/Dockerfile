@@ -1,11 +1,13 @@
 # agentdev forge sidecar (#64): the only container of an agent pod that holds the forge token.
 # Published as ghcr.io/valentinalexeev/agentdev-forge (#28).
-FROM golang:1.25.14-alpine AS build
+# The build stage runs on the builder's own platform and cross-compiles (GOOS/GOARCH from buildx), so multi-arch
+# images need no QEMU emulation for the Go build. Vet and tests run in CI (lint job), not here.
+FROM --platform=$BUILDPLATFORM golang:1.25.14-alpine AS build
+ARG TARGETOS TARGETARCH
 WORKDIR /src
-RUN apk add --no-cache git
 COPY go.mod ./
 COPY *.go ./
-RUN go vet ./... && go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /forge .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=-s -o /forge .
 
 # Not distroless: the sidecar runs git (fetch, bundle, push), which needs libc, its helper programs and libcurl.
 # Alpine with git and CA certificates only; no shell is ever started by the sidecar, and its git gets no repo- or
