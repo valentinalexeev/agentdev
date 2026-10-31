@@ -14,12 +14,18 @@ source "$(dirname "$0")/../lib.sh"
 need jq; need envsubst
 
 attach() {
-  local s=$1 pod
-  pod=$(k -n "${AGENTS_NS}" get pod -l "session=${s}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  local s=$1 pod=""
+  # the Job's pod appears a moment after apply
+  for _ in $(seq 1 60); do
+    pod=$(k -n "${AGENTS_NS}" get pod -l "session=${s}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    [[ -n "${pod}" ]] && break; sleep 2
+  done
   [[ -n "${pod}" ]] || die "no running session ${s}"
   k -n "${AGENTS_NS}" wait --for=condition=Ready "pod/${pod}" --timeout=180s >/dev/null || die "session ${s} did not start"
   # wait for tmux inside: the clone may take a moment
-  for _ in $(seq 1 60); do k -n "${AGENTS_NS}" exec "${pod}" -- tmux has-session -t chat 2>/dev/null && break; sleep 2; done
+  local up=""
+  for _ in $(seq 1 60); do k -n "${AGENTS_NS}" exec "${pod}" -- tmux has-session -t chat 2>/dev/null && { up=1; break; }; sleep 2; done
+  [[ -n "${up}" ]] || die "session ${s} has no chat yet (see: ${KUBECTL} -n ${AGENTS_NS} logs ${pod})"
   ok "attaching to ${s} (detach: Ctrl-b d; the session keeps running until idle)"
   exec ${KUBECTL} -n "${AGENTS_NS}" exec -it "${pod}" -- tmux attach -t chat
 }
@@ -31,7 +37,7 @@ case "${1:-}" in
     need yq
     spec=${2:?usage: $0 start <project.yaml>}
     project=$(yq -r '.project' "${spec}"); REPO=$(yq -r '.forge.repo' "${spec}")
-    [[ "${project}" =~ ^[a-z0-9-]+$ && "${REPO}" == */* ]] || die "spec: project and forge.repo are required"
+    [[ "${project}" =~ ^[a-z0-9-]+$ && "${REPO}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "spec: project (a-z0-9-) and forge.repo (owner/name) are required"
     gitea_cli() { k -n "${FORGE_NS}" exec deploy/gitea -- gitea "$@" 2>/dev/null; }
     # shellcheck source=../lib-forge.sh
     source "${SPIKE_DIR}/lib-forge.sh"
@@ -49,7 +55,7 @@ case "${1:-}" in
       --dry-run=client -o yaml | k apply -f - >/dev/null
     k -n "${AGENTS_NS}" get secret claude-shared >/dev/null 2>&1 || die "no claude-shared secret (run ./run.sh 06 first)"
     session="chat-${project}-$(date +%H%M%S)"
-    SESSION="${session}" PROJECT="${project}" AGENTS_NS="${AGENTS_NS}" WORKER_IMAGE="${WORKER_IMAGE}" IMAGE_PULL_POLICY=Never \
+    SESSION="${session}" PROJECT="${project}" AGENTS_NS="${AGENTS_NS}" WORKER_IMAGE="${WORKER_IMAGE}" IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-Never}" \
       FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" CHAT_USER="${chat}" REPO="${REPO}" \
       IDLE_SECONDS="${IDLE_SECONDS:-1800}" REMOTE_CONTROL="${REMOTE_CONTROL:-false}" CLAUDE_SECRET="${CLAUDE_SECRET:-claude-shared}" \
       envsubst < "${SPIKE_DIR}/manifests/chat.yaml.tmpl" | k apply -f - >/dev/null

@@ -9,6 +9,7 @@ metadata:
   labels: {app: agent-chat, project: "${PROJECT}"}
 spec:
   backoffLimit: 0
+  activeDeadlineSeconds: 28800    # hard cap 8 h, even with someone attached
   ttlSecondsAfterFinished: 300
   template:
     metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}"}}
@@ -32,6 +33,7 @@ spec:
         - {name: REPO,           value: "${REPO}"}
         - {name: IDLE_SECONDS,   value: "${IDLE_SECONDS}"}
         - {name: REMOTE_CONTROL, value: "${REMOTE_CONTROL}"}
+        - {name: CLAUDE_CONFIG_DIR, value: /home/node/.claude}   # also the image default; where the session pre-seeds .claude.json
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: chat-${PROJECT}, key: FORGE_TOKEN}}
         envFrom:
