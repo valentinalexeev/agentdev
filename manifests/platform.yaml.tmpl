@@ -28,9 +28,11 @@ spec:
     metadata: {labels: {app: platform-db}}
     spec:
       automountServiceAccountToken: false
+      securityContext: {runAsUser: 999, runAsGroup: 999, fsGroup: 999, runAsNonRoot: true}   # the image's postgres user
       containers:
       - name: postgres
         image: ${POSTGRES_IMAGE}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         env:
         - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
         - name: POSTGRES_PASSWORD
@@ -76,12 +78,14 @@ spec:
   replicas: 1                      # DB cache, no Redis: one replica (ADR 0001)
   selector: {matchLabels: {app: contextforge}}
   template:
-    metadata: {labels: {app: contextforge}}
+    metadata: {labels: {app: contextforge, agentdev/db-client: "true"}}
     spec:
       automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true}   # the image runs as 10001
       containers:
       - name: gateway
         image: ${CONTEXTFORGE_IMAGE}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         envFrom: [{secretRef: {name: contextforge}}]
         env:
         - {name: HOST, value: 0.0.0.0}
@@ -105,3 +109,35 @@ metadata: {name: contextforge, namespace: ${PLATFORM_NS}}
 spec:
   selector: {app: contextforge}
   ports: [{name: http, port: 4444, targetPort: http}]
+---
+# Network: agent pods run untrusted code, so the platform is closed by default. Postgres only from its clients in this
+# namespace (ContextForge now, the agentdev API in #46); ContextForge only from the agents namespace (agents call
+# /servers/<id>/mcp with a token scoped to their project). Admin calls come through `kubectl port-forward`, which
+# NetworkPolicy does not filter. Enforced on GKE (Dataplane V2); the kindnet CNI of a local kind cluster does not
+# enforce it (checked: a pod in `default` still reaches ContextForge), so locally this is declared intent only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-ingress, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: platform-db, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: platform-db}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {agentdev/db-client: "true"}}}]
+    ports: [{port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: contextforge}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}}]
+    ports: [{port: 4444}]
