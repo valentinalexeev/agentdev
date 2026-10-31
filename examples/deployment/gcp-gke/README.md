@@ -7,7 +7,7 @@ instance. The product (modules, playbook, images) stays in `valentinalexeev/agen
 ```
 terraform/main.tf                root module → agentdev//infra/terraform?ref=vX.Y.Z
 terraform/instance.tfvars        your project, region, zone, billing account, this repo's name
-ansible/instance.yml             your project, zone, image_tag (= the same vX.Y.Z), reviewer, agents
+ansible/instance.yml             your project, zone, image_tag (X.Y.Z of the same release), reviewer, agents
 .github/workflows/deploy.yml     PR: plan + check   main: apply + deploy   (Workload Identity, no keys)
 AGENTS.md / CLAUDE.md            how an agent operates this instance
 ```
@@ -22,5 +22,5 @@ AGENTS.md / CLAUDE.md            how an agent operates this instance
 6. Protect `main`: require a PR, 1 approval, and the `deploy` checks. From now on every change is a PR here.
 
 ## Upgrading agentdev
-Change `ref=vX.Y.Z` in `terraform/main.tf` **and** `image_tag` in `ansible/instance.yml` together, in one PR.
+Change `ref=vX.Y.Z` in `terraform/main.tf` **and** `image_tag: "X.Y.Z"` in `ansible/instance.yml` together, in one PR (image tags have no `v`).
 Read the agentdev `CHANGELOG.md` first; a MAJOR bump (MINOR while `0.x`) can require input changes.

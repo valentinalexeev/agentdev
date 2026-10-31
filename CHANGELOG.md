@@ -6,6 +6,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-31
+
 ### Added
 - Coding agents on Kubernetes: one Claude Code worker per forge account, polling assigned issues and PR
   feedback, under gVisor (kind locally).
@@ -39,3 +41,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   must come from the deployment (`-e @instance.yml`); the playbook stops if they're missing (#11).
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
+
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
