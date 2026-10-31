@@ -8,6 +8,10 @@ forge account** (and optionally its own Claude account) and runs a loop:
 1. open issue **assigned to me** with no PR yet → branch `agent/<me>/issue-N`, run `claude -p`, push, open PR
 2. new **comments / reviews from others** on my open PRs → check out the branch, run `claude -p`, push, reply
 
+> **Security:** agents run untrusted issue text with build and test tools. Until the forge sidecar lands, only trusted
+> people should write issues and reviews for an agent. See [docs/security.md](docs/security.md) (risk register) and
+> [docs/security-model.md](docs/security-model.md) (target design).
+
 ```mermaid
 flowchart LR
   you((you)) -- issues, reviews --> gitea[Gitea<br/>owner/playground]

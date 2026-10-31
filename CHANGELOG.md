@@ -41,6 +41,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   the loop's environment and answers only for the forge host. The loop's own git runs no hooks, fsmonitor or
   config-defined drivers, pushes to the forge URL rather than `origin`, and keeps Claude's stderr out of the worktree.
   The security model is documented in `docs/concepts.md`; egress control remains open (#6).
+  **Known gap:** a build or test command Claude runs can read the loop's environment, including the forge token
+  (R4). Until the forge sidecar lands, only trusted people should write issues and reviews for an agent.
+- Security risk register `docs/security.md` (every flagged risk with its status) and the target security model
+  `docs/security-model.md` (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI).
+- The loop's git ignores global and system git config and pins each worktree's `.git` to the shared clone.
 
 ## [0.1.0] - 2026-10-31
 

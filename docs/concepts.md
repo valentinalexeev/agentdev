@@ -90,19 +90,23 @@ token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so
 **Security model.** An agent is an autonomous developer: it has to build and test the code it writes, and a test
 runner can start any program. So the security boundary is the pod, not the list of tools Claude may use:
 
-- **Nothing to steal:** Claude never sees the forge token. It is removed from Claude's environment and never written
-  to disk. The agent loop, not Claude, fetches and pushes, through a credential helper that answers only for the
-  forge's own host. The loop's git runs no hooks or config-defined programs, so code Claude writes into the repo or
-  `.git` never runs with the token.
+- **Nothing to steal (partly):** the forge token is never written to disk and is removed from Claude's own
+  environment. The agent loop, not Claude, fetches and pushes, through a credential helper that answers only for the
+  forge's own host. The loop's git runs no hooks, global config or config-defined programs, so code Claude writes into
+  the repo or `.git` never runs with the token. **Known gap (R4):** the loop runs in the same container and as the
+  same user as Claude, so a build or test command Claude runs can still read the loop's environment
+  (`/proc/<pid>/environ`) and with it the token. Until the forge sidecar lands ([security-model.md](security-model.md),
+  phase 1), **only trusted people may write issues and reviews for an agent.**
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
   push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
-- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login) could be sent out.
-  An egress allow-list and a credential proxy for the Claude login are tracked in #6 and are needed before agents
-  face untrusted input in production. Repo code and issue text always go to the model provider: that is inherent to
-  the product.
+- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login, the forge token through
+  R4) could be sent out. The full list of risks and their status is in [security.md](security.md); the target design
+  (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI) is in
+  [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
+  to the product.
 
 ## What is planned
 
