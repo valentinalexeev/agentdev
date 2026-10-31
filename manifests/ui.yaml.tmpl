@@ -17,13 +17,20 @@ spec:
         - {name: OIDC_ISSUER, value: "${OIDC_ISSUER}"}
         - {name: OIDC_CLIENT_ID, value: agentdev}
         - {name: API_UPSTREAM, value: "http://agentdev-api.${PLATFORM_NS}.svc.cluster.local:8080"}
-        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        # nginx writes its rendered config, pid and temp files: only these are writable
+        volumeMounts:
+        - {name: conf, mountPath: /etc/nginx/conf.d}
+        - {name: tmp, mountPath: /tmp}
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
         resources:
           requests: {cpu: 10m, memory: 16Mi}
           limits: {memory: 64Mi}
+      volumes:
+      - {name: conf, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service

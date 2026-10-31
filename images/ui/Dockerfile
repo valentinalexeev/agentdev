@@ -10,7 +10,8 @@ RUN npm run lint && npm run build
 # envsubst at start: the API upstream and /config.json (OIDC issuer, client id) come from the pod's environment.
 FROM nginxinc/nginx-unprivileged:1.29.3-alpine
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
-COPY --chmod=0755 nginx/15-nameserver.envsh /docker-entrypoint.d/15-nameserver.envsh
+COPY --chmod=0755 nginx/15-env.envsh /docker-entrypoint.d/15-env.envsh
+COPY nginx/security.conf /etc/nginx/snippets/security.conf
 COPY --from=build /src/dist /usr/share/nginx/html
 ENV API_UPSTREAM=http://agentdev-api:8080 OIDC_CLIENT_ID=agentdev
 EXPOSE 8080

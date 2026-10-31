@@ -1,4 +1,0 @@
-#!/bin/sh
-# Expose the pod's DNS server to the nginx template (resolver directive), then let the image entrypoint render it.
-NAMESERVER=$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)
-export NAMESERVER="${NAMESERVER:-127.0.0.11}"

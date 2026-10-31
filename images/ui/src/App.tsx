@@ -1,13 +1,25 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserManager, User } from './auth'
 import { listAgents, Unauthorized, type Agent } from './api'
 
 export function App({ um }: { um: UserManager }) {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   const [error, setError] = useState<string>('')
+  const handled = useRef(false)
+
+  const signIn = useCallback(() => {
+    um.signinRedirect().catch((e) => setError(`cannot reach the sign-in server: ${e.message}`))
+  }, [um])
+  // ends the authentik session too, then comes back to the UI
+  const signOut = useCallback(() => {
+    um.signoutRedirect().catch(() => um.removeUser().then(() => setUser(null)))
+  }, [um])
+  const onExpired = useCallback(() => { um.removeUser().then(() => setUser(null)) }, [um])
 
   useEffect(() => {
     if (window.location.pathname === '/callback') {
+      if (handled.current) return // StrictMode runs effects twice in dev; the code is single-use
+      handled.current = true
       um.signinRedirectCallback()
         .then((u) => { window.history.replaceState({}, '', '/'); setUser(u) })
         .catch((e) => setError(`login failed: ${e.message}`))
@@ -16,19 +28,19 @@ export function App({ um }: { um: UserManager }) {
     um.getUser().then((u) => setUser(u && !u.expired ? u : null))
   }, [um])
 
-  if (error) return <Shell><p className="error">{error}</p><button onClick={() => um.signinRedirect()}>Try again</button></Shell>
+  if (error) return <Shell><p className="error">{error}</p><button onClick={() => signIn()}>Try again</button></Shell>
   if (user === undefined) return <Shell><p>Loading…</p></Shell>
   if (!user) {
     return (
       <Shell>
         <p>Sign in with your agentdev account.</p>
-        <button onClick={() => um.signinRedirect()}>Sign in</button>
+        <button onClick={() => signIn()}>Sign in</button>
       </Shell>
     )
   }
   return (
-    <Shell user={user} onLogout={() => um.removeUser().then(() => setUser(null))}>
-      <Overview token={user.access_token} onExpired={() => um.removeUser().then(() => setUser(null))} />
+    <Shell user={user} onLogout={signOut}>
+      <Overview token={user.access_token} onExpired={onExpired} />
     </Shell>
   )
 }

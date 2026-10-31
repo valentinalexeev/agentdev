@@ -129,7 +129,9 @@ kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443     # si
 
 **Sign in** sends you to authentik (OIDC authorization code + PKCE, client `agentdev`); after login the overview
 lists the agents with their phase and refreshes every 15 s. Tokens are kept in the tab's session storage (closing
-the tab signs you out). nginx serves `/config.json` from the pod's environment (`OIDC_ISSUER`) and proxies `/api`
+the tab signs you out); **Sign out** also ends the authentik session for agentdev. nginx sends a strict
+Content-Security-Policy (scripts from the UI only, network calls to the UI and authentik only) and runs with a
+read-only root filesystem. nginx serves `/config.json` from the pod's environment (`OIDC_ISSUER`) and proxies `/api`
 to the API, so the browser only talks to the UI origin and authentik. The UI origin must be a strict redirect URI
 in the authentik blueprint (`manifests/authentik-blueprint-agentdev.yaml`): authentik derives its CORS allow-list
 from those. On GKE: #51.
