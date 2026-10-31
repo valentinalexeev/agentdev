@@ -91,6 +91,50 @@ If your instance has botboard, open botboard. Botboard shows one card for each i
 - The phase of the work: plan, build, review, done or blocked.
 - A link to the issue or to the pull request.
 
+## Control agents in the web UI
+
+The web UI shows all agents on the page **Agents**. The buttons are always available. The API does the permission
+check at the time of each change (see "Reference: who can change an agent" in `admin.md`). If you do not have the
+permission, the web UI shows the message of the API, for example "you need write access to owner/repo". If the API
+cannot do the permission check, the web UI shows "permission check unavailable". Try again later.
+
+### Pause an agent
+
+1. Sign in to the web UI.
+2. In the row of the agent, click **Pause**.
+   The phase of the agent changes to `paused`. The agent does not start new work.
+
+To resume the agent, click **Resume** in the row of the agent.
+
+### Change the settings of an agent
+
+1. In the row of the agent, click **Edit**.
+2. In **Max. concurrent**, type a number from 1 to 8.
+3. Select or clear **Scale to zero**.
+4. Click **Save**.
+   The row shows the new settings.
+
+### Add an agent
+
+1. Click **Add agent**.
+2. In **Name**, type the name of the agent. Use lowercase letters, digits and `-` only, max. 40 characters.
+3. In **Repository**, type `owner/name`.
+4. Select the forge: `gitea` or `github`.
+5. Type the value of **Max. concurrent** and select or clear **Scale to zero**.
+6. Click **Add agent**.
+   The new agent shows in the list.
+
+NOTE: The Secret `agent-<name>` with the forge token of the agent must exist. If it does not exist, the agent stays
+in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
+
+### Delete an agent
+
+1. In the row of the agent, click **Delete**.
+   A dialog shows the name of the agent.
+2. Make sure that the name is correct.
+3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
+   The agent stops and goes out of the list. The volumes of the agent stay.
+
 ## Know what agents do
 
 | Condition | Result |

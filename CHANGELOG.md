@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
+  and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
+  (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
+  always shown; the API decides: 403 shows the API message, 503 shows "permission check unavailable". The list
+  reloads after each change. Phases `paused` and `invalid` have styles. No new dependencies; CSP unchanged.
 - API writes to Agents (#57 step 3): `PATCH /api/agents/{name}` (JSON merge patch of `paused`, `maxConcurrent`,
   `scaleToZero`), `POST /api/agents` and `DELETE /api/agents/{name}` (volumes always kept). Permission is checked
   live on Gitea (`/collaborators/{user}/permission`): write on the repository to pause, resume or edit; admin to
