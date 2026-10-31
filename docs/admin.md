@@ -28,6 +28,14 @@ v1 limits: Gitea only, issues on the same forge, one repository per agent deploy
 | Parallel items per agent | `MAX_CONCURRENT` (default 2) | `max_concurrent`, per agent `agents[].max_concurrent` |
 | Poll interval (webhook fallback) | `POLL_SECONDS` | `poll_seconds` |
 
+Each agent pod has two containers: `agent` (loop and Claude, no forge credentials) and `forge` (the sidecar that
+holds the forge token, image `agentdev-forge`, #64). Logs: `kubectl -n coding-agents logs agent-<name>-0 -c forge`.
+The sidecar refuses pushes outside `agent/<name>/*`, pushes touching `PROTECTED_PATHS` (default the workflow
+directories) and pushes over `MAX_PUSH_MB` (50). Every refusal, in the sidecar or the loop, is logged as an
+`AGENTDEV_SECURITY_EVENT` JSON line (rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4));
+`kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT` lists them. On kind `./run.sh 06` builds it (`FORGE_IMAGE`); Ansible uses
+`forge_image` (same `image_tag`).
+
 Each agent uses exactly one Claude credential: its own if present, otherwise the shared one (#5).
 An agent's memory limit is (1 + parallel items) GiB, so 3 GiB at the default of 2 (set by the operator).
 

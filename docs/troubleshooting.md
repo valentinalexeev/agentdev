@@ -4,7 +4,7 @@ Start with the agent and router logs:
 
 ```bash
 kubectl -n coding-agents get pods
-kubectl -n coding-agents logs -f -l app=coding-agent --prefix
+kubectl -n coding-agents logs -f -l app=coding-agent --prefix --all-containers   # agent loop and forge sidecar
 kubectl -n coding-agents logs deploy/webhook-router
 ```
 
@@ -26,6 +26,9 @@ kubectl -n coding-agents logs deploy/webhook-router
 | authentik login loops back to the login page | plain http port-forward: session cookies are https only | port-forward `443` and use https://localhost:9443/ |
 | API answers 401 to a fresh token | token issuer differs from `API_OIDC_ISSUER` (logged in through another URL) | log in through the URL in `API_OIDC_ISSUER`, or set it and rerun `./run.sh 10` |
 | UI: Sign in does nothing, browser console shows a CORS error | the UI origin is not a strict redirect URI of the `agentdev` client | add `http(s)://<ui host>/callback` as `strict` in `manifests/authentik-blueprint-agentdev.yaml`, rerun `./run.sh 09` |
+| Agent log `push to agent/<name>/... failed: push refused: ... protected path` | the change touches `.github/workflows/` (or another `PROTECTED_PATHS` entry) | by design (#64): a person makes that change; the issue gets "could not produce a change" |
+| `AGENTDEV_SECURITY_EVENT` lines in the agent log | a guardrail refused something (rule and action in the JSON) | `high`: read the job's issue or review for an injection attempt; `medium` git-config/hook events after a Claude run are worth a look too |
+| Agent log `sync: the forge sidecar failed` | `forge` container not running or cannot reach the forge | `kubectl -n coding-agents logs agent-<name>-0 -c forge`; check `FORGE_TOKEN` in Secret `agent-<name>` |
 | A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).

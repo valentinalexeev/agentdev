@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 # agent-loop: one Claude Code worker bound to one forge account.
 #
-# Every POLL_SECONDS, or right away when a signed forge webhook arrives (webhook-listener.js), it:
+# Every POLL_SECONDS, or right away when the router wakes it (the forge sidecar's webhook listener), it:
 #   1. picks open issues assigned to FORGE_USER that have no PR yet -> branch, run claude, push, open PR
 #   2. checks its own open PRs for new feedback (comments, reviews) from others -> run claude, push, reply
 #
 # State (which feedback was already handled) lives in /state, which is a PVC, so restarts don't redo work.
 # Talks to the Gitea REST API (/api/v1). GitHub would be a different `api_*` layer; the loop stays the same.
+#
+# This container holds no forge credentials (#64, security model phase 1). Every forge operation goes through the
+# forge sidecar in the same pod (images/forge, http://127.0.0.1:7070): REST calls, sync (a git bundle of the repo)
+# and push (a git bundle, accepted only for agent/<FORGE_USER>/*, without protected paths). The sidecar holds
+# FORGE_TOKEN, WAKE_TOKEN and REGISTER_TOKEN and runs the webhook listener.
 set -uo pipefail
 
-: "${FORGE_URL:?}" "${FORGE_USER:?}" "${FORGE_TOKEN:?}" "${REPO:?}"   # REPO=owner/name
+: "${FORGE_URL:?}" "${FORGE_USER:?}" "${REPO:?}"   # REPO=owner/name
+FORGE_API="${FORGE_API:-http://127.0.0.1:7070}"   # the forge sidecar (localhost only)
+exec 3>&1   # security events (security_event) always reach the container log, even from inside $(...)
 POLL_SECONDS="${POLL_SECONDS:-30}"
 REVIEWER="${REVIEWER:-${REPO%%/*}}"   # who approves agent PRs; defaults to the repo owner
 MAX_TURNS="${MAX_TURNS:-40}"
-WAKE_FILE="${WAKE_FILE:-/tmp/agent-wake}"   # touched by webhook-listener.js on a signed forge delivery (#3)
+WAKE_FILE="${WAKE_FILE:-/state/agent-wake}"   # appended by the sidecar's webhook listener on a router wake (#3)
 STATE="${STATE_DIR:-/state}"
 WORK="${STATE}/repo"
 # MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp from scripts/mcp-sync.sh) Claude gets the project's tools.
@@ -26,11 +33,18 @@ fi
 mkdir -p "${STATE}/seen"
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
+# security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
+# #70). JOB is set inside each background job (start_job). Written to fd 3, the loop's own stdout (exec 3>&1 below),
+# so an event raised inside a captured function (dir=$(worktree ...)) or a job's prefixed pipe stays a clean line.
+security_event() {
+  local fd=1; { true >&3; } 2>/dev/null && fd=3
+  printf 'AGENTDEV_SECURITY_EVENT %s\n' "$(jq -cn --arg r "$1" --arg s "$2" --arg a "${AGENT_NAME:-${FORGE_USER}}" \
+    --arg j "${JOB:-}" --arg x "${3:0:500}" '{source:"loop", rule:$r, severity:$s, agent:$a, job:$j, action:$x}')" >&"${fd}"
+}
 
-api() {  # api METHOD PATH [json-body]
+api() {  # api METHOD PATH [json-body]: through the forge sidecar, which adds the token and allows only the loop's calls
   local m=$1 p=$2; shift 2
-  curl -fsS -X "${m}" -H "Authorization: token ${FORGE_TOKEN}" -H 'Content-Type: application/json' \
-    "${FORGE_URL}/api/v1${p}" ${1:+-d "$1"}
+  curl -fsS -X "${m}" -H 'Content-Type: application/json' -H "X-Agentdev-Job: ${JOB:-}" "${FORGE_API}/api/v1${p}" ${1:+-d "$1"}
 }
 
 request_review() {  # (re)request REVIEWER on a PR; also works after a review to ask again
@@ -59,15 +73,10 @@ board_note() {  # board_note <text> [url]
     '{agent:$a, project:$p, text:$t} + (if $u != "" then {url:$u} else {} end)')" >/dev/null 2>&1 || true
 }
 
-# The forge token never goes into a URL (git remote, process list, error output) and never into a file: git asks a
-# credential helper that reads FORGE_TOKEN from the loop's own environment. Claude runs without that variable and
-# without the helper (see run_claude), so nothing on disk or in its environment holds the token (#59, CodeQL).
+# The forge token is not in this container at all (#64): git here never talks to the forge. The shared clone gets its
+# objects from a bundle the sidecar sends (sync_repo), and pushes leave as a bundle the sidecar checks and pushes
+# (commit_and_push). The remote URL is kept for display and carries no credentials.
 clone_url() { echo "${FORGE_URL%/}/${REPO}.git"; }
-# scheme://host[:port] of the forge: the helper answers only for exactly this origin, so a redirect or a rewritten
-# remote can never send the token to another host
-FORGE_ORIGIN=$(sed -E 's#^([a-zA-Z]+://[^/]+).*#\1#' <<<"${FORGE_URL}"); export FORGE_ORIGIN
-# shellcheck disable=SC2016  # expanded by git's shell, from the loop's environment, at fetch/push time
-GIT_HELPER='!f() { test "$1" = get || exit 0; h=; p=; while IFS== read -r k v; do [ -z "$k" ] && break; case "$k" in host) h=$v;; protocol) p=$v;; esac; done; [ "$p://$h" = "${FORGE_ORIGIN}" ] || exit 0; echo "username=${FORGE_USER}"; echo "password=${FORGE_TOKEN}"; }; f'
 # git as the loop runs it. Claude can write anywhere in the worktree (and with a shell, into .git), so the loop never
 # runs repo-controlled code: hooks and fsmonitor are off for every loop git call (command-line config wins over
 # .git/config).
@@ -78,10 +87,18 @@ lgit() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath
 scrub_git_config() {
   local cfg="${WORK}/.git/config" k
   [[ -f "${cfg}" ]] || return 0
-  rm -f "${WORK}"/.git/worktrees/*/config.worktree "${WORK}/.git/config.worktree"
+  local f
+  for f in "${WORK}"/.git/worktrees/*/config.worktree "${WORK}/.git/config.worktree"; do
+    [[ -e "${f}" || -L "${f}" ]] && { security_event git-config-worktree medium "removed ${f#"${WORK}/"}"; rm -f "${f}"; }
+  done
+  # hooks never run in the loop's git (lgit), but one appearing means something tried to plant code
+  for f in "${WORK}"/.git/hooks/*; do
+    [[ -e "${f}" && "${f}" != *.sample ]] && { security_event git-hook-present high "hook ${f##*/} found and removed"; rm -f "${f}"; }
+  done
   git config --file "${cfg}" --name-only --list 2>/dev/null | sort -u | while read -r k; do
-    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|extensions\.objectformat|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] ||
-      git config --file "${cfg}" --unset-all "${k}" 2>/dev/null
+    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|extensions\.objectformat|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] && continue
+    security_event git-config-key medium "removed git config key ${k}"
+    git config --file "${cfg}" --unset-all "${k}" 2>/dev/null
   done
   git config --file "${cfg}" remote.origin.url "$(clone_url)"
 }
@@ -93,36 +110,47 @@ scrub_git_config() {
 pin_worktree() {
   local dir base adm="" a n=0
   dir=$(cd "$1" && pwd -P) || return 1
-  [[ -L "${WORK}/.git/worktrees" ]] && { log "worktrees dir is a symlink"; return 1; }
+  [[ -L "${WORK}/.git/worktrees" ]] && { log "worktrees dir is a symlink"; security_event git-worktree-forged high "worktrees dir is a symlink"; return 1; }
   base=$(cd "${WORK}/.git/worktrees" 2>/dev/null && pwd -P) || { log "no worktrees dir"; return 1; }
   # exactly one real admin dir may name this tree (its name can differ after `worktree move`); two means someone
   # forged one, so fail closed
   for a in "${base}"/*/; do
     a=${a%/}
-    [[ -L "${a}" || -L "${a}/gitdir" || ! -f "${a}/gitdir" ]] && continue
+    if [[ -L "${a}" || -L "${a}/gitdir" ]]; then security_event git-worktree-forged high "symlinked worktree admin dir ${a##*/}"; continue; fi
+    [[ -f "${a}/gitdir" ]] || continue
     [[ "$(cat "${a}/gitdir")" == "${dir}/.git" ]] && { adm=${a}; n=$((n+1)); }
   done
-  [[ ${n} -eq 1 ]] || { log "no single trusted worktree admin dir for ${dir} (${n})"; return 1; }
+  [[ ${n} -eq 1 ]] || { log "no single trusted worktree admin dir for ${dir} (${n})"
+    (( n > 1 )) && security_event git-worktree-forged high "${n} admin dirs claim ${dir}"; return 1; }
+  # the .git file should already point at the admin dir; anything else means it was redirected
+  # (compared resolved: git may write the path unresolved)
+  local cur real=""; cur=$(cat "${dir}/.git" 2>/dev/null)
+  [[ "${cur}" == "gitdir: "* && ! -L "${dir}/.git" ]] && real=$(cd "${cur#gitdir: }" 2>/dev/null && pwd -P)
+  [[ "${real}" != "${adm}" ]] && security_event git-worktree-redirected high "worktree .git of ${dir##*/} pointed at: ${cur:0:200}"
+  [[ -L "${adm}/commondir" || "$(cat "${adm}/commondir" 2>/dev/null)" != "../.." ]] && security_event git-worktree-redirected high "commondir of ${adm##*/} was changed"
   rm -rf "${dir}/.git.pin" "${adm}/commondir.pin"
   # mv onto a symlink to a directory would move into it: remove whatever is there first
   rm -rf "${dir}/.git" "${adm}/commondir"
   printf 'gitdir: %s\n' "${adm}" > "${dir}/.git.pin" && mv -f "${dir}/.git.pin" "${dir}/.git" || return 1
   printf '../..\n' > "${adm}/commondir.pin" && mv -f "${adm}/commondir.pin" "${adm}/commondir" || return 1
 }
-# git with forge auth: only the loop calls this (fetch, push); the helper exists for that one process only
-git_auth() { lgit -c credential.helper= -c credential.helper="${GIT_HELPER}" "$@"; }
+# sidecar <path> [curl args...]: a call to the forge sidecar that is not a forge REST call (sync, push, idle)
+sidecar() { local p=$1; shift; curl -fsS -m 900 -H "X-Agentdev-Job: ${JOB:-}" "$@" "${FORGE_API}${p}"; }
 
 sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses concurrent ref updates.
   (
     flock 9
     rm -f "${STATE}/git-credentials"   # older versions stored the token here
+    local bundle="${STATE}/jobs/sync-$$.bundle"
+    # the sidecar fetches the forge into its own mirror and answers with a bundle of every branch
+    sidecar /sync -X POST -o "${bundle}" || { rm -f "${bundle}"; log "sync: the forge sidecar failed"; exit 1; }
     if [[ ! -d "${WORK}/.git" ]]; then
-      git_auth clone -q "$(clone_url)" "${WORK}" || exit 1
+      lgit init -q "${WORK}" && lgit -C "${WORK}" remote add origin "$(clone_url)" || { rm -f "${bundle}"; exit 1; }
     fi
-    # the helper is passed per git call by the loop (git_auth), never stored in the repo config Claude works in
     lgit -C "${WORK}" config --unset-all credential.helper 2>/dev/null || true
     lgit -C "${WORK}" remote set-url origin "$(clone_url)"
-    git_auth -C "${WORK}" fetch -q --prune origin
+    lgit -C "${WORK}" fetch -q --prune "${bundle}" '+refs/heads/*:refs/remotes/origin/*'; local rc=$?
+    rm -f "${bundle}"; (( rc == 0 )) || exit 1
     # the shared clone never holds a branch, so every branch is free for its own worktree (pre-#20 clones did)
     lgit -C "${WORK}" checkout -q --detach 2>/dev/null || true
     lgit -C "${WORK}" config user.name  "${FORGE_USER}"
@@ -156,6 +184,7 @@ start_job() {
   (( $(running_jobs) >= MAX_CONCURRENT )) && return 1
   echo "$$" > "${JOBS}/${key}.lock"
   (
+    JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"' EXIT
     set -o pipefail
     if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
@@ -204,9 +233,10 @@ worktree() {
 default_branch() { api GET "/repos/${REPO}" | jq -r .default_branch; }
 
 # Guardrails for the Claude run (#59, CodeQL: prompt injection, excessive agency):
-#  - Claude holds no forge credentials: FORGE_TOKEN, WAKE_TOKEN and REGISTER_TOKEN are removed from its environment,
-#    git has no credential helper in its process and the token is on no disk. The loop pushes afterwards, only to the
-#    agent's own branch, and only the owner can merge (branch protection). The loop's own git calls run no hooks,
+#  - Claude holds no forge credentials: FORGE_TOKEN, WAKE_TOKEN and REGISTER_TOKEN live only in the forge sidecar
+#    container (#64), so neither this process's environment nor /proc of anything here holds them (the env -u below
+#    stays as a second line). The sidecar pushes, only to the agent's own branch and without protected paths
+#    (.github/workflows/ and friends), and only the owner can merge (branch protection). The loop's own git calls run no hooks,
 #    no fsmonitor and no config-defined drivers (lgit, scrub_git_config), since Claude can write into .git.
 #  - The tool lists below are a usability and defence-in-depth layer, not the security boundary: a test runner can
 #    start any program. The boundary is the pod: no credentials Claude can read, gVisor, no service account token,
@@ -242,8 +272,8 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
   return ${rc}
 }
 
-commit_and_push() {  # commit_and_push <dir> <branch> <message>  -> 0 if something was pushed
-  local dir=$1 branch=$2 msg=$3
+commit_and_push() {  # commit_and_push <dir> <branch> <message> <base>  -> 0 if something was pushed
+  local dir=$1 branch=$2 msg=$3 base=${4:-} bundle out
   ( flock 9; scrub_git_config ) 9>"${STATE}/git.lock"
   pin_worktree "${dir}" || return 1
   lgit -C "${dir}" add -A
@@ -253,8 +283,13 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message>  -> 0 if somethi
      [[ -z $(lgit -C "${dir}" log --oneline "origin/${branch}..HEAD") ]]; then
     return 1
   fi
-  # to the forge URL itself, not "origin": Claude may have rewritten the remote
-  git_auth -C "${dir}" push -q "$(clone_url)" "HEAD:refs/heads/${branch}" || return 1
+  # the new commits go to the sidecar as a bundle (data, not a repo it would run git in); it checks the policy and pushes
+  bundle="${STATE}/jobs/push-$$-${RANDOM}.bundle"
+  lgit -C "${dir}" bundle create -q "${bundle}" HEAD --not --remotes || { rm -f "${bundle}"; return 1; }
+  # base is informational: the sidecar looks up the default branch itself
+  out=$(curl -sS -m 900 -w '\n%{http_code}' -X POST --data-binary "@${bundle}" -H 'Content-Type: application/octet-stream' \
+        -H "X-Agentdev-Job: ${JOB:-}" "${FORGE_API}/push?branch=${branch}&base=${base}"); rm -f "${bundle}"
+  [[ "${out##*$'\n'}" == 200 ]] || { log "push to ${branch} failed: ${out%$'\n'*}"; return 1; }
   # a push to a URL does not move origin/<branch>; do it, so a second call before the next fetch sees nothing new
   lgit -C "${dir}" update-ref "refs/remotes/origin/${branch}" HEAD
 }
@@ -307,7 +342,7 @@ ${body}")
 Make the code changes, run the project's tests if you can, and keep the change focused.
 Do not push and do not create branches; just leave the work in the working tree (committing is fine).
 Finish with a short summary of what you changed, written for a PR description.")
-  if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})"; then
+  if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
     local pr
     pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
           --arg d "Closes #${n}
@@ -418,7 +453,7 @@ $(untrusted "${fb}")
 
 Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
 Do not push. Finish with a short reply to the reviewers.")
-  if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}"; then
+  if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
     comment "${pr}" "🤖 Pushed an update.
 
 ${result}"
@@ -445,11 +480,10 @@ wait_for_work() {
     sleep 0.5
   done
 }
-: > "${WAKE_FILE}"
+: > "${WAKE_FILE}"; chmod 664 "${WAKE_FILE}"   # the sidecar (other UID, same fsGroup) appends to it
 
-if [[ -n "${ROUTER_URL:-}" ]]; then
-  node /usr/local/lib/agentdev/webhook-listener.js &
-fi
+# the sidecar starts next to us; wait for it rather than failing the first pass
+for _ in $(seq 60); do curl -fsS -m 2 "${FORGE_API}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 log "starting: repo=${REPO} forge=${FORGE_URL} poll=${POLL_SECONDS}s webhooks=$([[ -n "${ROUTER_URL:-}" ]] && echo "via ${ROUTER_URL}" || echo off) claude=$(claude --version 2>/dev/null)"
 api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
 
@@ -502,8 +536,8 @@ maybe_stop() {
   if (( $(running_jobs) > 0 )); then idle_since=$(date +%s); return; fi
   (( $(date +%s) - idle_since >= IDLE_SECONDS )) || return
   local r
-  r=$(curl -fsS -X POST -H "Authorization: Bearer ${WAKE_TOKEN}" -H 'Content-Type: application/json' "${ROUTER_URL}/idle" \
-      -d "$(jq -n --arg a "${AGENT_NAME:-${FORGE_USER}}" --argjson s "$(( idle_since * 1000 ))" '{agent:$a, idleSince:$s}')") \
+  # through the sidecar, which holds the wake token the router checks
+  r=$(sidecar /idle -X POST -H 'Content-Type: application/json' -d "$(jq -n --argjson s "$(( idle_since * 1000 ))" '{idleSince:$s}')") \
     || { log "idle: router unreachable or refused"; idle_since=$(date +%s); return; }
   if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then
     # the pod is being removed: take no new work (a job started now would be killed); the router restarts us on the next event

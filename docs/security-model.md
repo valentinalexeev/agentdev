@@ -44,6 +44,40 @@ flowchart LR
 
 ### Phase 1: forge sidecar (fixes R4)
 
+Status: **implemented** in #64 (`images/forge`, operator renders it), pending an e2e pass on a cluster. As built:
+sync and push exchange git bundles (the loop never shares a git directory with the sidecar; the sidecar keeps its
+mirror on a volume only it mounts); push refuses non-fast-forwards; protected paths default to
+`.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (`PROTECTED_PATHS`), size limit `MAX_PUSH_MB`
+(50). A refused protected-path push fails with a clear message today; holding it for an approval comes with phase 4.
+The image is Alpine with git rather than distroless, because the sidecar runs git. The default branch for the
+protected-path check is looked up by the sidecar from the forge, never taken from the caller, and the check fails
+closed (review of #68).
+
+**Security events.** Every guardrail that fires prints one line to the container log (stdout), so a bypass attempt
+is reported, not only blocked (collection, UI and auto-pause: #70):
+
+```
+AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medium|high","agent":"...","job":"issue-N|pr-N","action":"..."}
+```
+
+| Source | Rule | Severity | When |
+|---|---|---|---|
+| forge | `push-foreign-branch` | high | push (or PR head) outside `agent/<name>/*` |
+| forge | `push-protected-path` | high | push touches a `PROTECTED_PATHS` entry (merges included) |
+| forge | `push-oversize` | medium | push over `MAX_PUSH_MB` |
+| forge | `push-unrelated`, `push-refused` | medium | push with no common history, empty or invalid bundle |
+| forge | `api-other-repo` | high | REST call for a repo other than `REPO` |
+| forge | `api-not-allowed` | medium | REST call outside the allow-list (merge, edit, hooks, ...) |
+| forge | `api-non-loopback` | high | a caller from outside the pod reached the localhost API |
+| forge | `webhook-bad-token` | medium | wake call with a wrong token |
+| loop | `git-worktree-redirected` | high | a worktree `.git` or `commondir` pointed elsewhere (re-pinned) |
+| loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |
+| loop | `git-hook-present` | high | a hook file in the shared clone (removed) |
+| loop | `git-config-key`, `git-config-worktree` | medium | a git config key outside the plain list, or a `config.worktree` (removed) |
+
+`job` comes from the loop; in sidecar events it is the loop's `X-Agentdev-Job` header, which Claude could forge, so
+treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT`.
+
 - The pod gets two containers that share a `/state` volume. Kubernetes gives each container its own process
   namespace by default (`shareProcessNamespace: false`), so the Claude container cannot read the sidecar's
   `/proc/<pid>/environ`.

@@ -48,6 +48,7 @@ func main() {
 	}
 	r := &AgentReconciler{Client: mgr.GetClient(), D: Defaults{
 		WorkerImage:    env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
+		ForgeImage:     env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
 		PullPolicy:     env("IMAGE_PULL_POLICY", "IfNotPresent"),
 		ForgeURL:       os.Getenv("FORGE_URL"),
 		ForgePublicURL: os.Getenv("FORGE_PUBLIC_URL"),

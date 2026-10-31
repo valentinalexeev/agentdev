@@ -6,6 +6,20 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- Forge sidecar (#64, security model phase 1, fixes R4 pending e2e): every agent pod gets a `forge` container
+  (`images/forge`, image `ghcr.io/valentinalexeev/agentdev-forge`, UID 1001, own process namespace) that alone holds
+  `FORGE_TOKEN`, `WAKE_TOKEN` and `REGISTER_TOKEN` and does every forge operation for the loop over localhost:
+  allow-listed REST calls, sync and push as git bundles. Pushes only to `agent/<name>/*`, no force, protected paths
+  (`.github/workflows/` and friends, `PROTECTED_PATHS`) refused, size limit (`MAX_PUSH_MB`). The webhook listener
+  moved into the sidecar. **BREAKING** for deployments: the operator needs `FORGE_IMAGE` (Ansible `forge_image`,
+  derived from `image_tag`; kind builds it in `./run.sh 06`); the worker image no longer runs without the sidecar.
+- Security events (#64): every refusal by the forge sidecar (foreign branch, protected path, oversize, API call
+  outside the allow-list or for another repo, non-loopback caller, bad webhook token) and by the loop (redirected or
+  forged worktree, removed git config keys, planted hooks) prints an `AGENTDEV_SECURITY_EVENT {json}` line to stdout.
+- The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
+  missing or wrong `base` cannot let a workflow change through (review of #68).
+
 ### Added
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
   ContextForge); `mcp:` in the project spec plus `scripts/mcp-sync.sh` give each agent a token scoped to its

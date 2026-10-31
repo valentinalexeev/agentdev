@@ -26,7 +26,7 @@ func setup(t *testing.T, objs ...client.Object) (*AgentReconciler, client.Client
 	_ = clientgoscheme.AddToScheme(s)
 	_ = v1.AddToScheme(s)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(&v1.Agent{}).Build()
-	return &AgentReconciler{Client: c, D: Defaults{WorkerImage: "worker:dev", PullPolicy: "Never", ForgeURL: "http://forge",
+	return &AgentReconciler{Client: c, D: Defaults{WorkerImage: "worker:dev", ForgeImage: "forge:dev", PullPolicy: "Never", ForgeURL: "http://forge",
 		PollSeconds: "20", IdleSeconds: "900", Reviewer: "owner"}}, c
 }
 
@@ -69,7 +69,7 @@ func TestCreatesChildrenFromSpec(t *testing.T) {
 	reconcile(t, r, "alice")
 	s := getSTS(t, c, "alice")
 	if *s.Spec.Replicas != 1 || envOf(s, "REPO") != "owner/repo" || envOf(s, "MAX_CONCURRENT") != "3" ||
-		envOf(s, "FORGE_KIND") != "gitea" || s.Spec.Template.Spec.Containers[0].Image != "worker:dev" {
+		s.Spec.Template.Spec.Containers[0].Image != "worker:dev" {
 		t.Fatalf("statefulset not rendered from spec: replicas=%d env=%v", *s.Spec.Replicas, s.Spec.Template.Spec.Containers[0].Env)
 	}
 	if s.Annotations["agentdev/repos"] != "owner/repo" || s.Labels["app"] != "coding-agent" {
@@ -177,4 +177,80 @@ func TestForeignSecretsRefused(t *testing.T) {
 	r, c := setup(t, agent("carl", func(a *v1.Agent) { a.Spec.ClaudeSecret = "claude-carl"; a.Spec.ForgeSecret = "agent-carl" }))
 	reconcile(t, r, "carl")
 	getSTS(t, c, "carl") // own Secrets are fine
+}
+
+func container(s *appsv1.StatefulSet, name string) *corev1.Container {
+	for i := range s.Spec.Template.Spec.Containers {
+		if c := &s.Spec.Template.Spec.Containers[i]; c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func hasEnv(c *corev1.Container, k string) bool {
+	for _, e := range c.Env {
+		if e.Name == k {
+			return true
+		}
+	}
+	return false
+}
+
+// #64: forge credentials live only in the forge sidecar; the agent container has none, and cannot see the sidecar's
+// processes.
+func TestForgeSidecarHoldsTheTokens(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	p := s.Spec.Template.Spec
+	ag, fg := container(s, "agent"), container(s, "forge")
+	if ag == nil || fg == nil || len(p.Containers) != 2 {
+		t.Fatalf("want containers agent and forge, got %d", len(p.Containers))
+	}
+	for _, k := range []string{"FORGE_TOKEN", "WAKE_TOKEN", "REGISTER_TOKEN", "SELF_URL"} {
+		if hasEnv(ag, k) {
+			t.Errorf("agent container has %s", k)
+		}
+	}
+	for _, e := range ag.Env {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+			t.Errorf("agent container reads a Secret key: %s", e.Name)
+		}
+	}
+	for _, f := range ag.EnvFrom { // only the Claude credential and the MCP token, never the forge Secret
+		if f.SecretRef != nil && f.SecretRef.Name == "agent-alice" {
+			t.Error("agent container mounts the forge Secret")
+		}
+	}
+	for _, k := range []string{"FORGE_TOKEN", "WAKE_TOKEN", "REGISTER_TOKEN", "SELF_URL", "ROUTER_URL"} {
+		if !hasEnv(fg, k) {
+			t.Errorf("forge container lacks %s", k)
+		}
+	}
+	if fg.Image != "forge:dev" || len(fg.Ports) != 1 || fg.Ports[0].Name != "webhook" || len(ag.Ports) != 0 {
+		t.Errorf("forge image/ports: %s %v / agent %v", fg.Image, fg.Ports, ag.Ports)
+	}
+	if p.ShareProcessNamespace == nil || *p.ShareProcessNamespace {
+		t.Error("shareProcessNamespace must be false")
+	}
+	if fg.SecurityContext == nil || fg.SecurityContext.RunAsUser == nil || *fg.SecurityContext.RunAsUser == *p.SecurityContext.RunAsUser {
+		t.Error("forge container must run as its own UID")
+	}
+	if p.SecurityContext.FSGroup == nil || *fg.SecurityContext.RunAsGroup != *p.SecurityContext.FSGroup {
+		t.Error("forge container must share the fsGroup to write /state")
+	}
+	mounts := func(c *corev1.Container) map[string]string {
+		m := map[string]string{}
+		for _, v := range c.VolumeMounts {
+			m[v.Name] = v.MountPath
+		}
+		return m
+	}
+	if mounts(ag)["state"] != "/state" || mounts(fg)["state"] != "/state" {
+		t.Error("both containers must mount /state")
+	}
+	if _, ok := mounts(ag)["forge"]; ok || mounts(fg)["forge"] != "/forge" {
+		t.Error("the sidecar's mirror volume is the sidecar's alone")
+	}
 }
