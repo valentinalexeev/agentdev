@@ -5,3 +5,7 @@ REVOKE ALL ON security_events, security_settings FROM agentdev_api;
 GRANT SELECT, INSERT ON security_events TO agentdev_api;
 GRANT USAGE ON SEQUENCE security_events_id_seq TO agentdev_api;
 GRANT EXECUTE ON FUNCTION security_events_prune() TO agentdev_api;
+-- Only the owner may create objects in public (the default from PostgreSQL 15, explicit for older versions), so
+-- nobody can plant a shadowing object in the SECURITY DEFINER function's search_path (pg_catalog, public).
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CREATE ON SCHEMA public TO agentdev_owner;

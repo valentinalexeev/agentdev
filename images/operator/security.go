@@ -85,6 +85,54 @@ type bucket struct {
 	tokens  float64
 	last    time.Time
 	limited bool
+	// verdicts of recorded lines by hash: a line read again after a failed Record (the stream reconnects from the
+	// last saved position) gets its first verdict back and costs no second token. Trimmed to the last 10 minutes.
+	verdicts map[string]verdict
+}
+
+type verdict struct {
+	ok, first bool
+	t         time.Time
+}
+
+// admit is allow for one parsed line: a line already admitted (same hash) returns its earlier verdict without taking
+// a token, so a DB or API outage, where the same lines are re-read on every reconnect, cannot drain the bucket.
+func (c *Collector) admit(key, hash string, now time.Time) (ok, first bool) {
+	c.bmu.Lock()
+	if b := c.buckets[key]; b != nil {
+		if v, seen := b.verdicts[hash]; seen {
+			c.bmu.Unlock()
+			return v.ok, v.first
+		}
+	}
+	c.bmu.Unlock()
+	ok, first = c.allow(key, now)
+	if ok || first { // only recorded lines can fail and be re-read
+		c.bmu.Lock()
+		b := c.buckets[key]
+		if b.verdicts == nil {
+			b.verdicts = map[string]verdict{}
+		}
+		for h, v := range b.verdicts {
+			if now.Sub(v.t) > 10*time.Minute {
+				delete(b.verdicts, h)
+			}
+		}
+		b.verdicts[hash] = verdict{ok, first, now}
+		c.bmu.Unlock()
+	}
+	return ok, first
+}
+
+// pruneBuckets drops the rate-limit state of pods that are gone (live holds the UIDs of existing pods).
+func (c *Collector) pruneBuckets(live map[string]bool) {
+	c.bmu.Lock()
+	defer c.bmu.Unlock()
+	for k := range c.buckets {
+		if uid, _, _ := strings.Cut(k, "/"); !live[uid] {
+			delete(c.buckets, k)
+		}
+	}
 }
 
 // allow takes one token from the pod container's bucket. first is true for the first refused line of a flood: the
@@ -323,7 +371,7 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 		if !ok {
 			continue
 		}
-		if ok, first := c.allow(string(p.UID)+"/"+container, spec.Time.Time); !ok {
+		if ok, first := c.admit(string(p.UID)+"/"+container, spec.Hash, spec.Time.Time); !ok {
 			c.Dropped.Add(1)
 			if !first {
 				continue
@@ -450,14 +498,8 @@ func (c *Collector) Prune(ctx context.Context) error {
 	return c.prunePositions(ctx)
 }
 
-// prunePositions drops positions of pods that are gone (a new pod has a new UID and starts from its first line).
+// prunePositions drops positions and rate-limit buckets of pods that are gone (a new pod has a new UID and starts from its first line).
 func (c *Collector) prunePositions(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var cm corev1.ConfigMap
-	if err := c.Direct.Get(ctx, types.NamespacedName{Namespace: c.NS, Name: positionsCM}, &cm); err != nil {
-		return client.IgnoreNotFound(err)
-	}
 	var pods corev1.PodList
 	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "coding-agent"}); err != nil {
 		return err
@@ -465,6 +507,13 @@ func (c *Collector) prunePositions(ctx context.Context) error {
 	live := map[string]bool{}
 	for _, p := range pods.Items {
 		live[string(p.UID)] = true
+	}
+	c.pruneBuckets(live)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var cm corev1.ConfigMap
+	if err := c.Direct.Get(ctx, types.NamespacedName{Namespace: c.NS, Name: positionsCM}, &cm); err != nil {
+		return client.IgnoreNotFound(err)
 	}
 	changed := false
 	for k := range cm.Data {

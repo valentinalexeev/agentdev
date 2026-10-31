@@ -388,3 +388,52 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("positions %v", got.Data)
 	}
 }
+
+// A failed Record makes the stream re-read its lines; the re-read must not take tokens again, or a long DB/API
+// outage would end in a false rate-limited pause.
+func TestRetryDoesNotDrainBucket(t *testing.T) {
+	col, c := collector(t, agent("alice", nil))
+	col.C.RatePerMin, col.C.RateBurst = 10, 2
+	col.C.PauseAfter = 1000
+	p := pod("alice")
+	ctx := context.Background()
+	log := strings.Join([]string{
+		line("2026-10-31T10:00:01Z", `{"rule":"ok1","severity":"low"}`),
+		line("2026-10-31T10:00:01.5Z", `{"rule":"bad","severity":"low"}`),
+	}, "\n")
+	col.Client = failingCreate{Client: c, rule: "bad"}
+	for i := 0; i < 50; i++ { // a long outage: every reconnect re-reads the same lines
+		if err := col.consume(ctx, strings.NewReader(log), p, "agent"); err == nil {
+			t.Fatal("want an error on the failed record")
+		}
+	}
+	col.Client = c
+	if err := col.consume(ctx, strings.NewReader(log), p, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events(t, c) {
+		if e.Spec.Rule == "rate-limited" {
+			t.Fatal("retries were charged as a flood")
+		}
+	}
+	if n := len(events(t, c)); n != 2 || getAgent(t, c, "alice").Spec.Paused || col.Dropped.Load() != 0 {
+		t.Fatalf("events %d, dropped %d", n, col.Dropped.Load())
+	}
+}
+
+func TestPruneDropsBucketsOfGonePods(t *testing.T) {
+	running := pod("alice")
+	col, _ := collector(t, running)
+	now := time.Now()
+	col.allow(string(running.UID)+"/agent", now)
+	col.allow("gone-uid/agent", now)
+	if err := col.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := col.buckets["gone-uid/agent"]; ok {
+		t.Fatal("bucket of a gone pod kept")
+	}
+	if _, ok := col.buckets[string(running.UID)+"/agent"]; !ok {
+		t.Fatal("bucket of a running pod dropped")
+	}
+}
