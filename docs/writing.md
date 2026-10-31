@@ -97,7 +97,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | forge token | the credential that lets an agent use its forge account |
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
-| kind | the local Kubernetes cluster tool |
+| `kind` | the local Kubernetes cluster tool (always written as code) |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
 | port-forward | a `kubectl port-forward` connection from the local computer to a service in the cluster |
