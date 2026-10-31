@@ -27,3 +27,19 @@ th { font-weight: 600; color: #555; font-size: 0.85rem; }
 .phase.blocked { background: #fde2e1; color: #a1251f; }
 .error { color: #a1251f; }
 code { background: #eceef1; padding: 0 0.3rem; border-radius: 4px; }
+.phase.paused { background: #e7e3fb; color: #4b3a9a; }
+.phase.invalid { background: #fde2e1; color: #a1251f; }
+nav { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+button.tab { background: #fff; color: #1d1d1f; border-color: #d0d0d4; }
+button.tab.on { background: #1d1d1f; color: #fff; }
+.muted { color: #777; }
+.badge { display: inline-block; min-width: 1.4rem; text-align: center; padding: 0 0.45rem; border-radius: 999px;
+  background: #fde2e1; color: #a1251f; font-weight: 600; text-decoration: none; }
+.filters { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.filters input, .filters select { font: inherit; padding: 0.3rem 0.5rem; margin-left: 0.3rem; }
+.sev { padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.85rem; }
+.sev.high { background: #fde2e1; color: #a1251f; }
+.sev.medium { background: #fff4d6; color: #7a5a00; }
+.sev.low { background: #eceef1; color: #555; }
+.nowrap { white-space: nowrap; }
+td.action { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; }
