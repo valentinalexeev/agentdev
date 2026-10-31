@@ -157,24 +157,38 @@ sequenceDiagram
 
 ### API (agentdev-api)
 
-- `GET /api/approvals?project=&state=pending` (projects where the caller has write access, or all for
-  `agentdev-admins`), `GET /api/approvals/stream` SSE for live updates.
+- `GET /api/approvals?project=&state=pending|decided|expired|all&agent=&from=&to=` (projects where the caller has
+  write access, or all for `agentdev-admins`), `GET /api/approvals/{id}` (one request with its full context), `GET
+  /api/approvals/stream` SSE for live updates.
 - `POST /api/approvals/{id}/decision` with `allow_once | allow_job | deny` and a note. Allowed for users with write
   access to the request's repository (checked on the forge at decision time); `agentdev-admins` may always deny.
   Every decision is audit-logged (who, when, what, request content hash).
 - The project and repository are set by the API from the agent's spec, never taken from the agent's request: a
   compromised agent cannot send its request to a different project.
-- Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent), so the
-  operator, API and sidecar share it without a new database, and it is visible with `kubectl`. Garbage-collected
-  after 7 days.
+- Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent) for the live
+  workflow, so the operator, API and sidecar share it without a new database. It is removed 7 days after the
+  decision. **History** (every request and its outcome) is kept in the `approvals` table of the platform Postgres,
+  next to `security_events` (#70), with the same retention (default 1 year); the history view reads from there.
 - Request content shown to the approver is the exact tool input (command line, file path, host), rendered as text, never
   as HTML.
+- **Context** stored with each request: the agent, the job (issue or PR number and title, with a link to the forge),
+  the branch and commit the agent was on, the tool and its exact input, the reason Claude gave, the last part of the
+  agent's transcript before the request (bounded, for example the last 20 tool calls, secrets redacted by the
+  sidecar), and, for a push request, the diff of the protected paths.
 
 ### UI
 
-- Header badge with the count of requests waiting in **my projects**; an **Approvals** page per project with the
-  request, the agent, the issue or PR it works on, the reason Claude gave, and the three buttons. Admins get an "all
-  projects" view.
+- Header badge with the count of requests waiting in **my projects**.
+- **Approvals** page per project, with two tabs:
+  - **Pending:** each request with the agent, the issue or PR it works on, the reason Claude gave, and the three
+    buttons.
+  - **History:** every request that was raised, with its outcome (**approved once**, **approved for the job**,
+    **denied**, or **expired** after the timeout), who decided, where (UI or forge), when, and the note. Filters by
+    agent, outcome and date; export as CSV.
+- **Request detail** (from either tab): the full context stored with the request (see API above), with links that open
+  the issue or PR, the branch and the commit on the forge, and the agent's transcript excerpt. After a decision, it
+  also shows what the agent did next (the job outcome and the PR it produced).
+- Admins get an "all projects" view of both tabs.
 - Agent overview shows "waiting for approval" as a state.
 - The same request also appears on the forge (see *Forge as an approval surface*).
 - **Open question (#67):** whether UI decisions ship in the first version (forge accounts sign in to the UI through
