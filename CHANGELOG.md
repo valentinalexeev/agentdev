@@ -21,6 +21,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   missing or wrong `base` cannot let a workflow change through (review of #68).
 
 ### Added
+- Security model phase 5 (#69, design): deterministic executors apply changes that an AI agent designed with
+  read-only credentials, after the merge and an explicit `/approve`; trusted plan required, one executor per
+  environment.
 - Manuals follow ASD-STE100 Simplified Technical English (#75): rules and the project word list in `docs/writing.md`,
   CLAUDE.md rule for agents and reviewers; the admin guide's *Web UI* section is the first converted page.
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
