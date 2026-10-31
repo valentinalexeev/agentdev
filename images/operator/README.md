@@ -35,6 +35,12 @@ operator's `WORKER_IMAGE`), and the Secrets an Agent can name are limited to `ag
 Deleting an Agent deletes its Service and StatefulSet (owner references); the state volumes are kept, so re-adding
 the agent resumes its work. Delete the PVCs `state-agent-<name>-0` and `claude-agent-<name>-0` to forget it.
 
+**Security events (#70).** The operator also follows the logs of every agent container and turns each
+`AGENTDEV_SECURITY_EVENT` line into a `SecurityEvent` (short name `sev`, read-only for agents, immutable). A
+high-severity event, or more than `SECURITY_PAUSE_AFTER` (default 5) events in one job, sets `spec.paused` and the
+`SecurityPaused` condition. Objects are deleted after `SECURITY_RETENTION_DAYS` (30) or past `SECURITY_MAX_PER_AGENT`
+(500) per agent. Schema and mapping: `docs/security-model.md`.
+
 Development: `go test ./...` (fake client). After changing `api/` or the `+kubebuilder` markers, regenerate and
 commit (CI checks):
 

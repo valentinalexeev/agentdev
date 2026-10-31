@@ -17,6 +17,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Security events (#64): every refusal by the forge sidecar (foreign branch, protected path, oversize, API call
   outside the allow-list or for another repo, non-loopback caller, bad webhook token) and by the loop (redirected or
   forged worktree, removed git config keys, planted hooks) prints an `AGENTDEV_SECURITY_EVENT {json}` line to stdout.
+- Security events are collected, stored and reported (#70): the operator turns `AGENTDEV_SECURITY_EVENT` log lines of
+  every agent container into `SecurityEvent` objects (new CRD `securityevents.agentdev.dev`, schema
+  `agentdev.security/v1`, kept 30 days or 500 per agent) and pauses an agent on a high-severity event or more than
+  `SECURITY_PAUSE_AFTER` (5) events in one job (condition `SecurityPaused`). The API appends them to the append-only
+  `security_events` table in the platform Postgres (database `agentdev`, kept 1 year), serves
+  `GET /api/security-events` (filters, cursor paging) and sends new events to an optional HMAC-SHA256 signed webhook.
+  The web UI has a **Security** page and a counter per agent. Deployments: install the new CRD (`./run.sh 12`,
+  Ansible does it); the operator needs `pods`, `pods/log`, `configmaps` and `securityevents` in its Role (in the
+  manifest); `./run.sh 10` creates the API's database login.
 - The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
   missing or wrong `base` cannot let a workflow change through (review of #68).
 

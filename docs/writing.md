@@ -106,6 +106,13 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | router | the agentdev service that receives forge webhooks and wakes agents |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | security event | a record of an action that a guardrail stopped |
+| SecurityEvent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SecurityEvent`) that the operator makes for each security event |
+| guardrail | a check in agentdev that stops an action of an agent |
+| job | one issue or one pull request that an agent works on |
+| condition | an entry in the status of a Kubernetes object, for example `SecurityPaused` |
+| SIEM | a security information and event management system that collects security events |
+| webhook | an HTTP request that a service sends to a URL when an event occurs |
+| Postgres | the PostgreSQL database of the instance |
 | sidecar | a second container in the agent pod |
 | web UI | the agentdev management user interface |
 

@@ -289,6 +289,55 @@ documented filter on the prefix), receive an HMAC-signed webhook (#70), or poll 
 over TLS, OTLP logs and a per-agent hash chain for tamper evidence follow in #71. Output settings live in
 `instance.yml`, never in git.
 
+**Event schema `agentdev.security/v1` (#70).** One record per refusal. The same fields appear in the log line (the
+emitter's subset), the `SecurityEvent` object (`spec`), the `security_events` table, the `GET /api/security-events`
+items and the webhook body. A new field may be added within v1; renaming, removing or changing the meaning of a field
+makes it v2.
+
+| Field | Type | Set by | Meaning |
+|---|---|---|---|
+| `schema` | string | operator | `agentdev.security/v1` |
+| `id` | int | API | row id in `security_events`, increasing; the paging cursor is based on it |
+| `time` | RFC 3339 | container runtime | when the line was written (the log timestamp, not a value from the agent) |
+| `agent` | string | operator | agent name, from the pod's `agent` label (the `agent` in the line is ignored: the agent could forge it) |
+| `job` | string | emitter | `issue-N` or `pr-N`; missing and empty mean "not known". Informational: Claude can influence it |
+| `source` | string | emitter | `forge` (sidecar), `loop` (agent loop); later `egress`, `claude-proxy`, `approvals` |
+| `rule` | string | emitter | the guardrail that fired, for example `push-branch`, `protected-path`, `git-config` |
+| `severity` | `low`, `medium`, `high` | emitter | an unknown value is stored as `high` |
+| `action` | string | emitter | the refused action as text, at most 500 characters plus `...` |
+| `pod`, `container` | string | operator | where the line came from |
+| `hash` | hex SHA-256 | operator | over pod UID, container, log timestamp and raw line: the dedupe key end to end |
+
+Log line format (what the emitters print, one line on stdout): `AGENTDEV_SECURITY_EVENT {"source":..,"rule":..,
+"severity":..,"agent":..,"job":..,"action":..}`. The loop always writes `job` (maybe empty); the sidecar leaves it
+out when empty.
+
+Mapping for SIEMs:
+
+| agentdev.security/v1 | OCSF 1.x Detection Finding (class_uid 2004) | ECS 8.x |
+|---|---|---|
+| (constant) | `category_uid` 2 (Findings), `activity_id` 1 (Create) | `event.kind: alert`, `event.category: intrusion_detection`, `event.type: denied` |
+| `hash` | `finding_info.uid` | `event.id` |
+| `time` | `time` | `@timestamp` |
+| `rule` | `finding_info.title`, `rule.name` | `rule.name` |
+| `source` | `metadata.product.feature.name` | `event.module` (`observer.type` for the sidecar) |
+| `severity` | `severity_id` (low 2, medium 3, high 4) and `severity` | `event.severity` (low 21, medium 47, high 73), `log.level` |
+| `agent` | `actor.user.name` | `user.name` (and `agent.name` = `agentdev`) |
+| `job` | `finding_info.related_events` / `unmapped.job` | `labels.job` |
+| `action` | `message` | `message` |
+| `pod`, `container` | `device.hostname`, `unmapped.container` | `orchestrator.resource.name`, `container.name` |
+| `schema` | `metadata.version` (`unmapped.schema`) | `event.dataset: agentdev.security` |
+
+**Collection and auto-pause (#70, implemented).** The operator follows the logs of every container of every agent
+pod (`pods/log`), with runtime timestamps. It keeps the time of the last line read per pod and container in the
+ConfigMap `agentdev-security-positions`, so a restarted operator resumes there; the hash makes a re-read line a no-op.
+It creates a `SecurityEvent` named `<agent>-<hash prefix>`, then pauses the Agent (`spec.paused=true`, condition
+`SecurityPaused` with reason `HighSeverity` or `TooManyEvents`) on a high-severity event or when one job has more than
+`SECURITY_PAUSE_AFTER` (default 5) events. Resuming sets the condition to `False` (reason `Resumed`) and keeps the
+message. Objects are pruned hourly: older than 30 days, or beyond 500 per agent. The API watches the objects and
+appends them to `security_events`; a trigger refuses `UPDATE` and any `DELETE` inside the retention (default 1 year).
+Forge comments and notifications to people with write access are not part of #70 (they need #67 and #57).
+
 Each phase's issue includes its signals in its acceptance criteria.
 
 ## Order and size

@@ -48,6 +48,8 @@ planned target, [security-model.md](security-model.md).
 | R31 | MCP token scope | review #50 | fixed | Per-agent token scoped to the project's virtual server; revoke and renewal (#50) |
 | R32 | In-cluster OIDC key fetch over plain http | review #53 | open | TLS inside the cluster, #51 |
 | R33 | UI security headers dropped on some routes; no CSP | review #56 | fixed | Shared header snippet, strict CSP, `frame-ancestors 'none'` (4e1f9be) |
+| R34 | A bypass attempt is blocked but nobody sees it, so a prompt injection can keep trying | owner, #64 | mitigated | #70: every refusal becomes a `SecurityEvent` and a row in the append-only `security_events` table; high severity or > 5 events per job pause the agent; Security page, per-agent counter, signed webhook to a SIEM. Agents have no RBAC on SecurityEvents. Forge comments and notifications to project writers: #67, #57. Tamper evidence (hash chain), syslog, OTLP: #71 |
+| R35 | Every signed-in user can read every agent's security events (the `action` text can quote issue content) | #70 | open | Restrict `GET /api/security-events` to projects with write access (#57) |
 | R34 | Sign-out left the authentik session alive | review #56 | fixed | `signoutRedirect` (4e1f9be) |
 | R35 | GitHub App manifest built by string templating (injection) | review #61 | fixed | Built with `jq --arg`, strict input validation (db8be52) |
 
