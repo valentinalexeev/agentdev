@@ -250,10 +250,15 @@ password that you set in the UI is final.
 
 ### Keep the usernames safe
 
-The API uses the authentik username as the forge login (#57). An authentik user who can pick a name can act as the
-forge user with that name. Thus, keep these settings:
+The intended setup: authentik keeps no users and passwords of its own. It signs people in through an external
+identity provider, the same single sign-on that the forge uses (for example Google Workspace). Thus, one company
+account gives the authentik username and the forge login. The API uses the authentik username as the forge login
+(#57). An authentik user who can pick a name can act as the forge user with that name. Thus, keep these settings:
 
-- Only administrators make authentik users. Do not add an enrollment flow. The blueprint has none.
+- Connect authentik to the company identity provider as a source, and take the username from it. Use the same
+  identity provider for the forge.
+- Only the identity provider or the administrators make authentik users. Do not add an enrollment flow. The
+  blueprint has none.
 - In **System > Settings**, keep **Allow users to change username** off (the default). The blueprint cannot set
   this, so check it after each authentik upgrade.
 - Give each person the same username in authentik and on the forge, in lower case.
