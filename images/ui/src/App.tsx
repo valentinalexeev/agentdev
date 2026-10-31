@@ -112,7 +112,7 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
         <h1>Agents</h1>
         <button onClick={() => setCreating(true)}>Add agent</button>
       </div>
-      {notice && <p className="error" role="alert">{notice}</p>}
+      {notice && !deleting && !creating && <p className="error" role="alert">{notice}</p>}
       {agents.length === 0
         ? <p>No agents yet. Add one, or connect a project with <code>scripts/bootstrap-project.sh</code>.</p>
         : (
@@ -167,10 +167,11 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
             <button className="secondary" onClick={() => setDeleting(null)}>Cancel</button>
             <button className="danger" disabled={busy} onClick={async () => {
               const n = deleting
-              await act(`Delete ${n}`, () => deleteAgent(token, n))
-              setDeleting(null)
+              // keep the dialog open on an error, so the message shows where the user acted
+              if (await act(`Delete ${n}`, () => deleteAgent(token, n))) setDeleting(null)
             }}>Delete {deleting}</button>
           </div>
+          {notice && <p className="error" role="alert">{notice}</p>}
         </Modal>
       )}
       {creating && (
@@ -193,8 +194,10 @@ function EditForm({ agent, busy, onSave, onCancel }: {
   const err = maxConcurrentError(Number(max))
   return (
     <form className="inline" onSubmit={(e) => { e.preventDefault(); if (!err) onSave({ maxConcurrent: Number(max), scaleToZero: stz }) }}>
-      <label>Max. concurrent <input type="number" min={1} max={8} required value={max} onChange={(e) => setMax(e.target.value)} /></label>
-      <label><input type="checkbox" checked={stz} onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
+      <label>Max. concurrent <input type="number" min={1} max={8} required value={max} aria-label={`Maximum concurrent items of agent ${agent.name}`}
+        onChange={(e) => setMax(e.target.value)} /></label>
+      <label><input type="checkbox" checked={stz} aria-label={`Scale agent ${agent.name} to zero`}
+        onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
       {err && <span className="error">{err}</span>}
       <span className="buttons">
         <button type="submit" disabled={busy || !!err}>Save</button>
