@@ -113,6 +113,9 @@ jobs:
         run: |
           docker build -t agentdev/worker:ci images/worker
           docker run --rm --entrypoint claude agentdev/worker:ci --version
+          # Claude guardrails (#59): no tokens in Claude's env, tool allow-list, untrusted text fenced
+          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/guard.test.sh
+          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/jobs.test.sh
           if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
           grep -q FORGE_URL err.txt
       - name: skipped (images/worker unchanged)
