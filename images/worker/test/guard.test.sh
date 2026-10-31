@@ -65,6 +65,18 @@ evil="${tmp}/evilgit"; cp -R "${WORK}/.git" "${evil}"; git config --file "${evil
 printf 'gitdir: %s\n' "${evil}" > "${wt}/.git"; echo '* filter=x' > "${wt}/.gitattributes"
 check "pin_worktree resets a redirected .git file" "pin_worktree '${wt}' && grep -qx \"gitdir: \$(cd '${WORK}/.git/worktrees/wt' && pwd -P)\" '${wt}/.git'"
 check "loop git in the pinned worktree runs no planted filter" "lgit -C '${wt}' add -A && [[ ! -e '${tmp}/pwned-gitdir' ]]"
+# a symlinked admin dir (pointing at a config Claude controls) is not trusted
+real="${WORK}/.git/worktrees/wt"; mv "${real}" "${tmp}/admreal"; ln -s "${tmp}/admreal" "${real}"
+check "pin_worktree refuses a symlinked admin dir" "! pin_worktree '${wt}' 2>/dev/null"
+rm "${real}"; mv "${tmp}/admreal" "${real}"
+# a second admin dir forged to claim the same tree makes pin fail closed
+mkdir "${WORK}/.git/worktrees/forged"; cp "${real}/gitdir" "${WORK}/.git/worktrees/forged/gitdir"
+check "pin_worktree fails closed on a forged second admin dir" "! pin_worktree '${wt}' 2>/dev/null"
+rm -rf "${WORK}/.git/worktrees/forged"
+# a .git that is a symlink to a directory is replaced, not written through
+mkdir "${tmp}/target"; rm -f "${wt}/.git"; ln -s "${tmp}/target" "${wt}/.git"
+check "pin_worktree replaces a symlinked .git instead of writing through it" \
+  "pin_worktree '${wt}' && [[ ! -L '${wt}/.git' && -f '${wt}/.git' && -z \$(ls -A '${tmp}/target') ]]"
 # a global git config written by Claude (Write tool into ~) is ignored by the loop's git
 export HOME="${tmp}/home"; mkdir -p "${HOME}"; printf '[alias]\n\tst = !touch %s/pwned-global\n[core]\n\tpager = touch %s/pwned-pager\n' "${tmp}" "${tmp}" > "${HOME}/.gitconfig"
 check "loop git ignores a global config" "[[ -z \$(lgit config --get core.pager) ]] && ! lgit -C '${WORK}' st 2>/dev/null; [[ ! -e '${tmp}/pwned-global' ]]"

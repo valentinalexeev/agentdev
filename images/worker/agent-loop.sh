@@ -86,17 +86,28 @@ scrub_git_config() {
   git config --file "${cfg}" remote.origin.url "$(clone_url)"
 }
 # pin_worktree <dir>: the worktree's .git is a plain file Claude can edit to point git at a directory it controls
-# (with its own config). Rewrite it, and the admin dir's back-links, to the shared clone before the loop uses it.
+# (with its own config). Before the loop runs git in a worktree, rewrite its .git and the admin dir's commondir to the
+# shared clone. The admin dir is never reached through anything Claude can redirect: it must be a real directory (not
+# a symlink) directly under WORK/.git/worktrees, the only one whose gitdir names this tree. Files are replaced (mv
+# over), never written through a symlink.
 pin_worktree() {
-  local dir adm="" g
+  local dir base adm="" a n=0
   dir=$(cd "$1" && pwd -P) || return 1
-  # the admin dir is the one whose gitdir points back at this tree (its name can differ after `worktree move`)
-  for g in "${WORK}"/.git/worktrees/*/gitdir; do
-    [[ -f "${g}" && "$(cat "${g}")" == "${dir}/.git" ]] && { adm=$(cd "${g%/gitdir}" && pwd -P); break; }
+  [[ -L "${WORK}/.git/worktrees" ]] && { log "worktrees dir is a symlink"; return 1; }
+  base=$(cd "${WORK}/.git/worktrees" 2>/dev/null && pwd -P) || { log "no worktrees dir"; return 1; }
+  # exactly one real admin dir may name this tree (its name can differ after `worktree move`); two means someone
+  # forged one, so fail closed
+  for a in "${base}"/*/; do
+    a=${a%/}
+    [[ -L "${a}" || -L "${a}/gitdir" || ! -f "${a}/gitdir" ]] && continue
+    [[ "$(cat "${a}/gitdir")" == "${dir}/.git" ]] && { adm=${a}; n=$((n+1)); }
   done
-  [[ -n "${adm}" ]] || { log "no worktree admin dir for ${dir}"; return 1; }
-  printf 'gitdir: %s\n' "${adm}" > "${dir}/.git"
-  printf '../..\n' > "${adm}/commondir"
+  [[ ${n} -eq 1 ]] || { log "no single trusted worktree admin dir for ${dir} (${n})"; return 1; }
+  rm -rf "${dir}/.git.pin" "${adm}/commondir.pin"
+  # mv onto a symlink to a directory would move into it: remove whatever is there first
+  rm -rf "${dir}/.git" "${adm}/commondir"
+  printf 'gitdir: %s\n' "${adm}" > "${dir}/.git.pin" && mv -f "${dir}/.git.pin" "${dir}/.git" || return 1
+  printf '../..\n' > "${adm}/commondir.pin" && mv -f "${adm}/commondir.pin" "${adm}/commondir" || return 1
 }
 # git with forge auth: only the loop calls this (fetch, push); the helper exists for that one process only
 git_auth() { lgit -c credential.helper= -c credential.helper="${GIT_HELPER}" "$@"; }
@@ -181,6 +192,8 @@ worktree() {
       rm -rf "${dir}"
     fi
     if [[ -d "${dir}" ]]; then
+      # a reused tree may have a .git Claude redirected: pin it before the loop runs checkout/reset/clean there
+      pin_worktree "${dir}" &&
       lgit -C "${dir}" checkout -q -B "${branch}" "${from}" && lgit -C "${dir}" reset -q --hard "${from}" && lgit -C "${dir}" clean -qfd
     else
       mkdir -p "${STATE}/work" && lgit -C "${WORK}" worktree add -q -B "${branch}" "${dir}" "${from}"
