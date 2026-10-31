@@ -427,6 +427,13 @@ func (w *writer) delete(rw http.ResponseWriter, r *http.Request) {
 	}
 	e.Grant = grant
 	if err := w.store.Delete(r.Context(), name, string(cur.GetUID()), cur.GetResourceVersion()); err != nil {
+		if apierrors.IsNotFound(err) {
+			// another request deleted it between the check and the delete: the result the caller wanted
+			e.Result, e.Reason = "ok", "already deleted"
+			audit(e)
+			rw.WriteHeader(http.StatusNoContent)
+			return
+		}
 		w.fail(rw, e, err)
 		return
 	}
@@ -436,16 +443,30 @@ func (w *writer) delete(rw http.ResponseWriter, r *http.Request) {
 }
 
 // auditAuth writes an audit line when auth refuses a write (401: no or bad token). The token is never logged; the
-// caller is unknown, so only the action, the agent and the remote address are recorded.
+// caller is unknown, so only the action, the agent and the client address are recorded. Behind the ingress,
+// RemoteAddr is the proxy, so the first X-Forwarded-For entry (set by the ingress) is recorded as well; it is
+// informational only, because a client can send its own X-Forwarded-For.
 func auditAuth(action string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		sr := &statusRec{ResponseWriter: rw}
 		next.ServeHTTP(sr, r)
 		if sr.code == http.StatusUnauthorized {
 			audit(auditEntry{Action: action, Agent: r.PathValue("name"), Result: "unauthenticated",
-				Reason: "missing or invalid bearer token", Remote: r.RemoteAddr})
+				Reason: "missing or invalid bearer token", Remote: clientAddr(r)})
 		}
 	})
+}
+
+// clientAddr is "<forwarded client> via <peer>" behind a proxy, else the peer address.
+func clientAddr(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first := strings.TrimSpace(strings.Split(xff, ",")[0])
+		if len(first) > 64 {
+			first = first[:64]
+		}
+		return first + " via " + r.RemoteAddr
+	}
+	return r.RemoteAddr
 }
 
 type statusRec struct {

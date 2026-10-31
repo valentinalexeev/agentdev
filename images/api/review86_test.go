@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -122,3 +124,36 @@ var (
 	deleteNoPre = metav1.DeleteOptions{}
 	updateOpts  = metav1.UpdateOptions{}
 )
+
+// goneStore simulates a concurrent DELETE: the object disappears between the check and the delete.
+type goneStore struct{ agentStore }
+
+func (s *goneStore) Delete(context.Context, string, string, string) error {
+	return apierrors.NewNotFound(agentsGVR.GroupResource(), "alice")
+}
+
+func TestConcurrentDeleteIsNoContent(t *testing.T) {
+	gitea := fakeGitea(t)
+	defer gitea.Close()
+	e := newEnv(t, gitea.URL)
+	e.h = routes(idVerify, e.k, &writer{store: &goneStore{agentStore: e.k}, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"})
+	if w := e.call("DELETE", "/api/agents/alice", "admin", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("a delete that lost the race must still answer 204, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestClientAddr(t *testing.T) {
+	r := httptest.NewRequest("POST", "/api/agents", nil)
+	r.RemoteAddr = "10.0.0.5:1234"
+	if got := clientAddr(r); got != "10.0.0.5:1234" {
+		t.Errorf("no proxy: %q", got)
+	}
+	r.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+	if got := clientAddr(r); got != "203.0.113.7 via 10.0.0.5:1234" {
+		t.Errorf("behind proxy: %q", got)
+	}
+	r.Header.Set("X-Forwarded-For", strings.Repeat("x", 500))
+	if got := clientAddr(r); len(got) > 64+len(" via 10.0.0.5:1234") {
+		t.Errorf("forwarded value not clipped: %d", len(got))
+	}
+}
