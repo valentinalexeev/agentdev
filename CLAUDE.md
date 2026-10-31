@@ -40,7 +40,8 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 |---|---|---|
 | Issues, comments, labels | yes, marked (below) | yes |
 | Decide an open question | **no**, a bot comment is never a decision | yes, by comment |
-| Branch, commit, push to a branch | yes | yes |
+| Branch, commit, push to a branch | yes, always as the bot | yes |
+| Act, commit or push **as the owner** (owner git identity, owner credentials, owner `gh` login) | **no**, unless the owner gave explicit permission **in that ticket, for that change** | yes |
 | Push to `main` | **no** | via PR |
 | Open / update PR, fix mechanical conflicts | yes | yes |
 | Merge a PR | only after an owner **Approve** review on the PR's current head commit, and green CI (once CI exists) | yes |
@@ -57,8 +58,14 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   choices are decided by the agent in an ADR (`docs/adr/`) without asking. Ask before the work, not at the end.
 - **Recording answers.** On an owner answer: comment "Decision recorded: …" linking it, move it into the doc/ADR,
   tick the checklist item, drop `needs-decision`, continue if unblocked. Ambiguous answer → ask again, don't guess.
-- **If the bot token fails** (401): tell the owner, continue as the owner account with the `🤖 AI agent:` marker,
-  do not merge anything.
+- **Never as the owner.** Every commit, push, comment, review and API call is made as `valentinalexeev-bot`. The
+  agent never sets the owner's name or email as git author/committer and never uses the owner's credentials
+  (keychain, `gh` login, tokens), with exactly one exception: the owner wrote explicit permission **in the issue or
+  PR of that change**, naming the change. Permission is per change: an earlier "yes" on another ticket is not
+  permission. When the bot cannot do something itself (e.g. its token lacks `workflow` scope for `.github/workflows/`),
+  it posts the exact diff on the ticket, asks, and waits; the owner applies it or grants permission there.
+- **If the bot token fails** (401): tell the owner and stop the affected work; do not fall back to the owner
+  account, do not merge anything.
 
 ## 4. Pull requests
 
