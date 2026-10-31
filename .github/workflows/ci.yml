@@ -96,7 +96,7 @@ jobs:
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 object paths=./api/...
           go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName=agentdev-operator paths=./... \
             output:crd:dir=config/crd output:rbac:dir=config/rbac
-          git diff --exit-code -- . || { echo "run controller-gen and commit (see images/operator/README.md)"; exit 1; }
+          git add -N . && git diff --exit-code -- . || { echo "run controller-gen and commit (see images/operator/README.md)"; exit 1; }
 
   worker-image:
     needs: scope
