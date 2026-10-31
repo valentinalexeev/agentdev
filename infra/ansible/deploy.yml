@@ -122,6 +122,10 @@
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_agents.yaml"
+        # Agents below need the type to be served
+        wait: true
+        wait_condition: {type: Established, status: "True"}
+        wait_timeout: 60
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -180,6 +184,8 @@
             scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
+      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below
+      when: not ansible_check_mode
       no_log: true
 
     - name: Per-agent Claude secrets (only agents that have one)

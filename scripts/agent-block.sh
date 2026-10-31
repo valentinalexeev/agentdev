@@ -4,8 +4,8 @@
 #   scripts/agent-block.sh unblock <agent>            remove the block and start it again
 #   scripts/agent-block.sh list                       blocked agents
 #
-# While blocked, nothing starts the agent: the router skips it on events (scale to zero, #35) and 06-agents.sh keeps
-# it at 0 replicas on redeploy. The UI toggle in #12 sets the same annotation.
+# While blocked, nothing starts the agent: the router skips it on events (scale to zero, #35) and the operator keeps
+# its StatefulSet at 0 replicas whatever its Agent says (#47). The UI toggle in #12 sets the same annotation.
 source "$(dirname "$0")/../lib.sh"
 
 sts() { echo "agent-${1:?agent name required}"; }

@@ -66,9 +66,10 @@ for a in ${AGENTS}; do
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   # the agent itself (#47, #57): the operator renders its Service and StatefulSet; an existing one is adopted in place
   jq -n --arg n "${a}" --arg ns "${AGENTS_NS}" --arg repo "${REPO}" --arg claude "${secret}" \
-      --argjson maxc "${MAX_CONCURRENT}" --argjson s2z "${SCALE_TO_ZERO}" \
+      --arg maxc "${MAX_CONCURRENT}" --arg s2z "${SCALE_TO_ZERO}" \
       '{apiVersion:"agentdev.dev/v1alpha1", kind:"Agent", metadata:{name:$n, namespace:$ns},
-        spec:{repo:$repo, forge:"gitea", claudeSecret:$claude, maxConcurrent:$maxc, scaleToZero:$s2z}}' \
+        spec:{repo:$repo, forge:"gitea", claudeSecret:$claude, maxConcurrent:($maxc|tonumber),
+              scaleToZero:($s2z|ascii_downcase|IN("true","1","yes"))}}' \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   if [[ "${blocked}" == true ]]; then
     warn "${a} is blocked: kept at 0 (scripts/agent-block.sh unblock ${a})"; continue

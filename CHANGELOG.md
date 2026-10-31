@@ -10,6 +10,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 - `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
   renders the StatefulSets and adopts existing ones in place (no restart). `06` installs the operator when missing.
   **Removed** `manifests/agent.yaml.tmpl` (#57).
+- **BREAKING** `infra/ansible`: per-agent `agents[].idle_seconds` is no longer applied; the idle time is
+  cluster-wide (`idle_seconds`, set on the operator) until the Agent spec has it (#57).
 
 ## [0.1.0] - 2026-10-31
 
