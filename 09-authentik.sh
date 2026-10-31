@@ -33,6 +33,10 @@ log "authentik ${AUTHENTIK_VERSION} (${PLATFORM_NS})"
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
 
 helm repo add authentik https://charts.goauthentik.io >/dev/null 2>&1 || true
+# blueprints: agentdev's own authentik objects (the OIDC application, #46), mounted into the worker by the chart
+bp=(); for f in "${SPIKE_DIR}"/manifests/authentik-blueprint-*.yaml; do bp+=("--from-file=${f}"); done
+k -n "${PLATFORM_NS}" create configmap authentik-blueprints --dry-run=client -o yaml "${bp[@]}" \
+  | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
 helm repo update authentik >/dev/null
 helm --kube-context "kind-${CLUSTER_NAME}" upgrade --install authentik authentik/authentik \
   --namespace "${PLATFORM_NS}" --version "${AUTHENTIK_VERSION}" \
