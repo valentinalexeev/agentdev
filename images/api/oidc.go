@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -14,6 +16,8 @@ func newVerifier(ctx context.Context, issuer, discovery, audience string) (verif
 	if discovery == "" {
 		discovery = issuer
 	}
+	// bounded discovery and key fetches: a hung authentik must not hang startup or requests
+	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: 10 * time.Second})
 	if discovery != issuer {
 		ctx = oidc.InsecureIssuerURLContext(ctx, issuer)
 	}
@@ -21,6 +25,8 @@ func newVerifier(ctx context.Context, issuer, discovery, audience string) (verif
 	if err != nil {
 		return nil, fmt.Errorf("discover %s: %w", discovery, err)
 	}
+	// Accepts tokens of the agentdev client (access and ID tokens share the audience). Fine while read-only; before
+	// write endpoints, require access tokens only (#46 follow-up in the lifecycle work).
 	v := p.Verifier(&oidc.Config{ClientID: audience})
 	return func(ctx context.Context, raw string) (*identity, error) {
 		tok, err := v.Verify(ctx, raw)

@@ -20,6 +20,7 @@ PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" O
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev \
   envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
-k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null && ok "agentdev-api ready"
+k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"
+ok "agentdev-api ready"
 record "agentdev API up in ${PLATFORM_NS} (issuer ${API_OIDC_ISSUER})"
 echo "  API: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/agentdev-api 8088:8080  ->  http://localhost:8088/api/agents"

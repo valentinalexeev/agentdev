@@ -1,5 +1,5 @@
 # agentdev API (#46). Published as ghcr.io/valentinalexeev/agentdev-api (#28).
-FROM golang:1.25-alpine AS build
+FROM golang:1.25.14-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

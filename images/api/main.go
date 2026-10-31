@@ -48,7 +48,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("kubernetes: %v", err)
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
 }
@@ -99,8 +100,11 @@ type ctxIdentity struct{}
 func auth(verify verifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
-		raw, ok := strings.CutPrefix(h, "Bearer ")
-		if !ok || raw == "" {
+		var raw string
+		if len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") { // scheme is case-insensitive (RFC 7235)
+			raw = strings.TrimSpace(h[7:])
+		}
+		if raw == "" {
 			w.Header().Set("WWW-Authenticate", `Bearer`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required"})
 			return

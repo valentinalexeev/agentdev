@@ -26,7 +26,7 @@ spec:
     metadata: {labels: {app: agentdev-api}}
     spec:
       serviceAccountName: agentdev-api
-      securityContext: {runAsNonRoot: true}
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: api
         image: ${API_IMAGE}
@@ -38,6 +38,7 @@ spec:
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 32Mi}
           limits: {memory: 128Mi}
@@ -54,10 +55,11 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: authentik-from-api, namespace: ${PLATFORM_NS}}
 spec:
-  podSelector: {matchLabels: {app.kubernetes.io/name: authentik}}
+  podSelector: {matchLabels: {app.kubernetes.io/name: authentik, app.kubernetes.io/component: server}}
   policyTypes: [Ingress]
   ingress:
   - from: [{podSelector: {matchLabels: {app: agentdev-api}}}]
+    ports: [{port: 9000}]       # http: in-cluster discovery and keys (JWKS is public; TLS inside the cluster: #51)
 ---
 # the API itself: reached through port-forward now; the UI (#48) adds its own rule
 apiVersion: networking.k8s.io/v1
