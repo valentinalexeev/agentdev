@@ -118,60 +118,66 @@
       changed_when: false
       no_log: true
 
-    - name: Blocked agents (#27) stay stopped across deploys
-      kubernetes.core.k8s_info:
-        <<: *k8s
-        kind: StatefulSet
-        namespace: "{{ agents_ns }}"
-        label_selectors: [app=coding-agent]
-      register: agent_sts
-
-    - name: "Agents (own Claude secret if present, else the shared one; exactly one, see #5)"
+    - name: Agent CRD (#47)
       kubernetes.core.k8s:
         <<: *k8s
-        # a blocked agent's StatefulSet is rendered at 0 replicas with its annotation kept, in the same apply
-        definition: >-
-          {%- set docs = lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_agent) | from_yaml_all | list -%}
-          {%- set out = [] -%}
-          {%- for d in docs -%}
-          {%-   if d.kind == 'StatefulSet' and ('agent-' + item.name) in blocked_agents -%}
-          {%-     set _ = out.append(d | combine({'spec': {'replicas': 0}, 'metadata': {'annotations': {'agentdev/blocked': 'true'}}}, recursive=true)) -%}
-          {%-   else -%}{%- set _ = out.append(d) -%}{%- endif -%}
-          {%- endfor -%}
-          {{ out }}
+        src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_agents.yaml"
+
+    - name: Platform namespace
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}"}}
+
+    - name: Agent operator (#47); it renders every agent's StatefulSet
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_operator) | from_yaml_all | list }}"
       vars:
-        blocked_agents: >-
-          {%- set names = [] -%}
-          {%- for s in agent_sts.resources -%}
-          {%-   if ((s.metadata.annotations | default({}, true)).get('agentdev/blocked')) == 'true' -%}
-          {%-     set _ = names.append(s.metadata.name) -%}
-          {%-   endif -%}
-          {%- endfor -%}
-          {{ names }}
-        lines: "{{ agent_secrets.results[idx].stdout_lines }}"
-        own_claude: "{{ lines[2:] | select('search', '=') | list }}"
-        vars_agent:
-          src: "{{ repo_root }}/manifests/agent.yaml.tmpl"
+        vars_operator:
+          src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
           values:
-            AGENT: "{{ item.name }}"
+            PLATFORM_NS: "{{ platform_ns }}"
             AGENTS_NS: "{{ agents_ns }}"
-            FORGE_TOKEN: "{{ lines[0] }}"
-            WAKE_TOKEN: "{{ lines[1] }}"
-            REGISTER_TOKEN: "{{ register_token }}"
+            OPERATOR_IMAGE: "{{ operator_image }}"
             WORKER_IMAGE: "{{ worker_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
-            REPO: "{{ item.repos }}"
-            POLL_SECONDS: "{{ poll_seconds }}"
-            MAX_CONCURRENT: "{{ item.max_concurrent | default(max_concurrent) }}"
-            SCALE_TO_ZERO: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool | lower }}"
-            IDLE_SECONDS: "{{ item.idle_seconds | default(idle_seconds) }}"
-            BOTBOARD_URL: "{{ botboard_url }}"
+            FORGE_URL: "{{ forge_url }}"
             FORGE_PUBLIC_URL: "{{ forge_public_url | default('') }}"
             FORGE_ADMIN_USER: "{{ reviewer }}"
-            FORGE_KIND: "{{ forge_kind }}"
-            FORGE_URL: "{{ forge_url }}"
-            CLAUDE_SECRET: "{{ ('claude-' + item.name) if own_claude else 'claude-shared' }}"
+            BOTBOARD_URL: "{{ botboard_url }}"
+            POLL_SECONDS: "{{ poll_seconds }}"
+            IDLE_SECONDS: "{{ idle_seconds }}"
           replace: []
+
+    - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: "agent-{{ item.name }}", namespace: "{{ agents_ns }}"}
+          stringData:
+            FORGE_TOKEN: "{{ agent_secrets.results[idx].stdout_lines[0] }}"
+            WAKE_TOKEN: "{{ agent_secrets.results[idx].stdout_lines[1] }}"
+            REGISTER_TOKEN: "{{ register_token }}"
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      no_log: true
+
+    - name: "Agents (#57): one Agent object each; own Claude secret if present, else the shared one (#5)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        # blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0
+        definition:
+          apiVersion: agentdev.dev/v1alpha1
+          kind: Agent
+          metadata: {name: "{{ item.name }}", namespace: "{{ agents_ns }}"}
+          spec:
+            repo: "{{ item.repos }}"
+            forge: "{{ forge_kind }}"
+            claudeSecret: "{{ ('claude-' + item.name) if (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list) else 'claude-shared' }}"
+            maxConcurrent: "{{ (item.max_concurrent | default(max_concurrent)) | int }}"
+            scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true

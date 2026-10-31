@@ -13,8 +13,8 @@ import (
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
 
-// render fills the StatefulSet from the Agent; the Go form of manifests/agent.yaml.tmpl. Keep them in step until
-// 06-agents.sh creates Agents instead of rendering the template (follow-up of #47).
+// render fills the StatefulSet from the Agent. It is the only definition of an agent's pod (the shell template it
+// replaced is gone since #57); changes here reach every agent on the next reconcile.
 func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	n, ns := a.Name, a.Namespace
 	forgeSecret := a.Spec.ForgeSecret
@@ -51,7 +51,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	// keep the agent's state volume when the Agent is deleted: re-adding the agent resumes its work
 	s.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
 		WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType, WhenScaled: appsv1.RetainPersistentVolumeClaimRetentionPolicyType}
-	if len(s.Spec.VolumeClaimTemplates) == 0 { // immutable after creation; same claims as manifests/agent.yaml.tmpl
+	if len(s.Spec.VolumeClaimTemplates) == 0 { // immutable after creation; same claims the earlier template created
 		pvc := func(name, size string) corev1.PersistentVolumeClaim {
 			return corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name},
 				Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -62,8 +62,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 
 	env := func(k, v string) corev1.EnvVar { return corev1.EnvVar{Name: k, Value: v} }
 	secretKey := func(k, secret string, optional bool) corev1.EnvVar {
-		return corev1.EnvVar{Name: k, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: k, Optional: ptr.To(optional)}}}
+		sel := &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: k}
+		if optional { // unset, not false, when required: same pod template as the earlier template (adoption without restart)
+			sel.Optional = ptr.To(true)
+		}
+		return corev1.EnvVar{Name: k, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: sel}}
 	}
 	s.Spec.Template.Labels = labels
 	p := &s.Spec.Template.Spec
@@ -103,7 +106,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
-				// 3Gi fits 2 parallel items (agent.yaml.tmpl); ~1Gi per extra slot
+				// 3Gi fits 2 parallel items; ~1Gi per extra slot
 				corev1.ResourceMemory: *resource.NewQuantity(int64(1+maxc)*(1<<30), resource.BinarySI)},
 		},
 	}}

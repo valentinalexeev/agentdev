@@ -1,7 +1,8 @@
 # agentdev operator
 
 Reconciles `Agent` resources (`agentdev.dev/v1alpha1`, short name `ag`) in the agents namespace into the agent's
-Service and StatefulSet: the same objects `manifests/agent.yaml.tmpl` describes (#47, design A on the issue).
+Service and StatefulSet (#47, design A on the issue). `06-agents.sh`, `scripts/bootstrap-project.sh` and the
+Ansible playbook create Agents (#57); existing StatefulSets are adopted in place, without a restart.
 
 ```yaml
 apiVersion: agentdev.dev/v1alpha1
@@ -43,5 +44,4 @@ go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName
   output:crd:dir=config/crd output:rbac:dir=config/rbac
 ```
 
-`render.go` mirrors `manifests/agent.yaml.tmpl`; keep both in step until #57 makes `06-agents.sh` create Agents instead of
-rendering the template.
+`render.go` is the only definition of an agent's pod: change it, run `./run.sh 12`, and every agent follows.

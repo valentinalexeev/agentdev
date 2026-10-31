@@ -1,5 +1,5 @@
 // Package v1alpha1: the Agent resource (#47, decision A on the issue). An Agent is one coding agent: a forge account
-// working one repository. The operator turns it into the objects manifests/agent.yaml.tmpl describes (Service,
+// working one repository. The operator turns it into the agent's Service and StatefulSet (render.go) (Service,
 // StatefulSet); secrets (forge token, Claude credential) stay outside the spec and are referenced by name.
 // +kubebuilder:object:generate=true
 // +groupName=agentdev.dev

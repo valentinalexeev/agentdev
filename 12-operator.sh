@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# agentdev operator (#47): Agent CRD + controller. After 06 (needs the agents namespace and router) and 08 (platform ns).
-#   ./run.sh 12      build (kind), install the CRD, deploy the operator; idempotent
+# agentdev operator (#47): Agent CRD + controller, in ${PLATFORM_NS}, watching ${AGENTS_NS}.
+#   ./run.sh 12      build (kind), install the CRD, deploy the operator; idempotent. 06 runs it when missing (#57).
 # Then an agent is one object:
 #   kubectl -n coding-agents apply -f - <<< '{"apiVersion":"agentdev.dev/v1alpha1","kind":"Agent",
 #     "metadata":{"name":"carol"},"spec":{"repo":"owner/playground","claudeSecret":"claude-shared"}}'
 # Its forge token Secret agent-<name> (FORGE_TOKEN) must exist; 05/06 create them for the agents in config.env.
 source "$(dirname "$0")/lib.sh"
 need envsubst
-k get ns "${PLATFORM_NS}" >/dev/null 2>&1 || die "platform namespace missing: run ./run.sh 08 first"
+k create namespace "${PLATFORM_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
+k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 
 log "Image ${OPERATOR_IMAGE}"
 if [[ "${OPERATOR_IMAGE}" == agentdev-operator:* ]]; then
