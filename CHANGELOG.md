@@ -21,6 +21,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   missing or wrong `base` cannot let a workflow change through (review of #68).
 
 ### Added
+- Manuals follow ASD-STE100 Simplified Technical English (#75): rules and the project word list in `docs/writing.md`,
+  CLAUDE.md rule for agents and reviewers; the admin guide's *Web UI* section is the first converted page.
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
   ContextForge); `mcp:` in the project spec plus `scripts/mcp-sync.sh` give each agent a token scoped to its
   project's virtual server only; the readiness report counts the tools.

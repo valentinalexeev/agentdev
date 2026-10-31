@@ -149,22 +149,64 @@ with `scaleToZero` the router, not the operator, starts and stops the pod. Field
 keeping Agents in the deployment repo with Argo CD or Flux is #58.
 ## Web UI
 
-`./run.sh 11` (after `10`) builds and deploys the web UI (`images/ui`, React + Vite, served by unprivileged nginx)
-in `agentdev-platform` (#48). Open it locally with two port-forwards:
+The web UI shows the agents of the instance and their status. You sign in to the web UI through authentik. The web
+UI is in the `agentdev-platform` namespace. For GKE, refer to issue #51.
 
-```bash
-kubectl -n agentdev-platform port-forward svc/agentdev-ui 8091:8080          # http://localhost:8091/
-kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443     # sign-in
-```
+### Deploy the web UI
 
-**Sign in** sends you to authentik (OIDC authorization code + PKCE, client `agentdev`); after login the overview
-lists the agents with their phase and refreshes every 15 s. Tokens are kept in the tab's session storage (closing
-the tab signs you out); **Sign out** also ends the authentik session for agentdev. nginx sends a strict
-Content-Security-Policy (scripts from the UI only, network calls to the UI and authentik only) and runs with a
-read-only root filesystem. nginx serves `/config.json` from the pod's environment (`OIDC_ISSUER`) and proxies `/api`
-to the API, so the browser only talks to the UI origin and authentik. The UI origin must be a strict redirect URI
-in the authentik blueprint (`manifests/authentik-blueprint-agentdev.yaml`): authentik derives its CORS allow-list
-from those. On GKE: #51.
+Do this task after run.sh step 10 (the API).
+
+1. Run run.sh step 11: `./run.sh 11`
+
+The script builds the web UI image and deploys it to the cluster.
+
+### Open the web UI
+
+1. Start the port-forward to the web UI:
+   `kubectl -n agentdev-platform port-forward svc/agentdev-ui 8091:8080`
+2. Start the port-forward to authentik:
+   `kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443`
+3. Open http://localhost:8091/ in a browser.
+4. Click **Sign in**.
+   The browser shows the authentik sign-in page.
+5. Type the user name and the password.
+6. Click **Log in**.
+   The web UI shows a list of the agents and the phase of each agent.
+
+NOTE: The web UI updates the list each 15 seconds.
+
+NOTE: At this time, an agent can read its forge token (risk R4 in [security.md](security.md)). Give agents issues
+only from persons that you know. Refer to [Projects](#projects).
+
+### Open the web UI from a different computer
+
+The web UI works only at the address http://localhost:8091. From a different computer, use an SSH tunnel to this
+computer.
+
+1. On the different computer, open an SSH tunnel for ports 8091 and 9443:
+   `ssh -L 8091:localhost:8091 -L 9443:localhost:9443 <this-computer>`
+2. Do steps 3 to 6 of *Open the web UI* on the different computer.
+
+### Sign out
+
+1. Click **Sign out**.
+
+The web UI ends your session and the authentik session for agentdev.
+
+NOTE: When you close the browser tab, you also sign out.
+
+### Reference: how the web UI works
+
+- The source is in `images/ui` (#48). An unprivileged nginx serves the web UI.
+- The web UI uses OIDC with the authorization code and PKCE. The authentik client is `agentdev`.
+- The browser keeps the tokens in the session storage of the tab.
+- nginx sends a strict Content-Security-Policy. Scripts come only from the web UI.
+- Network calls go only to the web UI and to authentik.
+- nginx runs with a read-only root file system.
+- nginx creates `/config.json` from the environment of the pod (`OIDC_ISSUER`).
+- nginx sends `/api` requests to the API. Because of this, the browser connects only to the web UI and to authentik.
+- The address of the web UI must be a strict redirect URI in the authentik blueprint
+  (`manifests/authentik-blueprint-agentdev.yaml`). authentik creates its CORS list from these URIs.
 
 ## GitHub App (registration)
 
