@@ -72,7 +72,7 @@ type agent struct {
 	Name          string   `json:"name"`
 	Repos         []string `json:"repos"`
 	Forge         string   `json:"forge,omitempty"`
-	Phase         string   `json:"phase"` // running | starting | stopped | paused | blocked
+	Phase         string   `json:"phase"` // running | starting | stopped | paused | blocked | invalid
 	Replicas      int32    `json:"replicas"`
 	Ready         int32    `json:"ready"`
 	Managed       bool     `json:"managed"` // an Agent object exists (#57); false: a StatefulSet from before the operator

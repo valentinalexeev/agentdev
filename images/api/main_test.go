@@ -9,12 +9,14 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func fakeVerify(_ context.Context, raw string) (*identity, error) {
@@ -130,5 +132,26 @@ func TestAgentsFromAgentObjects(t *testing.T) {
 	}
 	if l.Managed || l.Phase != "running" || l.Name != "legacy" {
 		t.Errorf("legacy StatefulSet: %+v", l)
+	}
+}
+
+// A failing Agent list (forbidden, timeout) is an error, not a quiet fallback to managed:false; only a missing CRD
+// (operator not installed) falls back to the StatefulSets.
+func TestAgentsListErrors(t *testing.T) {
+	newDyn := func(err error) *dynfake.FakeDynamicClient {
+		d := dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{agentsGVR: "AgentList"})
+		d.PrependReactor("list", "agents", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, err })
+		return d
+	}
+	c := fake.NewSimpleClientset(sts("alice", 1, 1, map[string]string{"agentdev/repos": "owner/x"}))
+	gr := schema.GroupResource{Group: "agentdev.dev", Resource: "agents"}
+
+	k := &kubeAgents{c: c, d: newDyn(apierrors.NewForbidden(gr, "", nil)), ns: "coding-agents"}
+	if _, err := k.List(context.Background()); err == nil {
+		t.Error("forbidden Agent list must be an error")
+	}
+	k.d = newDyn(apierrors.NewNotFound(gr, ""))
+	if got, err := k.List(context.Background()); err != nil || len(got) != 1 || got[0].Managed {
+		t.Errorf("CRD not installed must fall back to StatefulSets: %v %+v", err, got)
 	}
 }

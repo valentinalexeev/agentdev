@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -51,12 +54,19 @@ func newKubeAgents(ns string) (*kubeAgents, error) {
 func (k *kubeAgents) List(ctx context.Context) ([]agent, error) {
 	byName := map[string]agent{}
 	if k.d != nil {
-		if ags, err := k.d.Resource(agentsGVR).Namespace(k.ns).List(ctx, metav1.ListOptions{}); err == nil {
+		ags, err := k.d.Resource(agentsGVR).Namespace(k.ns).List(ctx, metav1.ListOptions{})
+		switch {
+		case err == nil:
 			for _, u := range ags.Items {
 				a := fromAgentObject(u)
 				byName[a.Name] = a
 			}
-		} // a cluster without the CRD (operator not installed) still lists its StatefulSets
+		case apierrors.IsNotFound(err) || meta.IsNoMatchError(err):
+			// the CRD is not installed (no operator yet): list the StatefulSets only
+		default:
+			// forbidden, timeouts and the like must not quietly turn every agent into managed:false
+			return nil, fmt.Errorf("list agents: %w", err)
+		}
 	}
 	sts, err := k.c.AppsV1().StatefulSets(k.ns).List(ctx, metav1.ListOptions{LabelSelector: "app=coding-agent"})
 	if err != nil {
