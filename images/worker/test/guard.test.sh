@@ -59,4 +59,13 @@ check "config scrub removes drivers, includes and ssh commands" \
   "! git config --file '${WORK}/.git/config' --name-only --list | grep -qE '^(filter|include|core\.sshcommand)'"
 check "config scrub keeps user and resets the remote to the forge" \
   "[[ \$(git config --file '${WORK}/.git/config' user.name) == alice && \$(git config --file '${WORK}/.git/config' remote.origin.url) == http://gitea.forge:3000/owner/repo.git ]]"
+# a worktree whose .git file Claude redirected to a gitdir it controls is pinned back to the shared clone
+wt="${tmp}/wt"; git -C "${WORK}" worktree add -q -b agent/alice/issue-1 "${wt}"
+evil="${tmp}/evilgit"; cp -R "${WORK}/.git" "${evil}"; git config --file "${evil}/config" filter.x.clean "touch ${tmp}/pwned-gitdir"
+printf 'gitdir: %s\n' "${evil}" > "${wt}/.git"; echo '* filter=x' > "${wt}/.gitattributes"
+check "pin_worktree resets a redirected .git file" "pin_worktree '${wt}' && grep -qx \"gitdir: \$(cd '${WORK}/.git/worktrees/wt' && pwd -P)\" '${wt}/.git'"
+check "loop git in the pinned worktree runs no planted filter" "lgit -C '${wt}' add -A && [[ ! -e '${tmp}/pwned-gitdir' ]]"
+# a global git config written by Claude (Write tool into ~) is ignored by the loop's git
+export HOME="${tmp}/home"; mkdir -p "${HOME}"; printf '[alias]\n\tst = !touch %s/pwned-global\n[core]\n\tpager = touch %s/pwned-pager\n' "${tmp}" "${tmp}" > "${HOME}/.gitconfig"
+check "loop git ignores a global config" "[[ -z \$(lgit config --get core.pager) ]] && ! lgit -C '${WORK}' st 2>/dev/null; [[ ! -e '${tmp}/pwned-global' ]]"
 exit ${fail}

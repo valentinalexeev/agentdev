@@ -71,19 +71,32 @@ GIT_HELPER='!f() { test "$1" = get || exit 0; h=; p=; while IFS== read -r k v; d
 # git as the loop runs it. Claude can write anywhere in the worktree (and with a shell, into .git), so the loop never
 # runs repo-controlled code: hooks and fsmonitor are off for every loop git call (command-line config wins over
 # .git/config).
-lgit() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+lgit() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 # Hooks are not the only repo-controlled code: config can name filter drivers, diff/merge drivers, ssh commands or
 # include other files. Claude can edit .git/config, so before the loop uses the repo again (worktree, commit, push),
 # every key outside a short list of plain settings is removed.
 scrub_git_config() {
   local cfg="${WORK}/.git/config" k
   [[ -f "${cfg}" ]] || return 0
-  rm -f "${WORK}"/.git/worktrees/*/config.worktree
+  rm -f "${WORK}"/.git/worktrees/*/config.worktree "${WORK}/.git/config.worktree"
   git config --file "${cfg}" --name-only --list 2>/dev/null | sort -u | while read -r k; do
-    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] ||
+    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|extensions\.objectformat|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] ||
       git config --file "${cfg}" --unset-all "${k}" 2>/dev/null
   done
   git config --file "${cfg}" remote.origin.url "$(clone_url)"
+}
+# pin_worktree <dir>: the worktree's .git is a plain file Claude can edit to point git at a directory it controls
+# (with its own config). Rewrite it, and the admin dir's back-links, to the shared clone before the loop uses it.
+pin_worktree() {
+  local dir adm="" g
+  dir=$(cd "$1" && pwd -P) || return 1
+  # the admin dir is the one whose gitdir points back at this tree (its name can differ after `worktree move`)
+  for g in "${WORK}"/.git/worktrees/*/gitdir; do
+    [[ -f "${g}" && "$(cat "${g}")" == "${dir}/.git" ]] && { adm=$(cd "${g%/gitdir}" && pwd -P); break; }
+  done
+  [[ -n "${adm}" ]] || { log "no worktree admin dir for ${dir}"; return 1; }
+  printf 'gitdir: %s\n' "${adm}" > "${dir}/.git"
+  printf '../..\n' > "${adm}/commondir"
 }
 # git with forge auth: only the loop calls this (fetch, push); the helper exists for that one process only
 git_auth() { lgit -c credential.helper= -c credential.helper="${GIT_HELPER}" "$@"; }
@@ -219,6 +232,7 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
 commit_and_push() {  # commit_and_push <dir> <branch> <message>  -> 0 if something was pushed
   local dir=$1 branch=$2 msg=$3
   ( flock 9; scrub_git_config ) 9>"${STATE}/git.lock"
+  pin_worktree "${dir}" || return 1
   lgit -C "${dir}" add -A
   lgit -C "${dir}" diff --cached --quiet || lgit -C "${dir}" commit -q -m "${msg}"
   # claude may also have committed on its own; push whatever is ahead of the remote
@@ -227,7 +241,9 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message>  -> 0 if somethi
     return 1
   fi
   # to the forge URL itself, not "origin": Claude may have rewritten the remote
-  git_auth -C "${dir}" push -q "$(clone_url)" "HEAD:refs/heads/${branch}"
+  git_auth -C "${dir}" push -q "$(clone_url)" "HEAD:refs/heads/${branch}" || return 1
+  # a push to a URL does not move origin/<branch>; do it, so a second call before the next fetch sees nothing new
+  lgit -C "${dir}" update-ref "refs/remotes/origin/${branch}" HEAD
 }
 
 # ---------- 1. new issues -> PRs ----------
