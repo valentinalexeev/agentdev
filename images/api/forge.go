@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -40,12 +41,24 @@ type permChecker interface {
 // with the same name in both. When the forge accounts come from authentik (OIDC login on Gitea) or the names differ,
 // replace this function: for example read a claim with the forge login, or look the user up by e-mail. An empty
 // result means "no forge user", and every forge-based permission is then denied.
+//
+// Gitea logins are case-insensitive, authentik usernames are not: "Adam" in authentik would act as "adam" on Gitea.
+// So only a username that is already lowercase and matches forgeLoginRe maps to a forge user; any other name
+// (upper case, spaces, other characters) gives "" and is denied. This relies on admin settings (docs/admin.md,
+// docs/security.md R42): closed enrollment and no username changes by users in authentik. Stable claim: #88.
 var forgeUserOf = func(id *identity) string {
-	return strings.TrimSpace(id.Username)
+	u := id.Username
+	if u != strings.ToLower(u) || len(u) > 40 || !forgeLoginRe.MatchString(u) {
+		return ""
+	}
+	return u
 }
 
-// giteaPerms asks Gitea: GET /api/v1/repos/{owner}/{repo}/collaborators/{user}/permission. The token only needs
-// read access to the repositories (it never writes); it comes from a Secret, never from git.
+var forgeLoginRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// giteaPerms asks Gitea: GET /api/v1/repos/{owner}/{repo}/collaborators/{user}/permission. Gitea answers this for
+// another user only if the token user is a site admin or an admin of that repository (else 403, and we fail closed).
+// The token scope stays read-only (read:repository, read:user); it comes from a Secret, never from git.
 type giteaPerms struct {
 	base  string // e.g. http://gitea.forge.svc.cluster.local:3000
 	token string

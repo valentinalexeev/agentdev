@@ -14,7 +14,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   authentik username (pluggable `forgeUserOf`). If the forge cannot be reached the change is refused (503). Every
   attempt prints an `AGENTDEV_AUDIT {json}` line (who, action, agent, before, after, result). Writes require a bearer
   token (no cookies, CSRF). The API Role gains `patch`, `create`, `delete` on `agents` only. New optional Secret
-  `agentdev-api-forge` (`FORGE_API_TOKEN`, read-only token) and env `FORGE_URL`, `ADMIN_GROUP`.
+  `agentdev-api-forge` (`FORGE_API_TOKEN`, scopes `read:repository`, `read:user`; the token user must be admin of
+  the agent repositories, Gitea requires it) and env `FORGE_URL`, `ADMIN_GROUP`. Review of #86: only lowercase
+  usernames map to a forge user (R42); DELETE uses UID and resourceVersion preconditions; repositories with `.`/`..`
+  segments are refused; refused logins (401) on write routes are audited; GitHub agents give 403 for repository
+  users until #87.
 
 ### Security
 - Forge sidecar (#64, security model phase 1, fixes R4 pending e2e): every agent pod gets a `forge` container

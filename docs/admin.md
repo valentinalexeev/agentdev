@@ -248,6 +248,19 @@ WARNING: Change the password and add MFA immediately after the first login. The 
 NOTE: The first password is also in the Secret `authentik`, but authentik uses it only at the first start. Thus, the
 password that you set in the UI is final.
 
+### Keep the usernames safe
+
+The API uses the authentik username as the forge login (#57). An authentik user who can pick a name can act as the
+forge user with that name. Thus, keep these settings:
+
+- Only administrators make authentik users. Do not add an enrollment flow. The blueprint has none.
+- In **System > Settings**, keep **Allow users to change username** off (the default). The blueprint cannot set
+  this, so check it after each authentik upgrade.
+- Give each person the same username in authentik and on the forge, in lower case.
+
+NOTE: The API refuses a username that has upper case letters or characters other than `a-z`, `0-9`, `.`, `_`, `-`.
+Such a user can read, but cannot change agents. A stable forge-login claim is planned in #88.
+
 ### Reference: authentik
 
 - The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
@@ -301,7 +314,12 @@ through the API.
 
 WARNING: Do not use a token with write access. The API only reads the permissions of the users.
 
-1. On the forge, make a token that can read the repositories of the agents.
+Gitea tells the permission of another user only to a site admin or to an admin of the repository. With any other
+token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
+example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
+
+1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
+   only.
 2. Put the token in the Secret `agentdev-api-forge`:
    `kubectl -n agentdev-platform create secret generic agentdev-api-forge --from-literal=FORGE_API_TOKEN=<token>`
 3. Restart the API: `kubectl -n agentdev-platform rollout restart deploy/agentdev-api`

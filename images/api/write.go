@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,8 +29,23 @@ import (
 
 var (
 	agentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-	repoRe      = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	repoSegRe   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 )
+
+// validRepo accepts owner/name. Each part starts with a letter, digit or _, does not end with a dot and has no "..":
+// so "."/".." segments, "-x" and "x." are refused before anything reaches the forge path.
+func validRepo(s string) bool {
+	owner, name, ok := strings.Cut(s, "/")
+	if !ok {
+		return false
+	}
+	for _, seg := range []string{owner, name} {
+		if len(seg) > 100 || !repoSegRe.MatchString(seg) || strings.HasSuffix(seg, ".") || strings.Contains(seg, "..") {
+			return false
+		}
+	}
+	return true
+}
 
 // agentState is the writable view of an Agent, used in the audit log and responses.
 type agentState struct {
@@ -46,7 +62,7 @@ type agentStore interface {
 	Get(ctx context.Context, name string) (*unstructured.Unstructured, error)
 	Create(ctx context.Context, u *unstructured.Unstructured) (*unstructured.Unstructured, error)
 	Patch(ctx context.Context, name string, patch []byte) (*unstructured.Unstructured, error)
-	Delete(ctx context.Context, name string) error
+	Delete(ctx context.Context, name, uid, resourceVersion string) error
 }
 
 func (k *kubeAgents) Get(ctx context.Context, name string) (*unstructured.Unstructured, error) {
@@ -61,8 +77,14 @@ func (k *kubeAgents) Patch(ctx context.Context, name string, patch []byte) (*uns
 	return k.d.Resource(agentsGVR).Namespace(k.ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 }
 
-func (k *kubeAgents) Delete(ctx context.Context, name string) error {
-	return k.d.Resource(agentsGVR).Namespace(k.ns).Delete(ctx, name, metav1.DeleteOptions{})
+// Delete removes the object only if it is still the one that was checked (same UID and resourceVersion).
+func (k *kubeAgents) Delete(ctx context.Context, name, uid, resourceVersion string) error {
+	pre := &metav1.Preconditions{ResourceVersion: &resourceVersion}
+	if uid != "" {
+		u := types.UID(uid)
+		pre.UID = &u
+	}
+	return k.d.Resource(agentsGVR).Namespace(k.ns).Delete(ctx, name, metav1.DeleteOptions{Preconditions: pre})
 }
 
 func stateOf(u *unstructured.Unstructured) *agentState {
@@ -87,13 +109,14 @@ type auditEntry struct {
 	Who       auditWho    `json:"who"`
 	Action    string      `json:"action"` // patch | create | delete
 	Agent     string      `json:"agent"`
-	Result    string      `json:"result"` // ok | denied | invalid | error
+	Result    string      `json:"result"` // ok | denied | invalid | error | unauthenticated
 	Reason    string      `json:"reason,omitempty"`
 	Request   any         `json:"request,omitempty"`
 	Before    *agentState `json:"before"`
 	After     *agentState `json:"after"`
 	Grant     string      `json:"grant,omitempty"` // why it was allowed: repo-write, repo-admin, admin-group
 	KeepState *bool       `json:"keepState,omitempty"`
+	Remote    string      `json:"remote,omitempty"` // only for refused logins (no identity)
 }
 
 type auditWho struct {
@@ -103,7 +126,7 @@ type auditWho struct {
 	Groups    []string `json:"groups,omitempty"`
 }
 
-// auditOut receives the audit lines (stdout through the standard logger by default; tests replace it).
+// auditOut receives the audit lines: stderr (the standard logger's writer) by default; tests replace it.
 var auditOut io.Writer = log.Writer()
 
 var now = func() time.Time { return time.Now().UTC() }
@@ -159,6 +182,10 @@ func invalid(msg string) *httpErr { return &httpErr{http.StatusBadRequest, "inva
 func (w *writer) authorize(ctx context.Context, id *identity, forge, repo string, need perm, adminOK bool) (string, error) {
 	if adminOK && w.isAdmin(id) {
 		return "admin-group", nil
+	}
+	if forge == "github" {
+		return "", denied("changes to GitHub agents are not supported yet for repository users; ask an agentdev " +
+			"administrator (follow-up: https://github.com/valentinalexeev/agentdev/issues/87)")
 	}
 	p, err := w.repoPerm(ctx, id, forge, repo)
 	if err != nil {
@@ -316,7 +343,7 @@ func (w *writer) create(rw http.ResponseWriter, r *http.Request) {
 		switch k {
 		case "name":
 		case "repo":
-			if json.Unmarshal(m[k], &st.Repo) != nil || !repoRe.MatchString(st.Repo) {
+			if json.Unmarshal(m[k], &st.Repo) != nil || !validRepo(st.Repo) {
 				w.fail(rw, e, invalid("repo must be owner/name"))
 				return
 			}
@@ -399,11 +426,36 @@ func (w *writer) delete(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Grant = grant
-	if err := w.store.Delete(r.Context(), name); err != nil && !apierrors.IsNotFound(err) {
+	if err := w.store.Delete(r.Context(), name, string(cur.GetUID()), cur.GetResourceVersion()); err != nil {
 		w.fail(rw, e, err)
 		return
 	}
 	e.Result = "ok"
 	audit(e)
 	rw.WriteHeader(http.StatusNoContent)
+}
+
+// auditAuth writes an audit line when auth refuses a write (401: no or bad token). The token is never logged; the
+// caller is unknown, so only the action, the agent and the remote address are recorded.
+func auditAuth(action string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		sr := &statusRec{ResponseWriter: rw}
+		next.ServeHTTP(sr, r)
+		if sr.code == http.StatusUnauthorized {
+			audit(auditEntry{Action: action, Agent: r.PathValue("name"), Result: "unauthenticated",
+				Reason: "missing or invalid bearer token", Remote: r.RemoteAddr})
+		}
+	})
+}
+
+type statusRec struct {
+	http.ResponseWriter
+	code int
+}
+
+func (s *statusRec) WriteHeader(c int) {
+	if s.code == 0 {
+		s.code = c
+	}
+	s.ResponseWriter.WriteHeader(c)
 }

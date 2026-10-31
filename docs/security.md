@@ -50,6 +50,8 @@ planned target, [security-model.md](security-model.md).
 | R33 | UI security headers dropped on some routes; no CSP | review #56 | fixed | Shared header snippet, strict CSP, `frame-ancestors 'none'` (4e1f9be) |
 | R34 | Sign-out left the authentik session alive | review #56 | fixed | `signoutRedirect` (4e1f9be) |
 | R35 | GitHub App manifest built by string templating (injection) | review #61 | fixed | Built with `jq --arg`, strict input validation (db8be52) |
+| R42 | API maps the authentik username to the forge login: a chosen or case-variant name ("Adam") could act as another forge user | review #86 | mitigated | Only lowercase names matching `^[a-z0-9][a-z0-9._-]*$` map to a forge user; requires closed enrollment and no username changes in authentik (admin.md, "Keep the usernames safe"). Stable claim: #88 |
+| R43 | API forge token user must be repo or site admin to read permissions | review #86 | accepted | Read-only scopes (`read:repository`, `read:user`); dedicated service account, admin on agent repositories only |
 
 ## Process
 

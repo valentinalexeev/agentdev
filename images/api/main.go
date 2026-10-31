@@ -105,9 +105,9 @@ func routes(verify verifier, agents agentLister, wr *writer) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
-		mux.Handle("PATCH /api/agents/{name}", auth(verify, http.HandlerFunc(wr.patch)))
-		mux.Handle("POST /api/agents", auth(verify, http.HandlerFunc(wr.create)))
-		mux.Handle("DELETE /api/agents/{name}", auth(verify, http.HandlerFunc(wr.delete)))
+		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
+		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
+		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
 	}
 	return mux
 }
