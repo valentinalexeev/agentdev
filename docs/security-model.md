@@ -143,10 +143,10 @@ sequenceDiagram
 
 | Phase | Fixes | Size | Depends on |
 |-------|-------|------|-----------|
-| 1 forge sidecar | R4 | large (new Go program, loop split, operator) | #59 |
-| 2 egress | R10 | medium | 1 (forge traffic from the sidecar only) |
-| 3 claude-proxy | R11 | medium | 2 |
-| 4 approvals | usability, safe exceptions | large (API, UI, MCP tool, CRD) | #57 steps 3-4 (API writes, admin group) |
+| 1 forge sidecar (#64) | R4 | large (new Go program, loop split, operator) | #59 |
+| 2 egress (#65, #6) | R10 | medium | 1 (forge traffic from the sidecar only) |
+| 3 claude-proxy (#66) | R11 | medium | 2 |
+| 4 approvals (#67) | usability, safe exceptions | large (API, UI, MCP tool, CRD) | #57 steps 3-4 (API writes, admin group) |
 
 Phases 1 and 2 should land before #51 (GKE) puts agents in front of untrusted input. Until phase 1, only trusted
 people may write issues and reviews for an agent (R4).

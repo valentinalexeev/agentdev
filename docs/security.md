@@ -16,14 +16,14 @@ planned target, [security-model.md](security-model.md).
 | R1 | Forge token in git remote URL (visible in process list, errors, `.git/config`) | CodeQL #59 | fixed | Token never in a URL; credential helper (#59) |
 | R2 | Forge token stored on disk (`/state/git-credentials`) readable through `cat` | CodeQL #59 | fixed | Helper reads token from the loop's environment; old file deleted on start (49c5671) |
 | R3 | Forge, wake and register tokens in Claude's environment | CodeQL #59 | fixed | Removed from Claude's environment (`env -u`) (0ff6073) |
-| R4 | **Claude can read the loop's environment through `/proc/<pid>/environ`** with any allowed runner (same UID, same container) | CodeQL #59 on 4d6026f | **open** | Until fixed, only trusted people may write issues and reviews for an agent. Fix: forge sidecar (security-model.md, phase 1) |
+| R4 | **Claude can read the loop's environment through `/proc/<pid>/environ`** with any allowed runner (same UID, same container) | CodeQL #59 on 4d6026f | **open** | Until fixed, only trusted people may write issues and reviews for an agent. Fix: forge sidecar (security-model.md phase 1, #64) |
 | R5 | `--dangerously-skip-permissions` (no tool policy) | CodeQL #59 | fixed | `--permission-mode dontAsk` with allow and deny lists (0ff6073) |
 | R6 | Build and test runners can start any program, bypassing the tool lists | CodeQL #59 | accepted | Required for an autonomous developer. Boundary is the pod, not the tool list (concepts.md). Residual risk depends on R4, R10 |
 | R7 | Git hooks or config-defined programs written by Claude run in the loop's git (with the token) | CodeQL #59, review | fixed | `lgit` (no hooks, fsmonitor, global or system config), `scrub_git_config` (4d6026f); worktree `.git` pinned (cdef2b4) |
 | R8 | Credential helper answered any host (redirect or rewritten remote leaks the token) | CodeQL #59 | fixed | Answers only the forge's `scheme://host`; push to the forge URL, not `origin` (4d6026f) |
 | R9 | Claude's stderr written into the worktree and committed | CodeQL #59 | fixed | Written under `/state/jobs` and deleted (4d6026f) |
-| R10 | **Open egress**: anything Claude can read can be sent anywhere | review, #6 | **open** | Egress allow-list (security-model.md, phase 2, #6) |
-| R11 | Claude login (subscription or API key) is in the agent pod and readable by Claude | design review | **open** | Credential proxy (security-model.md, phase 3, #6) |
+| R10 | **Open egress**: anything Claude can read can be sent anywhere | review, #6 | **open** | Egress allow-list (security-model.md phase 2, #65, #6) |
+| R11 | Claude login (subscription or API key) is in the agent pod and readable by Claude | design review | **open** | Credential proxy (security-model.md phase 3, #66) |
 | R12 | Prompt injection through issue and review text steers edits | CodeQL #59 | mitigated | Fenced as untrusted, fixed system rule, agent pushes only to its own branch, owner review before merge |
 | R13 | Loop pushes without an approval gate | CodeQL #59 | mitigated | Push only to `agent/<name>/*`; merge to main needs the owner's approval (branch protection) |
 | R14 | Issue and repo text sent to the model provider | CodeQL #59 | accepted | Inherent to the product; documented. No automatic redaction (would give false assurance) |
