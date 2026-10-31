@@ -99,7 +99,8 @@ the permission prompt if they were running Claude Code interactively.
   workflows where branch rules require it) needs a user with `admin`.
 - `agentdev-admins` (platform operators) see every project's requests and can **deny** any of them as an emergency
   stop; they approve only in projects where they have write access.
-- If nobody decides before the timeout, the request is denied.
+- If nobody decides before the timeout, the request **expires**, which has the same effect as a denial. History
+  shows it as *expired*.
 
 ### Forge as an approval surface
 
@@ -166,15 +167,23 @@ sequenceDiagram
 - The project and repository are set by the API from the agent's spec, never taken from the agent's request: a
   compromised agent cannot send its request to a different project.
 - Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent) for the live
-  workflow, so the operator, API and sidecar share it without a new database. It is removed 7 days after the
-  decision. **History** (every request and its outcome) is kept in the `approvals` table of the platform Postgres,
-  next to `security_events` (#70), with the same retention (default 1 year); the history view reads from there.
+  workflow, so the operator, API and sidecar share it without a new database. The API writes the history row first,
+  then the operator removes the `Approval` 7 days after it was decided or expired. **History** (every request and
+  its outcome) is in the `approvals` table of the platform Postgres, next to `security_events` (#70). Retention:
+  outcome records 1 year by default; the bulky context (transcript excerpt, diff) 90 days.
 - Request content shown to the approver is the exact tool input (command line, file path, host), rendered as text, never
   as HTML.
-- **Context** stored with each request: the agent, the job (issue or PR number and title, with a link to the forge),
-  the branch and commit the agent was on, the tool and its exact input, the reason Claude gave, the last part of the
-  agent's transcript before the request (bounded, for example the last 20 tool calls, secrets redacted by the
-  sidecar), and, for a push request, the diff of the protected paths.
+- **Context** stored with each request:
+  - from the forge, fetched by the API (never taken from the agent's request): the issue or PR number, title and link,
+    the branch and the commit;
+  - from the agent, labelled untrusted and shown as text only: the tool and its exact input, the reason Claude gave, the
+    last part of the transcript before the request (for example the last 20 tool calls, each tool output cut to a
+    fixed length), and, for a push request, the diff of the protected paths.
+- **Redaction** of the agent-supplied context happens twice: best effort in the sidecar, then in the API, which also
+  removes known values (the agent's own forge token, the Claude credential, values of the agent's Secrets). The API
+  pass is the one that counts, because the sidecar runs inside the pod it protects.
+- **Access to history:** write access to the repository, checked on the forge each time history or a request
+  detail is read, not only when the request was created. Every CSV export is audit-logged.
 
 ### UI
 
@@ -237,7 +246,8 @@ operator turns those log lines into `SecurityEvent` objects; the agent itself ca
 2. **Working copy:** `SecurityEvent` objects for the UI and auto-pause, kept 30 days by default with a cap per agent;
    the agent has no RBAC on them.
 3. **Long-term:** an append-only `security_events` table in the platform Postgres, written by the API, default
-   retention 1 year, shared with approval decisions (#67) as one audit trail.
+   retention 1 year. Approval requests and decisions (#67) are in the `approvals` table next to it; together they
+   are one audit trail.
 
 **SIEM integration:** events follow a versioned schema (`agentdev.security/v1`) mapped to OCSF *Detection Finding*
 and ECS (`event.kind=alert`, `event.category=intrusion_detection`). A SIEM can pull from the cluster logs (a
