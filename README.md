@@ -52,6 +52,10 @@ protection, adds labels, proposes the process files (`AGENTS.md`, issue and PR t
 merge, deploys the agents and waits until each one posts a readiness report (forge, tracker, Claude) on an
 "agentdev: project connected" issue. Safe to re-run. v1: Gitea and forge issues only.
 
+**Chat in a project (#38).** `scripts/agent-chat.sh start examples/project.yaml` opens an interactive Claude Code
+session with a fresh clone of the project; detach with Ctrl-b d and `scripts/agent-chat.sh attach` re-attaches from any
+terminal with cluster access. The session can read and file issues but not push; it ends after 30 min unattended.
+
 **MVP limits.** Polling (20 s), not webhooks. Gitea only; GitHub needs a second `api` layer in the loop
 (the rest is the same). No merge, no CI gate: you review and merge.
 

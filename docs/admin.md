@@ -48,6 +48,24 @@ kubectl -n coding-agents logs deploy/webhook-router | grep scaled
 
 Re-applying the manifests (a redeploy) starts stopped agents once; they stop again after the idle time.
 
+## Interactive sessions
+
+`scripts/agent-chat.sh start <project.yaml>` creates, on first use, the project's chat account `<project>-chat`
+(read collaborator, token scoped to `read:repository, write:issue`; kept in `.secrets/<project>-chat.token` and the
+Secret `chat-<project>`), then starts a Job from `manifests/chat.yaml.tmpl`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `IDLE_SECONDS` | 1800 | end the session after this long with nobody attached |
+| hard cap | 8 h | `activeDeadlineSeconds` in the template, even while attached |
+| `CLAUDE_SECRET` | `claude-shared` | Claude credential the session uses (it is visible inside the session pod) |
+| `REMOTE_CONTROL` | false | also expose the session to the Claude app (#26). Needs a full claude.ai login: run `/login` inside the session. API keys and `claude setup-token` tokens are refused (inference-only) |
+| `IMAGE_PULL_POLICY` | Never | `IfNotPresent` outside kind |
+
+Finished sessions are removed 5 minutes after they end. Running ones: `kubectl -n coding-agents get jobs -l app=agent-chat`.
+If botboard runs (`./run.sh 07`, #26), each session shows as a card (agent `chat`) while it is open and turns `done` when
+it ends. `CHAT_URL` sets the card's link; it will point at the UI's chat page once #12 exists.
+
 ## Webhooks
 
 One webhook per repository points at the router (`06-agents.sh` or bootstrap registers it). The router verifies
