@@ -34,6 +34,9 @@ spec:
         - {name: IDLE_SECONDS,   value: "${IDLE_SECONDS}"}
         - {name: REMOTE_CONTROL, value: "${REMOTE_CONTROL}"}
         - {name: CLAUDE_CONFIG_DIR, value: /home/node/.claude}   # also the image default; where the session pre-seeds .claude.json
+        - {name: SESSION_NAME,   value: "${SESSION}"}
+        - {name: BOTBOARD_URL,   value: "${BOTBOARD_URL}"}   # card while the session is open (#26); empty = off
+        - {name: CHAT_URL,       value: "${CHAT_URL}"}       # the UI's chat page (#12), the card's link; empty until the UI exists
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: chat-${PROJECT}, key: FORGE_TOKEN}}
         envFrom:

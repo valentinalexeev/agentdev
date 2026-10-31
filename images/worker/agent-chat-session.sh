@@ -36,6 +36,17 @@ tmux new-session -d -s chat -x 200 -y 50 \
   "claude ${rc[*]} --append-system-prompt \"\$(cat /state/session-prompt.md)\"; echo 'claude exited; detach with Ctrl-b d'; sleep infinity"
 log "session ready: attach with scripts/agent-chat.sh attach (idle timeout ${IDLE_SECONDS}s)"
 
+# botboard (#26): one card while the session is open. CHAT_URL (the UI's chat page, #12) becomes its link once the UI
+# exists; until then the card says how to attach. Best effort, never blocks the session.
+board() {  # board <phase> <activity>
+  [[ -n "${BOTBOARD_URL:-}" ]] || return 0
+  curl -fsS -m 5 --connect-timeout 2 -X POST "${BOTBOARD_URL%/}/api/cards" -H 'Content-Type: application/json' -d "$(jq -n \
+    --arg id "${SESSION_NAME:-chat-${HOSTNAME}}" --arg p "${REPO#*/}" --arg ph "$1" --arg ac "$2" --arg u "${CHAT_URL:-}" \
+    '{id:$id, agent:"chat", project:$p, task:("interactive session " + $id), phase:$ph, activity:$ac}
+     + (if $u != "" then {url:$u} else {} end)')" >/dev/null 2>&1 || true
+}
+board chat "open: scripts/agent-chat.sh attach ${SESSION_NAME:-}"
+
 # idle watchdog: count time with no attached client
 idle=0
 while tmux has-session -t chat 2>/dev/null; do
@@ -44,4 +55,5 @@ while tmux has-session -t chat 2>/dev/null; do
   sleep 10
 done
 tmux kill-server 2>/dev/null
+board "done" "session ended"
 exit 0

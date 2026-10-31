@@ -56,6 +56,9 @@ case "${1:-}" in
       --dry-run=client -o yaml | k apply -f - >/dev/null
     k -n "${AGENTS_NS}" get secret claude-shared >/dev/null 2>&1 || die "no claude-shared secret (run ./run.sh 06 first)"
     session="chat-${project}-$(date +%H%M%S)"
+    board_url="${BOTBOARD_URL:-}"   # report the session to botboard (#26) when it is deployed
+    [[ -z "${board_url}" ]] && k -n "${BOTBOARD_NS:-botboard}" get svc botboard >/dev/null 2>&1 && board_url="http://botboard.${BOTBOARD_NS:-botboard}.svc.cluster.local"
+    BOTBOARD_URL="${board_url}" CHAT_URL="${CHAT_URL:-}" \
     SESSION="${session}" PROJECT="${project}" AGENTS_NS="${AGENTS_NS}" WORKER_IMAGE="${WORKER_IMAGE}" IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-Never}" \
       FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" CHAT_USER="${chat}" REPO="${REPO}" \
       IDLE_SECONDS="${IDLE_SECONDS:-1800}" REMOTE_CONTROL="${REMOTE_CONTROL:-false}" CLAUDE_SECRET="${CLAUDE_SECRET:-claude-shared}" \

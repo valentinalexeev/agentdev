@@ -63,6 +63,8 @@ Secret `chat-<project>`), then starts a Job from `manifests/chat.yaml.tmpl`.
 | `IMAGE_PULL_POLICY` | Never | `IfNotPresent` outside kind |
 
 Finished sessions are removed 5 minutes after they end. Running ones: `kubectl -n coding-agents get jobs -l app=agent-chat`.
+If botboard runs (`./run.sh 07`, #26), each session shows as a card (agent `chat`) while it is open and turns `done` when
+it ends. `CHAT_URL` sets the card's link; it will point at the UI's chat page once #12 exists.
 
 ## Webhooks
 
