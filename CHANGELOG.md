@@ -14,6 +14,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`.github/workflows/` and friends, `PROTECTED_PATHS`) refused, size limit (`MAX_PUSH_MB`). The webhook listener
   moved into the sidecar. **BREAKING** for deployments: the operator needs `FORGE_IMAGE` (Ansible `forge_image`,
   derived from `image_tag`; kind builds it in `./run.sh 06`); the worker image no longer runs without the sidecar.
+- Security events (#64): every refusal by the forge sidecar (foreign branch, protected path, oversize, API call
+  outside the allow-list or for another repo, non-loopback caller, bad webhook token) and by the loop (redirected or
+  forged worktree, removed git config keys, planted hooks) prints an `AGENTDEV_SECURITY_EVENT {json}` line to stdout.
+- The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
+  missing or wrong `base` cannot let a workflow change through (review of #68).
 
 ### Added
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,

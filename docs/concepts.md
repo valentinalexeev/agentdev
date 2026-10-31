@@ -98,7 +98,8 @@ runner can start any program. So the security boundary is the pod, not the list 
   with force, refuses changes under `.github/workflows/` and other protected paths (`PROTECTED_PATHS`), limits the
   size (`MAX_PUSH_MB`), and runs git from its own mirror with no hooks and no global, system or repo-supplied config,
   so nothing Claude writes runs there. It also receives the router's wake calls. Even if Claude calls the sidecar
-  directly, it gets no more than this policy allows; this closes R4 (pending an e2e pass).
+  directly, it gets no more than this policy allows; this closes R4 (pending an e2e pass). Every refusal is also
+  reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without

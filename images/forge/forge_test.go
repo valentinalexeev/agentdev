@@ -102,7 +102,7 @@ func isPolicy(err error) bool { var pe *policyError; return errors.As(err, &pe) 
 func TestPushOwnBranch(t *testing.T) {
 	f := newFixture(t)
 	f.commit(t, "agent/alice/issue-1", "src/a.go", "package a\n")
-	tip, err := f.g.Push(context.Background(), "agent/alice/issue-1", "main", f.bundle(t))
+	tip, err := f.g.Push(context.Background(), "agent/alice/issue-1", f.bundle(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestPushOwnBranch(t *testing.T) {
 	}
 	// a second commit on the same branch is a fast-forward
 	f.commit(t, "agent/alice/issue-1", "src/b.go", "package a\n")
-	if _, err := f.g.Push(context.Background(), "agent/alice/issue-1", "main", f.bundle(t)); err != nil {
+	if _, err := f.g.Push(context.Background(), "agent/alice/issue-1", f.bundle(t)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -121,7 +121,7 @@ func TestPushRefusesOtherBranches(t *testing.T) {
 	f.commit(t, "agent/alice/x", "a", "a")
 	for _, b := range []string{"main", "agent/bob/x", "agent/alice/", "agent/alice", "agent/alice/../main",
 		"agent/alice/x.lock", "agent/alice/.hidden", "refs/heads/agent/alice/x", "agent/alice/a b", "agent/alice/x:main"} {
-		if _, err := f.g.Push(context.Background(), b, "main", f.bundle(t)); err == nil || !isPolicy(err) {
+		if _, err := f.g.Push(context.Background(), b, f.bundle(t)); err == nil || !isPolicy(err) {
 			t.Errorf("branch %q: want a policy refusal, got %v", b, err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestPushRefusesProtectedPaths(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			mk(f)
-			_, err := f.g.Push(context.Background(), "agent/alice/w", "main", f.bundle(t))
+			_, err := f.g.Push(context.Background(), "agent/alice/w", f.bundle(t))
 			if err == nil || !isPolicy(err) || !strings.Contains(err.Error(), "protected path") {
 				t.Fatalf("want protected-path refusal, got %v", err)
 			}
@@ -166,7 +166,7 @@ func TestPushRefusesProtectedViaMerge(t *testing.T) {
 	f.sync(t)
 	f.commit(t, "agent/alice/m", "a.txt", "a")
 	sh(t, f.agent, "merge", "-q", "--no-edit", "origin/feature")
-	if _, err := f.g.Push(context.Background(), "agent/alice/m", "main", f.bundle(t)); err == nil || !strings.Contains(err.Error(), "protected path") {
+	if _, err := f.g.Push(context.Background(), "agent/alice/m", f.bundle(t)); err == nil || !strings.Contains(err.Error(), "protected path") {
 		t.Fatalf("want refusal for a workflow change brought in by a merge, got %v", err)
 	}
 }
@@ -177,7 +177,7 @@ func TestPushSizeLimit(t *testing.T) {
 	big := make([]byte, 16<<10)
 	_, _ = rand.Read(big) // incompressible
 	f.commit(t, "agent/alice/big", "big.bin", string(big))
-	if _, err := f.g.Push(context.Background(), "agent/alice/big", "main", f.bundle(t)); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, err := f.g.Push(context.Background(), "agent/alice/big", f.bundle(t)); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("want size refusal, got %v", err)
 	}
 }
@@ -185,16 +185,16 @@ func TestPushSizeLimit(t *testing.T) {
 func TestPushRefusesForceAndGarbage(t *testing.T) {
 	f := newFixture(t)
 	f.commit(t, "agent/alice/f", "a", "1")
-	if _, err := f.g.Push(context.Background(), "agent/alice/f", "main", f.bundle(t)); err != nil {
+	if _, err := f.g.Push(context.Background(), "agent/alice/f", f.bundle(t)); err != nil {
 		t.Fatal(err)
 	}
 	// rewrite history: a non-fast-forward must fail at the forge
 	sh(t, f.agent, "reset", "-q", "--hard", "origin/main")
 	f.commit(t, "agent/alice/f", "b", "2")
-	if _, err := f.g.Push(context.Background(), "agent/alice/f", "main", f.bundle(t)); err == nil {
+	if _, err := f.g.Push(context.Background(), "agent/alice/f", f.bundle(t)); err == nil {
 		t.Fatal("non-fast-forward push accepted")
 	}
-	if _, err := f.g.Push(context.Background(), "agent/alice/f", "main", strings.NewReader("not a bundle")); err == nil || !isPolicy(err) {
+	if _, err := f.g.Push(context.Background(), "agent/alice/f", strings.NewReader("not a bundle")); err == nil || !isPolicy(err) {
 		t.Fatalf("garbage accepted: %v", err)
 	}
 }
@@ -205,7 +205,7 @@ func TestMirrorRunsNoHooks(t *testing.T) {
 	// even a hook in the mirror itself is never run (core.hooksPath=/dev/null)
 	os.WriteFile(filepath.Join(f.c.MirrorDir, "hooks", "reference-transaction"), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755)
 	f.commit(t, "agent/alice/h", "a", "1")
-	if _, err := f.g.Push(context.Background(), "agent/alice/h", "main", f.bundle(t)); err != nil {
+	if _, err := f.g.Push(context.Background(), "agent/alice/h", f.bundle(t)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err == nil {
@@ -400,4 +400,132 @@ func TestProtectedHit(t *testing.T) {
 	if protectedHit([]string{"CODEOWNERS.md"}, p) != "" {
 		t.Error("exact file matched a prefix")
 	}
+}
+
+// captureEvents redirects security events for one test and returns them, parsed
+func captureEvents(t *testing.T) func() []securityEvent {
+	t.Helper()
+	var buf bytes.Buffer
+	old := eventOut
+	eventOut = &buf
+	t.Cleanup(func() { eventOut = old })
+	return func() []securityEvent {
+		var out []securityEvent
+		for _, l := range lines(buf.String()) {
+			js, ok := strings.CutPrefix(l, eventPrefix)
+			if !ok {
+				t.Fatalf("event line without prefix: %q", l)
+			}
+			var e securityEvent
+			if err := json.Unmarshal([]byte(js), &e); err != nil {
+				t.Fatalf("bad event JSON %q: %v", js, err)
+			}
+			out = append(out, e)
+		}
+		return out
+	}
+}
+
+// review of #68, finding 1: an evil merge (a merge commit whose own tree adds a workflow), pushed through the API
+// with no or a bogus base, must still be refused
+func TestPushRefusesEvilMergeWithoutBase(t *testing.T) {
+	for _, q := range []string{"", "&base=", "&base=does-not-exist", "&base=agent/alice/m"} {
+		t.Run(q, func(t *testing.T) {
+			f := newFixture(t)
+			f.c.AgentName = "alice"
+			events := captureEvents(t)
+			h := (&server{c: f.c, git: f.g}).routes()
+			f.commit(t, "agent/alice/m", "a.txt", "a")
+			sh(t, f.agent, "checkout", "-qb", "side", "origin/main")
+			os.WriteFile(filepath.Join(f.agent, "b.txt"), []byte("b"), 0o644)
+			sh(t, f.agent, "add", "-A")
+			sh(t, f.agent, "commit", "-qm", "side")
+			sh(t, f.agent, "checkout", "-q", "agent/alice/m")
+			sh(t, f.agent, "merge", "-q", "--no-commit", "side")
+			os.WriteFile(filepath.Join(f.agent, ".github/workflows/evil.yml"), []byte("evil\n"), 0o644)
+			sh(t, f.agent, "add", "-A")
+			sh(t, f.agent, "commit", "-qm", "merge")
+			b, _ := io.ReadAll(f.bundle(t))
+			rec := call(t, h, "POST", "/push?branch=agent/alice/m"+q, string(b))
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "protected path") {
+				t.Fatalf("want protected-path refusal, got %d %s", rec.Code, rec.Body)
+			}
+			if ev := events(); len(ev) != 1 || ev[0].Rule != "push-protected-path" || ev[0].Severity != "high" {
+				t.Fatalf("events: %+v", ev)
+			}
+		})
+	}
+}
+
+func TestSecurityEvents(t *testing.T) {
+	want := func(t *testing.T, ev []securityEvent, rule, sev string) {
+		t.Helper()
+		if len(ev) != 1 || ev[0].Source != "forge" || ev[0].Rule != rule || ev[0].Severity != sev || ev[0].Agent != "alice" || ev[0].Action == "" {
+			t.Fatalf("want one %s/%s event, got %+v", rule, sev, ev)
+		}
+	}
+	t.Run("push outside own branches", func(t *testing.T) {
+		f := newFixture(t)
+		f.c.AgentName = "alice"
+		events := captureEvents(t)
+		h := (&server{c: f.c, git: f.g}).routes()
+		f.commit(t, "agent/alice/x", "a", "a")
+		b, _ := io.ReadAll(f.bundle(t))
+		req := httptest.NewRequest("POST", "/push?branch=main", bytes.NewReader(b))
+		req.RemoteAddr, req.Header = "127.0.0.1:1", http.Header{"X-Agentdev-Job": {"issue-12"}}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		ev := events()
+		want(t, ev, "push-foreign-branch", "high")
+		if ev[0].Job != "issue-12" || !strings.Contains(ev[0].Action, "push to main") {
+			t.Fatalf("job/action: %+v", ev[0])
+		}
+	})
+	t.Run("oversize push", func(t *testing.T) {
+		f := newFixture(t)
+		f.c.AgentName, f.c.MaxPushBytes = "alice", 1024
+		events := captureEvents(t)
+		big := make([]byte, 16<<10)
+		_, _ = rand.Read(big)
+		f.commit(t, "agent/alice/big", "big.bin", string(big))
+		b, _ := io.ReadAll(f.bundle(t))
+		call(t, (&server{c: f.c, git: f.g}).routes(), "POST", "/push?branch=agent/alice/big", string(b))
+		want(t, events(), "push-oversize", "medium")
+	})
+	forge, _ := fakeForge(t)
+	s := newServer(&Config{ForgeURL: forge.URL, ForgeUser: "alice", AgentName: "alice", Token: "t", Repos: []string{"owner/repo"}})
+	for _, c := range []struct{ name, m, p, b, rule, sev string }{
+		{"call outside the allow-list", "POST", "/api/v1/repos/owner/repo/pulls/1/merge", "{}", "api-not-allowed", "medium"},
+		{"another repo", "GET", "/api/v1/repos/evil/repo/issues", "", "api-other-repo", "high"},
+		{"PR from a foreign branch", "POST", "/api/v1/repos/owner/repo/pulls", `{"head":"main"}`, "push-foreign-branch", "high"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			events := captureEvents(t)
+			call(t, s.routes(), c.m, c.p, c.b)
+			want(t, events(), c.rule, c.sev)
+		})
+	}
+	t.Run("caller outside the pod", func(t *testing.T) {
+		events := captureEvents(t)
+		req := httptest.NewRequest("GET", "/api/v1/user", nil)
+		req.RemoteAddr = "10.0.0.9:1"
+		s.routes().ServeHTTP(httptest.NewRecorder(), req)
+		want(t, events(), "api-non-loopback", "high")
+	})
+	t.Run("bad webhook token", func(t *testing.T) {
+		events := captureEvents(t)
+		h := wakeHandler(&Config{WakeToken: "w", AgentName: "alice", WakeFile: filepath.Join(t.TempDir(), "w")}, t.Logf)
+		r := httptest.NewRequest("POST", "/", strings.NewReader("{}"))
+		r.Header.Set("Authorization", "Bearer bad")
+		h.ServeHTTP(httptest.NewRecorder(), r)
+		want(t, events(), "webhook-bad-token", "medium")
+	})
+	t.Run("allowed calls emit nothing; job header is validated", func(t *testing.T) {
+		events := captureEvents(t)
+		call(t, s.routes(), "GET", "/api/v1/repos/owner/repo", "")
+		emitEvent("alice", "issue-1\n{evil}", "r", "low", "line1\nline2")
+		ev := events()
+		if len(ev) != 1 || ev[0].Job != "" || ev[0].Action != "line1\nline2" {
+			t.Fatalf("got %+v", ev)
+		}
+	})
 }

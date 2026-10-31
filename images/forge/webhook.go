@@ -50,6 +50,7 @@ func wakeHandler(c *Config, logf func(string, ...any)) http.Handler {
 		}
 		if got := []byte(r.Header.Get("Authorization")); len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
 			logf("rejected wake (token)")
+			emitEvent(c.AgentName, "", "webhook-bad-token", "medium", fmt.Sprintf("POST %s from %s", r.URL.Path, r.RemoteAddr))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -144,7 +145,8 @@ func (s *server) idle(w http.ResponseWriter, r *http.Request) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.c.RouterURL, "/")+"/idle", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.c.WakeToken)
-	resp, err := http.DefaultClient.Do(req)
+	// a timeout and no redirects (the request carries the wake token), like the forge proxy
+	resp, err := s.client.Do(req)
 	if err != nil {
 		fail(w, fmt.Errorf("router unreachable"))
 		return

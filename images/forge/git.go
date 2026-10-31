@@ -27,12 +27,17 @@ type gitRepo struct {
 	mu sync.Mutex // git refuses concurrent ref updates
 }
 
-// policyError is a refusal by the push policy (HTTP 403), as opposed to a git or forge failure (HTTP 502).
-type policyError struct{ msg string }
+// policyError is a refusal by the push policy (HTTP 403), as opposed to a git or forge failure (HTTP 502). Rule and
+// severity go into the security event (events.go).
+type policyError struct{ rule, severity, msg string }
 
 func (e *policyError) Error() string { return e.msg }
 
-func refuse(format string, a ...any) error { return &policyError{fmt.Sprintf(format, a...)} }
+func refuse(format string, a ...any) error { return refuseAs("push-refused", "medium", format, a...) }
+
+func refuseAs(rule, severity, format string, a ...any) error {
+	return &policyError{rule, severity, fmt.Sprintf(format, a...)}
+}
 
 // forgeOrigin is scheme://host[:port] of the forge: the credential helper answers only for exactly this.
 func forgeOrigin(forgeURL string) (scheme, host string, err error) {
@@ -114,11 +119,11 @@ var refPart = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 func checkBranch(user, branch string) error {
 	prefix := "agent/" + user + "/"
 	if !strings.HasPrefix(branch, prefix) || len(branch) == len(prefix) || len(branch) > 200 {
-		return refuse("push refused: branch %q is not under %s", branch, prefix)
+		return refuseAs("push-foreign-branch", "high", "push refused: branch %q is not under %s", branch, prefix)
 	}
 	for _, p := range strings.Split(branch, "/") {
 		if !refPart.MatchString(p) || strings.HasPrefix(p, ".") || strings.HasSuffix(p, ".lock") || strings.Contains(p, "..") {
-			return refuse("push refused: branch %q is not a plain branch name", branch)
+			return refuseAs("push-foreign-branch", "high", "push refused: branch %q is not a plain branch name", branch)
 		}
 	}
 	return nil
@@ -148,9 +153,26 @@ func lines(s string) []string {
 	return out
 }
 
+// defaultBranch asks the forge (not the caller) which branch is the default, from the remote's HEAD.
+func (g *gitRepo) defaultBranch(ctx context.Context) (string, error) {
+	out, err := g.run(ctx, nil, "ls-remote", "--symref", g.remoteURL(), "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, l := range lines(out) {
+		if rest, ok := strings.CutPrefix(l, "ref: refs/heads/"); ok {
+			if b, _, ok := strings.Cut(rest, "\t"); ok && b != "" {
+				return b, nil
+			}
+		}
+	}
+	return "", errors.New("the forge did not name a default branch")
+}
+
 // Push takes a git bundle whose HEAD is the new tip of branch, checks it against the policy and pushes it to the
-// forge without force. base is the default branch, used to compute what the branch changes in total.
-func (g *gitRepo) Push(ctx context.Context, branch, base string, bundle io.Reader) (string, error) {
+// forge without force. The default branch, against which the total change is computed, is looked up by the sidecar
+// itself: a caller-supplied base could be wrong on purpose (review of #68).
+func (g *gitRepo) Push(ctx context.Context, branch string, bundle io.Reader) (string, error) {
 	if err := checkBranch(g.c.ForgeUser, branch); err != nil {
 		return "", err
 	}
@@ -168,7 +190,7 @@ func (g *gitRepo) Push(ctx context.Context, branch, base string, bundle io.Reade
 		return "", err
 	}
 	if n > g.c.MaxPushBytes {
-		return "", refuse("push refused: larger than %d MB", g.c.MaxPushBytes>>20)
+		return "", refuseAs("push-oversize", "medium", "push refused: larger than %d MB", g.c.MaxPushBytes>>20)
 	}
 	if n == 0 {
 		return "", refuse("push refused: empty bundle")
@@ -188,23 +210,27 @@ func (g *gitRepo) Push(ctx context.Context, branch, base string, bundle io.Reade
 		return "", refuse("push refused: HEAD is not a commit")
 	}
 
-	// every path the push changes: each new non-merge commit (catches add-then-remove), and the branch's net change
-	// against the default branch (catches what a merge commit brings in)
-	changed, err := g.git(ctx, "log", "--no-merges", "--no-renames", "--name-only", "--format=", tip, "--not", "--branches")
+	// every path the push changes, fail closed:
+	//  - each new commit against its first parent, merges included (catches add-then-remove and evil merges)
+	//  - the branch's net change against the forge's default branch (catches what a merge brings in)
+	changed, err := g.git(ctx, "log", "--diff-merges=first-parent", "--no-renames", "--name-only", "--format=", tip, "--not", "--branches")
 	if err != nil {
 		return "", err
 	}
-	if base != "" {
-		if mb, err := g.git(ctx, "merge-base", tip, "refs/heads/"+base); err == nil {
-			net, err := g.git(ctx, "diff", "--no-renames", "--name-only", mb, tip)
-			if err != nil {
-				return "", err
-			}
-			changed += "\n" + net
-		}
+	base, err := g.defaultBranch(ctx)
+	if err != nil {
+		return "", err
 	}
-	if hit := protectedHit(lines(changed), g.c.Protected); hit != "" {
-		return "", refuse("push refused: %s is a protected path (%s); a person has to make this change",
+	mb, err := g.git(ctx, "merge-base", tip, "refs/heads/"+base)
+	if err != nil {
+		return "", refuseAs("push-unrelated", "medium", "push refused: the branch shares no history with %s", base)
+	}
+	net, err := g.git(ctx, "diff", "--no-renames", "--name-only", mb, tip)
+	if err != nil {
+		return "", err
+	}
+	if hit := protectedHit(append(lines(changed), lines(net)...), g.c.Protected); hit != "" {
+		return "", refuseAs("push-protected-path", "high", "push refused: %s is a protected path (%s); a person has to make this change",
 			hit, strings.Join(g.c.Protected, ", "))
 	}
 

@@ -16,6 +16,7 @@ set -uo pipefail
 
 : "${FORGE_URL:?}" "${FORGE_USER:?}" "${REPO:?}"   # REPO=owner/name
 FORGE_API="${FORGE_API:-http://127.0.0.1:7070}"   # the forge sidecar (localhost only)
+exec 3>&1   # security events (security_event) always reach the container log, even from inside $(...)
 POLL_SECONDS="${POLL_SECONDS:-30}"
 REVIEWER="${REVIEWER:-${REPO%%/*}}"   # who approves agent PRs; defaults to the repo owner
 MAX_TURNS="${MAX_TURNS:-40}"
@@ -32,10 +33,18 @@ fi
 mkdir -p "${STATE}/seen"
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
+# security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
+# #70). JOB is set inside each background job (start_job). Written to fd 3, the loop's own stdout (exec 3>&1 below),
+# so an event raised inside a captured function (dir=$(worktree ...)) or a job's prefixed pipe stays a clean line.
+security_event() {
+  local fd=1; { true >&3; } 2>/dev/null && fd=3
+  printf 'AGENTDEV_SECURITY_EVENT %s\n' "$(jq -cn --arg r "$1" --arg s "$2" --arg a "${AGENT_NAME:-${FORGE_USER}}" \
+    --arg j "${JOB:-}" --arg x "${3:0:500}" '{source:"loop", rule:$r, severity:$s, agent:$a, job:$j, action:$x}')" >&"${fd}"
+}
 
 api() {  # api METHOD PATH [json-body]: through the forge sidecar, which adds the token and allows only the loop's calls
   local m=$1 p=$2; shift 2
-  curl -fsS -X "${m}" -H 'Content-Type: application/json' "${FORGE_API}/api/v1${p}" ${1:+-d "$1"}
+  curl -fsS -X "${m}" -H 'Content-Type: application/json' -H "X-Agentdev-Job: ${JOB:-}" "${FORGE_API}/api/v1${p}" ${1:+-d "$1"}
 }
 
 request_review() {  # (re)request REVIEWER on a PR; also works after a review to ask again
@@ -78,10 +87,18 @@ lgit() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c core.hooksPath
 scrub_git_config() {
   local cfg="${WORK}/.git/config" k
   [[ -f "${cfg}" ]] || return 0
-  rm -f "${WORK}"/.git/worktrees/*/config.worktree "${WORK}/.git/config.worktree"
+  local f
+  for f in "${WORK}"/.git/worktrees/*/config.worktree "${WORK}/.git/config.worktree"; do
+    [[ -e "${f}" || -L "${f}" ]] && { security_event git-config-worktree medium "removed ${f#"${WORK}/"}"; rm -f "${f}"; }
+  done
+  # hooks never run in the loop's git (lgit), but one appearing means something tried to plant code
+  for f in "${WORK}"/.git/hooks/*; do
+    [[ -e "${f}" && "${f}" != *.sample ]] && { security_event git-hook-present high "hook ${f##*/} found and removed"; rm -f "${f}"; }
+  done
   git config --file "${cfg}" --name-only --list 2>/dev/null | sort -u | while read -r k; do
-    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|extensions\.objectformat|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] ||
-      git config --file "${cfg}" --unset-all "${k}" 2>/dev/null
+    [[ "${k}" =~ ^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|extensions\.objectformat|remote\.origin\.(url|fetch)|branch\.[^.]+\.(remote|merge)|user\.(name|email))$ ]] && continue
+    security_event git-config-key medium "removed git config key ${k}"
+    git config --file "${cfg}" --unset-all "${k}" 2>/dev/null
   done
   git config --file "${cfg}" remote.origin.url "$(clone_url)"
 }
@@ -93,16 +110,24 @@ scrub_git_config() {
 pin_worktree() {
   local dir base adm="" a n=0
   dir=$(cd "$1" && pwd -P) || return 1
-  [[ -L "${WORK}/.git/worktrees" ]] && { log "worktrees dir is a symlink"; return 1; }
+  [[ -L "${WORK}/.git/worktrees" ]] && { log "worktrees dir is a symlink"; security_event git-worktree-forged high "worktrees dir is a symlink"; return 1; }
   base=$(cd "${WORK}/.git/worktrees" 2>/dev/null && pwd -P) || { log "no worktrees dir"; return 1; }
   # exactly one real admin dir may name this tree (its name can differ after `worktree move`); two means someone
   # forged one, so fail closed
   for a in "${base}"/*/; do
     a=${a%/}
-    [[ -L "${a}" || -L "${a}/gitdir" || ! -f "${a}/gitdir" ]] && continue
+    if [[ -L "${a}" || -L "${a}/gitdir" ]]; then security_event git-worktree-forged high "symlinked worktree admin dir ${a##*/}"; continue; fi
+    [[ -f "${a}/gitdir" ]] || continue
     [[ "$(cat "${a}/gitdir")" == "${dir}/.git" ]] && { adm=${a}; n=$((n+1)); }
   done
-  [[ ${n} -eq 1 ]] || { log "no single trusted worktree admin dir for ${dir} (${n})"; return 1; }
+  [[ ${n} -eq 1 ]] || { log "no single trusted worktree admin dir for ${dir} (${n})"
+    (( n > 1 )) && security_event git-worktree-forged high "${n} admin dirs claim ${dir}"; return 1; }
+  # the .git file should already point at the admin dir; anything else means it was redirected
+  # (compared resolved: git may write the path unresolved)
+  local cur real=""; cur=$(cat "${dir}/.git" 2>/dev/null)
+  [[ "${cur}" == "gitdir: "* && ! -L "${dir}/.git" ]] && real=$(cd "${cur#gitdir: }" 2>/dev/null && pwd -P)
+  [[ "${real}" != "${adm}" ]] && security_event git-worktree-redirected high "worktree .git of ${dir##*/} pointed at: ${cur:0:200}"
+  [[ -L "${adm}/commondir" || "$(cat "${adm}/commondir" 2>/dev/null)" != "../.." ]] && security_event git-worktree-redirected high "commondir of ${adm##*/} was changed"
   rm -rf "${dir}/.git.pin" "${adm}/commondir.pin"
   # mv onto a symlink to a directory would move into it: remove whatever is there first
   rm -rf "${dir}/.git" "${adm}/commondir"
@@ -110,7 +135,7 @@ pin_worktree() {
   printf '../..\n' > "${adm}/commondir.pin" && mv -f "${adm}/commondir.pin" "${adm}/commondir" || return 1
 }
 # sidecar <path> [curl args...]: a call to the forge sidecar that is not a forge REST call (sync, push, idle)
-sidecar() { local p=$1; shift; curl -fsS -m 900 "$@" "${FORGE_API}${p}"; }
+sidecar() { local p=$1; shift; curl -fsS -m 900 -H "X-Agentdev-Job: ${JOB:-}" "$@" "${FORGE_API}${p}"; }
 
 sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses concurrent ref updates.
   (
@@ -159,6 +184,7 @@ start_job() {
   (( $(running_jobs) >= MAX_CONCURRENT )) && return 1
   echo "$$" > "${JOBS}/${key}.lock"
   (
+    JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"' EXIT
     set -o pipefail
     if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
@@ -260,8 +286,9 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message> <base>  -> 0 if 
   # the new commits go to the sidecar as a bundle (data, not a repo it would run git in); it checks the policy and pushes
   bundle="${STATE}/jobs/push-$$-${RANDOM}.bundle"
   lgit -C "${dir}" bundle create -q "${bundle}" HEAD --not --remotes || { rm -f "${bundle}"; return 1; }
+  # base is informational: the sidecar looks up the default branch itself
   out=$(curl -sS -m 900 -w '\n%{http_code}' -X POST --data-binary "@${bundle}" -H 'Content-Type: application/octet-stream' \
-        "${FORGE_API}/push?branch=${branch}&base=${base}"); rm -f "${bundle}"
+        -H "X-Agentdev-Job: ${JOB:-}" "${FORGE_API}/push?branch=${branch}&base=${base}"); rm -f "${bundle}"
   [[ "${out##*$'\n'}" == 200 ]] || { log "push to ${branch} failed: ${out%$'\n'*}"; return 1; }
   # a push to a URL does not move origin/<branch>; do it, so a second call before the next fetch sees nothing new
   lgit -C "${dir}" update-ref "refs/remotes/origin/${branch}" HEAD

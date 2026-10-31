@@ -56,6 +56,15 @@ func newServer(c *Config) *server {
 	return s
 }
 
+// event reports a refusal (see events.go); job is the loop's X-Agentdev-Job header, if any
+func (s *server) event(r *http.Request, rule, severity, action string) {
+	job := ""
+	if r != nil {
+		job = r.Header.Get("X-Agentdev-Job")
+	}
+	emitEvent(s.c.AgentName, job, rule, severity, action)
+}
+
 func (s *server) logf(format string, a ...any) {
 	log.Printf("%s [%s] forge: %s", time.Now().UTC().Format("15:04:05"), s.c.ForgeUser, fmt.Sprintf(format, a...))
 }
@@ -87,18 +96,27 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /sync", s.sync)
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
-	return localOnly(mux)
+	return s.localOnly(mux)
 }
 
 // localOnly refuses anything not from loopback, even if FORGE_API_LISTEN were misconfigured to a pod address.
-func localOnly(h http.Handler) http.Handler {
+func (s *server) localOnly(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.RemoteAddr, "127.") && !strings.HasPrefix(r.RemoteAddr, "[::1]") {
+			s.event(r, "api-non-loopback", "high", fmt.Sprintf("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr))
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// policyEvent reports err if it is a policy refusal (not a forge or git failure)
+func (s *server) policyEvent(r *http.Request, err error, action string) {
+	var pe *policyError
+	if errors.As(err, &pe) {
+		s.event(r, pe.rule, pe.severity, action+": "+pe.msg)
+	}
 }
 
 func fail(w http.ResponseWriter, err error) {
@@ -113,18 +131,27 @@ func fail(w http.ResponseWriter, err error) {
 func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/api/v1")
 	var match *rule
+	otherRepo := false
 	for i := range s.rules {
 		ru := &s.rules[i]
 		if ru.method != r.Method {
 			continue
 		}
-		if m := ru.path.FindStringSubmatch(p); m != nil && (len(m) < 2 || s.repoAllowed(m[1])) {
-			match = ru
-			break
+		if m := ru.path.FindStringSubmatch(p); m != nil {
+			if len(m) < 2 || s.repoAllowed(m[1]) {
+				match = ru
+				break
+			}
+			otherRepo = true
 		}
 	}
 	if match == nil {
 		s.logf("refused %s %s", r.Method, p)
+		if otherRepo {
+			s.event(r, "api-other-repo", "high", r.Method+" "+p)
+		} else {
+			s.event(r, "api-not-allowed", "medium", r.Method+" "+p)
+		}
 		http.Error(w, fmt.Sprintf("forge sidecar: %s %s is not an allowed call", r.Method, p), http.StatusForbidden)
 		return
 	}
@@ -136,6 +163,7 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	if match.check != nil {
 		if err := match.check(s, body); err != nil {
 			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
 			fail(w, err)
 			return
 		}
@@ -169,6 +197,8 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
+	// buffered so a failure is still an HTTP error; the bundle is the whole repo, so a very large repo needs more than
+	// the sidecar's 512Mi limit (operator render.go)
 	var buf bytes.Buffer
 	if err := s.git.Sync(ctx, &buf); err != nil {
 		s.logf("sync failed: %v", err)
@@ -179,16 +209,14 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(buf.Bytes())
 }
 
-// POST /push?branch=agent/<user>/x&base=main, body = git bundle with HEAD = the new tip.
+// POST /push?branch=agent/<user>/x, body = git bundle with HEAD = the new tip. A base= parameter (older loops) is
+// ignored: the sidecar looks up the default branch itself.
 func (s *server) push(w http.ResponseWriter, r *http.Request) {
-	branch, base := r.URL.Query().Get("branch"), r.URL.Query().Get("base")
-	if base != "" && !refPart.MatchString(strings.ReplaceAll(base, "/", "_")) {
-		http.Error(w, "bad base", http.StatusBadRequest)
-		return
-	}
-	tip, err := s.git.Push(r.Context(), branch, base, r.Body)
+	branch := r.URL.Query().Get("branch")
+	tip, err := s.git.Push(r.Context(), branch, r.Body)
 	if err != nil {
 		s.logf("push to %s: %v", branch, err)
+		s.policyEvent(r, err, "push to "+branch)
 		fail(w, err)
 		return
 	}

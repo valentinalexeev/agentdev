@@ -2,7 +2,7 @@
 // FORGE_TOKEN (and the router's WAKE_TOKEN and REGISTER_TOKEN). The agent container talks to it over localhost:
 //
 //	/api/v1/...   allow-listed Gitea REST calls for the agent's own repo (issues, comments, PRs, reviews)
-//	POST /sync    fetch the forge into the sidecar's own bare mirror (mounted read-only into the agent container)
+//	POST /sync    fetch the forge into the sidecar's own bare mirror (only the sidecar mounts it); answers a git bundle
 //	POST /push    body = a git bundle; pushed to agent/<FORGE_USER>/* only, protected paths refused, size-limited
 //	POST /idle    ask the router to stop this agent (scale to zero), with the wake token held here
 //
@@ -26,7 +26,7 @@ type Config struct {
 	ForgeURL, ForgeUser, Token string
 	Repos                      []string // owner/name, the only repos the API and git talk to
 	Listen, WebhookListen      string
-	MirrorDir                  string // bare mirror the agent container reads (read-only mount)
+	MirrorDir                  string // the sidecar's own bare mirror, on a volume only the sidecar mounts
 	IncomingDir                string // private temp dir for uploaded bundles
 	Protected                  []string
 	MaxPushBytes               int64

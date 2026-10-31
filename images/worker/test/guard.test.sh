@@ -18,7 +18,16 @@ printf '%s\n' "$@" > "${CAPTURE}/args"; env > "${CAPTURE}/env"; echo '{"result":
 EOF
 chmod +x "${tmp}/bin/claude"; export PATH="${tmp}/bin:${PATH}" CAPTURE="${tmp}"
 # shellcheck disable=SC1090
+source <(sed -n '/^security_event() {/,/^}/p' "${here}/../agent-loop.sh")
+# shellcheck disable=SC1090
 source <(sed -n '/^# The forge token is not in this container/,/^sidecar()/p' "${here}/../agent-loop.sh")
+# events (#64): every guardrail that fires prints AGENTDEV_SECURITY_EVENT <json>; evs <cmd> keeps them in ${tmp}/ev
+export AGENT_NAME=alice JOB=issue-7
+evs() { : > "${tmp}/ev"; "$@" > "${tmp}/ev.out"; local rc=$?; grep '^AGENTDEV_SECURITY_EVENT ' "${tmp}/ev.out" > "${tmp}/ev"; return ${rc}; }
+event() {  # event <rule> <severity>: exactly that event, valid JSON, source loop, agent and job filled in
+  grep '^AGENTDEV_SECURITY_EVENT ' "${tmp}/ev" | sed 's/^AGENTDEV_SECURITY_EVENT //' |
+    jq -e --arg r "$1" --arg s "$2" 'select(.rule==$r and .severity==$s and .source=="loop" and .agent=="alice" and .job=="issue-7" and (.action|length>0))' >/dev/null
+}
 # shellcheck disable=SC1090
 source <(sed -n '/^# Guardrails for the Claude run/,/^commit_and_push()/p' "${here}/../agent-loop.sh" | sed '$d')
 
@@ -66,7 +75,11 @@ check "loop commits run no git hooks" "lgit -C '${WORK}' add -A && lgit -C '${WO
 git -C "${WORK}" config filter.x.clean "touch ${tmp}/pwned-filter"; git -C "${WORK}" config core.sshCommand evil
 git -C "${WORK}" config include.path /tmp/evil; git -C "${WORK}" config remote.origin.url http://evil.example/x.git
 git -C "${WORK}" config user.name alice
-scrub_git_config
+evs scrub_git_config
+check "config scrub reports each removed key (event)" "event git-config-key medium && grep -q 'core.sshcommand' '${tmp}/ev' && ! grep -q 'user.name' '${tmp}/ev'"
+check "a planted hook is reported and removed (event)" "event git-hook-present high && [[ ! -e '${WORK}/.git/hooks/pre-commit' ]]"
+evs scrub_git_config
+check "a clean config reports nothing" "[[ ! -s '${tmp}/ev' ]]"
 check "config scrub removes drivers, includes and ssh commands" \
   "! git config --file '${WORK}/.git/config' --name-only --list | grep -qE '^(filter|include|core\.sshcommand)'"
 check "config scrub keeps user and resets the remote to the forge" \
@@ -75,20 +88,27 @@ check "config scrub keeps user and resets the remote to the forge" \
 wt="${tmp}/wt"; git -C "${WORK}" worktree add -q -b agent/alice/issue-1 "${wt}"
 evil="${tmp}/evilgit"; cp -R "${WORK}/.git" "${evil}"; git config --file "${evil}/config" filter.x.clean "touch ${tmp}/pwned-gitdir"
 printf 'gitdir: %s\n' "${evil}" > "${wt}/.git"; echo '* filter=x' > "${wt}/.gitattributes"
-check "pin_worktree resets a redirected .git file" "pin_worktree '${wt}' && grep -qx \"gitdir: \$(cd '${WORK}/.git/worktrees/wt' && pwd -P)\" '${wt}/.git'"
+check "pin_worktree resets a redirected .git file" "evs pin_worktree '${wt}' && event git-worktree-redirected high && grep -qx \"gitdir: \$(cd '${WORK}/.git/worktrees/wt' && pwd -P)\" '${wt}/.git'"
+# inside $(...) (as dir=$(worktree ...)) an event must not end up in the captured value
+exec 3>"${tmp}/ev3"
+printf 'gitdir: %s\n' "${evil}" > "${wt}/.git"
+export captured; captured=$(pin_worktree "${wt}"; echo end)
+check "events from a captured call go to fd 3, not into the value" "[[ \"\${captured}\" == end ]] && grep -q git-worktree-redirected '${tmp}/ev3'"
+exec 3>&-
+check "pinning an untouched worktree reports nothing" "evs pin_worktree '${wt}' && [[ ! -s '${tmp}/ev' ]]"
 check "loop git in the pinned worktree runs no planted filter" "lgit -C '${wt}' add -A && [[ ! -e '${tmp}/pwned-gitdir' ]]"
 # a symlinked admin dir (pointing at a config Claude controls) is not trusted
 real="${WORK}/.git/worktrees/wt"; mv "${real}" "${tmp}/admreal"; ln -s "${tmp}/admreal" "${real}"
-check "pin_worktree refuses a symlinked admin dir" "! pin_worktree '${wt}' 2>/dev/null"
+check "pin_worktree refuses a symlinked admin dir (event)" "! evs pin_worktree '${wt}' 2>/dev/null && event git-worktree-forged high"
 rm "${real}"; mv "${tmp}/admreal" "${real}"
 # a second admin dir forged to claim the same tree makes pin fail closed
 mkdir "${WORK}/.git/worktrees/forged"; cp "${real}/gitdir" "${WORK}/.git/worktrees/forged/gitdir"
-check "pin_worktree fails closed on a forged second admin dir" "! pin_worktree '${wt}' 2>/dev/null"
+check "pin_worktree fails closed on a forged second admin dir (event)" "! evs pin_worktree '${wt}' 2>/dev/null && event git-worktree-forged high"
 rm -rf "${WORK}/.git/worktrees/forged"
 # a .git that is a symlink to a directory is replaced, not written through
 mkdir "${tmp}/target"; rm -f "${wt}/.git"; ln -s "${tmp}/target" "${wt}/.git"
 check "pin_worktree replaces a symlinked .git instead of writing through it" \
-  "pin_worktree '${wt}' && [[ ! -L '${wt}/.git' && -f '${wt}/.git' && -z \$(ls -A '${tmp}/target') ]]"
+  "evs pin_worktree '${wt}' && event git-worktree-redirected high && [[ ! -L '${wt}/.git' && -f '${wt}/.git' && -z \$(ls -A '${tmp}/target') ]]"
 # a global git config written by Claude (Write tool into ~) is ignored by the loop's git
 export HOME="${tmp}/home"; mkdir -p "${HOME}"; printf '[alias]\n\tst = !touch %s/pwned-global\n[core]\n\tpager = touch %s/pwned-pager\n' "${tmp}" "${tmp}" > "${HOME}/.gitconfig"
 check "loop git ignores a global config" "[[ -z \$(lgit config --get core.pager) ]] && ! lgit -C '${WORK}' st 2>/dev/null; [[ ! -e '${tmp}/pwned-global' ]]"
