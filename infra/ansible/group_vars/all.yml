@@ -32,3 +32,9 @@ sm_forge_webhook_secret: github-app-webhook-secret
 #   gcp_project, gcp_zone, image_tag, reviewer,
 #   agents: [{name, user, repos}]   per agent, Secret Manager holds agent-<name>-forge-token
 #                                   and optionally agent-<name>-claude
+# security events (#70): auto-pause and SecurityEvent retention (operator). Webhook output settings
+# (security.siem.webhook_url, secret in Secret Manager) apply where the API runs.
+security:
+  pause_after: 5                    # more than N events in one job pause the agent
+  retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history
+  max_per_agent: 500

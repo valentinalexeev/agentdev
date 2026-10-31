@@ -118,14 +118,15 @@
       changed_when: false
       no_log: true
 
-    - name: Agent CRD (#47)
+    - name: Agent and SecurityEvent CRDs (#47, #70)
       kubernetes.core.k8s:
         <<: *k8s
-        src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_agents.yaml"
+        src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
         # Agents below need the type to be served
         wait: true
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
+      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -152,6 +153,9 @@
             BOTBOARD_URL: "{{ botboard_url }}"
             POLL_SECONDS: "{{ poll_seconds }}"
             IDLE_SECONDS: "{{ idle_seconds }}"
+            SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
+            SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
+            SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
           replace: []
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods

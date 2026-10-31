@@ -1,0 +1,125 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: securityevents.agentdev.dev
+spec:
+  group: agentdev.dev
+  names:
+    kind: SecurityEvent
+    listKind: SecurityEventList
+    plural: securityevents
+    shortNames:
+    - sev
+    singular: securityevent
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agent
+      name: Agent
+      type: string
+    - jsonPath: .spec.severity
+      name: Severity
+      type: string
+    - jsonPath: .spec.rule
+      name: Rule
+      type: string
+    - jsonPath: .spec.job
+      name: Job
+      type: string
+    - jsonPath: .spec.time
+      name: Time
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SecurityEventSpec is one guardrail refusal (#64, #70). Written by the operator from the agent pod's log line; never
+              by the agent (agents have no RBAC on this resource). Immutable once created.
+            properties:
+              action:
+                description: The refused action as text, at most 500 characters plus
+                  an ellipsis.
+                maxLength: 520
+                type: string
+              agent:
+                description: 'Agent name: taken from the pod''s agent label, not from
+                  the log line.'
+                type: string
+              container:
+                type: string
+              hash:
+                description: 'SHA-256 over pod UID, container, timestamp and the raw
+                  line: the dedupe key; the object name is derived from it.'
+                type: string
+              job:
+                description: Job the agent worked on, issue-N or pr-N; empty when
+                  not known (a missing and an empty job are the same).
+                type: string
+              pod:
+                description: Pod and container that wrote the line.
+                type: string
+              rule:
+                description: Rule that fired, for example push-branch or git-config.
+                maxLength: 80
+                type: string
+              schema:
+                description: Schema version, agentdev.security/v1.
+                type: string
+              severity:
+                enum:
+                - low
+                - medium
+                - high
+                type: string
+              source:
+                description: 'Component that refused: forge (sidecar), loop (agent
+                  loop); later egress, claude-proxy, approvals.'
+                maxLength: 40
+                type: string
+              time:
+                description: When the line was written (container runtime timestamp).
+                format: date-time
+                type: string
+            required:
+            - action
+            - agent
+            - container
+            - hash
+            - pod
+            - rule
+            - schema
+            - severity
+            - source
+            - time
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: SecurityEvent is immutable
+          rule: self.spec == oldSelf.spec
+    served: true
+    storage: true
+    subresources: {}
