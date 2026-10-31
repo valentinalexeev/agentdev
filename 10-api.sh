@@ -4,7 +4,7 @@
 # The OIDC application `agentdev` comes from an authentik blueprint (09). OIDC_ISSUER must be the URL users reach
 # authentik through, because authentik puts that URL into tokens (locally: the https port-forward).
 source "$(dirname "$0")/lib.sh"
-need envsubst
+need envsubst; need openssl
 k -n "${PLATFORM_NS}" get deploy authentik-server >/dev/null 2>&1 || die "authentik not deployed: run ./run.sh 09 first"
 
 log "Image ${API_IMAGE}"
@@ -14,10 +14,31 @@ if [[ "${API_IMAGE}" == agentdev-api:* ]]; then
   ok "built and loaded"
 else ok "using published image"; fi
 
+log "Database (security_events, #70)"
+# login agentdev_api, database agentdev; the API creates its tables on start. Password generated, hex only (safe in SQL)
+S="${SPIKE_DIR}/.secrets/platform"; mkdir -p "${S}"; chmod 700 "${S}"
+[[ -s "${S}/pg-agentdev-api" ]] || { openssl rand -hex 24 > "${S}/pg-agentdev-api"; chmod 600 "${S}/pg-agentdev-api"; }
+pgpw=$(cat "${S}/pg-agentdev-api")
+k -n "${PLATFORM_NS}" exec -i platform-db-0 -- psql -U postgres -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
+SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
+ALTER ROLE agentdev_api PASSWORD '${pgpw}';
+SELECT 'CREATE DATABASE agentdev OWNER agentdev_api' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
+SQL
+printf 'DATABASE_URL=postgres://agentdev_api:%s@platform-db:5432/agentdev?sslmode=disable\n' "${pgpw}" \
+  | k -n "${PLATFORM_NS}" create secret generic agentdev-api-db --from-env-file=/dev/stdin --dry-run=client -o yaml \
+  | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+ok "database agentdev"
+# SIEM webhook (optional): put SECURITY_WEBHOOK_URL=... and SECURITY_WEBHOOK_SECRET=... into .secrets/platform/siem-webhook
+if [[ -s "${S}/siem-webhook" ]]; then
+  k -n "${PLATFORM_NS}" create secret generic agentdev-api-siem --from-env-file="${S}/siem-webhook" --dry-run=client -o yaml \
+    | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+  ok "security webhook output configured"
+fi
+
 log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
-  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev \
+  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev SECURITY_DB_RETENTION_DAYS="${SECURITY_DB_RETENTION_DAYS:-365}" \
   envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"

@@ -10,6 +10,7 @@ metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
 rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -24,7 +25,7 @@ spec:
   replicas: 1
   selector: {matchLabels: {app: agentdev-api}}
   template:
-    metadata: {labels: {app: agentdev-api}}
+    metadata: {labels: {app: agentdev-api, agentdev/db-client: "true"}}   # may reach platform-db (#70)
     spec:
       serviceAccountName: agentdev-api
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
@@ -36,6 +37,12 @@ spec:
         - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
         - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: SECURITY_RETENTION_DAYS, value: "${SECURITY_DB_RETENTION_DAYS}"}
+        # security_events table (#70): DATABASE_URL from the Secret 10-api.sh creates (login agentdev_api)
+        - name: DATABASE_URL
+          valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
+        # optional SIEM webhook output (#70): SECURITY_WEBHOOK_URL and SECURITY_WEBHOOK_SECRET, instance config only
+        envFrom: [{secretRef: {name: agentdev-api-siem, optional: true}}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}

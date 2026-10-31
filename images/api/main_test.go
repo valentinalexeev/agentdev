@@ -43,7 +43,7 @@ func testServer() http.Handler {
 		sts("dave", 0, 0, map[string]string{"agentdev/blocked": "true"}),
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "coding-agents"}}, // not an agent
 	)
-	return routes(fakeVerify, &kubeAgents{c: c, ns: "coding-agents"})
+	return routes(fakeVerify, &kubeAgents{c: c, ns: "coding-agents"}, newMemStore())
 }
 
 func do(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
@@ -120,7 +120,7 @@ func TestAgentsFromAgentObjects(t *testing.T) {
 		sts("alice", 0, 0, map[string]string{"agentdev/repos": "owner/x"}),
 		sts("legacy", 1, 1, map[string]string{"agentdev/repos": "owner/old"}), // no Agent object yet
 	)
-	h := routes(fakeVerify, &kubeAgents{c: c, d: d, ns: "coding-agents"})
+	h := routes(fakeVerify, &kubeAgents{c: c, d: d, ns: "coding-agents"}, newMemStore())
 	w := do(t, h, "/api/agents", "good")
 	var got struct{ Agents []agent }
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Agents) != 2 {
