@@ -1,6 +1,6 @@
 // agentdev API (#46, #12): the management API behind authentik OIDC.
-// Phase 1: read-only overview of the agents (state from Kubernetes). Every /api call needs a valid OIDC bearer
-// token from the configured issuer and audience; /healthz is open. Lifecycle actions (#4, #27) come later.
+// Read: overview of the agents (state from Kubernetes). Write (#57 step 3): pause, resume, edit, create, delete Agents. Every /api call needs a valid OIDC bearer
+// token from the configured issuer and audience; /healthz is open.
 package main
 
 import (
@@ -20,6 +20,8 @@ type config struct {
 	Audience  string // OIDC client id of the API
 	Namespace string // agents namespace
 	Addr      string
+	ForgeURL  string // forge API for the live permission check of writes (#57)
+	AdminGrp  string // OIDC group that may create, delete and always pause agents
 	// security events (#70)
 	DatabaseURL   string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
 	DBMigrate     bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
@@ -41,6 +43,8 @@ func main() {
 		Audience:  os.Getenv("OIDC_AUDIENCE"),
 		Namespace: env("AGENTS_NS", "coding-agents"),
 		Addr:      env("ADDR", ":8080"),
+		ForgeURL:  os.Getenv("FORGE_URL"),
+		AdminGrp:  env("ADMIN_GROUP", "agentdev-admins"),
 
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
 		DBMigrate:     os.Getenv("DATABASE_MIGRATE") == "true",
@@ -72,7 +76,10 @@ func main() {
 		go s.out.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
-	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store), ReadHeaderTimeout: 10 * time.Second,
+	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
+	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
+	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp}
+	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
@@ -112,9 +119,10 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 type verifier func(ctx context.Context, raw string) (*identity, error)
 
 type identity struct {
-	Subject  string `json:"sub"`
-	Username string `json:"preferred_username"`
-	Email    string `json:"email"`
+	Subject  string   `json:"sub"`
+	Username string   `json:"preferred_username"`
+	Email    string   `json:"email"`
+	Groups   []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
 }
 
 // agentLister returns the agents' current state.
@@ -137,7 +145,7 @@ type agent struct {
 	SecurityEvents int `json:"securityEvents"`
 }
 
-func routes(verify verifier, agents agentLister, events eventStore) http.Handler {
+func routes(verify verifier, agents agentLister, events eventStore, wr *writer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.Handle("GET /api/me", auth(verify, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,10 +173,18 @@ func routes(verify verifier, agents agentLister, events eventStore) http.Handler
 	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has
 	// write access to needs the forge permission check of #67 and per-project access from #57: see #57.
 	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events)))
+	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
+		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
+		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
+		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
+	}
 	return mux
 }
 
 type ctxIdentity struct{}
+
+// auth accepts only a bearer token in the Authorization header. The API never reads cookies, so a cross-site form or
+// request from another origin cannot act for a logged-in user (CSRF): the browser does not add this header by itself.
 
 func auth(verify verifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

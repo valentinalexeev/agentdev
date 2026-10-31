@@ -18,3 +18,8 @@ plan.bin
 *.tfvars
 !example.tfvars
 .terraform.lock.hcl.bak
+
+# Go build outputs of the images
+images/api/api
+images/*/bin/
+images/**/*.test

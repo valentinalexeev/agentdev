@@ -25,7 +25,7 @@ func ev(agent, sev, hash string, t time.Time) securityEvent {
 func eventServer(t *testing.T, store eventStore) http.Handler {
 	t.Helper()
 	c := fake.NewSimpleClientset(sts("alice", 1, 1, nil), sts("bob", 1, 1, nil))
-	return routes(fakeVerify, &kubeAgents{c: c, ns: "coding-agents"}, store)
+	return routes(fakeVerify, &kubeAgents{c: c, ns: "coding-agents"}, store, nil)
 }
 
 type page struct {
