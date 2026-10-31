@@ -37,5 +37,5 @@ go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName
   output:crd:dir=config/crd output:rbac:dir=config/rbac
 ```
 
-`render.go` mirrors `manifests/agent.yaml.tmpl`; keep both in step until `06-agents.sh` creates Agents instead of
+`render.go` mirrors `manifests/agent.yaml.tmpl`; keep both in step until #57 makes `06-agents.sh` create Agents instead of
 rendering the template.
