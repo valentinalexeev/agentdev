@@ -3,6 +3,7 @@ name: Images
 # Publish agentdev images to GHCR (#28):
 #   ghcr.io/<owner>/agentdev-worker   Claude Code CLI + agent loop + webhook listener
 #   ghcr.io/<owner>/agentdev-router   webhook router
+#   ghcr.io/<owner>/agentdev-api      management API (#46)
 # Pull requests build both (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest.
 # Multi-arch: linux/amd64 (GKE) and linux/arm64 (kind on Apple Silicon).
 on:
@@ -29,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [worker, router]
+        name: [worker, router, api]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
