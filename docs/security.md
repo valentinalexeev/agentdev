@@ -37,8 +37,8 @@ planned target, [security-model.md](security-model.md).
 |----|------|--------|--------|-------------|
 | R20 | Agent spec can choose any container image | CodeQL #59 | fixed | No image field; image set by the operator (#59) |
 | R21 | Agent spec can mount any Secret (forge or Claude credentials of another agent) | CodeQL #59 | fixed | CEL rules bind secrets to the agent name; reconciler fails closed with phase `invalid` |
-| R22 | `spec.repo` points the agent at an attacker-controlled repository | CodeQL #59 | mitigated | Pattern-checked; only cluster admins (and later `agentdev-admins`) can create Agents |
-| R23 | Creating an Agent gives a pod forge write access | CodeQL #59 | accepted | That is the product; creation restricted by RBAC and, in the API, `agentdev-admins` (#57) |
+| R22 | `spec.repo` points the agent at an attacker-controlled repository | CodeQL #59 | mitigated | Pattern-checked; Agents are created by cluster admins, or through the API (#57) only by `agentdev-admins` or a user with **admin** on that repository, checked live on the forge (fail closed); every attempt is logged as `AGENTDEV_AUDIT`. An admin of a repository can point an agent only at that repository |
+| R23 | Creating an Agent gives a pod forge write access | CodeQL #59 | accepted | That is the product. The API Role may create/patch/delete Agents only (no Secrets): the forge token must already exist as `agent-<name>` (CEL, R21), so the API cannot mint credentials. Creation needs repo admin or `agentdev-admins` (#57); forge user = authentik username for now (`forgeUserOf`) |
 
 ## Platform (ContextForge, authentik, API, UI)
 

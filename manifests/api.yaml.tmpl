@@ -1,5 +1,6 @@
-# agentdev API (#46), namespace ${PLATFORM_NS}. Rendered by 10-api.sh. Reads agent state (read-only RBAC on the
-# agents namespace); every /api call needs an authentik OIDC token for client ${OIDC_AUDIENCE}.
+# agentdev API (#46), namespace ${PLATFORM_NS}. Rendered by 10-api.sh. Reads agent state and writes Agent objects
+# (#57 step 3; the API checks the caller's forge permission first); every /api call needs an authentik OIDC token for
+# client ${OIDC_AUDIENCE}.
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}}
@@ -9,7 +10,7 @@ kind: Role
 metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
 rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
-- {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch, patch, create, delete]}   # Agents only: no Secrets, no StatefulSets, no PVCs
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -36,6 +37,12 @@ spec:
         - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
         - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: FORGE_URL, value: "${FORGE_URL}"}
+        - {name: ADMIN_GROUP, value: agentdev-admins}
+        # forge token for the live permission check of writes (read on the repositories only). Optional: without it
+        # every write that needs the forge gives 503 (fail closed).
+        - name: FORGE_API_TOKEN
+          valueFrom: {secretKeyRef: {name: agentdev-api-forge, key: FORGE_API_TOKEN, optional: true}}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}

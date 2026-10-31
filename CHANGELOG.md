@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- API writes to Agents (#57 step 3): `PATCH /api/agents/{name}` (JSON merge patch of `paused`, `maxConcurrent`,
+  `scaleToZero`), `POST /api/agents` and `DELETE /api/agents/{name}` (volumes always kept). Permission is checked
+  live on Gitea (`/collaborators/{user}/permission`): write on the repository to pause, resume or edit; admin to
+  create or delete; the authentik group `agentdev-admins` may always pause, create and delete. The forge user is the
+  authentik username (pluggable `forgeUserOf`). If the forge cannot be reached the change is refused (503). Every
+  attempt prints an `AGENTDEV_AUDIT {json}` line (who, action, agent, before, after, result). Writes require a bearer
+  token (no cookies, CSRF). The API Role gains `patch`, `create`, `delete` on `agents` only. New optional Secret
+  `agentdev-api-forge` (`FORGE_API_TOKEN`, read-only token) and env `FORGE_URL`, `ADMIN_GROUP`.
+
 ### Security
 - Forge sidecar (#64, security model phase 1, fixes R4 pending e2e): every agent pod gets a `forge` container
   (`images/forge`, image `ghcr.io/valentinalexeev/agentdev-forge`, UID 1001, own process namespace) that alone holds
