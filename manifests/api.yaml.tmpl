@@ -9,6 +9,7 @@ kind: Role
 metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
 rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
