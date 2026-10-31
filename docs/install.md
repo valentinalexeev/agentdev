@@ -24,6 +24,7 @@ router. File an issue, assign it to `alice`, and review the PR she opens.
 | `01` | kind cluster with a sandbox node pool, gVisor runtime |
 | `05` | Gitea, owner and agent accounts, branch protection |
 | `06` | builds worker and router images, deploys the router and agents, registers the webhook |
+| `07` | optional: [botboard](https://github.com/valentinalexeev/botboard), a live dashboard agents report to; run `06` again afterwards |
 
 To connect **another repository** in the local Gitea, see [Administration → Projects](admin.md#projects).
 Remove everything with `./99-teardown.sh`.

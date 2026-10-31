@@ -48,6 +48,17 @@ kubectl -n coding-agents logs deploy/webhook-router | grep scaled
 
 Re-applying the manifests (a redeploy) starts stopped agents once; they stop again after the idle time.
 
+## Agent dashboard (botboard)
+
+`./run.sh 07` deploys [botboard](https://github.com/valentinalexeev/botboard) (`ghcr.io/valentinalexeev/botboard`)
+in namespace `botboard`; the next `./run.sh 06` finds it and sets `BOTBOARD_URL` on every agent. View it with
+`kubectl -n botboard port-forward svc/botboard 8090:80` and http://localhost:8090. The board keeps state in memory:
+a restart clears it, and agents re-publish as they work.
+
+On GKE, set `botboard_url` in `ansible/instance.yml`. botboard is meant to be reached over your tailnet: run it with
+`TS_AUTHKEY` (from Secret Manager) instead of local mode, and use `http://botboard.<tailnet>` as the URL.
+`FORGE_PUBLIC_URL` (agent env) makes card links point at the forge's public address instead of the in-cluster one.
+
 ## Webhooks
 
 One webhook per repository points at the router (`06-agents.sh` or bootstrap registers it). The router verifies

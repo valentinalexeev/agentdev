@@ -33,6 +33,25 @@ request_review() {  # (re)request REVIEWER on a PR; also works after a review to
 
 comment() { api POST "/repos/${REPO}/issues/$1/comments" "$(jq -n --arg b "$2" '{body:$b}')" >/dev/null; }
 
+# botboard (#26): a live dashboard of what agents work on. One card per item, upserted by id; best effort:
+# a board that is down or unset never blocks or fails a job. BOTBOARD_URL empty = off.
+PROJECT="${PROJECT:-${REPO#*/}}"
+web_url() { echo "${FORGE_PUBLIC_URL:-${FORGE_URL}}/${REPO}/$1"; }
+board_card() {  # board_card <key> <task> <phase> <activity> [url]
+  [[ -n "${BOTBOARD_URL:-}" ]] || return 0
+  curl -fsS -m 5 -X POST "${BOTBOARD_URL%/}/api/cards" -H 'Content-Type: application/json' -d "$(jq -n \
+    --arg id "${FORGE_USER}-${PROJECT}-$1" --arg a "${FORGE_USER}" --arg p "${PROJECT}" --arg t "$2" \
+    --arg ph "$3" --arg ac "$4" --arg u "${5:-}" \
+    '{id:$id, agent:$a, project:$p, task:$t, phase:$ph, activity:$ac} + (if $u != "" then {url:$u} else {} end)')" \
+    >/dev/null 2>&1 || true
+}
+board_note() {  # board_note <text> [url]
+  [[ -n "${BOTBOARD_URL:-}" ]] || return 0
+  curl -fsS -m 5 -X POST "${BOTBOARD_URL%/}/api/notes" -H 'Content-Type: application/json' -d "$(jq -n \
+    --arg a "${FORGE_USER}" --arg p "${PROJECT}" --arg t "$1" --arg u "${2:-}" \
+    '{agent:$a, project:$p, text:$t} + (if $u != "" then {url:$u} else {} end)')" >/dev/null 2>&1 || true
+}
+
 clone_url() { local host=${FORGE_URL#*://}; echo "${FORGE_URL%%://*}://${FORGE_USER}:${FORGE_TOKEN}@${host}/${REPO}.git"; }
 
 sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses concurrent ref updates.
@@ -176,8 +195,10 @@ issue_job() {
   title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
   branch="agent/${FORGE_USER}/issue-${n}"
   comment "${n}" "🤖 \`${FORGE_USER}\` picked this up and is working on it."
-  sync_repo || { log "clone failed"; return 1; }
+  board_card "issue-${n}" "#${n} ${title}" plan "picked up" "$(web_url "issues/${n}")"
+  sync_repo || { log "clone failed"; board_card "issue-${n}" "#${n} ${title}" blocked "clone failed, will retry"; return 1; }
   dir=$(worktree "${branch}" "origin/${base}") || { log "worktree failed"; return 1; }
+  board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
   result=$(run_claude "${dir}" "You are ${FORGE_USER}, an autonomous engineer working in this git repository.
 Resolve issue #${n}.
 
@@ -198,13 +219,15 @@ ${result}
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
-    [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; return 1; }  # backoff, retry later
+    [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
+    board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(web_url "pulls/${pr}")"
     # anything already on the PR at this point is ours; start the feedback cursor after it
     date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
   else
     log "no changes produced for issue #${n}"
+    board_card "issue-${n}" "#${n} ${title}" blocked "could not produce a change (see the issue)" "$(web_url "issues/${n}")"
     comment "${n}" "🤖 I could not produce a change for this.
 
 ${result}"
@@ -254,6 +277,26 @@ handle_feedback() {
       log "PR #${pr}: new feedback, waiting for a free slot"
     fi
   done
+  board_finish "${prs}"
+}
+
+# botboard: a PR of ours that left the open list was merged or closed -> its card goes to done (once).
+board_finish() {
+  [[ -n "${BOTBOARD_URL:-}" ]] || return 0
+  local open f pr pull state title n
+  open=$(jq -r --arg me "${FORGE_USER}" '.[] | select(.user.login == $me) | .number' <<<"$1")
+  for f in "${STATE}"/seen/pr-*.reviewer; do
+    [[ -e "${f}" ]] || continue
+    pr=${f##*/pr-}; pr=${pr%.reviewer}
+    grep -qx "${pr}" <<<"${open}" && continue
+    [[ -e "${STATE}/seen/pr-${pr}.board-done" ]] && continue
+    pull=$(api GET "/repos/${REPO}/pulls/${pr}") || continue
+    state=$(jq -r 'if .merged then "merged" else .state end' <<<"${pull}"); title=$(jq -r .title <<<"${pull}")
+    [[ "${state}" == open ]] && continue
+    n=$(jq -r '.head.ref | sub(".*issue-"; "")' <<<"${pull}")
+    board_card "issue-${n}" "#${n} ${title}" "done" "PR #${pr} ${state}" "$(web_url "pulls/${pr}")"
+    touch "${STATE}/seen/pr-${pr}.board-done"
+  done
 }
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
@@ -264,6 +307,8 @@ feedback_job() {
   [[ -z "${fb}" ]] && return
   sync_repo || return 1
   dir=$(worktree "${branch}" "origin/${branch}") || { log "worktree failed"; return 1; }
+  local issue_n; issue_n=${branch##*issue-}   # the PR's card is the issue's card
+  board_card "issue-${issue_n}" "#${issue_n} ${title}" build "addressing review feedback on PR #${pr}" "$(web_url "pulls/${pr}")"
   result=$(run_claude "${dir}" "You are ${FORGE_USER}. You opened PR #${pr} (\"${title}\") from this branch.
 Reviewers left this feedback:
 
@@ -281,6 +326,8 @@ ${result}"
   fi
   echo "${now}" > "${STATE}/seen/pr-${pr}"
   log "PR #${pr}: replied"
+  board_card "issue-${issue_n}" "#${issue_n} ${title}" review "feedback addressed, PR #${pr} waits for ${REVIEWER}" "$(web_url "pulls/${pr}")"
+  board_note "addressed feedback on PR #${pr}" "$(web_url "pulls/${pr}")"
 }
 
 # Sleep up to POLL_SECONDS, but return as soon as a webhook was delivered.

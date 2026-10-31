@@ -56,6 +56,14 @@ Optional per agent (`SCALE_TO_ZERO`, #35). An agent with no work for `IDLE_SECON
 router to stop it. When an event for a stopped agent arrives, the router starts it again, and it picks the work up
 from the forge. The router refuses to stop an agent that was woken since it became idle, so work is not cut off.
 
+## Agent dashboard (botboard)
+
+Optionally, agents report what they are doing to [botboard](https://github.com/valentinalexeev/botboard), a small live
+dashboard (#26). Each issue an agent works on is one card that moves through phases: **plan** (picked up), **build**
+(Claude is working), **review** (the PR waits for you), back to **build** while it addresses feedback, and **done**
+when the PR is merged or closed, or **blocked** if it could not produce a change. Cards link to the issue or PR.
+Reporting is best effort: if the board is down, agents carry on.
+
 ## Sandboxing
 
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account

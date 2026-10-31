@@ -1,0 +1,37 @@
+# botboard (#26): live dashboard of what agents are working on (github.com/valentinalexeev/botboard).
+# Rendered by 07-botboard.sh (envsubst). Agents publish cards to http://botboard.${BOTBOARD_NS}.svc.cluster.local/.
+# Local mode (plain HTTP in the cluster; view with kubectl port-forward). On GKE set TS_AUTHKEY in the Secret to put it on
+# your tailnet instead (botboard's intended access control); then drop BOTBOARD_LOCAL.
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${BOTBOARD_NS}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: botboard, namespace: ${BOTBOARD_NS}, labels: {app: botboard}}
+spec:
+  replicas: 1                      # state is in memory: one replica, a restart clears the board
+  selector: {matchLabels: {app: botboard}}
+  template:
+    metadata: {labels: {app: botboard}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 65534, runAsNonRoot: true}
+      containers:
+      - name: botboard
+        image: ${BOTBOARD_IMAGE}
+        env:
+        - {name: BOTBOARD_LOCAL, value: ":8080"}
+        - {name: TS_STATE_DIR,   value: /tmp/botboard}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /api/state, port: http}, periodSeconds: 10}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits:   {cpu: 200m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: botboard, namespace: ${BOTBOARD_NS}}
+spec:
+  selector: {app: botboard}
+  ports: [{name: http, port: 80, targetPort: http}]

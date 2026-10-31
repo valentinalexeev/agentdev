@@ -25,6 +25,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   the router to stop it; a webhook for a stopped agent makes the router start it again (#35). The router gets a
   namespaced Role limited to reading agent StatefulSets and patching their scale.
 
+- Agents report their work to [botboard](https://github.com/valentinalexeev/botboard) (`./run.sh 07`, `BOTBOARD_URL`):
+  one card per issue through plan, build, review, done/blocked, linking to the issue or PR (#26).
+
 ### Changed
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no
   instance defaults); the module no longer declares a backend; the deployment's root module does (#11).
