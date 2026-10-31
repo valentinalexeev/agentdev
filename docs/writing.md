@@ -90,30 +90,47 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | Agent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `Agent`) that defines an agent |
 | approval request | a request from an agent for a right it does not have; a person approves or denies it |
 | authentik | the identity provider of an agentdev instance |
+| bootstrap | the script `scripts/bootstrap-project.sh` that connects a project, or the Terraform bootstrap that makes a GCP project |
+| botboard | the optional dashboard that shows the work of the agents as cards |
 | branch | a git branch |
 | cluster | a Kubernetes cluster |
+| concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
 | config.env | the file with the local default settings |
+| ContextForge | the MCP gateway in the platform namespace |
+| deployment repository | the private repository that contains the values of one production instance |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
+| guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
+| Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
+| MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
+| poll interval | the time between two reads of the forge by an agent when webhooks do not operate |
+| process pack | the files (`AGENTS.md`, templates, labels) that the bootstrap proposes to a project |
 | port-forward | a `kubectl port-forward` connection from the local computer to a service in the cluster |
 | project | one forge repository with its agents |
 | pull request (PR) | a request to merge a branch |
 | router | the agentdev service that receives forge webhooks and wakes agents |
+| quota | a limit for the pods, the CPU and the memory of the agents namespace |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | security event | a record of an action that a guardrail stopped |
+| scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
+| setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
+| specification (spec) | the project file, for example `my-project.yaml` |
+| sync | one run of `scripts/mcp-sync.sh` |
 | web UI | the agentdev management user interface |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 
 These technical names are also allowed in the manuals with their usual meaning: browser, CORS, image (container
 image), namespace, nginx, OIDC, password, PKCE, port, redirect URI, session, SSH tunnel, tab (browser tab), token,
-user name, authentik blueprint, phase (of an agent: running, stopped and so on).
+user name, authentik blueprint, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
+Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terraform, Ansible, playbook, Secret Manager,
+webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log.
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
@@ -124,12 +141,16 @@ authentik page. A label is not a word of the text, so a label does not break the
 |---|---|
 | approve | accept a pull request or an approval request |
 | assign | give an issue to an agent account |
+| clone | copy a git repository with `git clone` |
 | click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
+| log in | start a session on the authentik page (the authentik label is **Log in**) |
 | merge | add the changes of a pull request to the main branch |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
+| register | record a webhook, an agent or an App in the system that uses it |
 | resume | start a paused agent again (STE alternative: start again) |
+| revoke | make a token not valid |
 | sign in, sign out | start or end a session in the web UI |
 
 ## Before you merge a manual change
