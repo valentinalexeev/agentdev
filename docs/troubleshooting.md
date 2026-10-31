@@ -25,6 +25,7 @@ kubectl -n coding-agents logs deploy/webhook-router
 | Agent lacks a newly added tool | the pod started before the sync | `kubectl -n coding-agents delete pod agent-<name>-0` |
 | authentik login loops back to the login page | plain http port-forward: session cookies are https only | port-forward `443` and use https://localhost:9443/ |
 | API answers 401 to a fresh token | token issuer differs from `API_OIDC_ISSUER` (logged in through another URL) | log in through the URL in `API_OIDC_ISSUER`, or set it and rerun `./run.sh 10` |
+| UI: Sign in does nothing, browser console shows a CORS error | the UI origin is not a strict redirect URI of the `agentdev` client | add `http(s)://<ui host>/callback` as `strict` in `manifests/authentik-blueprint-agentdev.yaml`, rerun `./run.sh 09` |
 | A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).
