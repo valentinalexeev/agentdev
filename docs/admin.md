@@ -152,13 +152,15 @@ github_app:
 ```bash
 scripts/github-app.sh render instance.yml        # review the manifest (permissions, events, URLs)
 scripts/github-app.sh form instance.yml          # writes .secrets/github-app/register.html; open it, confirm on github.com
-scripts/github-app.sh convert instance.yml CODE  # within 1 h: App ID, private key, webhook secret into .secrets/github-app/
+scripts/github-app.sh convert instance.yml 'URL'   # within 1 h, the full redirect URL: App ID, private key, webhook secret
 ```
 
 The webhook URL is `<public_url>/` (the router verifies `X-Hub-Signature-256`). After you confirm, GitHub redirects
-to `<public_url>/github-app/registered?code=...`; copy the code from the address bar. Then install the App on the
+to `<public_url>/github-app/registered?code=...&state=...` (a 404 there is fine: nothing listens yet); pass that whole
+URL to `convert`, which checks `state` against the form it generated and stores the results in `.secrets/github-app/`
+(mode 600). Then install the App on the
 repositories the agents work. Permissions: contents, issues and pull requests write; metadata, checks and statuses
-read. The private key opens every repository the App is installed on: it goes to Secret Manager (GKE) or a local
+read. It deliberately has no `workflows` permission: agents cannot change `.github/workflows/`. The private key opens every repository the App is installed on: it goes to Secret Manager (GKE) or a local
 Secret, never into git or an issue. The worker using the App is the rest of #2.
 
 ## Limits and blocking
