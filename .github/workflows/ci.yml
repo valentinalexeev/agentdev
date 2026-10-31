@@ -74,10 +74,17 @@ jobs:
           helm repo add authentik https://charts.goauthentik.io >/dev/null
           helm template authentik authentik/authentik --version "$(sed -n 's/^AUTHENTIK_VERSION="${AUTHENTIK_VERSION:-\(.*\)}".*/\1/p' config.env)" \
             -n agentdev-platform -f manifests/authentik-values.yaml | ./kubeconform -strict -summary -ignore-missing-schemas -
+          PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents API_IMAGE=img OIDC_ISSUER=https://i/ OIDC_DISCOVERY_URL=http://d/ \
+            OIDC_AUDIENCE=agentdev envsubst < manifests/api.yaml.tmpl | ./kubeconform -strict -summary -
           AGENT=demo AGENTS_NS=coding-agents FORGE_TOKEN=x WORKER_IMAGE=img REPO=o/r POLL_SECONDS=20 FORGE_ADMIN_USER=owner \
             envsubst < manifests/agent.yaml.tmpl | ./kubeconform -strict -summary -
       - name: router tests (no dependencies, a few seconds)
         run: node --test images/router/test/*.test.js
+      - uses: actions/setup-go@v5
+        with: {go-version-file: images/api/go.mod, cache-dependency-path: images/api/go.sum}
+      - name: API vet and tests (#46)
+        working-directory: images/api
+        run: go vet ./... && go test ./...
 
   worker-image:
     needs: scope

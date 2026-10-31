@@ -1,0 +1,71 @@
+# agentdev API (#46), namespace ${PLATFORM_NS}. Rendered by 10-api.sh. Reads agent state (read-only RBAC on the
+# agents namespace); every /api call needs an authentik OIDC token for client ${OIDC_AUDIENCE}.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
+rules:
+- {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-api-read}
+subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, labels: {app: agentdev-api}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: agentdev-api}}
+  template:
+    metadata: {labels: {app: agentdev-api}}
+    spec:
+      serviceAccountName: agentdev-api
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: api
+        image: ${API_IMAGE}
+        env:
+        - {name: OIDC_ISSUER, value: "${OIDC_ISSUER}"}
+        - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
+        - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
+        - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
+        resources:
+          requests: {cpu: 20m, memory: 32Mi}
+          limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: agentdev-api}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# platform namespace is deny-by-default (platform.yaml.tmpl): the API reaches authentik for OIDC discovery and keys
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: authentik-from-api, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: authentik, app.kubernetes.io/component: server}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: agentdev-api}}}]
+    ports: [{port: 9000}]       # http: in-cluster discovery and keys (JWKS is public; TLS inside the cluster: #51)
+---
+# the API itself: reached through port-forward now; the UI (#48) adds its own rule
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-api}}
+  policyTypes: [Ingress]
+  ingress: []

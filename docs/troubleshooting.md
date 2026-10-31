@@ -24,6 +24,7 @@ kubectl -n coding-agents logs deploy/webhook-router
 | Readiness shows `mcp: ContextForge did not list this project's tools` | ContextForge down, or a server in `mcp:` not reachable | `kubectl -n agentdev-platform get pods`; rerun `scripts/mcp-sync.sh <spec>` and read its gateway errors |
 | Agent lacks a newly added tool | the pod started before the sync | `kubectl -n coding-agents delete pod agent-<name>-0` |
 | authentik login loops back to the login page | plain http port-forward: session cookies are https only | port-forward `443` and use https://localhost:9443/ |
+| API answers 401 to a fresh token | token issuer differs from `API_OIDC_ISSUER` (logged in through another URL) | log in through the URL in `API_OIDC_ISSUER`, or set it and rerun `./run.sh 10` |
 | A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).

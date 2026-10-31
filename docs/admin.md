@@ -101,6 +101,22 @@ session cookies need https). Change the password and add MFA after the first log
 deny-by-default). The bootstrap password stays in Secret `authentik` but only applies on first start, so changing
 it in the UI is final. On GKE the playbook does not deploy it yet (#51).
 
+## Management API
+
+`./run.sh 10` (after `09`) builds and deploys the agentdev API (`images/api`, Go) in `agentdev-platform` (#46).
+Every `/api` call needs an authentik access token of the OIDC application `agentdev` (created by a blueprint in
+`09`, public client, authorization code + PKCE); without one it answers 401. Phase 1 is read-only:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
+| `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `blocked`), replicas |
+
+authentik writes the URL you logged in through into the token, so `API_OIDC_ISSUER` (`config.env`) must be that
+URL: locally `https://localhost:9443/application/o/agentdev/` with the 9443 port-forward. The API fetches keys
+from authentik inside the cluster. It reads agents with a read-only Role on the agents namespace. Reach it with
+`kubectl -n agentdev-platform port-forward svc/agentdev-api 8088:8080`. On GKE: #51.
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents

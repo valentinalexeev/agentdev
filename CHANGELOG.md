@@ -38,6 +38,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   project's virtual server only; the readiness report counts the tools.
 - authentik as the instance identity provider (#45): `./run.sh 09` installs the Helm chart on the platform
   Postgres (database `authentik`, no Redis); the owner is the first admin.
+- Management API skeleton (#46): Go service `agentdev-api` (`./run.sh 10`, image `ghcr.io/valentinalexeev/agentdev-api`),
+  authentik OIDC required (401 without a valid token), read-only `/api/me` and `/api/agents`; the `agentdev` OIDC
+  application comes from an authentik blueprint.
 
 ### Changed
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports

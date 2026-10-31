@@ -16,3 +16,5 @@ worker:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {memory: 1Gi}
 postgresql: {enabled: false}      # the platform Postgres (platform.yaml.tmpl)
+blueprints:
+  configMaps: [authentik-blueprints]   # agentdev's OIDC application (manifests/authentik-blueprint-*.yaml), applied by the worker
