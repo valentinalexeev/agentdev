@@ -39,6 +39,12 @@ k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/nu
 ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
 
 log "Agents"
+# report to botboard (#26) when it is deployed (./run.sh 07); otherwise off
+BOTBOARD_URL="${BOTBOARD_URL:-}"
+if [[ -z "${BOTBOARD_URL}" ]] && k -n "${BOTBOARD_NS}" get svc botboard >/dev/null 2>&1; then
+  BOTBOARD_URL="http://botboard.${BOTBOARD_NS}.svc.cluster.local"
+fi
+[[ -n "${BOTBOARD_URL}" ]] && ok "agents report to botboard: ${BOTBOARD_URL}"
 for a in ${AGENTS}; do
   if [[ -s "${SPIKE_DIR}/.secrets/${a}.claude" ]]; then
     k -n "${AGENTS_NS}" create secret generic "claude-${a}" --from-env-file="${SPIKE_DIR}/.secrets/${a}.claude" \
@@ -56,7 +62,7 @@ for a in ${AGENTS}; do
     WAKE_TOKEN="$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" REGISTER_TOKEN="${REGISTER_TOKEN}" \
     WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
     IMAGE_PULL_POLICY=Never FORGE_KIND=gitea FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" MAX_CONCURRENT="${MAX_CONCURRENT}" \
-    SCALE_TO_ZERO="${SCALE_TO_ZERO}" IDLE_SECONDS="${IDLE_SECONDS}" \
+    SCALE_TO_ZERO="${SCALE_TO_ZERO}" IDLE_SECONDS="${IDLE_SECONDS}" BOTBOARD_URL="${BOTBOARD_URL}" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
     envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" \
     | if [[ "${blocked}" == true ]]; then   # one apply, already at 0 and still annotated: no pod flashes up
         yq 'select(.kind == "StatefulSet") |= (.spec.replicas = 0 | .metadata.annotations."agentdev/blocked" = "true")'

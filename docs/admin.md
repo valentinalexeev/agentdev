@@ -48,6 +48,19 @@ kubectl -n coding-agents logs deploy/webhook-router | grep scaled
 
 Re-applying the manifests (a redeploy) starts stopped agents once; they stop again after the idle time.
 
+## Agent dashboard (botboard)
+
+`./run.sh 07` deploys [botboard](https://github.com/valentinalexeev/botboard) (`ghcr.io/valentinalexeev/botboard`)
+in namespace `botboard`; the next `./run.sh 06` finds it and sets `BOTBOARD_URL` on every agent. View it with
+`kubectl -n botboard port-forward svc/botboard 8090:80` and http://localhost:8090. The board keeps state in memory:
+a restart clears it, and agents re-publish as they work.
+
+On GKE, agents report to whatever botboard `botboard_url` in `ansible/instance.yml` points at; the playbook does not
+deploy botboard itself yet. botboard has no authentication of its own: inside the cluster any pod can post cards, so
+its intended exposure is your tailnet (run it with `TS_AUTHKEY` and use `http://botboard.<tailnet>`), not a public
+URL. Card links use `FORGE_PUBLIC_URL` (`forge_public_url` in Ansible; locally the Gitea host URL) so they open in a
+browser rather than pointing at the in-cluster forge address.
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents

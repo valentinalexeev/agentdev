@@ -46,6 +46,9 @@ scripts/agent-chat.sh start my-project.yaml      # starts a session and attaches
 
 ## What to expect
 
+If your instance runs botboard, open it to see every agent's current work at a glance: one card per issue, its phase
+(plan, build, review, done, blocked) and a link to the issue or PR.
+
 | Situation | What happens |
 |---|---|
 | Two issues assigned at once | both are worked on in parallel (up to the agent's limit), in separate PRs |

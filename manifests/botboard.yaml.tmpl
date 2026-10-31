@@ -1,0 +1,44 @@
+# botboard (#26): live dashboard of what agents are working on (github.com/valentinalexeev/botboard).
+# Rendered by 07-botboard.sh (envsubst). Agents publish cards to http://botboard.${BOTBOARD_NS}.svc.cluster.local/.
+# Local mode: plain HTTP inside the cluster, viewed with kubectl port-forward. Anything in the cluster can post cards
+# (botboard has no auth of its own; its intended access control is a tailnet, see docs/admin.md).
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${BOTBOARD_NS}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: botboard, namespace: ${BOTBOARD_NS}, labels: {app: botboard}}
+spec:
+  replicas: 1                      # state is in memory: one replica, a restart clears the board
+  selector: {matchLabels: {app: botboard}}
+  template:
+    metadata: {labels: {app: botboard}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 65534, runAsNonRoot: true}
+      containers:
+      - name: botboard
+        image: ${BOTBOARD_IMAGE}
+        env:
+        - {name: BOTBOARD_LOCAL, value: ":8080"}
+        - {name: TS_STATE_DIR,   value: /tmp/botboard}
+        ports: [{name: http, containerPort: 8080}]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+          seccompProfile: {type: RuntimeDefault}
+        volumeMounts: [{name: tmp, mountPath: /tmp}]
+        readinessProbe: {httpGet: {path: /api/state, port: http}, periodSeconds: 10}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits:   {cpu: 200m, memory: 128Mi}
+      volumes: [{name: tmp, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: botboard, namespace: ${BOTBOARD_NS}}
+spec:
+  selector: {app: botboard}
+  ports: [{name: http, port: 80, targetPort: http}]

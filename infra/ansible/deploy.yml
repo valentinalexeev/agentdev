@@ -165,6 +165,8 @@
             MAX_CONCURRENT: "{{ item.max_concurrent | default(max_concurrent) }}"
             SCALE_TO_ZERO: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool | lower }}"
             IDLE_SECONDS: "{{ item.idle_seconds | default(idle_seconds) }}"
+            BOTBOARD_URL: "{{ botboard_url }}"
+            FORGE_PUBLIC_URL: "{{ forge_public_url | default('') }}"
             FORGE_ADMIN_USER: "{{ reviewer }}"
             FORGE_KIND: "{{ forge_kind }}"
             FORGE_URL: "{{ forge_url }}"
