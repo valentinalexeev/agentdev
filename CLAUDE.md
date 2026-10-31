@@ -27,12 +27,16 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - Every piece of unfinished work is an issue: a step of the roadmap, a leftover found in a session, an incident.
   "To do later" in code comments, docs or commit messages without an issue link is not allowed.
 - Labels: `AI` (created by an agent), `in-progress`, `needs-decision` (waits for the owner), `blocked`,
-  `deferred` (reason in a comment), `incident`, `ADR` (result includes a decision record), plus topic labels
-  `forge`, `worker`, `cluster`, `security`, `docs`. Add a new label only if none fits.
+  `roadmap` (the umbrella issue with the status comment), `deferred` (reason in a comment), `incident`, `ADR` (result
+  includes a decision record), plus topic labels `forge`, `worker`, `cluster`, `security`, `docs`. Add a new label
+  only if none fits.
 - Statuses: not started = open without `in-progress`; in progress = `in-progress`; done = closed as completed
   **only** when the acceptance criterion is met, with a comment (what was done, checks, PR); partial = stays open
   with a list of what remains; rejected = closed as not planned with a reason.
 - Commits and PRs reference the issue (`#NN`). `Closes #NN` only when the acceptance criterion is met, otherwise `Refs #NN`.
+- **Every question to the owner goes on an issue** (open one if none fits), in the form of §3 *Questions*, even when
+  it is also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the
+  status comment of the umbrella issue (the open issue labelled `roadmap`), without reading the chat.
 
 ## 3. Bot and owner
 

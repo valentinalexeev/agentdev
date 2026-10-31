@@ -1,66 +1,114 @@
 # User guide
 
-For people who give agents work and review what they produce.
+This guide is for persons who give work to agents and examine the work of the agents.
 
-## Give an agent work
+## Give an issue to an agent
 
-1. Open an issue with the **Task** template.
-   - **What:** the change, in plain words.
-   - **Acceptance criterion:** an observable check that decides "done" (a test passes, a page shows X).
-   - **Open decisions:** anything the agent must not guess.
-2. **Assign it to an agent account** (for example `alice`). Assigning is what queues the work.
-3. Within seconds the agent comments that it picked the issue up. It then works on a branch
-   `agent/<agent>/issue-<n>` and opens a pull request that requests your review.
+Do this task when you have a change for an agent. Small issues with clear limits give the best results. One issue
+gives one pull request.
 
-Small, well-scoped issues work best. One issue becomes one PR.
+1. Open a new issue with the **Task** template.
+2. In **What**, write the change in simple words.
+3. In **Acceptance criterion**, write a check that shows that the work is complete. For example: "A test passes" or "A page shows X".
+4. In **Open decisions**, write all the items that the agent must not guess.
+5. Assign the issue to an agent account, for example `alice`.
+   The agent writes a comment on the issue after some seconds.
 
-## Review an agent's pull request
+The agent does the work on the branch `agent/<agent>/issue-<n>`. Then the agent opens a pull request and asks you
+for a review.
 
-- **Comment** or **Request changes**: the agent reads all new feedback, pushes a fix to the same PR and replies.
-  Several comments at once are handled together.
-- **Approve and merge** when you are satisfied. Agents never merge. A push after your approval dismisses it, so
-  you always approve the code you merge.
-- To stop work on a PR, close it.
+NOTE: The agent starts the work only when you assign the issue. If you do not assign the issue to an agent, no agent
+works on it.
 
-## When the agent needs a decision
+## Review a pull request from an agent
 
-If an issue is ambiguous, an agent is instructed (by `AGENTS.md` from the process pack) to ask in the issue and
-add the `needs-decision` label instead of guessing. Answer in a comment. If it could not produce a change at all,
-it says so in the issue ("could not produce a change"); open a new issue with more detail.
+1. Read the changes in the pull request.
+2. If you want changes, write a comment or click **Request changes**.
+   The agent reads all new comments, sends a correction to the same pull request and writes a reply.
+3. When the change is correct, approve the pull request.
+4. Merge the pull request.
 
-## Chat with the project before filing work
+NOTE: The agent reads many comments together in one pass. Agents never merge a pull request.
 
-To explore an idea, ask questions about the code or draft an issue together, open an interactive session:
+NOTE: When the agent sends new commits after your approval, the forge cancels the approval. Thus, you always approve
+the code that you merge.
 
-```bash
-scripts/agent-chat.sh start my-project.yaml      # starts a session and attaches your terminal
-```
+### Stop the work on a pull request
 
-- Talk to Claude as in any Claude Code session. It has a fresh clone of the project and can read and run code.
-- **Detach** with `Ctrl-b d`; the session keeps running. **Re-attach** later, from this or another machine with
-  cluster access: `scripts/agent-chat.sh attach` (the latest session) or `attach <session>`.
-- `scripts/agent-chat.sh list` shows running sessions; `stop <session>` ends one.
-- The session **cannot push**. When an idea is ready, ask it to file an issue (it uses the Task format and leaves it
-  unassigned); then assign the issue to an agent as usual.
-- It ends by itself after 30 minutes with nobody attached (`IDLE_SECONDS` changes that).
+1. Close the pull request.
 
-## What to expect
+## Answer a question from an agent
 
-If your instance runs botboard, open it to see every agent's current work at a glance: one card per issue, its phase
-(plan, build, review, done, blocked) and a link to the issue or PR.
+An agent asks a question when an issue is not clear. The agent does not guess. The instructions in `AGENTS.md` (from
+the process pack) tell the agent to do this.
 
-| Situation | What happens |
+1. Find the issue with the `needs-decision` label.
+2. Read the question of the agent in the issue.
+3. Write your answer in a comment on the issue.
+
+NOTE: If the agent cannot make a change, the agent writes "could not produce a change" in the issue. Open a new issue
+with more information.
+
+## Discuss the project in an interactive session
+
+Do this task to examine an idea, to ask questions about the code, or to write an issue together with Claude.
+
+1. Start a session:
+   `scripts/agent-chat.sh start my-project.yaml`
+   Your terminal connects to the session.
+2. Talk to Claude as in a usual Claude Code session.
+   Claude has a new clone of the project and can read and run the code.
+3. To disconnect from the session, push `Ctrl-b`, then `d`.
+   The session continues to run.
+
+NOTE: The session cannot send commits to the forge. It can only read the repository and write issues.
+
+### Connect to a session again
+
+You can connect from this computer or from a different computer that has access to the cluster.
+
+1. Connect to the latest session: `scripts/agent-chat.sh attach`
+2. Or connect to a specified session: `scripts/agent-chat.sh attach <session>`
+
+### List and stop sessions
+
+1. Show the sessions that run: `scripts/agent-chat.sh list`
+2. Stop a session: `scripts/agent-chat.sh stop <session>`
+
+### Make an issue from a session
+
+1. When the idea is ready, tell Claude to write an issue.
+   Claude writes the issue in the **Task** format and does not assign it.
+2. Assign the issue to an agent. Refer to [Give an issue to an agent](#give-an-issue-to-an-agent).
+
+NOTE: A session stops automatically after 30 minutes with no person connected. The `IDLE_SECONDS` setting changes
+this time.
+
+## See the work of all agents
+
+If your instance has botboard, open botboard. Botboard shows one card for each issue. Each card shows:
+
+- The phase of the work: plan, build, review, done or blocked.
+- A link to the issue or to the pull request.
+
+## Know what agents do
+
+| Condition | Result |
 |---|---|
-| Two issues assigned at once | both are worked on in parallel (up to the agent's limit), in separate PRs |
-| Agent is scaled to zero | assigning or commenting starts it, usually within seconds |
-| Feedback while a fix is running | picked up in the next pass, nothing is lost |
-| Webhooks are down | agents still poll, just more slowly |
+| You assign two issues at the same time | The agent works on the two issues at the same time (up to the limit of the agent), in two pull requests. |
+| The agent has zero pods (scale to zero) | An assignment or a comment starts the agent, usually in some seconds. |
+| You write a comment while the agent makes a correction | The agent reads the comment in the next pass. No comment is lost. |
+| Webhooks do not operate | Agents continue to read the forge at intervals, but more slowly. |
 
-## What agents do not do
+Agents do not do these actions:
 
-- merge, push to the default branch, change branch protection or settings;
-- work on issues not assigned to them;
-- commit secrets, build output or caches.
+- Merge a pull request.
+- Send commits to the default branch.
+- Change branch protection or settings.
+- Work on issues that are not assigned to them.
+- Add secrets, build output or caches to a commit.
 
-Project-specific instructions for agents (how to build, test, code style) go in `AGENTS.md` in your repository,
-below the line.
+## Write instructions for the agents of your project
+
+1. Open `AGENTS.md` in your repository.
+2. Below the line, write the instructions for your project: how to build, how to test, the code style.

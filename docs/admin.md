@@ -1,153 +1,347 @@
 # Administration
 
-Local paths below refer to the kind setup (`config.env`, `.secrets/`, `run.sh`). On GKE the same settings are
-Ansible variables in the deployment repo (`ansible/instance.yml`) and secrets are in Secret Manager.
+This guide is for the administrator of an agentdev instance. The local paths refer to the `kind` installation
+(`config.env`, `.secrets/`, `run.sh`). On GKE, the same settings are Ansible variables in the deployment repository
+(`ansible/instance.yml`). On GKE, the secrets are in Secret Manager.
 
 ## Projects
 
-Connect an existing repository with one spec:
+A project is one forge repository with its agents. The bootstrap script connects a repository that exists.
 
-```bash
-cp examples/project.yaml my-project.yaml      # set forge.repo, forge.owner, agents
-scripts/bootstrap-project.sh my-project.yaml
-```
+### Add a project
 
-It creates agent accounts and tokens, sets owner-only-approval branch protection (an existing rule is kept;
-`REPLACE_BRANCH_PROTECTION=1` replaces it), adds labels, proposes the process pack in a PR, deploys the agents and
-waits until each agent posts **ready** on an "agentdev: project connected" issue. Re-running it is safe.
+1. Copy the example specification:
+   `cp examples/project.yaml my-project.yaml`
+2. In `my-project.yaml`, set `forge.repo`, `forge.owner` and `agents`.
+3. Run the bootstrap: `scripts/bootstrap-project.sh my-project.yaml`
+   Each agent writes **ready** on the issue "agentdev: project connected".
 
-v1 limits: Gitea only, issues on the same forge, one repository per agent deployment.
+NOTE: You can run the bootstrap again with no risk.
+
+### Reference: the bootstrap
+
+The bootstrap does these actions:
+
+- It makes the agent accounts and the forge tokens.
+- It sets branch protection: only the owner can approve. It keeps a rule that exists. `REPLACE_BRANCH_PROTECTION=1`
+  replaces the rule.
+- It adds the labels.
+- It proposes the process pack in a pull request.
+- It deploys the agents and waits for the **ready** comment of each agent.
+
+Limits of v1:
+
+- Only Gitea.
+- The issues are on the same forge.
+- One repository for each agent deployment.
 
 ## Agents
 
-| Task | kind | GKE (Ansible) |
+### Add an agent
+
+1. On `kind`: add the agent to `AGENTS` in `config.env`, for example `AGENTS="alice bob carol"`.
+   On GKE: add the agent to the `agents:` list in `instance.yml`.
+2. On `kind`: run `./run.sh 05 06`.
+   On GKE: open a pull request in the deployment repository.
+
+### Remove an agent
+
+CAUTION: Step 3 deletes the work data of the agent.
+
+1. Remove the agent from the agent list (`AGENTS` or `agents:`).
+2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+3. Delete the StatefulSet, the volumes and the forge account of the agent.
+
+### Give an agent its own Claude credential
+
+WARNING: Do not put the credential in git or in an issue.
+
+1. Get a credential for the Claude subscription: `claude setup-token`.
+2. On `kind`: write `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` in `.secrets/<agent>.claude`.
+   On GKE: write the `KEY=VALUE` lines in Secret Manager `agent-<agent>-claude`.
+3. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+
+NOTE: Each agent uses one Claude credential. It uses its own credential if it has one. If not, it uses the shared
+credential (#5). The shared credential is `.env` on `kind` and Secret Manager `claude-shared` on GKE.
+
+### Replace a credential
+
+Use this task to replace a Claude credential or a forge token.
+
+1. Replace the file or the secret.
+2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+
+### Set the concurrency
+
+The concurrency is the number of items that one agent works on at the same time.
+
+1. On `kind`: set `MAX_CONCURRENT` (the default is 2).
+   On GKE: set `max_concurrent`, or `agents[].max_concurrent` for one agent.
+2. Deploy again.
+
+NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
+sets the limit.
+
+### Set the poll interval
+
+Agents read the forge at this interval when webhooks do not operate.
+
+1. On `kind`: set `POLL_SECONDS`. On GKE: set `poll_seconds`.
+2. Deploy again.
+
+### Find the security events of an agent
+
+1. Run this command:
+   `kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT`
+   The output shows one JSON line for each action that a guardrail stopped.
+
+### Reference: the agent pod
+
+| Item | Value |
+|---|---|
+| Containers | `agent` (the loop and Claude, no forge credentials) and `forge` (the sidecar that keeps the forge token, image `agentdev-forge`, #64) |
+| Log of the sidecar | `kubectl -n coding-agents logs agent-<name>-0 -c forge` |
+| The sidecar refuses a `git push` | to a branch outside `agent/<name>/*`; that touches `PROTECTED_PATHS` (default: the workflow directories); of more than `MAX_PUSH_MB` (50) |
+| Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
+| Sidecar image | on `kind`, `./run.sh 06` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
+
+| Setting | `kind` | GKE (Ansible) |
 |---|---|---|
-| Add or remove an agent | `AGENTS="alice bob carol"` in `config.env`, `./run.sh 05 06` | `agents:` list in `instance.yml` |
-| Own Claude credential | `.secrets/<agent>.claude` with `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
+| Agent list | `AGENTS` in `config.env`, then `./run.sh 05 06` | `agents:` in `instance.yml` |
+| Own Claude credential | `.secrets/<agent>.claude` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
-| Parallel items per agent | `MAX_CONCURRENT` (default 2) | `max_concurrent`, per agent `agents[].max_concurrent` |
-| Poll interval (webhook fallback) | `POLL_SECONDS` | `poll_seconds` |
-
-Each agent pod has two containers: `agent` (loop and Claude, no forge credentials) and `forge` (the sidecar that
-holds the forge token, image `agentdev-forge`, #64). Logs: `kubectl -n coding-agents logs agent-<name>-0 -c forge`.
-The sidecar refuses pushes outside `agent/<name>/*`, pushes touching `PROTECTED_PATHS` (default the workflow
-directories) and pushes over `MAX_PUSH_MB` (50). Every refusal, in the sidecar or the loop, is logged as an
-`AGENTDEV_SECURITY_EVENT` JSON line (rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4));
-`kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT` lists them. On kind `./run.sh 06` builds it (`FORGE_IMAGE`); Ansible uses
-`forge_image` (same `image_tag`).
-
-Each agent uses exactly one Claude credential: its own if present, otherwise the shared one (#5).
-An agent's memory limit is (1 + parallel items) GiB, so 3 GiB at the default of 2 (set by the operator).
-
-Credentials for the Claude subscription come from `claude setup-token`. Rotate a credential by replacing the file
-or secret and redeploying (`./run.sh 06`, or a deployment PR).
+| Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
+| Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 
 ## Scale to zero
 
-Off by default. Turn it on with `SCALE_TO_ZERO=true` (and optionally `IDLE_SECONDS`, default 900), or per agent
-with `agents[].scale_to_zero` in Ansible. The router needs a namespaced Role to scale agent StatefulSets; the
-manifest includes it. Check the state:
+With scale to zero, the router stops an agent that has no work, and starts it when an event occurs. Scale to zero is
+off by default.
 
-```bash
-kubectl -n coding-agents get sts -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas
-kubectl -n coding-agents logs deploy/webhook-router | grep scaled
-```
+### Turn on scale to zero
 
-Re-applying the manifests (a redeploy) starts stopped agents once; they stop again after the idle time.
+1. On `kind`: set `SCALE_TO_ZERO=true`.
+   On GKE: set `agents[].scale_to_zero` for each agent.
+2. Optional: set `IDLE_SECONDS` (the default is 900).
+3. Deploy again.
+
+### Examine the state of scale to zero
+
+1. Show the replicas of the agents:
+   `kubectl -n coding-agents get sts -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas`
+2. Show the scale actions of the router:
+   `kubectl -n coding-agents logs deploy/webhook-router | grep scaled`
+
+NOTE: The router must have a namespaced Role to scale the agent StatefulSets. The manifest has this Role.
+
+NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
+idle time.
 
 ## Agent dashboard (botboard)
 
-`./run.sh 07` deploys [botboard](https://github.com/valentinalexeev/botboard) (`ghcr.io/valentinalexeev/botboard`)
-in namespace `botboard`; the next `./run.sh 06` finds it and sets `BOTBOARD_URL` on every agent. View it with
-`kubectl -n botboard port-forward svc/botboard 8090:80` and http://localhost:8090. The board keeps state in memory:
-a restart clears it, and agents re-publish as they work.
+Botboard ([source](https://github.com/valentinalexeev/botboard), `ghcr.io/valentinalexeev/botboard`) shows the work
+of the agents. It shows one card for each issue.
 
-On GKE, agents report to whatever botboard `botboard_url` in `ansible/instance.yml` points at; the playbook does not
-deploy botboard itself yet. botboard has no authentication of its own: inside the cluster any pod can post cards, so
-its intended exposure is your tailnet (run it with `TS_AUTHKEY` and use `http://botboard.<tailnet>`), not a public
-URL. Card links use `FORGE_PUBLIC_URL` (`forge_public_url` in Ansible; locally the Gitea host URL) so they open in a
-browser rather than pointing at the in-cluster forge address.
+### Deploy botboard
+
+1. Run run.sh step 07: `./run.sh 07`
+   The script deploys botboard in the namespace `botboard`.
+2. Run run.sh step 06 again: `./run.sh 06`
+   The script finds botboard and sets `BOTBOARD_URL` on each agent.
+
+### Open botboard
+
+1. Start the port-forward: `kubectl -n botboard port-forward svc/botboard 8090:80`
+2. Open http://localhost:8090 in a browser.
+
+NOTE: Botboard keeps its state in memory. When botboard starts again, its state is empty. The agents send their cards again while they work.
+
+### Connect the agents to botboard on GKE
+
+WARNING: Do not make botboard available on a public URL. Botboard has no authentication. Any pod in the cluster can
+send cards.
+
+1. Run botboard with `TS_AUTHKEY` in your tailnet.
+2. In `ansible/instance.yml`, set `botboard_url` to `http://botboard.<tailnet>`.
+3. Set `forge_public_url` to the public URL of the forge.
+
+NOTE: The playbook does not deploy botboard yet. The card links use `FORGE_PUBLIC_URL` (`forge_public_url` in Ansible;
+on `kind`, the URL of the Gitea host). Thus, the links open in a browser and do not go to the forge address in the
+cluster.
 
 ## MCP tools
 
-`./run.sh 08` deploys the platform namespace `agentdev-platform`: Postgres (databases `contextforge` and
-`agentdev`) and ContextForge (`CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE`, `CF_ADMIN_EMAIL` in `config.env`). Generated
-passwords and keys stay in `.secrets/platform/`, never in git. Then list servers in the project spec:
+MCP tools give the agents of a project more tools through ContextForge. On GKE, the playbook does not deploy
+ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
 
-```yaml
-mcp:
-  servers:
-    - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
-```
+### Deploy the platform namespace
 
-`scripts/bootstrap-project.sh` runs `scripts/mcp-sync.sh <spec>`, which you can also run alone after changing
-`mcp:`. It is idempotent: it registers each server as gateway `<project>-<name>`, builds virtual server
-`project-<project>` from their tools, mints one token per agent scoped to that server, and stores it in Secret
-`agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`). Restart the agent (`kubectl delete pod agent-<name>-0`) to pick up
-new tools. Tokens are valid for a year; any sync in the last 30 days mints a new one and revokes the old. An agent
-removed from `agents:` (or a spec without `mcp:`) loses its Secret and its token is revoked on the next sync.
-The worker passes Claude `--strict-mcp-config`, so only the gateway's tools are available.
-NetworkPolicies close Postgres to everything but ContextForge, and ContextForge to everything but the agents
-namespace. GKE enforces them; local kind (kindnet) does not.
-The ContextForge admin UI: `kubectl -n agentdev-platform port-forward svc/contextforge 4444:4444`.
+1. Optional: in `config.env`, set `CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE` and `CF_ADMIN_EMAIL`.
+2. Run run.sh step 08: `./run.sh 08`
+   The script deploys the namespace `agentdev-platform` with Postgres and ContextForge.
 
-If a spec has `mcp:` and `./run.sh 08` was never run, bootstrap stops before deploying agents and says so.
+NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
+`.secrets/platform/`, never in git.
 
-On GKE the Ansible playbook does not deploy ContextForge yet (#51); projects there have no MCP tools until it does.
+### Add MCP servers to a project
+
+1. In the project specification, list the servers:
+
+   ```yaml
+   mcp:
+     servers:
+       - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
+   ```
+
+2. Run the sync: `scripts/mcp-sync.sh <spec>`
+   The bootstrap also runs this script.
+3. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
+
+NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
+agents. The bootstrap tells you the cause.
+
+### Open the ContextForge admin UI
+
+1. Start the port-forward: `kubectl -n agentdev-platform port-forward svc/contextforge 4444:4444`
+
+### Reference: the MCP sync
+
+You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
+
+- It registers each server as the gateway `<project>-<name>`.
+- It builds the virtual server `project-<project>` from the tools of the gateways.
+- It makes one token for each agent, for that server only.
+- It keeps the token in the Secret `agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`).
+
+Tokens are valid for one year. A sync in the last 30 days of a token makes a new token and revokes the old token.
+When you remove an agent from `agents:` (or remove `mcp:`), the next sync deletes its Secret and revokes its token.
+
+The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
+Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
+applies the NetworkPolicies. Local `kind` (kindnet) does not.
 
 ## Identity (authentik)
 
-`./run.sh 09` (after `08`) installs [authentik](https://goauthentik.io) with its Helm chart (`AUTHENTIK_VERSION` in
-`config.env`, values in `manifests/authentik-values.yaml`) in `agentdev-platform`, using database `authentik` on
-the platform Postgres and no Redis. Its configuration is Secret `authentik`, generated from `.secrets/platform/`.
-The first admin is **you**: user `akadmin` (email `AUTHENTIK_ADMIN_EMAIL`), password in
-`.secrets/platform/authentik-admin`. Open it with
-`kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443` and https://localhost:9443/ (self-signed;
-session cookies need https). Change the password and add MFA after the first login. The agentdev API and UI
-(#46, #48) will be OIDC applications in it; they add a NetworkPolicy rule to reach it (the platform namespace is
-deny-by-default). The bootstrap password stays in Secret `authentik` but only applies on first start, so changing
-it in the UI is final. On GKE the playbook does not deploy it yet (#51).
+authentik is the identity provider of the instance. It is in the namespace `agentdev-platform` and uses the
+database `authentik` on the platform Postgres, with no Redis. On GKE, the playbook does not deploy it yet (#51).
+
+### Deploy authentik
+
+Do this task after run.sh step 08.
+
+1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
+2. Run run.sh step 09: `./run.sh 09`
+   The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+
+### Log in to authentik for the first time
+
+WARNING: Change the password and add MFA immediately after the first login. The first password is in a local file.
+
+1. Start the port-forward:
+   `kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443`
+2. Open https://localhost:9443/ in a browser.
+   The certificate is self-signed. The session cookies must have https.
+3. Log in with the user name `akadmin`. The password is in `.secrets/platform/authentik-admin`.
+4. Change the password.
+5. Add MFA.
+
+NOTE: The first password is also in the Secret `authentik`, but authentik uses it only at the first start. Thus, the
+password that you set in the UI is final.
+
+### Reference: authentik
+
+- The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
+- The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
+- The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
+- The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
+  to authentik.
 
 ## Management API
 
-`./run.sh 10` (after `09`) builds and deploys the agentdev API (`images/api`, Go) in `agentdev-platform` (#46).
-Every `/api` call needs an authentik access token of the OIDC application `agentdev` (created by a blueprint in
-`09`, public client, authorization code + PKCE); without one it answers 401. Phase 1 is read-only:
+The agentdev API (`images/api`, Go, #46) shows the agents of the instance. Phase 1 is read-only. On GKE, refer to #51.
 
-| Endpoint | Returns |
+### Deploy the API
+
+Do this task after run.sh step 09.
+
+1. Set `API_OIDC_ISSUER` in `config.env` to the URL that you use to log in to authentik.
+   On `kind`, with the 9443 port-forward, this URL is `https://localhost:9443/application/o/agentdev/`.
+2. Run run.sh step 10: `./run.sh 10`
+   The script builds the API and deploys it in `agentdev-platform`.
+
+NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
+
+### Connect to the API
+
+1. Start the port-forward: `kubectl -n agentdev-platform port-forward svc/agentdev-api 8088:8080`
+2. Send each `/api` request with an authentik access token of the OIDC application `agentdev`.
+   Without a token, the API gives 401.
+
+### Reference: the API
+
+- A blueprint in run.sh step 09 makes the application `agentdev`. It is a public client with the authorization code
+  and PKCE.
+- The API gets the keys from authentik in the cluster.
+- The API reads the agents with a read-only Role on the agents namespace.
+
+| Endpoint | Gives |
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
 | `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). Every signed-in user sees every event for now; restriction to projects with write access is #57 |
 
-authentik writes the URL you logged in through into the token, so `API_OIDC_ISSUER` (`config.env`) must be that
-URL: locally `https://localhost:9443/application/o/agentdev/` with the 9443 port-forward. The API fetches keys
-from authentik inside the cluster. It reads agents with a read-only Role on the agents namespace. Reach it with
-`kubectl -n agentdev-platform port-forward svc/agentdev-api 8088:8080`. On GKE: #51.
-
 ## Agents as resources (operator)
 
-`./run.sh 12` installs the `Agent` CRD (`agentdev.dev/v1alpha1`) and the operator (#47). An agent is then one
-object in the agents namespace; the operator creates its Service and StatefulSet (the same ones `06` renders),
-keeps them in line with the spec, and reports `status.phase`:
+With the operator, an agent is one Agent object in the agents namespace. The operator makes the Service and the
+StatefulSet of the agent. These are the same objects that run.sh step 06 makes. The operator keeps them the same as
+the spec, and shows the phase in `status.phase`.
 
-```bash
-kubectl -n coding-agents apply -f - <<'EOF'
-apiVersion: agentdev.dev/v1alpha1
-kind: Agent
-metadata: {name: carol}
-spec: {repo: owner/playground, claudeSecret: claude-shared}
-EOF
-kubectl -n coding-agents get agents                       # NAME REPO PHASE
-kubectl -n coding-agents patch agent carol --type merge -p '{"spec":{"paused":true}}'   # pause, state kept
-kubectl -n coding-agents delete agent carol               # removes the pod; volumes kept
-```
+### Install the operator
 
-The forge token Secret `agent-<name>` must exist first. Blocked agents (`scripts/agent-block.sh`) stay stopped;
-with `scaleToZero` the router, not the operator, starts and stops the pod. Field reference:
-[`images/operator/README.md`](../images/operator/README.md). `06` creates Agent objects (#57), and the API reads
-them (`managed: true`); letting the UI add, pause and remove agents is the next step (#57, #4);
-keeping Agents in the deployment repo with Argo CD or Flux is #58.
+1. Run run.sh step 12: `./run.sh 12`
+   The script installs the `Agent` CRD (`agentdev.dev/v1alpha1`) and the operator (#47).
+
+### Add an agent with an Agent object
+
+Before you do this task, make sure that the Secret `agent-<name>` with the forge token exists.
+
+1. Apply the Agent object:
+
+   ```bash
+   kubectl -n coding-agents apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Agent
+   metadata: {name: carol}
+   spec: {repo: owner/playground, claudeSecret: claude-shared}
+   EOF
+   ```
+
+2. Show the agents: `kubectl -n coding-agents get agents`
+   The output shows the columns NAME, REPO and PHASE.
+
+### Pause and resume an agent
+
+1. To pause the agent, run:
+   `kubectl -n coding-agents patch agent carol --type merge -p '{"spec":{"paused":true}}'`
+   The pod stops. The operator keeps the state.
+2. To resume the agent, run the same command with `"paused":false`.
+   The operator starts the pod again. With scale to zero, the router stops the agent again when it has no work.
+
+### Delete an Agent object
+
+CAUTION: This procedure removes the pod of the agent. The volumes stay.
+
+1. Run `kubectl -n coding-agents delete agent carol`.
+
+### Reference: the operator
+
+- Blocked agents (`scripts/agent-block.sh`) stay stopped.
+- With `scaleToZero`, the router (not the operator) starts and stops the pod.
+- Field reference: [`images/operator/README.md`](../images/operator/README.md).
+- run.sh step 06 makes Agent objects (#57). The API reads them (`managed: true`).
+- The next work: the UI adds, pauses and removes agents (#57, #4).
+- Agents in the deployment repository with Argo CD or Flux: #58.
+
 ## Web UI
 
 The web UI shows the agents of the instance and their status. You sign in to the web UI through authentik. The web
@@ -299,85 +493,158 @@ for the rows in Postgres. The API cannot change the database retention.
 
 ## GitHub App (registration)
 
-On GitHub the agents act as one GitHub App (#2). Its webhook and redirect URLs belong to the deployment, so the
-manifest is a template (`manifests/github-app-manifest.json.tmpl`) filled from the instance file:
+On GitHub, the agents use one GitHub App (#2). The webhook URL and the redirect URL are part of the deployment. Thus,
+the manifest is a template (`manifests/github-app-manifest.json.tmpl`). The script fills it from the instance file.
 
-```yaml
-# instance.yml (deployment repo)
-github_app:
-  name: my-agentdev                         # unique on GitHub
-  owner: my-org                             # omit to own it with your personal account
-  public_url: https://agentdev.example.com  # HTTPS address of this deployment's webhook router
-```
+### Register the GitHub App
 
-```bash
-scripts/github-app.sh render instance.yml        # review the manifest (permissions, events, URLs)
-scripts/github-app.sh form instance.yml          # writes .secrets/github-app/register.html; open it, confirm on github.com
-scripts/github-app.sh convert instance.yml 'URL'   # within 1 h, the full redirect URL: App ID, private key, webhook secret
-```
+WARNING: Do not put the private key in git or in an issue. The private key opens each repository that has the App.
+Put it in Secret Manager (GKE) or in a local Secret.
 
-The webhook URL is `<public_url>/` (the router verifies `X-Hub-Signature-256`). After you confirm, GitHub redirects
-to `<public_url>/github-app/registered?code=...&state=...` (a 404 there is fine: nothing listens yet); pass that whole
-URL to `convert`, which checks `state` against the form it generated and stores the results in `.secrets/github-app/`
-(mode 600). Then install the App on the
-repositories the agents work. Permissions: contents, issues and pull requests write; metadata, checks and statuses
-read. It deliberately has no `workflows` permission: agents cannot change `.github/workflows/`. The private key opens every repository the App is installed on: it goes to Secret Manager (GKE) or a local
-Secret, never into git or an issue. The worker using the App is the rest of #2.
+1. In `instance.yml` of the deployment repository, set the values of the App:
 
-## Limits and blocking
+   ```yaml
+   # instance.yml (deployment repo)
+   github_app:
+     name: my-agentdev                         # unique on GitHub
+     owner: my-org                             # omit to own it with your personal account
+     public_url: https://agentdev.example.com  # HTTPS address of this deployment's webhook router
+   ```
 
-- **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents
-  namespace when you run bootstrap. Kubernetes refuses pods beyond it, whatever starts them. All projects share that
-  namespace until #17, so the quota caps them together. With a `cpu` or `memory` limit set, Kubernetes rejects any pod
-  in the namespace that does not declare CPU requests or memory limits. agentdev's agents, router and interactive
-  sessions all declare them; anything else you run there must too.
-- **Block an agent:** `scripts/agent-block.sh block <agent> [reason]` stops it and keeps it stopped: events don't
-  start it (scale to zero), and redeploys (`./run.sh 06` and the Ansible playbook) keep it at 0. `unblock` starts it
-  again and it picks up waiting work.
-  `list` shows blocked agents. The UI (#12) will set the same `agentdev/blocked` annotation.
+2. Show the manifest: `scripts/github-app.sh render instance.yml`
+3. Examine the permissions, the events and the URLs in the manifest.
+4. Make the form: `scripts/github-app.sh form instance.yml`
+   The script writes `.secrets/github-app/register.html`.
+5. Open `.secrets/github-app/register.html` in a browser.
+6. Confirm the App on github.com.
+   GitHub sends the browser to `<public_url>/github-app/registered?code=...&state=...`.
+   A 404 on this page is correct, because no service listens at this time.
+7. In 1 h or less, copy the full URL from the browser.
+8. Run:
+   `scripts/github-app.sh convert instance.yml 'URL'`
+   The script keeps the App ID, the private key and the webhook secret in `.secrets/github-app/` (mode 600).
+9. Install the App on the repositories of the agents.
+
+### Reference: the GitHub App
+
+- The webhook URL is `<public_url>/`. The router examines `X-Hub-Signature-256`.
+- `convert` compares `state` with the form that it generated.
+- Permissions: write for contents, issues and pull requests; read for metadata, checks and statuses.
+- The App has no `workflows` permission. Thus, agents cannot change `.github/workflows/`.
+- The worker that uses the App is work that #2 must still do.
+
+## Limits and blocked agents
+
+### Set a quota for the agents
+
+CAUTION: When you set a `cpu` or `memory` limit, Kubernetes refuses each pod in the namespace that does not declare
+CPU requests or memory limits.
+
+1. In the project specification, set `limits:` (`pods`, `cpu`, `memory`).
+2. Run the bootstrap.
+   The bootstrap makes a `ResourceQuota` on the agents namespace (#27).
+
+NOTE: Kubernetes refuses pods over the quota, from all sources. Until #17, all projects use the same namespace. Thus,
+the quota is a limit for all projects together.
+
+NOTE: The agents, the router and the interactive sessions of agentdev declare CPU requests and memory limits. A
+different pod in this namespace must also declare them.
+
+### Block an agent
+
+A blocked agent stays stopped. Events do not start it (scale to zero). Deployments (`./run.sh 06` and the Ansible
+playbook) keep it at 0.
+
+1. Run `scripts/agent-block.sh block <agent> [reason]`.
+   The agent stops.
+
+### Unblock an agent
+
+1. Run `scripts/agent-block.sh unblock <agent>`.
+   The agent starts and continues the work that waits.
+
+### List the blocked agents
+
+1. Run `scripts/agent-block.sh list`.
+
+NOTE: The script sets the annotation `agentdev/blocked`. The UI (#12) will set the same annotation.
 
 ## Interactive sessions
 
-`scripts/agent-chat.sh start <project.yaml>` creates, on first use, the project's chat account `<project>-chat`
-(read collaborator, token scoped to `read:repository, write:issue`; kept in `.secrets/<project>-chat.token` and the
-Secret `chat-<project>`), then starts a Job from `manifests/chat.yaml.tmpl`.
+`scripts/agent-chat.sh start <project.yaml>` starts a Job from `manifests/chat.yaml.tmpl`. For the user procedures,
+refer to the [user guide](user-guide.md).
+
+At the first start, the script makes the chat account `<project>-chat` of the project:
+
+- The account is a read collaborator.
+- Its token has the scope `read:repository, write:issue`.
+- The token is in `.secrets/<project>-chat.token` and in the Secret `chat-<project>`.
+
+### Show the sessions that run
+
+1. Run `kubectl -n coding-agents get jobs -l app=agent-chat`.
+
+NOTE: Kubernetes removes a finished session 5 minutes after it ends.
+
+### Reference: session settings
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `IDLE_SECONDS` | 1800 | end the session after this long with nobody attached |
-| hard cap | 8 h | `activeDeadlineSeconds` in the template, even while attached |
-| `CLAUDE_SECRET` | `claude-shared` | Claude credential the session uses (it is visible inside the session pod) |
-| `REMOTE_CONTROL` | false | also expose the session to the Claude app (#26). Needs a full claude.ai login: run `/login` inside the session. API keys and `claude setup-token` tokens are refused (inference-only) |
-| `IMAGE_PULL_POLICY` | Never | `IfNotPresent` outside kind |
+| `IDLE_SECONDS` | 1800 | The session stops after this time with no person connected. |
+| maximum time | 8 h | `activeDeadlineSeconds` in the template. This applies also while a person is connected. |
+| `CLAUDE_SECRET` | `claude-shared` | The Claude credential of the session. The credential is visible in the session pod. |
+| `REMOTE_CONTROL` | false | Also make the session available to the Claude app (#26). This must have a full claude.ai login: run `/login` in the session. API keys and `claude setup-token` tokens do not operate (inference-only). |
+| `IMAGE_PULL_POLICY` | Never | Use `IfNotPresent` on a cluster that is not `kind`. |
 
-Finished sessions are removed 5 minutes after they end. Running ones: `kubectl -n coding-agents get jobs -l app=agent-chat`.
-If botboard runs (`./run.sh 07`, #26), each session shows as a card (agent `chat`) while it is open and turns `done` when
-it ends. `CHAT_URL` sets the card's link; it will point at the UI's chat page once #12 exists.
+If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
+when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, it will go to the chat page of the UI.
 
 ## Webhooks
 
-One webhook per repository points at the router (`06-agents.sh` or bootstrap registers it). The router verifies
-the forge signature with `FORGE_SECRETS` and accepts agent registrations with `REGISTER_TOKEN`. Its state:
+Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
 
-```bash
-kubectl -n coding-agents exec deploy/webhook-router -- node -e \
-  "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"
-```
+### Show the state of the router
 
-For github.com the router needs a public HTTPS URL (Ingress) and a GitHub App, planned in #2.
+1. Run this command:
+
+   ```bash
+   kubectl -n coding-agents exec deploy/webhook-router -- node -e \
+     "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"
+   ```
+
+### Reference: the router
+
+- The router examines the forge signature with `FORGE_SECRETS`.
+- The router accepts agent registrations with `REGISTER_TOKEN`.
+- For github.com, the router must have a public HTTPS URL (Ingress) and a GitHub App. This is planned in #2.
 
 ## Upgrades
 
-agentdev follows strict SemVer. In the deployment repo, change the module `ref=vX.Y.Z` and `image_tag` together in
-one PR, after reading `CHANGELOG.md`. While the version is `0.x`, a MINOR bump may contain breaking changes.
+agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change can contain changes that are not compatible.
 
-## Removing
+### Upgrade an instance
 
-- An agent: remove it from the agent list and redeploy, then delete its StatefulSet, volumes and forge account.
-- The local setup: `./99-teardown.sh`.
-- A GKE instance: `terraform destroy` in the deployment repo.
+1. Read `CHANGELOG.md`.
+2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
+3. Open one pull request with the two changes.
+
+## Remove agentdev
+
+### Remove the local installation
+
+CAUTION: This procedure deletes the cluster and all data in it.
+
+1. Run `./99-teardown.sh`.
+
+### Remove a GKE instance
+
+CAUTION: This procedure deletes the instance and all data in it.
+
+1. In the deployment repository, run `terraform destroy`.
+
+NOTE: To remove an agent, refer to *Remove an agent*.
 
 ## Documentation
 
-The docs are in `docs/` and are reviewed in PRs. The GitHub wiki is a published copy, synced from `docs/` on
-`main` by a workflow, so the wiki never drifts from the reviewed text.
+The documentation is in `docs/`. Persons review it in pull requests. The GitHub wiki is a copy of `docs/` on `main`.
+A workflow updates the wiki. Thus, the wiki always has the reviewed text.
