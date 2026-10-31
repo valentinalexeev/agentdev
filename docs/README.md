@@ -10,6 +10,7 @@ issues assigned to it, opens pull requests and reacts to review feedback. People
 | [Install](install.md) | admins | local evaluation on kind, production on GCP/GKE |
 | [Administration](admin.md) | admins | projects, agents, credentials, concurrency, scale to zero, upgrades, removal |
 | [Troubleshooting](troubleshooting.md) | admins | symptoms, where to look, fixes |
+| [Writing the manuals](writing.md) | contributors | ASD-STE100 rules and the project word list for the manuals |
 | [Decision records](adr/) | maintainers | architecture decisions (ADR) |
 
 These pages live in the repository (`docs/`) so they are reviewed like code and versioned with each release.

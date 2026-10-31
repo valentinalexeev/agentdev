@@ -131,6 +131,12 @@ what happened, when and how found, impact, immediate actions. Never paste secret
 - **Pinned versions** in `config.env` / Dockerfiles; bump them in their own commit.
 - Shell: `bash`, `set -euo pipefail` via `lib.sh`, passes `shellcheck -S warning` (CI enforces it).
 - No em dashes in prose written by agents.
+- **Manuals use ASD-STE100 Simplified Technical English** (`user-guide.md`, `install.md`, `admin.md`,
+  `troubleshooting.md`): task procedures with numbered one-instruction steps, max. 20 words per procedure sentence
+  and 25 per description sentence, WARNING/CAUTION before the step, approved words plus the project's technical
+  names and verbs. Rules and word list: [`docs/writing.md`](docs/writing.md). Add a new technical word to that list
+  in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
+  reviewer checks STE on every PR that changes a manual.
 
 ## Bootstrapping on GCP
 
