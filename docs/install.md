@@ -26,6 +26,7 @@ router. File an issue, assign it to `alice`, and review the PR she opens.
 | `06` | builds worker and router images, deploys the router and agents, registers the webhook |
 | `07` | optional: [botboard](https://github.com/valentinalexeev/botboard), a live dashboard agents report to; run `06` again afterwards |
 | `08` | optional: platform namespace with Postgres and ContextForge, for [MCP tools](admin.md#mcp-tools) per project |
+| `09` | optional: [authentik](https://goauthentik.io) identity provider on the platform Postgres (after `08`), for the management UI (#12) |
 
 To connect **another repository** in the local Gitea, see [Administration → Projects](admin.md#projects).
 Remove everything with `./99-teardown.sh`.

@@ -88,6 +88,17 @@ If a spec has `mcp:` and `./run.sh 08` was never run, bootstrap stops before dep
 
 On GKE the Ansible playbook does not deploy ContextForge yet (#51); projects there have no MCP tools until it does.
 
+## Identity (authentik)
+
+`./run.sh 09` (after `08`) installs [authentik](https://goauthentik.io) with its Helm chart (`AUTHENTIK_VERSION` in
+`config.env`, values in `manifests/authentik-values.yaml`) in `agentdev-platform`, using database `authentik` on
+the platform Postgres and no Redis. Its configuration is Secret `authentik`, generated from `.secrets/platform/`.
+The first admin is **you**: user `akadmin` (email `AUTHENTIK_ADMIN_EMAIL`), password in
+`.secrets/platform/authentik-admin`. Open it with
+`kubectl -n agentdev-platform port-forward svc/authentik-server 9443:443` and https://localhost:9443/ (self-signed;
+session cookies need https). Change the password and add MFA after the first login. The agentdev API and UI
+(#46, #48) will be OIDC applications in it. On GKE the playbook does not deploy it yet (#51).
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents

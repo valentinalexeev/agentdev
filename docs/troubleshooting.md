@@ -23,6 +23,7 @@ kubectl -n coding-agents logs deploy/webhook-router
 | A chat session ended on its own | nobody attached for `IDLE_SECONDS`, or the 8 h cap | start a new one; the clone is fresh each time |
 | Readiness shows `mcp: ContextForge did not list this project's tools` | ContextForge down, or a server in `mcp:` not reachable | `kubectl -n agentdev-platform get pods`; rerun `scripts/mcp-sync.sh <spec>` and read its gateway errors |
 | Agent lacks a newly added tool | the pod started before the sync | `kubectl -n coding-agents delete pod agent-<name>-0` |
+| authentik login loops back to the login page | plain http port-forward: session cookies are https only | port-forward `443` and use https://localhost:9443/ |
 | A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).

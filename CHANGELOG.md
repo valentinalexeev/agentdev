@@ -36,6 +36,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 - MCP tools per project through ContextForge (#14): `./run.sh 08` deploys `agentdev-platform` (Postgres,
   ContextForge); `mcp:` in the project spec plus `scripts/mcp-sync.sh` give each agent a token scoped to its
   project's virtual server only; the readiness report counts the tools.
+- authentik as the instance identity provider (#45): `./run.sh 09` installs the Helm chart on the platform
+  Postgres (database `authentik`, no Redis); the owner is the first admin.
 
 ### Changed
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
