@@ -11,6 +11,7 @@ platform_ns: agentdev-platform
 # Published images (#28). Deployments pin image_tag to a release (vX.Y.Z, strict SemVer).
 image_registry: ghcr.io/valentinalexeev
 worker_image: "{{ image_registry }}/agentdev-worker:{{ image_tag }}"
+forge_image: "{{ image_registry }}/agentdev-forge:{{ image_tag }}"   # agent pod sidecar, holds the forge token (#64)
 router_image: "{{ image_registry }}/agentdev-router:{{ image_tag }}"
 operator_image: "{{ image_registry }}/agentdev-operator:{{ image_tag }}"
 

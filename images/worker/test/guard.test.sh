@@ -2,6 +2,7 @@
 # Unit test for the Claude guardrails (#59, CodeQL): run_claude with a fake claude that records its arguments and
 # environment. Checks: no forge/router tokens in Claude's environment, no permission bypass, an allow-list and a
 # deny-list of tools, the security system prompt, untrusted text fenced, and no token in the git remote URL.
+# Since #64 the loop itself holds no forge token: every forge call goes to the forge sidecar (FORGE_API).
 #   bash images/worker/test/guard.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -17,7 +18,7 @@ printf '%s\n' "$@" > "${CAPTURE}/args"; env > "${CAPTURE}/env"; echo '{"result":
 EOF
 chmod +x "${tmp}/bin/claude"; export PATH="${tmp}/bin:${PATH}" CAPTURE="${tmp}"
 # shellcheck disable=SC1090
-source <(sed -n '/^# The forge token never goes into a URL/,/^git_auth()/p' "${here}/../agent-loop.sh")
+source <(sed -n '/^# The forge token is not in this container/,/^sidecar()/p' "${here}/../agent-loop.sh")
 # shellcheck disable=SC1090
 source <(sed -n '/^# Guardrails for the Claude run/,/^commit_and_push()/p' "${here}/../agent-loop.sh" | sed '$d')
 
@@ -37,15 +38,26 @@ check "untrusted text is fenced and cannot close the fence early" \
   "grep -q '<untrusted>' '${tmp}/args' && [[ \$(grep -c '</untrusted>\$' '${tmp}/args') == 1 ]] && grep -q '</untrusted_>' '${tmp}/args'"
 check "clone URL carries no credentials" "[[ \$(clone_url) == http://gitea.forge:3000/owner/repo.git ]]"
 check "the token is not written anywhere under the state dir" "! grep -rq secret-forge '${STATE}'"
-# the helper returns the token to git (loop process) from the environment, and nothing without it
-check "credential helper answers git from the loop's env" \
-  "[[ \$(printf 'protocol=http\nhost=gitea.forge:3000\n\n' | git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill | grep ^password=) == password=secret-forge ]]"
-check "credential helper gives nothing to another host" \
-  "! (printf 'protocol=http\nhost=evil.example\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
-check "credential helper gives nothing over another scheme" \
-  "! (printf 'protocol=https\nhost=gitea.forge:3000\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
-check "without FORGE_TOKEN (Claude's env) the helper yields no token" \
-  "! (printf 'protocol=http\nhost=gitea.forge:3000\n\n' | env -u FORGE_TOKEN GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
+# the loop runs with no forge credentials at all (#64): nothing in its code reads the token, every forge call goes
+# to the sidecar on localhost, and its git never authenticates
+loop="${here}/../agent-loop.sh"
+check "the loop does not require or use FORGE_TOKEN" "! grep -vE '^\s*#' '${loop}' | grep -v 'env -u FORGE_TOKEN' | grep -qE 'FORGE_TOKEN|WAKE_TOKEN|REGISTER_TOKEN'"
+check "the loop has no git credential helper and never pushes or fetches from the forge itself" \
+  "! grep -qE 'credential\.helper=\\\$|GIT_HELPER|git_auth|push -q' '${loop}' && ! grep -vE '^\s*#' '${loop}' | grep -q 'Authorization: token'"
+check "REST calls and pushes go to the sidecar on localhost" \
+  "grep -q 'FORGE_API:-http://127.0.0.1:7070' '${loop}' && grep -qF '\${FORGE_API}/api/v1' '${loop}' && grep -qF '\${FORGE_API}/push?branch=' '${loop}'"
+# api() really calls the sidecar, without an Authorization header
+export FORGE_API="http://127.0.0.1:1"
+cat > "${tmp}/bin/curl" <<'EOF2'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${CAPTURE}/curl"; echo '{}'
+EOF2
+chmod +x "${tmp}/bin/curl"
+# shellcheck disable=SC1090
+source <(sed -n '/^api() {/,/^}/p' "${loop}")
+api GET /repos/owner/repo >/dev/null
+check "api() calls the sidecar and sends no token" "grep -qx 'http://127.0.0.1:1/api/v1/repos/owner/repo' '${tmp}/curl' && ! grep -qi 'authorization' '${tmp}/curl'"
+rm -f "${tmp}/bin/curl"
 # Claude can write into .git: the loop's own git must run no hooks and no config-defined programs
 WORK="${tmp}/clone"; git init -q "${WORK}" && git -C "${WORK}" commit -q --allow-empty -m init
 printf '#!/bin/sh\ntouch %s/pwned-hook\n' "${tmp}" > "${WORK}/.git/hooks/pre-commit"; chmod +x "${WORK}/.git/hooks/pre-commit"

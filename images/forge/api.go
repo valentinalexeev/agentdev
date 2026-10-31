@@ -1,0 +1,198 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+)
+
+type server struct {
+	c      *Config
+	git    *gitRepo
+	client *http.Client
+	rules  []rule
+}
+
+// rule is one allowed Gitea REST call. The path pattern's first group is the repo (owner/name), checked against REPO.
+type rule struct {
+	method string
+	path   *regexp.Regexp
+	check  func(s *server, body []byte) error // optional body policy
+}
+
+const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
+
+func newServer(c *Config) *server {
+	s := &server{c: c, git: &gitRepo{c: c},
+		client: &http.Client{Timeout: 60 * time.Second,
+			// never follow a redirect: it could carry the Authorization header to another host
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	r := func(m, p string, chk func(*server, []byte) error) rule {
+		return rule{m, regexp.MustCompile("^" + p + "$"), chk}
+	}
+	// exactly the calls agent-loop.sh makes (issues, PRs, comments, reviews, review requests)
+	s.rules = []rule{
+		r("GET", `/user`, nil),
+		r("GET", repoRe, nil),
+		r("GET", repoRe+`/issues`, nil),
+		r("GET", repoRe+`/issues/[0-9]+`, nil),
+		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("POST", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("GET", repoRe+`/pulls`, nil),
+		r("POST", repoRe+`/pulls`, checkOwnHead),
+		r("GET", repoRe+`/pulls/[0-9]+`, nil),
+		r("GET", repoRe+`/pulls/[0-9]+/reviews`, nil),
+		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
+		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
+	}
+	return s
+}
+
+func (s *server) logf(format string, a ...any) {
+	log.Printf("%s [%s] forge: %s", time.Now().UTC().Format("15:04:05"), s.c.ForgeUser, fmt.Sprintf(format, a...))
+}
+
+// checkOwnHead: a PR may only be opened from the agent's own branch.
+func checkOwnHead(s *server, body []byte) error {
+	var pr struct {
+		Head string `json:"head"`
+	}
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return refuse("bad PR body")
+	}
+	return checkBranch(s.c.ForgeUser, pr.Head)
+}
+
+func (s *server) repoAllowed(repo string) bool {
+	for _, r := range s.c.Repos {
+		if strings.EqualFold(r, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	mux.HandleFunc("/api/v1/", s.proxy)
+	mux.HandleFunc("POST /sync", s.sync)
+	mux.HandleFunc("POST /push", s.push)
+	mux.HandleFunc("POST /idle", s.idle)
+	return localOnly(mux)
+}
+
+// localOnly refuses anything not from loopback, even if FORGE_API_LISTEN were misconfigured to a pod address.
+func localOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.RemoteAddr, "127.") && !strings.HasPrefix(r.RemoteAddr, "[::1]") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func fail(w http.ResponseWriter, err error) {
+	code := http.StatusBadGateway
+	var pe *policyError
+	if errors.As(err, &pe) {
+		code = http.StatusForbidden
+	}
+	http.Error(w, err.Error(), code)
+}
+
+func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
+	p := strings.TrimPrefix(r.URL.Path, "/api/v1")
+	var match *rule
+	for i := range s.rules {
+		ru := &s.rules[i]
+		if ru.method != r.Method {
+			continue
+		}
+		if m := ru.path.FindStringSubmatch(p); m != nil && (len(m) < 2 || s.repoAllowed(m[1])) {
+			match = ru
+			break
+		}
+	}
+	if match == nil {
+		s.logf("refused %s %s", r.Method, p)
+		http.Error(w, fmt.Sprintf("forge sidecar: %s %s is not an allowed call", r.Method, p), http.StatusForbidden)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
+	if err != nil || len(body) > 1<<20 {
+		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if match.check != nil {
+		if err := match.check(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			fail(w, err)
+			return
+		}
+	}
+	u := s.c.ForgeURL + "/api/v1" + p
+	if r.URL.RawQuery != "" {
+		u += "?" + r.URL.RawQuery
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, u, bytes.NewReader(body))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	req.Header.Set("Authorization", "token "+s.c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		fail(w, errors.New("forge unreachable"))
+		return
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// POST /sync: fetch the forge, answer with a bundle of all branches.
+func (s *server) sync(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	var buf bytes.Buffer
+	if err := s.git.Sync(ctx, &buf); err != nil {
+		s.logf("sync failed: %v", err)
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(buf.Bytes())
+}
+
+// POST /push?branch=agent/<user>/x&base=main, body = git bundle with HEAD = the new tip.
+func (s *server) push(w http.ResponseWriter, r *http.Request) {
+	branch, base := r.URL.Query().Get("branch"), r.URL.Query().Get("base")
+	if base != "" && !refPart.MatchString(strings.ReplaceAll(base, "/", "_")) {
+		http.Error(w, "bad base", http.StatusBadRequest)
+		return
+	}
+	tip, err := s.git.Push(r.Context(), branch, base, r.Body)
+	if err != nil {
+		s.logf("push to %s: %v", branch, err)
+		fail(w, err)
+		return
+	}
+	s.logf("pushed %s to %s", tip[:12], branch)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": tip})
+}

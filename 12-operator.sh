@@ -27,7 +27,7 @@ if [[ -z "${BOTBOARD_URL}" ]] && k -n "${BOTBOARD_NS}" get svc botboard >/dev/nu
   BOTBOARD_URL="http://botboard.${BOTBOARD_NS}.svc.cluster.local"
 fi
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
-PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" \
+PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
   FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" BOTBOARD_URL="${BOTBOARD_URL}" POLL_SECONDS="${POLL_SECONDS}" IDLE_SECONDS="${IDLE_SECONDS}" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null

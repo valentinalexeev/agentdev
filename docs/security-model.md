@@ -44,6 +44,13 @@ flowchart LR
 
 ### Phase 1: forge sidecar (fixes R4)
 
+Status: **implemented** in #64 (`images/forge`, operator renders it), pending an e2e pass on a cluster. As built:
+sync and push exchange git bundles (the loop never shares a git directory with the sidecar; the sidecar keeps its
+mirror on a volume only it mounts); push refuses non-fast-forwards; protected paths default to
+`.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/` (`PROTECTED_PATHS`), size limit `MAX_PUSH_MB`
+(50). A refused protected-path push fails with a clear message today; holding it for an approval comes with phase 4.
+The image is Alpine with git rather than distroless, because the sidecar runs git.
+
 - The pod gets two containers that share a `/state` volume. Kubernetes gives each container its own process
   namespace by default (`shareProcessNamespace: false`), so the Claude container cannot read the sidecar's
   `/proc/<pid>/environ`.

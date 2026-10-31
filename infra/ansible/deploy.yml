@@ -144,6 +144,7 @@
             AGENTS_NS: "{{ agents_ns }}"
             OPERATOR_IMAGE: "{{ operator_image }}"
             WORKER_IMAGE: "{{ worker_image }}"
+            FORGE_IMAGE: "{{ forge_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
             FORGE_URL: "{{ forge_url }}"
             FORGE_PUBLIC_URL: "{{ forge_public_url | default('') }}"

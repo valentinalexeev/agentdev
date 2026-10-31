@@ -90,20 +90,21 @@ token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so
 **Security model.** An agent is an autonomous developer: it has to build and test the code it writes, and a test
 runner can start any program. So the security boundary is the pod, not the list of tools Claude may use:
 
-- **Nothing to steal (partly):** the forge token is never written to disk and is removed from Claude's own
-  environment. The agent loop, not Claude, fetches and pushes, through a credential helper that answers only for the
-  forge's own host. The loop's git runs no hooks, global config or config-defined programs, so code Claude writes into
-  the repo or `.git` never runs with the token. **Known gap (R4):** the loop runs in the same container and as the
-  same user as Claude, so a build or test command Claude runs can still read the loop's environment
-  (`/proc/<pid>/environ`) and with it the token. Until the forge sidecar lands ([security-model.md](security-model.md),
-  phase 1), **only trusted people may write issues and reviews for an agent.**
+- **No forge credentials next to Claude:** every agent pod has two containers that share `/state`. The `agent`
+  container runs the loop and Claude and holds no forge, wake or register token. The `forge` sidecar
+  (`images/forge`, its own UID, its own process namespace) is the only holder of those tokens and does every forge
+  operation for the loop over `127.0.0.1:7070`: an allow-listed set of REST calls for the agent's repo, `sync` (the
+  loop gets a git bundle) and `push` (the loop sends a git bundle). The sidecar pushes only to `agent/<name>/*`, never
+  with force, refuses changes under `.github/workflows/` and other protected paths (`PROTECTED_PATHS`), limits the
+  size (`MAX_PUSH_MB`), and runs git from its own mirror with no hooks and no global, system or repo-supplied config,
+  so nothing Claude writes runs there. It also receives the router's wake calls. Even if Claude calls the sidecar
+  directly, it gets no more than this policy allows; this closes R4 (pending an e2e pass).
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
   push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
-- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login, the forge token through
-  R4) could be sent out. The full list of risks and their status is in [security.md](security.md); the target design
+- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login) could be sent out. The full list of risks and their status is in [security.md](security.md); the target design
   (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI) is in
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
