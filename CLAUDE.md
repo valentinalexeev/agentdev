@@ -69,8 +69,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
   `gh api -X POST repos/valentinalexeev/agentdev/pulls/NN/requested_reviewers -f "reviewers[]=valentinalexeev"`
   (`gh pr edit --add-reviewer` needs `read:org`, which the bot token lacks).
-- Stacked PRs are merged with the async endpoint `PUT .../pulls/NN/merge-async` (`sha` pinned,
-  `merge_action=direct_merge`), which merges the whole downstack, so every PR in the stack must be approved on its head.
+- Stacked PRs (B based on A's branch) merge **top-down, one at a time** with the async endpoint
+  `PUT .../pulls/NN/merge-async` (`sha` pinned, `merge_action=direct_merge`): first B into A's branch, then A into
+  `main`. Merging B moves A's head, so A needs a fresh approval and green CI on its new head before its own merge.
+  Only stacks created through GitHub's stacks API merge as one unit; a PR merely based on another branch does not.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
   result in the PR. Blocking findings are fixed first.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
