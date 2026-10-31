@@ -25,6 +25,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
+- `GET /api/agents` reads Agent objects (#57): adds `managed`, `paused`, `maxConcurrent`, `scaleToZero`; agents still
+  deployed as plain StatefulSets are listed with `managed: false`. The API's Role can read Agents.
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
   there too.
 - `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
