@@ -17,12 +17,35 @@ While the version is `0.x`, breaking changes bump MINOR.
   application comes from an authentik blueprint.
 - Web UI shell (#48): React app `agentdev-ui` (`./run.sh 11`, image `ghcr.io/valentinalexeev/agentdev-ui`): sign in
   with authentik (code + PKCE), agent overview from the API; nginx serves runtime config and proxies `/api`.
+- Agent operator (#47): `Agent` CRD (`agentdev.dev/v1alpha1`) and a controller-runtime operator
+  (`./run.sh 12`, image `ghcr.io/valentinalexeev/agentdev-operator`); creating, pausing or deleting an Agent
+  creates, stops or removes its StatefulSet; honours `agentdev/blocked` and router scale-to-zero. An Agent can
+  reference only its own Secrets (`agent-<name>`, `claude-<name>` or `claude-shared`).
 - GitHub App manifest template and `scripts/github-app.sh` (render, registration page, code conversion) with the
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
   there too.
+- `06-agents.sh`, `scripts/bootstrap-project.sh` and the Ansible playbook create `Agent` objects; the operator
+  renders the StatefulSets and adopts existing ones in place (no restart). `06` installs the operator when missing.
+  **Removed** `manifests/agent.yaml.tmpl` (#57).
+- **BREAKING** `infra/ansible`: per-agent `agents[].idle_seconds` is no longer applied; the idle time is
+  cluster-wide (`idle_seconds`, set on the operator) until the Agent spec has it (#57).
+
+### Security
+- Agent runs are guarded (#59, CodeQL): Claude gets no forge or router tokens, works with an allow-list of tools
+  (`--permission-mode dontAsk`; file tools, git without push/remote/config, build and test runners; replace with
+  `CLAUDE_TOOLS`) instead of `--dangerously-skip-permissions`, and receives issue and review text fenced as untrusted
+  data under a fixed system rule. The forge token is in no git URL and on no disk: a credential helper reads it from
+  the loop's environment and answers only for the forge host. The loop's own git runs no hooks, fsmonitor or
+  config-defined drivers, pushes to the forge URL rather than `origin`, and keeps Claude's stderr out of the worktree.
+  The security model is documented in `docs/concepts.md`; egress control remains open (#6).
+  **Known gap:** a build or test command Claude runs can read the loop's environment, including the forge token
+  (R4). Until the forge sidecar lands, only trusted people should write issues and reviews for an agent.
+- Security risk register `docs/security.md` (every flagged risk with its status) and the target security model
+  `docs/security-model.md` (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI).
+- The loop's git ignores global and system git config and pins each worktree's `.git` to the shared clone.
 
 ## [0.1.0] - 2026-10-31
 

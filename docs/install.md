@@ -29,6 +29,7 @@ router. File an issue, assign it to `alice`, and review the PR she opens.
 | `09` | optional: [authentik](https://goauthentik.io) identity provider on the platform Postgres (after `08`), for the management UI (#12) |
 | `10` | optional: agentdev API (Go) behind authentik OIDC: read-only overview of the agents (after `09`) |
 | `11` | optional: agentdev web UI (React): sign in with authentik, agent overview (after `10`) |
+| `12` | optional: Agent operator: `Agent` resources (`kubectl get agents`) create and remove agents (after `06` and `08`) |
 
 To connect **another repository** in the local Gitea, see [Administration → Projects](admin.md#projects).
 Remove everything with `./99-teardown.sh`.

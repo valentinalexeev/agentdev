@@ -8,6 +8,10 @@ forge account** (and optionally its own Claude account) and runs a loop:
 1. open issue **assigned to me** with no PR yet → branch `agent/<me>/issue-N`, run `claude -p`, push, open PR
 2. new **comments / reviews from others** on my open PRs → check out the branch, run `claude -p`, push, reply
 
+> **Security:** agents run untrusted issue text with build and test tools. Until the forge sidecar lands, only trusted
+> people should write issues and reviews for an agent. See [docs/security.md](docs/security.md) (risk register) and
+> [docs/security-model.md](docs/security-model.md) (target design).
+
 ```mermaid
 flowchart LR
   you((you)) -- issues, reviews --> gitea[Gitea<br/>owner/playground]
@@ -41,9 +45,9 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | File | Role |
 |---|---|
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
-| `manifests/agent.yaml.tmpl` | one agent = Secret + StatefulSet under gVisor |
+| `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
-| `06-agents.sh` | builds the worker image, deploys every agent |
+| `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
 | `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
 
 **Connect another repo (#31).** Copy `examples/project.yaml`, set `forge.repo` to an existing repo and list the
