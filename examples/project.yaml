@@ -14,4 +14,6 @@ agents:
 #   pods: 4                   # all pods in the namespace: agents, router, interactive sessions
 #   cpu: "4"                  # total CPU requests
 #   memory: 16Gi              # total memory limits
-# mcp: {contextforge_project: playground}   # #14, not wired yet
+# mcp:                         # #14: MCP tools for this project, through ContextForge (./run.sh 08)
+#   servers:                    # every agent of the project gets these tools; nothing else
+#     - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
