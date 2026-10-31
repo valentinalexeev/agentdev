@@ -16,6 +16,8 @@ stringData:
     CREATE DATABASE contextforge OWNER contextforge;
     CREATE ROLE agentdev LOGIN PASSWORD '${PG_AGENTDEV_PASSWORD}';
     CREATE DATABASE agentdev OWNER agentdev;
+    CREATE ROLE authentik LOGIN PASSWORD '${PG_AUTHENTIK_PASSWORD}';
+    CREATE DATABASE authentik OWNER authentik;
 ---
 apiVersion: apps/v1
 kind: StatefulSet
