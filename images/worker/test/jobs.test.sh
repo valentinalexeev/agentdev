@@ -37,6 +37,9 @@ check "after the backoff it runs again, and success clears the backoff" "! backi
 # (needs flock: run on Linux, e.g. inside the worker image). d/d2/d3 are read inside check's eval.
 # shellcheck disable=SC1090
 source <(sed -n '/^worktree() {/,/^}/p' "${here}/../agent-loop.sh")
+# shellcheck disable=SC1090
+source <(sed -n '/^clone_url()/p; /^lgit()/p; /^scrub_git_config() {/,/^}/p' "${here}/../agent-loop.sh")
+export FORGE_URL=http://forge REPO=o/r
 WORK="${tmp}/repo"; git init -q -b main "${WORK}"; git -C "${WORK}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 git -C "${WORK}" worktree add -q -b agent/issue-71 "${STATE}/work/issue-71" main
 export d; d=$(worktree agent/issue-71 main); check "worktree reuses a branch checked out at an old path" "[[ -n \"\${d}\" && -d \"\${d}\" ]] && [[ \$(git -C \"\${d}\" branch --show-current) == agent/issue-71 ]]"

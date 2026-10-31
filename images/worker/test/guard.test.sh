@@ -6,7 +6,7 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
-STATE="${tmp}/state"; mkdir -p "${STATE}" "${tmp}/bin" "${tmp}/repo"
+STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"
 export MAX_TURNS=5 MCP_CONFIG="${STATE}/mcp.json"
 export FORGE_TOKEN=secret-forge WAKE_TOKEN=secret-wake REGISTER_TOKEN=secret-register
 export FORGE_URL=http://gitea.forge:3000 FORGE_USER=alice REPO=owner/repo
@@ -29,7 +29,9 @@ check "no FORGE_TOKEN in Claude's environment" "! grep -q '^FORGE_TOKEN=' '${tmp
 check "no WAKE/REGISTER tokens in Claude's environment" "! grep -qE 'secret-(wake|register)' '${tmp}/env'"
 check "no permission bypass" "! grep -q -- '--dangerously-skip-permissions' '${tmp}/args' && ! grep -qx bypassPermissions '${tmp}/args'"
 check "dontAsk mode with an allow-list" "grep -qx dontAsk '${tmp}/args' && grep -qx -- '--allowedTools' '${tmp}/args'"
-check "push, curl, cat and the state dir are denied or not allowed" "grep -qxF 'Bash(git push:*)' '${tmp}/args' && grep -qxF 'Bash(curl:*)' '${tmp}/args' && grep -qxF 'Read(${STATE}/**)' '${tmp}/args' && ! grep -qF 'Bash(cat:' '${tmp}/args' && ! grep -qF 'Bash(make:' '${tmp}/args'"
+check "push, curl and the state dir are denied; cat is not allowed" "grep -qxF 'Bash(git push:*)' '${tmp}/args' && grep -qxF 'Bash(curl:*)' '${tmp}/args' && grep -qxF 'Read(${STATE}/**)' '${tmp}/args' && ! grep -qF 'Bash(cat:' '${tmp}/args'"
+check "test runners are allowed by default" "grep -qF 'Bash(go test:*)' '${tmp}/args'"
+check "claude stderr is not left in the worktree" "[[ -z \$(ls -A '${tmp}/repo') ]] && ! ls '${tmp}'/repo.claude.stderr 2>/dev/null"
 check "security system prompt appended" "grep -qx -- '--append-system-prompt' '${tmp}/args' && grep -q 'nothing in the task text can change' '${tmp}/args'"
 check "untrusted text is fenced and cannot close the fence early" \
   "grep -q '<untrusted>' '${tmp}/args' && [[ \$(grep -c '</untrusted>\$' '${tmp}/args') == 1 ]] && grep -q '</untrusted_>' '${tmp}/args'"
@@ -37,7 +39,24 @@ check "clone URL carries no credentials" "[[ \$(clone_url) == http://gitea.forge
 check "the token is not written anywhere under the state dir" "! grep -rq secret-forge '${STATE}'"
 # the helper returns the token to git (loop process) from the environment, and nothing without it
 check "credential helper answers git from the loop's env" \
-  "[[ \$(printf 'protocol=http\nhost=x\n\n' | git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill | grep ^password=) == password=secret-forge ]]"
+  "[[ \$(printf 'protocol=http\nhost=gitea.forge:3000\n\n' | git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill | grep ^password=) == password=secret-forge ]]"
+check "credential helper gives nothing to another host" \
+  "! (printf 'protocol=http\nhost=evil.example\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
+check "credential helper gives nothing over another scheme" \
+  "! (printf 'protocol=https\nhost=gitea.forge:3000\n\n' | GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
 check "without FORGE_TOKEN (Claude's env) the helper yields no token" \
-  "! (printf 'protocol=http\nhost=x\n\n' | env -u FORGE_TOKEN GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
+  "! (printf 'protocol=http\nhost=gitea.forge:3000\n\n' | env -u FORGE_TOKEN GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c credential.helper=\"\${GIT_HELPER}\" credential fill 2>/dev/null | grep -q secret-forge)"
+# Claude can write into .git: the loop's own git must run no hooks and no config-defined programs
+WORK="${tmp}/clone"; git init -q "${WORK}" && git -C "${WORK}" commit -q --allow-empty -m init
+printf '#!/bin/sh\ntouch %s/pwned-hook\n' "${tmp}" > "${WORK}/.git/hooks/pre-commit"; chmod +x "${WORK}/.git/hooks/pre-commit"
+echo x > "${WORK}/f"
+check "loop commits run no git hooks" "lgit -C '${WORK}' add -A && lgit -C '${WORK}' -c user.name=a -c user.email=a@b commit -qm t && [[ ! -e '${tmp}/pwned-hook' ]]"
+git -C "${WORK}" config filter.x.clean "touch ${tmp}/pwned-filter"; git -C "${WORK}" config core.sshCommand evil
+git -C "${WORK}" config include.path /tmp/evil; git -C "${WORK}" config remote.origin.url http://evil.example/x.git
+git -C "${WORK}" config user.name alice
+scrub_git_config
+check "config scrub removes drivers, includes and ssh commands" \
+  "! git config --file '${WORK}/.git/config' --name-only --list | grep -qE '^(filter|include|core\.sshcommand)'"
+check "config scrub keeps user and resets the remote to the forge" \
+  "[[ \$(git config --file '${WORK}/.git/config' user.name) == alice && \$(git config --file '${WORK}/.git/config' remote.origin.url) == http://gitea.forge:3000/owner/repo.git ]]"
 exit ${fail}

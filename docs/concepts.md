@@ -87,14 +87,22 @@ with nobody attached, or after 8 hours at most.
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account
 token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so restarts do not redo work.
 
-Claude itself runs with guardrails (#59): it never sees the forge token (removed from its environment; git gets it
-from a credential helper that only the agent loop's own fetch and push use, and it is never written to disk), it may
-use only an allow-listed set of tools (reading and editing files, git without push/remote/config/fetch) instead of
-skipping permission checks, and issue and review text is passed to it fenced as untrusted data with a system rule
-that such text never changes its instructions. By default Claude runs no programs (no test runners or build scripts,
-which could start anything); a project can allow them with `CLAUDE_TOOLS`, accepting that risk. The agent loop, not
-Claude, pushes to the agent's own branch; only the owner merges. Open egress is a known gap, tracked in #6
-(egress control and credential proxy).
+**Security model.** An agent is an autonomous developer: it has to build and test the code it writes, and a test
+runner can start any program. So the security boundary is the pod, not the list of tools Claude may use:
+
+- **Nothing to steal:** Claude never sees the forge token. It is removed from Claude's environment and never written
+  to disk. The agent loop, not Claude, fetches and pushes, through a credential helper that answers only for the
+  forge's own host. The loop's git runs no hooks or config-defined programs, so code Claude writes into the repo or
+  `.git` never runs with the token.
+- **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
+- **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
+- **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
+  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
+  fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
+- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login) could be sent out.
+  An egress allow-list and a credential proxy for the Claude login are tracked in #6 and are needed before agents
+  face untrusted input in production. Repo code and issue text always go to the model provider: that is inherent to
+  the product.
 
 ## What is planned
 
