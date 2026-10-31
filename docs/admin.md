@@ -340,6 +340,9 @@ this Secret also exists. The API does not make Secrets.
    `curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"name":"carol","repo":"owner/playground"}' http://localhost:8088/api/agents`
    The API gives 201 and the new agent.
 
+NOTE: You can also add, pause, change and delete agents in the web UI. Refer to "Control agents in the web UI"
+in `user-guide.md`.
+
 ### Pause an agent through the API
 
 1. Send the request:
