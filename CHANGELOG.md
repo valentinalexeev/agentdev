@@ -30,9 +30,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Security
 - Agent runs are guarded (#59, CodeQL): Claude gets no forge or router tokens, works with an allow-list of tools
-  (`--permission-mode dontAsk`, push/remote/config/curl denied) instead of `--dangerously-skip-permissions`, and
-  receives issue and review text fenced as untrusted data under a fixed system rule. The forge token is no longer in
-  git remote URLs; git reads it from a private credential file. Extra tools: `CLAUDE_TOOLS`.
+  (`--permission-mode dontAsk`; file tools and git without push/remote/config/fetch; push, curl, env and the state dir
+  denied) instead of `--dangerously-skip-permissions`, and receives issue and review text fenced as untrusted data
+  under a fixed system rule. The forge token is in no git URL and on no disk: a credential helper reads it from the
+  loop's environment for the loop's own fetch and push.
+  **BREAKING** (agent behaviour): by default Claude no longer runs the project's tests or build scripts (they can
+  start any program); allow them per instance with `CLAUDE_TOOLS`, e.g. `...,Bash(go test:*)`.
 
 ## [0.1.0] - 2026-10-31
 
