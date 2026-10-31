@@ -1,0 +1,40 @@
+name: Docs to wiki
+
+# Publishes docs/ to the GitHub wiki on every push to main (#21). docs/ is the reviewed source; the wiki is a copy.
+# Page names: docs/README.md -> Home, docs/<name>.md -> <name>, docs/adr/<name>.md -> adr-<name>.
+# Relative links "x.md" become wiki links "x". Needs the wiki to have at least one page (create Home once by hand).
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '.github/workflows/wiki.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # the wiki is pushed with the workflow token
+
+concurrency: {group: wiki, cancel-in-progress: false}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: render and push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          git clone -q "https://x-access-token:${TOKEN}@github.com/${REPO}.wiki.git" wiki
+          find wiki -maxdepth 1 -name '*.md' -delete
+          page() { case "$1" in docs/README.md) echo Home;; docs/adr/README.md) echo adr;; docs/adr/*) echo "adr-$(basename "$1" .md)";; *) basename "$1" .md;; esac; }
+          for f in $(find docs -name '*.md'); do
+            # x.md -> x, adr/x.md -> adr-x, adr/ -> adr, ../ links point back to the repository
+            sed -E -e 's#\]\(adr/([^)]+)\.md\)#](adr-\1)#g' -e 's#\]\(adr/\)#](adr)#g' \
+                   -e 's#\]\(([a-z0-9-]+)\.md(\#[^)]*)?\)#](\1\2)#g' \
+                   -e "s#\]\(\.\./#](https://github.com/${REPO}/blob/main/#g" "$f" > "wiki/$(page "$f").md"
+          done
+          cd wiki
+          git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "wiki up to date"; exit 0; }
+          git commit -qm "docs: sync from ${GITHUB_SHA::7}" && git push -q
