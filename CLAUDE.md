@@ -69,8 +69,27 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 
 ## 4. Pull requests
 
-- Branch from `main`, named after the issue: `issueNN/short-name`, `incident/NN-short-name`, `docs/…`.
-- Commit and push as you go (semantic commit messages: `feat:`, `fix:`, `docs:`, `chore:`, `ci:` with optional scope).
+- **Branch names follow gitflow prefixes**, lower-case, with the issue number:
+
+  | Prefix | For | Example |
+  |---|---|---|
+  | `feature/` | new behaviour | `feature/57-agents-api` |
+  | `bugfix/` | a fix to something not yet released | `bugfix/59-operator-replicas` |
+  | `hotfix/` | an urgent fix to a released version, incidents | `hotfix/63-router-crash` |
+  | `release/` | cutting a release (`release/0.2.0`) | `release/0.2.0` |
+  | `docs/` | documentation only | `docs/60-owner-credentials` |
+  | `chore/`, `ci/` | tooling, dependencies, workflows | `ci/64-api-image` |
+
+  Branches start from `main` and PRs target `main` (gitflow names on a single integration branch; a separate
+  `develop` branch is not used unless the owner decides otherwise).
+- **Commit messages follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):**
+  `<type>[(scope)][!]: <description>`, imperative, lower-case, no trailing period, then an optional body and footers.
+  Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Scope is the
+  component (`api`, `ui`, `operator`, `router`, `worker`, `ansible`, `terraform`, `platform`, `mcp`, ...). A breaking
+  change (§7) uses `!` after the type/scope **and** a `BREAKING CHANGE: <what and how to migrate>` footer. Footers
+  also carry `Refs #NN` / `Closes #NN` and `Co-authored-by:`. The PR title follows the same format, because the
+  squash commit takes it.
+- Commit and push as you go.
 - Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `./run.sh` steps, e2e
   observations), what remains open, files shared with other open PRs.
 - **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
@@ -98,7 +117,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 An incident is something that already went wrong: red CI on `main`, a leaked or expired secret, an agent that
 damaged work, a broken `./run.sh` on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
 what happened, when and how found, impact, immediate actions. Never paste secrets, even partially. Fix in
-`incident/NN-…` with `Closes #NN`; the closing comment states the root cause, the fix, and what prevents a repeat
+`hotfix/NN-…` with `Closes #NN`; the closing comment states the root cause, the fix, and what prevents a repeat
 (test, CI check, rule change). A leaked secret: tell the owner at once; revoking it and rewriting history are owner actions.
 
 ## 6. Engineering rules for this repo
@@ -133,5 +152,5 @@ required inputs.
 - Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
   (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
   **BREAKING** with the migration step.
-- Cutting a release: a PR that moves `Unreleased` to the new version with the date and bumps any pinned
+- Cutting a release: a PR from `release/X.Y.Z` (commit `chore(release): vX.Y.Z`) that moves `Unreleased` to the new version with the date and bumps any pinned
   examples; after the owner merges it, the owner (or the bot on explicit permission) pushes the tag.
