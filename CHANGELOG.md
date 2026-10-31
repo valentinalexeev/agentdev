@@ -41,6 +41,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Management API skeleton (#46): Go service `agentdev-api` (`./run.sh 10`, image `ghcr.io/valentinalexeev/agentdev-api`),
   authentik OIDC required (401 without a valid token), read-only `/api/me` and `/api/agents`; the `agentdev` OIDC
   application comes from an authentik blueprint.
+- Agent operator (#47): `Agent` CRD (`agentdev.dev/v1alpha1`) and a controller-runtime operator
+  (`./run.sh 12`, image `ghcr.io/valentinalexeev/agentdev-operator`); creating, pausing or deleting an Agent
+  creates, stops or removes its StatefulSet; honours `agentdev/blocked` and router scale-to-zero.
 
 ### Changed
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports

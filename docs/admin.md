@@ -117,6 +117,30 @@ URL: locally `https://localhost:9443/application/o/agentdev/` with the 9443 port
 from authentik inside the cluster. It reads agents with a read-only Role on the agents namespace. Reach it with
 `kubectl -n agentdev-platform port-forward svc/agentdev-api 8088:8080`. On GKE: #51.
 
+## Agents as resources (operator)
+
+`./run.sh 12` installs the `Agent` CRD (`agentdev.dev/v1alpha1`) and the operator (#47). An agent is then one
+object in the agents namespace; the operator creates its Service and StatefulSet (the same ones `06` renders),
+keeps them in line with the spec, and reports `status.phase`:
+
+```bash
+kubectl -n coding-agents apply -f - <<'EOF'
+apiVersion: agentdev.dev/v1alpha1
+kind: Agent
+metadata: {name: carol}
+spec: {repo: owner/playground, claudeSecret: claude-shared}
+EOF
+kubectl -n coding-agents get agents                       # NAME REPO PHASE
+kubectl -n coding-agents patch agent carol --type merge -p '{"spec":{"paused":true}}'   # pause, state kept
+kubectl -n coding-agents delete agent carol               # removes the pod; volumes kept
+```
+
+The forge token Secret `agent-<name>` must exist first. Blocked agents (`scripts/agent-block.sh`) stay stopped;
+with `scaleToZero` the router, not the operator, starts and stops the pod. Field reference:
+[`images/operator/README.md`](../images/operator/README.md). Agents created by `06` are not Agents yet: moving
+`06` and the API to Agent objects is the next step (#57), so that the UI can add, pause and remove agents (#4);
+keeping Agents in the deployment repo with Argo CD or Flux is #58.
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents
