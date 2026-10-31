@@ -28,6 +28,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports
   there too.
 
+### Security
+- Agent runs are guarded (#59, CodeQL): Claude gets no forge or router tokens, works with an allow-list of tools
+  (`--permission-mode dontAsk`, push/remote/config/curl denied) instead of `--dangerously-skip-permissions`, and
+  receives issue and review text fenced as untrusted data under a fixed system rule. The forge token is no longer in
+  git remote URLs; git reads it from a private credential file. Extra tools: `CLAUDE_TOOLS`.
+
 ## [0.1.0] - 2026-10-31
 
 ### Added

@@ -86,7 +86,13 @@ with nobody attached, or after 8 hours at most.
 
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account
 token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so restarts do not redo work.
-Open egress and credentials inside the pod are known gaps, tracked in #6 (egress control and credential proxy).
+
+Claude itself runs with guardrails (#59): it never sees the forge token (removed from its environment; git reads it
+from a private credential file Claude may not open), it may use only an allow-listed set of tools (editing, git
+without push/remote/config, common test runners) instead of skipping permission checks, and issue and review text is
+passed to it fenced as untrusted data with a system rule that such text never changes its instructions. The agent
+loop, not Claude, pushes to the agent's own branch; only the owner merges. Open egress is a known gap, tracked in #6
+(egress control and credential proxy).
 
 ## What is planned
 
