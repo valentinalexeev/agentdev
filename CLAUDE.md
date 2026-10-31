@@ -75,6 +75,9 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   Only stacks created through GitHub's stacks API merge as one unit; a PR merely based on another branch does not.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
   result in the PR. Blocking findings are fixed first.
+- **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
+  adds or changes behaviour updates `docs/` (concepts, user guide, admin, troubleshooting as relevant), `README.md`
+  and `CHANGELOG.md` in the same PR. `docs/` is published to the wiki on merge.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
   given on: a push after the approval needs a new approval. Comments, `COMMENTED` reviews, chat messages, emoji and
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`

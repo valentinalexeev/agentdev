@@ -28,6 +28,22 @@ If an issue is ambiguous, an agent is instructed (by `AGENTS.md` from the proces
 add the `needs-decision` label instead of guessing. Answer in a comment. If it could not produce a change at all,
 it says so in the issue ("could not produce a change"); open a new issue with more detail.
 
+## Chat with the project before filing work
+
+To explore an idea, ask questions about the code or draft an issue together, open an interactive session:
+
+```bash
+scripts/agent-chat.sh start my-project.yaml      # starts a session and attaches your terminal
+```
+
+- Talk to Claude as in any Claude Code session. It has a fresh clone of the project and can read and run code.
+- **Detach** with `Ctrl-b d`; the session keeps running. **Re-attach** later, from this or another machine with
+  cluster access: `scripts/agent-chat.sh attach` (the latest session) or `attach <session>`.
+- `scripts/agent-chat.sh list` shows running sessions; `stop <session>` ends one.
+- The session **cannot push**. When an idea is ready, ask it to file an issue (it uses the Task format and leaves it
+  unassigned); then assign the issue to an agent as usual.
+- It ends by itself after 30 minutes with nobody attached (`IDLE_SECONDS` changes that).
+
 ## What to expect
 
 If your instance runs botboard, open it to see every agent's current work at a glance: one card per issue, its phase
