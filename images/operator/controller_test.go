@@ -79,7 +79,7 @@ func TestCreatesChildrenFromSpec(t *testing.T) {
 		t.Errorf("owner reference missing: %v", s.OwnerReferences)
 	}
 	if *s.Spec.Template.Spec.RuntimeClassName != "gvisor" || len(s.Spec.VolumeClaimTemplates) != 2 {
-		t.Errorf("sandbox/volumes not as in agent.yaml.tmpl")
+		t.Errorf("sandbox/volumes not rendered")
 	}
 	var svc corev1.Service
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-alice"}, &svc); err != nil {

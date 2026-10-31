@@ -47,7 +47,7 @@ func (k *kubeAgents) List(ctx context.Context) ([]agent, error) {
 	return out, nil
 }
 
-// toAgent maps an agent StatefulSet (manifests/agent.yaml.tmpl) to its overview entry.
+// toAgent maps an agent StatefulSet (rendered by the operator, images/operator) to its overview entry.
 func toAgent(s appsv1.StatefulSet) agent {
 	a := agent{Name: s.Labels["agent"], Forge: s.Annotations["agentdev/forge"], Ready: s.Status.ReadyReplicas}
 	if a.Name == "" {

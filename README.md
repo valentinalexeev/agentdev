@@ -41,9 +41,9 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | File | Role |
 |---|---|
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
-| `manifests/agent.yaml.tmpl` | one agent = Secret + StatefulSet under gVisor |
+| `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
-| `06-agents.sh` | builds the worker image, deploys every agent |
+| `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
 | `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
 
 **Connect another repo (#31).** Copy `examples/project.yaml`, set `forge.repo` to an existing repo and list the

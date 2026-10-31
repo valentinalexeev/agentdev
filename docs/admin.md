@@ -29,8 +29,7 @@ v1 limits: Gitea only, issues on the same forge, one repository per agent deploy
 | Poll interval (webhook fallback) | `POLL_SECONDS` | `poll_seconds` |
 
 Each agent uses exactly one Claude credential: its own if present, otherwise the shared one (#5).
-An agent's memory limit is 3 GiB, which fits 2 parallel items; add about 1 GiB per extra slot in
-`manifests/agent.yaml.tmpl`.
+An agent's memory limit is (1 + parallel items) GiB, so 3 GiB at the default of 2 (set by the operator).
 
 Credentials for the Claude subscription come from `claude setup-token`. Rotate a credential by replacing the file
 or secret and redeploying (`./run.sh 06`, or a deployment PR).
