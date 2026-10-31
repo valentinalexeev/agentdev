@@ -41,6 +41,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
+- The manuals (`user-guide.md`, `install.md`, `admin.md`, `troubleshooting.md`) use ASD-STE100 Simplified Technical
+  English: task procedures with numbered steps, safety notes before their steps, a reference part per section, and
+  troubleshooting as symptom / cause / procedure tables (#75). New technical words are in `docs/writing.md`.
 - `GET /api/agents` reads Agent objects (#57): adds `managed`, `paused`, `maxConcurrent`, `scaleToZero`; agents still
   deployed as plain StatefulSets are listed with `managed: false`. The API's Role can read Agents.
 - Image builds no longer emulate arm64 for compiling: the api, operator and forge Dockerfiles cross-compile on the builder's
