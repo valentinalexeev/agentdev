@@ -41,6 +41,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
+- `GET /api/agents` reads Agent objects (#57): adds `managed`, `paused`, `maxConcurrent`, `scaleToZero`; agents still
+  deployed as plain StatefulSets are listed with `managed: false`. The API's Role can read Agents.
 - Image builds no longer emulate arm64 for compiling: the api, operator and forge Dockerfiles cross-compile on the builder's
   platform, and the UI's static build runs once; vet, tests and lint stay in the CI `lint` job. Multi-arch image
   builds take minutes instead of up to 30 minutes on a cold cache.
