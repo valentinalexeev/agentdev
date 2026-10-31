@@ -1,0 +1,61 @@
+# agentdev operator (#47), namespace ${PLATFORM_NS}. Rendered by 12-operator.sh. Watches Agent resources in the agents
+# namespace only (Role there, not cluster-wide). The CRD itself is images/operator/config/crd (generated).
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
+rules:   # same rules as the generated images/operator/config/rbac/role.yaml, scoped to one namespace
+- {apiGroups: [agentdev.dev], resources: [agents, agents/status], verbs: [get, list, watch, update, patch]}
+- {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
+- {apiGroups: [""], resources: [services], verbs: [get, list, watch, create, update, patch, delete]}
+- {apiGroups: [""], resources: [events], verbs: [create, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}, labels: {app: agentdev-operator}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: agentdev-operator}}
+  template:
+    metadata: {labels: {app: agentdev-operator}}
+    spec:
+      serviceAccountName: agentdev-operator
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: operator
+        image: ${OPERATOR_IMAGE}
+        env:   # cluster-wide agent defaults, as 06-agents.sh takes them from config.env
+        - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: WORKER_IMAGE, value: "${WORKER_IMAGE}"}
+        - {name: IMAGE_PULL_POLICY, value: "${IMAGE_PULL_POLICY}"}
+        - {name: FORGE_URL, value: "${FORGE_URL}"}
+        - {name: FORGE_PUBLIC_URL, value: "${FORGE_PUBLIC_URL}"}
+        - {name: REVIEWER, value: "${FORGE_ADMIN_USER}"}
+        - {name: BOTBOARD_URL, value: "${BOTBOARD_URL}"}
+        - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
+        - {name: IDLE_SECONDS, value: "${IDLE_SECONDS}"}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        ports: [{name: health, containerPort: 8081}]
+        readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
+        livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {memory: 256Mi}
+---
+# no inbound traffic (it only calls the Kubernetes API)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-operator}}
+  policyTypes: [Ingress]
+  ingress: []
