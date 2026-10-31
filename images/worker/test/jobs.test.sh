@@ -38,7 +38,7 @@ check "after the backoff it runs again, and success clears the backoff" "! backi
 # shellcheck disable=SC1090
 source <(sed -n '/^worktree() {/,/^}/p' "${here}/../agent-loop.sh")
 # shellcheck disable=SC1090
-source <(sed -n '/^clone_url()/p; /^lgit()/p; /^scrub_git_config() {/,/^}/p' "${here}/../agent-loop.sh")
+source <(sed -n '/^clone_url()/p; /^lgit()/p; /^scrub_git_config() {/,/^}/p; /^pin_worktree() {/,/^}/p' "${here}/../agent-loop.sh")
 export FORGE_URL=http://forge REPO=o/r
 WORK="${tmp}/repo"; git init -q -b main "${WORK}"; git -C "${WORK}" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 git -C "${WORK}" worktree add -q -b agent/issue-71 "${STATE}/work/issue-71" main

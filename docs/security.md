@@ -19,7 +19,7 @@ planned target, [security-model.md](security-model.md).
 | R4 | Claude can read the loop's environment through `/proc/<pid>/environ` with any allowed runner (same UID, same container) | CodeQL #59 on 4d6026f | fixed (pending e2e) | Forge sidecar (security-model.md phase 1, #64): FORGE_TOKEN, WAKE_TOKEN and REGISTER_TOKEN are only in the `forge` container (own UID, own process namespace); the agent container's environment and processes hold none. Sidecar push policy: `agent/<name>/*` only, no force, protected paths, size limit. Until the e2e pass on a cluster, keep issue and review writers trusted |
 | R5 | `--dangerously-skip-permissions` (no tool policy) | CodeQL #59 | fixed | `--permission-mode dontAsk` with allow and deny lists (0ff6073) |
 | R6 | Build and test runners can start any program, bypassing the tool lists | CodeQL #59 | accepted | Required for an autonomous developer. Boundary is the pod, not the tool list (concepts.md). Residual risk depends on R10 (R4 fixed by #64) |
-| R7 | Git hooks or config-defined programs written by Claude run in the loop's git (with the token) | CodeQL #59, review | fixed | `lgit` (no hooks, fsmonitor, global or system config), `scrub_git_config` (4d6026f); worktree `.git` pinned (cdef2b4) |
+| R7 | Git hooks or config-defined programs written by Claude run in the loop's git (with the token) | CodeQL #59, review | fixed (unit-tested; live e2e pending) | `lgit` (no hooks, fsmonitor, global or system config), `scrub_git_config` (4d6026f); worktree `.git` and `commondir` pinned before every loop git use, admin dir must be a single real directory, no writes through symlinks (cdef2b4, and the follow-up in this PR) |
 | R8 | Credential helper answered any host (redirect or rewritten remote leaks the token) | CodeQL #59 | fixed | Answers only the forge's `scheme://host`; push to the forge URL, not `origin` (4d6026f) |
 | R9 | Claude's stderr written into the worktree and committed | CodeQL #59 | fixed | Written under `/state/jobs` and deleted (4d6026f) |
 | R10 | **Open egress**: anything Claude can read can be sent anywhere | review, #6 | **open** | Egress allow-list (security-model.md phase 2, #65, #6) |
@@ -28,6 +28,8 @@ planned target, [security-model.md](security-model.md).
 | R13 | Loop pushes without an approval gate | CodeQL #59 | mitigated | Push only to `agent/<name>/*`; merge to main needs the owner's approval (branch protection) |
 | R14 | Issue and repo text sent to the model provider | CodeQL #59 | accepted | Inherent to the product; documented. No automatic redaction (would give false assurance) |
 | R15 | `Write`/`MultiEdit` not covered by path deny rules | CodeQL #59 | mitigated | Claude Code applies `Edit(...)` rules to all writes; real risk was R7 |
+| R16 | A forged worktree admin dir makes pinning fail closed, so that branch stops working until fixed by hand (denial of service, no code runs) | review #59 | open | Self-heal by re-creating the worktree; with #64 |
+| R17 | `WORK/.git` itself is not checked for being a symlink | review #59 | open | Same class as R4 (Claude controls the agent's state volume); closed by #64 |
 
 ## Operator and Agent API
 
