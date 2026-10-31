@@ -337,8 +337,26 @@ max_concurrent=${MAX_CONCURRENT}"
   fi
 }
 [[ -n "${READY_ISSUE:-}" ]] && ready_check "${READY_ISSUE}"
+# Scale to zero (#35): with SCALE_TO_ZERO=true, an agent with no running job for IDLE_SECONDS asks the router to
+# stop it. The router refuses if it forwarded a wake since idle_since, so new work never races a shutdown.
+IDLE_SECONDS="${IDLE_SECONDS:-900}"
+idle_since=$(date +%s)
+maybe_stop() {
+  [[ "${SCALE_TO_ZERO:-false}" == true && -n "${ROUTER_URL:-}" ]] || return
+  if (( $(running_jobs) > 0 )); then idle_since=$(date +%s); return; fi
+  (( $(date +%s) - idle_since >= IDLE_SECONDS )) || return
+  local r
+  r=$(curl -fsS -X POST -H "Authorization: Bearer ${WAKE_TOKEN}" -H 'Content-Type: application/json' "${ROUTER_URL}/idle" \
+      -d "$(jq -n --arg a "${AGENT_NAME:-${FORGE_USER}}" --argjson s "$(( idle_since * 1000 ))" '{agent:$a, idleSince:$s}')") \
+    || { log "idle: router unreachable or refused"; idle_since=$(date +%s); return; }
+  if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then
+    # the pod is being removed: take no new work (a job started now would be killed); the router restarts us on the next event
+    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; exec sleep infinity
+  else log "idle: router keeps this agent ($(jq -r .reason <<<"${r}"))"; idle_since=$(date +%s); fi
+}
 while true; do
   handle_issues
   handle_feedback
+  maybe_stop
   wait_for_work
 done

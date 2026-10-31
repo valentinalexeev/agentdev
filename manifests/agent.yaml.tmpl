@@ -22,7 +22,15 @@ metadata:
   name: agent-${AGENT}
   namespace: ${AGENTS_NS}
   labels: {app: coding-agent, agent: "${AGENT}"}
+  # read by the router to start this agent on an event for it while stopped (#35)
+  annotations:
+    agentdev/scale-to-zero: "${SCALE_TO_ZERO}"
+    agentdev/user: "${AGENT}"
+    agentdev/repos: "${REPO}"
+    agentdev/forge: "${FORGE_KIND}"
 spec:
+  # 1 = running. With scale-to-zero the router changes it; re-applying this manifest starts a stopped agent once,
+  # which is harmless: it polls, finds nothing and reports idle again.
   replicas: 1
   serviceName: agent-${AGENT}
   selector: {matchLabels: {agent: "${AGENT}"}}
@@ -44,6 +52,7 @@ spec:
         env:
         - {name: FORGE_URL,    value: "${FORGE_URL}"}
         - {name: FORGE_USER,   value: "${AGENT}"}
+        - {name: AGENT_NAME,   value: "${AGENT}"}   # router registry key; StatefulSet is agent-<AGENT_NAME> (#35)
         - {name: REPO,         value: "${REPO}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: MAX_CONCURRENT, value: "${MAX_CONCURRENT}"}   # parallel items per agent (#20)
@@ -51,6 +60,8 @@ spec:
         - {name: ROUTER_URL,   value: "http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"}
         - {name: SELF_URL,     value: "http://agent-${AGENT}.${AGENTS_NS}.svc.cluster.local:8080/"}
         - {name: FORGE_KIND,   value: "${FORGE_KIND}"}
+        - {name: SCALE_TO_ZERO, value: "${SCALE_TO_ZERO}"}   # ask the router to stop this agent when idle (#35)
+        - {name: IDLE_SECONDS,  value: "${IDLE_SECONDS}"}
         - name: READY_ISSUE    # issue to post the readiness report on (#31); set by scripts/bootstrap-project.sh
           valueFrom: {configMapKeyRef: {name: agent-${AGENT}-project, key: READY_ISSUE, optional: true}}
         - name: WAKE_TOKEN

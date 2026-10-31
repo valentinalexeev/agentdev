@@ -67,6 +67,8 @@ jobs:
           ./kubeconform -strict -summary manifests/gitea.yaml manifests/postgres.yaml
           AGENT=demo AGENTS_NS=coding-agents FORGE_TOKEN=x WORKER_IMAGE=img REPO=o/r POLL_SECONDS=20 FORGE_ADMIN_USER=owner \
             envsubst < manifests/agent.yaml.tmpl | ./kubeconform -strict -summary -
+      - name: router tests (no dependencies, a few seconds)
+        run: node --test images/router/test/*.test.js
 
   worker-image:
     needs: scope
