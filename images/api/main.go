@@ -22,7 +22,7 @@ type config struct {
 	Addr      string
 	// security events (#70)
 	DatabaseURL   string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
-	RetentionDays int    // rows older than this are deleted from security_events (default 365)
+	DBMigrate     bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
 	WebhookURL    string // SIEM webhook output; empty: off. Instance config, never in git
 	WebhookSecret string // HMAC-SHA256 key for the webhook signature (Secret, never in git)
 }
@@ -43,7 +43,7 @@ func main() {
 		Addr:      env("ADDR", ":8080"),
 
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		RetentionDays: envInt("SECURITY_RETENTION_DAYS", 365),
+		DBMigrate:     os.Getenv("DATABASE_MIGRATE") == "true",
 		WebhookURL:    os.Getenv("SECURITY_WEBHOOK_URL"),
 		WebhookSecret: os.Getenv("SECURITY_WEBHOOK_SECRET"),
 	}
@@ -91,13 +91,13 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 		log.Printf("DATABASE_URL not set: security events are kept in memory only (lost on restart)")
 		return newMemStore(), nil
 	}
-	pg, err := newPgStore(ctx, cfg.DatabaseURL)
+	pg, err := newPgStore(ctx, cfg.DatabaseURL, cfg.DBMigrate)
 	if err != nil {
 		return nil, err
 	}
 	go func() {
 		for {
-			if err := pg.Prune(ctx, cfg.RetentionDays); err != nil {
+			if _, err := pg.Prune(ctx); err != nil {
 				log.Printf("prune security_events: %v", err)
 			}
 			if !sleepCtx(ctx, 24*time.Hour) {

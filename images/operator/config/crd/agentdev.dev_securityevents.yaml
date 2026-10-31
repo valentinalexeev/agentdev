@@ -66,8 +66,10 @@ spec:
               agent:
                 description: 'Agent name: taken from the pod''s agent label, not from
                   the log line.'
+                maxLength: 63
                 type: string
               container:
+                maxLength: 63
                 type: string
               hash:
                 description: 'SHA-256 over pod UID, container, timestamp and the raw
@@ -76,9 +78,12 @@ spec:
               job:
                 description: Job the agent worked on, issue-N or pr-N; empty when
                   not known (a missing and an empty job are the same).
+                maxLength: 20
+                pattern: ^((issue|pr)-[0-9]+)?$
                 type: string
               pod:
                 description: Pod and container that wrote the line.
+                maxLength: 253
                 type: string
               rule:
                 description: Rule that fired, for example push-branch or git-config.
@@ -94,14 +99,20 @@ spec:
                 - high
                 type: string
               source:
-                description: 'Component that refused: forge (sidecar), loop (agent
-                  loop); later egress, claude-proxy, approvals.'
+                description: |-
+                  Component that refused, set from the container (not from the line): forge for the forge sidecar, loop for the
+                  agent container. Later egress, claude-proxy, approvals.
                 maxLength: 40
                 type: string
               time:
                 description: When the line was written (container runtime timestamp).
                 format: date-time
                 type: string
+              untrusted:
+                description: |-
+                  True for events from the agent container, where Claude runs and can print any line: rule, severity, job and
+                  action are claims, not facts.
+                type: boolean
             required:
             - action
             - agent

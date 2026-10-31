@@ -15,15 +15,27 @@ if [[ "${API_IMAGE}" == agentdev-api:* ]]; then
 else ok "using published image"; fi
 
 log "Database (security_events, #70)"
-# login agentdev_api, database agentdev; the API creates its tables on start. Password generated, hex only (safe in SQL)
+# login agentdev_api, database agentdev; password generated, hex only (safe in SQL)
 S="${SPIKE_DIR}/.secrets/platform"; mkdir -p "${S}"; chmod 700 "${S}"
 [[ -s "${S}/pg-agentdev-api" ]] || { openssl rand -hex 24 > "${S}/pg-agentdev-api"; chmod 600 "${S}/pg-agentdev-api"; }
 pgpw=$(cat "${S}/pg-agentdev-api")
+# Owner role agentdev_owner (no login) owns database and table; the API login gets INSERT/SELECT and the prune
+# function only (images/api/grants.sql), so it cannot delete, truncate or change the retention (docs/security.md).
+retention="${SECURITY_DB_RETENTION_DAYS:-365}"; [[ "${retention}" =~ ^[1-9][0-9]*$ ]] || die "SECURITY_DB_RETENTION_DAYS must be a positive number"
 k -n "${PLATFORM_NS}" exec -i platform-db-0 -- psql -U postgres -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
+SELECT 'CREATE ROLE agentdev_owner NOLOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner')\gexec
 SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
 ALTER ROLE agentdev_api PASSWORD '${pgpw}';
-SELECT 'CREATE DATABASE agentdev OWNER agentdev_api' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
+SELECT 'CREATE DATABASE agentdev OWNER agentdev_owner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
+ALTER DATABASE agentdev OWNER TO agentdev_owner;
 SQL
+{ echo 'REASSIGN OWNED BY agentdev_api TO agentdev_owner;'   # objects an earlier API version created itself
+  echo 'SET ROLE agentdev_owner;'
+  cat "${SPIKE_DIR}/images/api/schema.sql"
+  echo "UPDATE security_settings SET retention_days = ${retention};"
+  echo 'RESET ROLE;'
+  cat "${SPIKE_DIR}/images/api/grants.sql"
+} | k -n "${PLATFORM_NS}" exec -i platform-db-0 -- psql -U postgres -d agentdev -v ON_ERROR_STOP=1 -q >/dev/null
 printf 'DATABASE_URL=postgres://agentdev_api:%s@platform-db:5432/agentdev?sslmode=disable\n' "${pgpw}" \
   | k -n "${PLATFORM_NS}" create secret generic agentdev-api-db --from-env-file=/dev/stdin --dry-run=client -o yaml \
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
@@ -38,7 +50,7 @@ fi
 log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
-  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev SECURITY_DB_RETENTION_DAYS="${SECURITY_DB_RETENTION_DAYS:-365}" \
+  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev \
   envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -171,33 +172,178 @@ func TestPauseOnHighSeverity(t *testing.T) {
 	}
 }
 
-func TestPauseAfterTooManyInJob(t *testing.T) {
+func TestPauseAfterTooManyInRun(t *testing.T) {
 	col, c := collector(t, agent("alice", nil))
-	p := pod("alice")
 	ctx := context.Background()
-	rec := func(i int, job string) {
+	rec := func(p *corev1.Pod, i int, job string) {
 		t.Helper()
 		ts := time.Date(2026, 10, 31, 10, 0, i, 0, time.UTC).Format(time.RFC3339Nano)
-		spec, _ := parseLine(line(ts, `{"source":"loop","rule":"r","severity":"low","job":"`+job+`","action":"x"}`), p, "agent")
+		spec, _ := parseLine(line(ts, `{"rule":"r","severity":"low","job":"`+job+`","action":"x"}`), p, "agent")
 		if err := col.Record(ctx, p, spec); err != nil {
 			t.Fatal(err)
 		}
 	}
+	old, cur := pod("alice"), pod("alice")
+	old.UID = "pod-alice-old"
 	for i := 0; i < 5; i++ {
-		rec(i, "issue-1")
+		rec(old, i, "issue-1") // an earlier run of the same job (other pod UID) does not count
 	}
-	for i := 10; i < 20; i++ {
-		rec(i, "") // events outside a job never count towards the per-job limit
+	for i := 10; i < 15; i++ {
+		rec(cur, i, "issue-1")
+	}
+	for i := 20; i < 25; i++ {
+		rec(cur, i, "") // events without a job share one per-pod bucket
 	}
 	if getAgent(t, c, "alice").Spec.Paused {
 		t.Fatal("paused at the limit")
 	}
-	rec(30, "issue-1") // 6th event in issue-1: over the limit of 5
+	rec(cur, 30, "issue-1") // 6th event of this run of issue-1, counted although the cache may lag
 	a := getAgent(t, c, "alice")
 	cond := meta.FindStatusCondition(a.Status.Conditions, "SecurityPaused")
-	if !a.Spec.Paused || cond == nil || cond.Reason != "TooManyEvents" {
+	if !a.Spec.Paused || cond == nil || cond.Reason != "TooManyEvents" || !strings.Contains(cond.Message, "6 security events") {
 		t.Fatalf("not paused: %+v", cond)
 	}
+}
+
+func TestPauseAfterTooManyWithoutJob(t *testing.T) {
+	col, c := collector(t, agent("alice", nil))
+	p := pod("alice")
+	for i := 0; i < 6; i++ {
+		ts := time.Date(2026, 10, 31, 10, 0, i, 0, time.UTC).Format(time.RFC3339Nano)
+		spec, _ := parseLine(line(ts, `{"rule":"r","severity":"low"}`), p, "forge")
+		if err := col.Record(context.Background(), p, spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !getAgent(t, c, "alice").Spec.Paused {
+		t.Fatal("events without a job never pause")
+	}
+}
+
+func TestSourceFromContainer(t *testing.T) {
+	p := pod("alice")
+	// Claude prints a line in the agent container that claims to be the forge sidecar
+	s, ok := parseLine(line(ts, `{"source":"forge","rule":"push-branch","severity":"high","action":"x"}`), p, "agent")
+	if !ok || s.Source != "loop" || !s.Untrusted {
+		t.Fatalf("forged source accepted: %+v", s)
+	}
+	s, _ = parseLine(line(ts, `{"source":"loop","rule":"r","severity":"low"}`), p, "forge")
+	if s.Source != "forge" || s.Untrusted {
+		t.Fatalf("forge container: %+v", s)
+	}
+}
+
+func TestJobValidation(t *testing.T) {
+	p := pod("alice")
+	for job, want := range map[string]string{"issue-7": "issue-7", "pr-12": "pr-12", "": "", "issue-": "",
+		"issue-7x": "", "../etc": "", strings.Repeat("a", 2000): "", "pr-1234567890123": ""} {
+		s, _ := parseLine(line(ts, `{"rule":"r","severity":"low","job":"`+job+`"}`), p, "agent")
+		if s.Job != want {
+			t.Errorf("job %.20q: got %q want %q", job, s.Job, want)
+		}
+	}
+}
+
+func TestClipRuneSafe(t *testing.T) {
+	s := strings.Repeat("a", 79) + "ü" // ü is 2 bytes: a byte cut at 80 would split it
+	if got := clip(s, 80); got != strings.Repeat("a", 79) || !utf8.ValidString(got) {
+		t.Fatalf("clip %q", got)
+	}
+	if got := clip("€€", 4); got != "€" {
+		t.Fatalf("clip %q", got)
+	}
+	if !utf8.ValidString(clip("a\xffb", 10)) {
+		t.Fatal("invalid bytes kept")
+	}
+	spec, _ := parseLine(line(ts, `{"rule":"`+s+`","severity":"low","action":"`+strings.Repeat("ж", 400)+`"}`), pod("a"), "agent")
+	if !utf8.ValidString(spec.Rule) || !utf8.ValidString(spec.Action) || len(spec.Action) > 503 {
+		t.Fatalf("parsed fields not valid UTF-8: %d", len(spec.Action))
+	}
+}
+
+// failingCreate fails SecurityEvent creation for one rule.
+type failingCreate struct {
+	client.Client
+	rule string
+}
+
+func (f failingCreate) Create(ctx context.Context, o client.Object, opts ...client.CreateOption) error {
+	if e, ok := o.(*v1.SecurityEvent); ok && e.Spec.Rule == f.rule {
+		return io.ErrUnexpectedEOF
+	}
+	return f.Client.Create(ctx, o, opts...)
+}
+
+func TestPositionNotAdvancedOnFailure(t *testing.T) {
+	col, c := collector(t, agent("alice", nil))
+	p := pod("alice")
+	ctx := context.Background()
+	log := strings.Join([]string{
+		line("2026-10-31T10:00:01Z", `{"rule":"ok1","severity":"low"}`),
+		line("2026-10-31T10:00:02Z", `{"rule":"bad","severity":"low"}`),
+		line("2026-10-31T10:00:03Z", `{"rule":"ok2","severity":"low"}`),
+	}, "\n")
+	col.Client = failingCreate{Client: c, rule: "bad"}
+	if err := col.consume(ctx, strings.NewReader(log), p, "agent"); err == nil {
+		t.Fatal("want an error on the failed record")
+	}
+	pos, _ := col.position(ctx, p, "agent")
+	if pos == nil || !pos.Time.Equal(time.Date(2026, 10, 31, 10, 0, 1, 0, time.UTC)) {
+		t.Fatalf("position moved past the failed line: %v", pos)
+	}
+	col.Client = c // reconnect: the failed line and the rest are recorded
+	if err := col.consume(ctx, strings.NewReader(log), p, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(events(t, c)); n != 3 {
+		t.Fatalf("want 3 events, got %d", n)
+	}
+}
+
+func TestFloodRateLimited(t *testing.T) {
+	col, c := collector(t, agent("mallory", nil), agent("alice", nil))
+	col.C.RatePerMin, col.C.RateBurst = 10, 20
+	col.C.PauseAfter = 1000
+	ctx := context.Background()
+	m, a := pod("mallory"), pod("alice")
+	var flood []string
+	for i := 0; i < 200; i++ { // 200 lines within 2 seconds
+		ts := time.Date(2026, 10, 31, 10, 0, 0, i*10_000_000, time.UTC).Format(time.RFC3339Nano)
+		flood = append(flood, line(ts, `{"rule":"r","severity":"low"}`))
+	}
+	if err := col.consume(ctx, strings.NewReader(strings.Join(flood, "\n")), m, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := col.consume(ctx, strings.NewReader(line(ts, `{"rule":"real","severity":"low"}`)), a, "forge"); err != nil {
+		t.Fatal(err)
+	}
+	var mal, ali, limited int
+	for _, e := range events(t, c) {
+		switch e.Spec.Agent {
+		case "mallory":
+			mal++
+			if e.Spec.Rule == "rate-limited" {
+				limited++
+			}
+		case "alice":
+			ali++
+		}
+	}
+	if mal != 21 || limited != 1 || ali != 1 {
+		t.Fatalf("mallory %d (rate-limited %d), alice %d", mal, limited, ali)
+	}
+	if col.Dropped.Load() != 180 {
+		t.Fatalf("dropped %d", col.Dropped.Load())
+	}
+	if !getAgent(t, c, "mallory").Spec.Paused || getAgent(t, c, "alice").Spec.Paused {
+		t.Fatal("the flood pauses only its own agent")
+	}
+	// the bucket refills: a minute later the agent's lines are recorded again
+	late := line("2026-10-31T10:01:30Z", `{"rule":"later","severity":"low"}`)
+	if ok, _ := col.allow(string(m.UID)+"/agent", time.Date(2026, 10, 31, 10, 1, 30, 0, time.UTC)); !ok {
+		t.Fatal("bucket did not refill")
+	}
+	_ = late
 }
 
 func TestPauseUnknownAgentIsNoError(t *testing.T) {
@@ -219,7 +365,7 @@ func TestPrune(t *testing.T) {
 		Data: map[string]string{"pod-alice.agent": ts, "gone.agent": ts}}
 	running := pod("alice")
 	col, c := collector(t, running, cm,
-		mk("alice", 31*24*time.Hour, 0), // too old
+		mk("alice", 31*24*time.Hour, 0),                                                                                  // too old
 		mk("alice", time.Hour, 1), mk("alice", 2*time.Hour, 2), mk("alice", 3*time.Hour, 3), mk("alice", 4*time.Hour, 4), // cap 3
 		mk("bob", 40*24*time.Hour, 5), mk("bob", time.Minute, 6))
 	col.Now = func() time.Time { return now }

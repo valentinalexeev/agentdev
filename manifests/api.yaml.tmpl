@@ -37,8 +37,8 @@ spec:
         - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
         - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
-        - {name: SECURITY_RETENTION_DAYS, value: "${SECURITY_DB_RETENTION_DAYS}"}
-        # security_events table (#70): DATABASE_URL from the Secret 10-api.sh creates (login agentdev_api)
+        # security_events table (#70): DATABASE_URL from the Secret 10-api.sh creates (login agentdev_api; schema
+        # and retention are set by 10-api.sh as agentdev_owner, the API only inserts, reads and calls the prune function)
         - name: DATABASE_URL
           valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
         # optional SIEM webhook output (#70): SECURITY_WEBHOOK_URL and SECURITY_WEBHOOK_SECRET, instance config only

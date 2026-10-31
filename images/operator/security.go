@@ -13,10 +13,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,7 +40,8 @@ const eventPrefix = "AGENTDEV_SECURITY_EVENT "
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=agentdev.dev,resources=securityevents,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents,verbs=patch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;create;update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;update,resourceNames=agentdev-security-positions
 
 // SecurityConfig holds the knobs (env on the operator, see main.go).
 type SecurityConfig struct {
@@ -45,6 +49,8 @@ type SecurityConfig struct {
 	Retention   time.Duration // SecurityEvent objects older than this are deleted (default 30 days)
 	MaxPerAgent int           // newest objects kept per agent (default 500)
 	Rescan      time.Duration // how often new pods and containers are picked up
+	RatePerMin  int           // events per minute one pod container may record (token bucket refill, default 10)
+	RateBurst   int           // bucket size (default 20)
 }
 
 // logOpener opens a container's log, with runtime timestamps, from since (nil: from the start), following it.
@@ -68,9 +74,63 @@ type Collector struct {
 
 	mu      sync.Mutex
 	streams map[string]bool // podUID/container being followed
+
+	bmu     sync.Mutex
+	buckets map[string]*bucket // podUID/container -> token bucket (flood protection)
+	Dropped atomic.Int64       // event lines dropped by the rate limit (all pods)
 }
 
-// rawEvent is the log line's JSON. Agent and job from the line are informational: the agent is taken from the pod.
+// bucket is a token bucket; limited is set once the rate-limited event for the current flood has been recorded.
+type bucket struct {
+	tokens  float64
+	last    time.Time
+	limited bool
+}
+
+// allow takes one token from the pod container's bucket. first is true for the first refused line of a flood: the
+// caller records one aggregated rate-limited event for it, and drops the rest until the bucket refills.
+func (c *Collector) allow(key string, now time.Time) (ok, first bool) {
+	rate, burst := c.C.RatePerMin, c.C.RateBurst
+	if rate <= 0 {
+		rate = 10
+	}
+	if burst <= 0 {
+		burst = 20
+	}
+	c.bmu.Lock()
+	defer c.bmu.Unlock()
+	if c.buckets == nil {
+		c.buckets = map[string]*bucket{}
+	}
+	b := c.buckets[key]
+	if b == nil {
+		b = &bucket{tokens: float64(burst), last: now}
+		c.buckets[key] = b
+	}
+	if d := now.Sub(b.last); d > 0 {
+		b.tokens += d.Minutes() * float64(rate)
+		if b.tokens > float64(burst) {
+			b.tokens = float64(burst)
+		}
+	}
+	b.last = now
+	if b.tokens >= 1 {
+		b.tokens--
+		b.limited = false
+		return true, false
+	}
+	first = !b.limited
+	b.limited = true
+	return false, first
+}
+
+// forgeContainer is the forge sidecar (render.go). Only its lines are trusted to name their source: Claude runs in
+// the agent container and can print any line there, so those events are always source=loop, untrusted=true.
+const forgeContainer = "forge"
+
+var jobRE = regexp.MustCompile(`^(issue|pr)-[0-9]{1,12}$`)
+
+// rawEvent is the log line's JSON. Agent and source from the line are ignored (taken from the pod and container).
 type rawEvent struct {
 	Schema   string `json:"schema"`
 	Source   string `json:"source"`
@@ -102,17 +162,30 @@ func parseLine(line string, pod *corev1.Pod, container string) (v1.SecurityEvent
 	default:
 		e.Severity = "high" // an unknown severity is treated as the worst case, never dropped
 	}
+	source, untrusted := "forge", false
+	if container != forgeContainer {
+		source, untrusted = "loop", true
+	}
+	if !jobRE.MatchString(e.Job) {
+		e.Job = "" // not a job name: a forged or garbled value is not stored
+	}
 	h := sha256.Sum256([]byte(string(pod.UID) + "\x00" + container + "\x00" + ts + "\x00" + rest))
-	return v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: clip(e.Source, 40), Rule: clip(e.Rule, 80),
+	return v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: source, Untrusted: untrusted, Rule: clip(e.Rule, 80),
 		Severity: e.Severity, Agent: agentOf(pod), Job: e.Job, Action: clip(e.Action, 503),
 		Time: metav1.NewTime(t), Pod: pod.Name, Container: container, Hash: hex.EncodeToString(h[:])}, true
 }
 
+// clip cuts s to at most n bytes on a UTF-8 rune boundary (Postgres rejects invalid UTF-8); invalid input bytes are
+// replaced first.
 func clip(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	if len(s) <= n {
+		return s
 	}
-	return s
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func agentOf(p *corev1.Pod) string {
@@ -139,6 +212,9 @@ func (c *Collector) Start(ctx context.Context) error {
 		case <-prune.C:
 			if err := c.Prune(ctx); err != nil {
 				log.FromContext(ctx).Error(err, "prune security events")
+			}
+			if n := c.Dropped.Load(); n > 0 {
+				log.FromContext(ctx).Info("security event lines dropped by the rate limit (total since start)", "dropped", n)
 			}
 		case <-tick.C:
 		}
@@ -236,6 +312,9 @@ func (c *Collector) savePosition(ctx context.Context, p *corev1.Pod, container s
 	return c.Update(ctx, &cm)
 }
 
+// consume records the event lines of one stream. On a Record failure it stops without advancing the position, so the
+// next scan reconnects from the last recorded line and the failed one is read again. Lines over the rate limit are
+// dropped (counted in Dropped); the first of a flood becomes one rate-limited high event, which pauses the agent.
 func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, container string) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -244,9 +323,15 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 		if !ok {
 			continue
 		}
+		if ok, first := c.allow(string(p.UID)+"/"+container, spec.Time.Time); !ok {
+			c.Dropped.Add(1)
+			if !first {
+				continue
+			}
+			spec = rateLimited(spec, c.C.RatePerMin)
+		}
 		if err := c.Record(ctx, p, spec); err != nil {
-			log.FromContext(ctx).Error(err, "record security event", "rule", spec.Rule)
-			continue // position not advanced: the line is read again after the next reconnect
+			return fmt.Errorf("record security event %s: %w", spec.Rule, err)
 		}
 		if err := c.savePosition(ctx, p, container, spec.Time.Time); err != nil {
 			log.FromContext(ctx).Error(err, "save log position")
@@ -255,11 +340,20 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	return sc.Err()
 }
 
+// rateLimited turns the first refused line of a flood into the aggregated event (same time, pod and container).
+func rateLimited(s v1.SecurityEventSpec, rate int) v1.SecurityEventSpec {
+	h := sha256.Sum256([]byte("rate-limited\x00" + s.Hash))
+	s.Rule, s.Severity, s.Job = "rate-limited", "high", ""
+	s.Action = fmt.Sprintf("more than %d security events per minute from container %s; further lines dropped", rate, s.Container)
+	s.Hash = hex.EncodeToString(h[:])
+	return s
+}
+
 // Record creates the SecurityEvent (idempotent by name) and, for a new one, applies the auto-pause rule.
 func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityEventSpec) error {
 	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: c.NS,
 		Labels: map[string]string{"agent": spec.Agent, "agentdev/severity": spec.Severity,
-			"agentdev/pod-uid": string(p.UID)}}, Spec: spec}
+			"agentdev/pod-uid": string(p.UID), "agentdev/job": spec.Job}}, Spec: spec}
 	if err := c.Create(ctx, ev); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil // seen before (restart or reconnect)
@@ -267,28 +361,34 @@ func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityE
 		return err
 	}
 	log.FromContext(ctx).Info("security event", "agent", spec.Agent, "rule", spec.Rule, "severity", spec.Severity, "job", spec.Job)
-	return c.maybePause(ctx, spec)
+	return c.maybePause(ctx, p, ev.Name, spec)
 }
 
-// maybePause pauses the agent on a high-severity event, or when its job has more than PauseAfter events. A person
-// resumes it (spec.paused=false) after looking; the reason stays in the SecurityPaused condition.
-func (c *Collector) maybePause(ctx context.Context, spec v1.SecurityEventSpec) error {
+// maybePause pauses the agent on a high-severity event, or when the current run has more than PauseAfter events.
+// The run is the pod UID plus job: a new pod starts a new count, and events without a job share one per-pod bucket.
+// The count includes the event just created (name), even if the cache has not seen it yet. A person resumes the agent
+// (spec.paused=false) after looking; the reason stays in the SecurityPaused condition.
+func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, spec v1.SecurityEventSpec) error {
 	reason, msg := "", ""
 	if spec.Severity == "high" {
 		reason, msg = "HighSeverity", fmt.Sprintf("high severity %s/%s: %s", spec.Source, spec.Rule, clip(spec.Action, 200))
-	} else if spec.Job != "" {
+	} else {
 		var list v1.SecurityEventList
-		if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agent": spec.Agent}); err != nil {
+		if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agentdev/pod-uid": string(p.UID)}); err != nil {
 			return err
 		}
-		n := 0
+		n := 1 // the event just recorded
 		for _, e := range list.Items {
-			if e.Spec.Job == spec.Job {
+			if e.Name != name && e.Spec.Job == spec.Job {
 				n++
 			}
 		}
 		if n > c.C.PauseAfter {
-			reason, msg = "TooManyEvents", fmt.Sprintf("%d security events in job %s (limit %d)", n, spec.Job, c.C.PauseAfter)
+			job := spec.Job
+			if job == "" {
+				job = "(none)"
+			}
+			reason, msg = "TooManyEvents", fmt.Sprintf("%d security events in job %s of pod %s (limit %d)", n, job, p.Name, c.C.PauseAfter)
 		}
 	}
 	if reason == "" {

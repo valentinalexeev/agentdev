@@ -83,6 +83,8 @@ func main() {
 			PauseAfter:  envInt("SECURITY_PAUSE_AFTER", 5),
 			Retention:   time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,
 			MaxPerAgent: envInt("SECURITY_MAX_PER_AGENT", 500),
+			RatePerMin:  envInt("SECURITY_RATE_PER_MIN", 10),
+			RateBurst:   envInt("SECURITY_RATE_BURST", 20),
 			Rescan:      15 * time.Second,
 		}}
 	if err := mgr.Add(col); err != nil {

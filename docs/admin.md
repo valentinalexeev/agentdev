@@ -233,7 +233,8 @@ NOTE: You can also use `kubectl -n coding-agents get securityevents` or `GET /ap
 ### Resume an agent that the operator paused
 
 The operator pauses an agent when a high severity event occurs. The operator also pauses an agent when one job has
-more than 5 events (`SECURITY_PAUSE_AFTER`).
+more than 5 events (`SECURITY_PAUSE_AFTER`). The count starts again for a new pod. The operator also pauses an
+agent when its containers write more than 10 events in one minute (rule `rate-limited`).
 
 WARNING: Do not resume the agent before you read the events and the issue or the pull request of the job. The text
 of the issue can contain a prompt injection.
@@ -264,9 +265,20 @@ WARNING: Do not put the webhook secret in git. Keep the secret only in the insta
    - Calculate HMAC-SHA256 with the secret over `<X-Agentdev-Timestamp>.<body>`.
    - Compare the result with the value in `X-Agentdev-Signature` (`sha256=<hex>`).
    - Refuse the request if the timestamp is more than 5 minutes old.
+   - Use a constant-time function for the comparison, for example `hmac.compare_digest` in Python or `hmac.Equal`
+     in Go.
+   - Keep the `hash` of each event and refuse a request with a known `hash`.
 
 NOTE: If the SIEM does not answer with a 2xx status, the API tries again 7 times. The time between the tries
 increases from 2 seconds to a maximum of 5 minutes. The event stays in the Postgres table and in the cluster log.
+
+NOTE: The API sends each event one time at most. The API does not send an event again after the last try or after a
+restart. Each agent has a queue of 200 events. When the queue is full, the API does not send the new events of
+that agent and writes the number in its log. Use `GET /api/security-events` to find the events that the SIEM did not
+get.
+
+NOTE: The `source` of an event comes from the container. An event with `untrusted: true` comes from the agent
+container. Claude can write such an event, so do not trust its text.
 
 NOTE: A SIEM can also read `GET /api/security-events` with the `cursor` parameter, or read the cluster logs with the
 filter `AGENTDEV_SECURITY_EVENT`.
@@ -278,7 +290,12 @@ filter `AGENTDEV_SECURITY_EVENT`.
 | `SECURITY_PAUSE_AFTER` | 5 | `config.env`; Ansible `security.pause_after` |
 | `SECURITY_RETENTION_DAYS` (SecurityEvent objects) | 30 | `config.env`; Ansible `security.retention_days` |
 | `SECURITY_MAX_PER_AGENT` (SecurityEvent objects) | 500 | `config.env`; Ansible `security.max_per_agent` |
-| `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env` |
+| `SECURITY_RATE_PER_MIN` (events per minute per container) | 10 | `config.env`; Ansible `security.rate_per_min` |
+| `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `config.env`; Ansible `security.rate_burst` |
+| `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env`; `./run.sh 10` writes it to the database |
+
+NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
+for the rows in Postgres. The API cannot change the database retention.
 
 ## GitHub App (registration)
 

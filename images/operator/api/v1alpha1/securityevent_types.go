@@ -13,18 +13,26 @@ const SchemaV1 = "agentdev.security/v1"
 type SecurityEventSpec struct {
 	// Schema version, agentdev.security/v1.
 	Schema string `json:"schema"`
-	// Component that refused: forge (sidecar), loop (agent loop); later egress, claude-proxy, approvals.
+	// Component that refused, set from the container (not from the line): forge for the forge sidecar, loop for the
+	// agent container. Later egress, claude-proxy, approvals.
 	// +kubebuilder:validation:MaxLength=40
 	Source string `json:"source"`
+	// True for events from the agent container, where Claude runs and can print any line: rule, severity, job and
+	// action are claims, not facts.
+	// +optional
+	Untrusted bool `json:"untrusted,omitempty"`
 	// Rule that fired, for example push-branch or git-config.
 	// +kubebuilder:validation:MaxLength=80
 	Rule string `json:"rule"`
 	// +kubebuilder:validation:Enum=low;medium;high
 	Severity string `json:"severity"`
 	// Agent name: taken from the pod's agent label, not from the log line.
+	// +kubebuilder:validation:MaxLength=63
 	Agent string `json:"agent"`
 	// Job the agent worked on, issue-N or pr-N; empty when not known (a missing and an empty job are the same).
 	// +optional
+	// +kubebuilder:validation:MaxLength=20
+	// +kubebuilder:validation:Pattern=`^((issue|pr)-[0-9]+)?$`
 	Job string `json:"job,omitempty"`
 	// The refused action as text, at most 500 characters plus an ellipsis.
 	// +kubebuilder:validation:MaxLength=520
@@ -32,7 +40,9 @@ type SecurityEventSpec struct {
 	// When the line was written (container runtime timestamp).
 	Time metav1.Time `json:"time"`
 	// Pod and container that wrote the line.
-	Pod       string `json:"pod"`
+	// +kubebuilder:validation:MaxLength=253
+	Pod string `json:"pod"`
+	// +kubebuilder:validation:MaxLength=63
 	Container string `json:"container"`
 	// SHA-256 over pod UID, container, timestamp and the raw line: the dedupe key; the object name is derived from it.
 	Hash string `json:"hash"`

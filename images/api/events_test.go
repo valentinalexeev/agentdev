@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,8 +138,39 @@ func TestSinkSendsOnlyNew(t *testing.T) {
 	e := ev("alice", "high", "h1", time.Now())
 	s.add(context.Background(), e)
 	s.add(context.Background(), e) // informer resync or API restart
-	if len(wh.queue) != 1 {
-		t.Fatalf("queued %d", len(wh.queue))
+	if _, ok := wh.next(); !ok {
+		t.Fatal("nothing queued")
+	}
+	if _, ok := wh.next(); ok {
+		t.Fatal("queued twice")
+	}
+}
+
+func TestWebhookFairQueue(t *testing.T) {
+	wh := newWebhook("http://unused", []byte("k"))
+	wh.PerAgent = 5
+	for i := 0; i < 100; i++ { // mallory floods
+		wh.Enqueue(ev("mallory", "low", fmt.Sprint("m", i), time.Now()))
+	}
+	wh.Enqueue(ev("alice", "high", "a1", time.Now()))
+	if d := wh.Dropped(); d["mallory"] != 95 || d["alice"] != 0 {
+		t.Fatalf("dropped %v", d)
+	}
+	// round robin: alice's event comes out second, not after mallory's backlog
+	var got []string
+	for e, ok := wh.next(); ok; e, ok = wh.next() {
+		got = append(got, e.Agent)
+	}
+	if len(got) != 6 || got[1] != "alice" {
+		t.Fatalf("order %v", got)
+	}
+}
+
+func TestUntrustedFromObject(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"agent": "a", "rule": "r", "hash": "h",
+		"time": "2026-10-31T10:00:00Z", "source": "loop", "untrusted": true}}}
+	if e, ok := fromSecurityEventObject(u); !ok || !e.Untrusted {
+		t.Fatalf("%+v", e)
 	}
 }
 
@@ -218,11 +250,11 @@ func TestPgStore(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	s, err := newPgStore(ctx, url)
+	s, err := newPgStore(ctx, url, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newPgStore(ctx, url); err != nil { // migrations are idempotent
+	if _, err := newPgStore(ctx, url, true); err != nil { // migrations are idempotent
 		t.Fatal(err)
 	}
 	h := "test-" + time.Now().Format(time.RFC3339Nano)
@@ -243,7 +275,51 @@ func TestPgStore(t *testing.T) {
 	if err != nil || len(l) == 0 || l[0].Hash != h {
 		t.Fatal(l, err)
 	}
-	if err := s.Prune(ctx, 365); err != nil {
+	if _, err := s.Prune(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPgRoleSeparation needs TEST_DATABASE_URL as a superuser: it sets up the roles like 10-api.sh and checks that the
+// API login cannot delete, truncate, drop the trigger or change the retention, but can insert, read and prune.
+func TestPgRoleSeparation(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	su, err := newPgStore(ctx, url, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup := `DROP TABLE IF EXISTS security_events, security_settings CASCADE;
+		DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner') THEN CREATE ROLE agentdev_owner NOLOGIN; END IF;
+		IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api') THEN CREATE ROLE agentdev_api NOLOGIN; END IF; END $$;
+		GRANT CREATE, USAGE ON SCHEMA public TO agentdev_owner;
+		SET ROLE agentdev_owner;` + schemaSQL + `RESET ROLE;` + grantsSQL
+	if _, err := su.db.Exec(ctx, setup); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := su.db.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SET ROLE agentdev_api`); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Exec(ctx, `RESET ROLE`)
+	if _, err := conn.Exec(ctx, `INSERT INTO security_events (schema,time,agent,source,rule,severity,action,hash)
+		VALUES ('v1', now(), 'a', 'loop', 'r', 'low', 'x', 'roles-test')`); err != nil {
+		t.Fatal("insert:", err)
+	}
+	for _, q := range []string{`DELETE FROM security_events`, `TRUNCATE security_events`, `UPDATE security_settings SET retention_days=1`,
+		`DROP TRIGGER security_events_append_only ON security_events`, `UPDATE security_events SET action='y'`} {
+		if _, err := conn.Exec(ctx, q); err == nil {
+			t.Errorf("API role may run %q", q)
+		}
+	}
+	if _, err := conn.Exec(ctx, `SELECT security_events_prune()`); err != nil {
+		t.Fatal("prune:", err)
 	}
 }

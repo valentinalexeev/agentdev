@@ -2,11 +2,13 @@ package main
 
 // Security events (#70), long-term copy: the API watches SecurityEvent objects (written by the operator from the
 // agent pods' log lines) and appends each one to the security_events table in the platform Postgres. The table is
-// append-only (a trigger refuses UPDATE; DELETE only removes rows past the retention). GET /api/security-events
+// append-only (schema.sql: the API login has INSERT and SELECT only, a trigger refuses UPDATE and DELETE inside the
+// retention). GET /api/security-events
 // reads it. New rows go to the configured outputs (webhook.go).
 
 import (
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -32,6 +34,7 @@ type securityEvent struct {
 	Agent     string    `json:"agent"`
 	Job       string    `json:"job,omitempty"`
 	Source    string    `json:"source"`
+	Untrusted bool      `json:"untrusted,omitempty"`
 	Rule      string    `json:"rule"`
 	Severity  string    `json:"severity"`
 	Action    string    `json:"action"`
@@ -78,42 +81,18 @@ func decodeCursor(s string) (int64, error) {
 
 type pgStore struct{ db *pgxpool.Pool }
 
-// migrations run in order on start; each is idempotent. Never edit one that has shipped: add a new one.
-var migrations = []string{
-	`CREATE TABLE IF NOT EXISTS security_events (
-		id         bigserial PRIMARY KEY,
-		schema     text        NOT NULL,
-		time       timestamptz NOT NULL,
-		agent      text        NOT NULL,
-		job        text        NOT NULL DEFAULT '',
-		source     text        NOT NULL,
-		rule       text        NOT NULL,
-		severity   text        NOT NULL CHECK (severity IN ('low','medium','high')),
-		action     text        NOT NULL,
-		pod        text        NOT NULL DEFAULT '',
-		container  text        NOT NULL DEFAULT '',
-		hash       text        NOT NULL UNIQUE,
-		stored_at  timestamptz NOT NULL DEFAULT now()
-	)`,
-	`CREATE INDEX IF NOT EXISTS security_events_agent_id ON security_events (agent, id DESC)`,
-	`CREATE INDEX IF NOT EXISTS security_events_time ON security_events (time)`,
-	// append-only: no UPDATE ever; DELETE only for rows past the retention (set per session by prune)
-	`CREATE OR REPLACE FUNCTION security_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
-	BEGIN
-		IF TG_OP = 'UPDATE' THEN
-			RAISE EXCEPTION 'security_events is append-only';
-		END IF;
-		IF OLD.time > now() - coalesce(nullif(current_setting('agentdev.retention_days', true), ''), '365')::int * interval '1 day' THEN
-			RAISE EXCEPTION 'security_events: row is inside the retention period';
-		END IF;
-		RETURN OLD;
-	END $$`,
-	`DROP TRIGGER IF EXISTS security_events_append_only ON security_events`,
-	`CREATE TRIGGER security_events_append_only BEFORE UPDATE OR DELETE ON security_events
-		FOR EACH ROW EXECUTE FUNCTION security_events_append_only()`,
-}
+// schema.sql creates the table, the append-only trigger and the prune function. In a deployment 10-api.sh applies it
+// as the owner role agentdev_owner and grants the API login (agentdev_api) only INSERT and SELECT plus EXECUTE on
+// security_events_prune(); the API then cannot UPDATE, DELETE, TRUNCATE, drop the trigger or change the retention.
+// Tests and a standalone API without that setup pass migrate=true and run it as their own login.
+//
+//go:embed schema.sql
+var schemaSQL string
 
-func newPgStore(ctx context.Context, url string) (*pgStore, error) {
+//go:embed grants.sql
+var grantsSQL string
+
+func newPgStore(ctx context.Context, url string, migrate bool) (*pgStore, error) {
 	db, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, err
@@ -128,18 +107,18 @@ func newPgStore(ctx context.Context, url string) (*pgStore, error) {
 	if lastErr != nil {
 		return nil, fmt.Errorf("connect: %w", lastErr)
 	}
-	for i, m := range migrations {
-		if _, err := db.Exec(ctx, m); err != nil {
-			return nil, fmt.Errorf("migration %d: %w", i, err)
+	if migrate {
+		if _, err := db.Exec(ctx, schemaSQL); err != nil {
+			return nil, fmt.Errorf("schema: %w", err)
 		}
 	}
 	return &pgStore{db: db}, nil
 }
 
 func (s *pgStore) Insert(ctx context.Context, e *securityEvent) (bool, error) {
-	err := s.db.QueryRow(ctx, `INSERT INTO security_events (schema, time, agent, job, source, rule, severity, action, pod, container, hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (hash) DO NOTHING RETURNING id`,
-		e.Schema, e.Time, e.Agent, e.Job, e.Source, e.Rule, e.Severity, e.Action, e.Pod, e.Container, e.Hash).Scan(&e.ID)
+	err := s.db.QueryRow(ctx, `INSERT INTO security_events (schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (hash) DO NOTHING RETURNING id`,
+		e.Schema, e.Time, e.Agent, e.Job, e.Source, e.Untrusted, e.Rule, e.Severity, e.Action, e.Pod, e.Container, e.Hash).Scan(&e.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -147,7 +126,7 @@ func (s *pgStore) Insert(ctx context.Context, e *securityEvent) (bool, error) {
 }
 
 func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, error) {
-	q := `SELECT id, schema, time, agent, job, source, rule, severity, action, pod, container, hash FROM security_events
+	q := `SELECT id, schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash FROM security_events
 		WHERE ($1 = '' OR agent = $1) AND ($2 = '' OR severity = $2) AND time >= $3 AND ($4 = 0 OR id < $4)
 		ORDER BY id DESC LIMIT $5`
 	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit)
@@ -158,7 +137,7 @@ func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, err
 	out := []securityEvent{}
 	for rows.Next() {
 		var e securityEvent
-		if err := rows.Scan(&e.ID, &e.Schema, &e.Time, &e.Agent, &e.Job, &e.Source, &e.Rule, &e.Severity, &e.Action,
+		if err := rows.Scan(&e.ID, &e.Schema, &e.Time, &e.Agent, &e.Job, &e.Source, &e.Untrusted, &e.Rule, &e.Severity, &e.Action,
 			&e.Pod, &e.Container, &e.Hash); err != nil {
 			return nil, err
 		}
@@ -185,20 +164,12 @@ func (s *pgStore) Counts(ctx context.Context, since time.Time) (map[string]int, 
 	return out, rows.Err()
 }
 
-// Prune deletes rows older than days (the trigger allows nothing newer).
-func (s *pgStore) Prune(ctx context.Context, days int) error {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT set_config('agentdev.retention_days', $1, true)`, strconv.Itoa(days)); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM security_events WHERE time < now() - $1::int * interval '1 day'`, days); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+// Prune calls security_events_prune(): a SECURITY DEFINER function of the owner role that deletes rows past the
+// retention stored in security_settings. The API passes no value, so it cannot shorten the retention.
+func (s *pgStore) Prune(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.db.QueryRow(ctx, `SELECT security_events_prune()`).Scan(&n)
+	return n, err
 }
 
 // ---- in memory ----
