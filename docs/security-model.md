@@ -291,6 +291,62 @@ over TLS, OTLP logs and a per-agent hash chain for tamper evidence follow in #71
 
 Each phase's issue includes its signals in its acceptance criteria.
 
+## Phase 5: deterministic executors (#69)
+
+The AI agent designs a change with **read-only** credentials. A **deterministic executor** with the narrowest write
+rights applies it, only after a person approved both the code and the run. No AI process ever holds write
+credentials to infrastructure. Owner decisions on #69 (2026-10-31): the trusted plan is required; an apply needs
+the merge **and** an explicit `/approve`; one executor per environment.
+
+### Resources
+
+- `Executor` (`agentdev.dev/v1alpha1`): one per environment and tool, for example `terraform-prod`. It fixes the image
+  (pinned **digest**, not a tag), the command templates (`plan`, `apply`), the repository and path it may act on, and
+  the service account it runs as. It never takes commands or images from the repository. **Only cluster admins** can
+  create or change an `Executor` (RBAC on the resource; the API exposes it read-only); agents and the forge sidecar
+  have no rights on it, and every change is a security event.
+- `ExecutorRun`: one run of a command on one commit, created by the operator, with its status, output and the hash of
+  its artifact (for example the plan file).
+
+### Actors and credentials
+
+| Actor | Runs as | Cloud credentials | Can |
+|---|---|---|---|
+| design agent (AI) | agent pod | read-only (viewer, state read) | read code and state, run a plan for itself, open the PR |
+| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, egress allow-list, no service account token) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
+| apply executor | Kubernetes Job | write, scoped to one environment (Workload Identity, lifetime of the Job) | apply exactly the approved plan |
+| person with write access | forge, UI | own | review, merge, `/approve` the apply |
+
+### Flow (example: add cert-manager as a `helm_release` to a terraform-managed cluster)
+
+1. The owner opens an issue and assigns it to the agent.
+2. The design agent writes the `helm_release` and its values, runs `terraform fmt`, `validate` and a plan with
+   read-only credentials, and opens a PR with the change and the plan summary.
+3. On the PR head, the operator runs the **plan executor**. It stores `plan-<commit>.tfplan` in a bucket the agents
+   cannot write and posts the readable plan on the PR. Branch protection requires this check. A new commit runs it
+   again. The plan executor runs code from an unreviewed PR (providers, modules), so it is sandboxed like an agent,
+   has read-only cloud credentials, and can write only to its own prefix of the plan bucket.
+4. A person reviews the diff and the **trusted** plan, approves and merges. Branch protection requires the PR
+   branch to be up to date with main, so the reviewed tree is the tree that is merged.
+5. After the merge, the operator runs the plan executor again **on the merge commit** of main. Only this plan can be
+   applied. If it differs from the plan that was reviewed on the PR, the run stops and the PR shows both plans.
+6. An `Approval` request (#67) "apply plan-<merge commit> to prod" appears, with the plan and its hash. It uses the
+   decision rules of phase 4 and is bound to the executor, the environment and the plan hash. It is single-use and
+   expires (default 24 h). A person with write access replies `/approve <id>`. Agents never approve.
+7. The operator runs the **apply executor** with the merge commit and the stored plan, after it checks that the plan
+   hash matches the approved one. Terraform refuses a stale plan; the flow then goes back to step 5.
+8. The executor posts the output to the issue. The run is audited and reported as a security event
+   (`executor.apply`, #70). A failure reopens the issue for the agent.
+
+### Tooling by place
+
+| Where | Tools |
+|---|---|
+| design agent image | terraform, helm (template, lint), tflint; providers through the registry proxy (#65) |
+| executor image (`agentdev-exec-terraform`) | pinned terraform, the repository's provider lock file, gcloud auth through Workload Identity; nothing else |
+| cluster | operator (`Executor`, `ExecutorRun`), buckets for state and plans, two service accounts per environment (read-only, write) |
+| forge | branch protection: required check "trusted plan", required review |
+
 ## Order and size
 
 | Phase | Fixes | Size | Depends on |
@@ -299,6 +355,7 @@ Each phase's issue includes its signals in its acceptance criteria.
 | 2 egress (#65, #6) | R10 | medium | 1 (forge traffic from the sidecar only) |
 | 3 claude-proxy (#66) | R11 | medium | 2 |
 | 4 approvals (#67) | usability, safe exceptions | large (API, UI, MCP tool, CRD, forge permission check) | #57 steps 3-4 (API writes) |
+| 5 executors (#69) | no write credentials in AI processes | large (operator resources, executor images, plan and apply flow) | 4 (approvals), #70 |
 
 Phases 1 and 2 should land before #51 (GKE) puts agents in front of untrusted input. Until phase 1, only trusted
 people may write issues and reviews for an agent (R4).

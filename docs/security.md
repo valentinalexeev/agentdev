@@ -39,6 +39,8 @@ planned target, [security-model.md](security-model.md).
 | R21 | Agent spec can mount any Secret (forge or Claude credentials of another agent) | CodeQL #59 | fixed | CEL rules bind secrets to the agent name; reconciler fails closed with phase `invalid` |
 | R22 | `spec.repo` points the agent at an attacker-controlled repository | CodeQL #59 | mitigated | Pattern-checked; only cluster admins (and later `agentdev-admins`) can create Agents |
 | R23 | Creating an Agent gives a pod forge write access | CodeQL #59 | accepted | That is the product; creation restricted by RBAC and, in the API, `agentdev-admins` (#57) |
+| R24 | **Write credentials to infrastructure** (for example cloud admin for terraform) held by an AI agent | design #69 | **open** | Phase 5 (#69): the agent keeps read-only credentials; a deterministic executor with scoped write credentials applies only an approved plan of the merge commit |
+| R25 | The plan executor runs code of an unreviewed PR (providers, modules) | review #85 | open (design) | Sandboxed like an agent, read-only cloud credentials, writes only to its own prefix in the plan bucket (phase 5) |
 
 ## Platform (ContextForge, authentik, API, UI)
 
