@@ -28,6 +28,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   short-lived gVisor Job with a fresh clone and a read + issues/comments forge account (no push). Re-attachable from
   any terminal with cluster access; ends after 30 min with nobody attached; optional Claude app access (#38, #26).
 
+- Resource control without the UI (#27): `limits:` in the project spec becomes a `ResourceQuota`;
+  `scripts/agent-block.sh` stops an agent and keeps it stopped (router and redeploys honour `agentdev/blocked`).
+
 ### Changed
 - **BREAKING** `infra/terraform`: `project_id`, `region`, `zone` and `github_repository` are required (no
   instance defaults); the module no longer declares a backend; the deployment's root module does (#11).

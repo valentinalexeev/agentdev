@@ -98,6 +98,16 @@ if [[ -z "${ready}" ]]; then
 fi
 ok "issue #${ready}"
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
+# Limits (#27): a ResourceQuota is the backstop no API or kubectl user can exceed. Agents of all projects share the
+# agents namespace today, so the quota caps that namespace; one namespace per project comes with #17.
+if [[ "$(yq -r '.limits // "" | length' "${spec}")" != 0 ]]; then
+  yq -o json '.limits' "${spec}" | jq --arg ns "${AGENTS_NS}" '{apiVersion:"v1", kind:"ResourceQuota",
+    metadata:{name:"agentdev-limits", namespace:$ns, labels:{app:"agentdev"}},
+    spec:{hard:({pods:.pods, "requests.cpu":.cpu, "limits.memory":.memory}
+                | with_entries(select(.value != null) | .value |= tostring))}}' \
+    | k apply -f - >/dev/null
+  ok "quota: $(k -n "${AGENTS_NS}" get resourcequota agentdev-limits -o jsonpath='{.spec.hard}')"
+fi
 for a in ${AGENTS}; do
   k -n "${AGENTS_NS}" create configmap "agent-${a}-project" --from-literal=PROJECT="${project}" \
     --from-literal=READY_ISSUE="${ready}" --dry-run=client -o yaml | k apply -f - >/dev/null
