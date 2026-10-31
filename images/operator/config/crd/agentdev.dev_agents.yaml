@@ -53,8 +53,10 @@ spec:
             description: AgentSpec is the desired agent. Defaults match 06-agents.sh.
             properties:
               claudeSecret:
-                description: Secret with the Claude credential (ANTHROPIC_API_KEY
-                  or CLAUDE_CODE_OAUTH_TOKEN). Exactly one per agent (#5).
+                description: |-
+                  Secret with the Claude credential (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN). Exactly one per agent (#5).
+                  Only claude-* names (claude-shared or claude-<agent>), for the same reason.
+                pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
               forge:
                 default: gitea
@@ -64,16 +66,17 @@ spec:
                 - github
                 type: string
               forgeSecret:
-                description: Secret with FORGE_TOKEN (and optional WAKE_TOKEN, REGISTER_TOKEN).
-                  Default agent-<name>.
-                type: string
-              image:
-                description: Worker image; default from the operator (WORKER_IMAGE).
+                description: |-
+                  Secret with FORGE_TOKEN (and optional WAKE_TOKEN, REGISTER_TOKEN). Default agent-<name>. Only agent-* names:
+                  whoever may write Agents must not be able to mount arbitrary Secrets of the namespace into a pod.
+                pattern: ^agent-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
               maxConcurrent:
                 default: 2
-                description: Parallel items (#20). Memory limit is (1 + maxConcurrent)
-                  Gi.
+                description: |-
+                  No image field on purpose: the worker image is the operator's (WORKER_IMAGE), so writing an Agent cannot run
+                  arbitrary code with the agent's credentials.
+                  Parallel items (#20). Memory limit is (1 + maxConcurrent) Gi.
                 format: int32
                 maximum: 8
                 minimum: 1

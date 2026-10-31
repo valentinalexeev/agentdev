@@ -26,14 +26,17 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Enum=gitea;github
 	// +kubebuilder:default=gitea
 	Forge string `json:"forge,omitempty"`
-	// Secret with FORGE_TOKEN (and optional WAKE_TOKEN, REGISTER_TOKEN). Default agent-<name>.
+	// Secret with FORGE_TOKEN (and optional WAKE_TOKEN, REGISTER_TOKEN). Default agent-<name>. Only agent-* names:
+	// whoever may write Agents must not be able to mount arbitrary Secrets of the namespace into a pod.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^agent-[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ForgeSecret string `json:"forgeSecret,omitempty"`
 	// Secret with the Claude credential (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN). Exactly one per agent (#5).
+	// Only claude-* names (claude-shared or claude-<agent>), for the same reason.
+	// +kubebuilder:validation:Pattern=`^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	ClaudeSecret string `json:"claudeSecret"`
-	// Worker image; default from the operator (WORKER_IMAGE).
-	// +optional
-	Image string `json:"image,omitempty"`
+	// No image field on purpose: the worker image is the operator's (WORKER_IMAGE), so writing an Agent cannot run
+	// arbitrary code with the agent's credentials.
 	// Parallel items (#20). Memory limit is (1 + maxConcurrent) Gi.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=8

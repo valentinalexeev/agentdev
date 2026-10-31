@@ -9,9 +9,9 @@ kind: Agent
 metadata: {name: carol, namespace: coding-agents}
 spec:
   repo: owner/playground        # required
-  claudeSecret: claude-shared   # required: Secret with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
+  claudeSecret: claude-shared   # required, claude-*: Secret with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
   forge: gitea                  # default; github later (#2)
-  forgeSecret: agent-carol      # default agent-<name>: FORGE_TOKEN (+ WAKE_TOKEN, REGISTER_TOKEN)
+  forgeSecret: agent-carol      # default agent-<name>, agent-*: FORGE_TOKEN (+ WAKE_TOKEN, REGISTER_TOKEN)
   maxConcurrent: 2              # default 2, 1..8; memory limit is (1 + maxConcurrent) Gi
   scaleToZero: false            # stop when idle; the router then owns replicas (#35); resuming starts it once
   paused: false                 # true: 0 replicas, state kept
@@ -19,6 +19,9 @@ spec:
 
 Names are at most 40 characters (they become `agent-<name>` and `state-agent-<name>-0`). One operator replica,
 no leader election.
+
+Writing an Agent must not give more than running an agent: there is no image field (the worker image is the
+operator's `WORKER_IMAGE`), and the Secrets an Agent can name are limited to `agent-*` and `claude-*`.
 
 | Status `phase` | Meaning |
 |---|---|

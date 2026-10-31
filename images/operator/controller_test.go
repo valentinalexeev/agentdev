@@ -32,7 +32,7 @@ func setup(t *testing.T, objs ...client.Object) (*AgentReconciler, client.Client
 
 func agent(name string, mut func(*v1.Agent)) *v1.Agent {
 	a := &v1.Agent{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("uid-" + name)},
-		Spec: v1.AgentSpec{Repo: "owner/repo", ClaudeSecret: "claude"}}
+		Spec: v1.AgentSpec{Repo: "owner/repo", ClaudeSecret: "claude-shared"}}
 	if mut != nil {
 		mut(a)
 	}

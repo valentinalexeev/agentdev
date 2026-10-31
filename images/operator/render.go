@@ -21,10 +21,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if forgeSecret == "" {
 		forgeSecret = "agent-" + n
 	}
-	image := a.Spec.Image
-	if image == "" {
-		image = r.D.WorkerImage
-	}
+	image := r.D.WorkerImage // never from the Agent (see AgentSpec)
 	forge := a.Spec.Forge
 	if forge == "" {
 		forge = "gitea"
