@@ -130,6 +130,28 @@ func TestScaleToZeroKeepsRouterReplicas(t *testing.T) {
 	}
 }
 
+func TestResumeStartsScaleToZeroAgent(t *testing.T) {
+	r, c := setup(t, agent("erin", func(a *v1.Agent) { a.Spec.ScaleToZero = true; a.Spec.Paused = true }))
+	reconcile(t, r, "erin")
+	var a v1.Agent
+	_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "erin"}, &a)
+	a.Spec.Paused = false
+	_ = c.Update(context.Background(), &a)
+	reconcile(t, r, "erin")
+	if s := getSTS(t, c, "erin"); *s.Spec.Replicas != 1 {
+		t.Fatalf("resumed scale-to-zero agent not started: replicas %d", *s.Spec.Replicas)
+	}
+}
+
+func TestMemoryFollowsMaxConcurrent(t *testing.T) {
+	r, c := setup(t, agent("fay", func(a *v1.Agent) { a.Spec.MaxConcurrent = 4 }))
+	reconcile(t, r, "fay")
+	m := getSTS(t, c, "fay").Spec.Template.Spec.Containers[0].Resources.Limits.Memory()
+	if m.Value() != 5<<30 {
+		t.Fatalf("memory limit %s, want 5Gi for 4 slots", m)
+	}
+}
+
 func TestDeletedAgentIsIgnored(t *testing.T) {
 	r, _ := setup(t)
 	reconcile(t, r, "gone") // NotFound must not error

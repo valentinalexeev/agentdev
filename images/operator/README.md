@@ -12,10 +12,13 @@ spec:
   claudeSecret: claude-shared   # required: Secret with ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
   forge: gitea                  # default; github later (#2)
   forgeSecret: agent-carol      # default agent-<name>: FORGE_TOKEN (+ WAKE_TOKEN, REGISTER_TOKEN)
-  maxConcurrent: 2              # default 2, 1..8
-  scaleToZero: false            # stop when idle; the router then owns replicas (#35)
+  maxConcurrent: 2              # default 2, 1..8; memory limit is (1 + maxConcurrent) Gi
+  scaleToZero: false            # stop when idle; the router then owns replicas (#35); resuming starts it once
   paused: false                 # true: 0 replicas, state kept
 ```
+
+Names are at most 40 characters (they become `agent-<name>` and `state-agent-<name>-0`). One operator replica,
+no leader election.
 
 | Status `phase` | Meaning |
 |---|---|

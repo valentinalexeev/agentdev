@@ -29,6 +29,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: 'Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0
+          (PVC): keep it a short DNS label.'
         properties:
           apiVersion:
             description: |-
@@ -70,7 +72,8 @@ spec:
                 type: string
               maxConcurrent:
                 default: 2
-                description: Parallel items (#20).
+                description: Parallel items (#20). Memory limit is (1 + maxConcurrent)
+                  Gi.
                 format: int32
                 maximum: 8
                 minimum: 1
@@ -84,7 +87,8 @@ spec:
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
               scaleToZero:
-                description: Stop when idle, woken by the router (#35).
+                description: Stop when idle, woken by the router (#35). The router
+                  then owns replicas; resuming a paused agent starts it once.
                 type: boolean
             required:
             - claudeSecret
@@ -162,6 +166,9 @@ spec:
                 type: integer
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: agent name must be at most 40 characters
+          rule: size(self.metadata.name) <= 40
     served: true
     storage: true
     subresources:

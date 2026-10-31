@@ -6,7 +6,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -59,11 +58,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		blocked := sts.Annotations["agentdev/blocked"] == "true"
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
+		wasPaused := sts.Annotations["agentdev/paused"] == "true"
 		r.render(&a, sts)
+		if a.Spec.Paused {
+			sts.Annotations["agentdev/paused"] = "true"
+		} else {
+			delete(sts.Annotations, "agentdev/paused")
+		}
 		switch {
 		case a.Spec.Paused || blocked:
 			sts.Spec.Replicas = ptr.To[int32](0)
-		case creating || !a.Spec.ScaleToZero || current == nil:
+		case creating || wasPaused || !a.Spec.ScaleToZero || current == nil:
+			// resume starts the agent once; with scale-to-zero it stops again when idle
 			sts.Spec.Replicas = ptr.To[int32](1)
 		default: // scale-to-zero and existing: the router owns replicas
 			sts.Spec.Replicas = current
@@ -104,8 +110,8 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 		return nil
 	}
 	a.Status = s
-	if err := r.Status().Update(ctx, a); err != nil && !apierrors.IsConflict(err) {
-		return err
+	if err := r.Status().Update(ctx, a); err != nil {
+		return err // a conflict is retried by controller-runtime with backoff
 	}
 	return nil
 }

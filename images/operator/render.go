@@ -79,9 +79,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	p.AutomountServiceAccountToken = ptr.To(false)
 	p.SecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true), FSGroup: ptr.To[int64](1000)}
 	p.Containers = []corev1.Container{{
-		Name:            "agent",
-		Image:           image,
-		ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
+		Name:                     "agent",
+		Image:                    image,
+		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
+		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
+		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		Env: []corev1.EnvVar{
 			env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
@@ -99,11 +101,13 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}},
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-mcp"}, Optional: ptr.To(true)}},
 		},
-		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080}},
+		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("3Gi")},
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
+				// 3Gi fits 2 parallel items (agent.yaml.tmpl); ~1Gi per extra slot
+				corev1.ResourceMemory: *resource.NewQuantity(int64(1+maxc)*(1<<30), resource.BinarySI)},
 		},
 	}}
 }

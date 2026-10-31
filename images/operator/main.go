@@ -25,8 +25,6 @@ func env(k, def string) string {
 }
 
 func main() {
-	var leader bool
-	flag.BoolVar(&leader, "leader-elect", false, "leader election (for more than one replica)")
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -42,9 +40,7 @@ func main() {
 		Scheme:                 scheme,
 		Cache:                  cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}}, // agents namespace only
 		Metrics:                metricsserver.Options{BindAddress: "0"},
-		HealthProbeBindAddress: ":8081",
-		LeaderElection:         leader,
-		LeaderElectionID:       "agentdev-operator.agentdev.dev",
+		HealthProbeBindAddress: ":8081", // one replica, no leader election (add a Lease Role first if that changes)
 	})
 	if err != nil {
 		log.Error(err, "manager")

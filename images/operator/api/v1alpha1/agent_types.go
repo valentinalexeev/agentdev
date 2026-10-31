@@ -34,12 +34,12 @@ type AgentSpec struct {
 	// Worker image; default from the operator (WORKER_IMAGE).
 	// +optional
 	Image string `json:"image,omitempty"`
-	// Parallel items (#20).
+	// Parallel items (#20). Memory limit is (1 + maxConcurrent) Gi.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=8
 	// +kubebuilder:default=2
 	MaxConcurrent int32 `json:"maxConcurrent,omitempty"`
-	// Stop when idle, woken by the router (#35).
+	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// +optional
 	ScaleToZero bool `json:"scaleToZero,omitempty"`
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
@@ -65,6 +65,8 @@ type AgentStatus struct {
 // +kubebuilder:printcolumn:name="Repo",type=string,JSONPath=`.spec.repo`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="agent name must be at most 40 characters"
 type Agent struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
