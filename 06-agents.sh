@@ -5,7 +5,7 @@
 #   .secrets/<agent>.claude  file with lines like CLAUDE_CODE_OAUTH_TOKEN=... or ANTHROPIC_API_KEY=...
 #   ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN from the environment (.env)  -> shared by all agents
 source "$(dirname "$0")/lib.sh"
-need envsubst
+need envsubst; need yq
 
 log "Building and loading ${WORKER_IMAGE} and ${ROUTER_IMAGE}"
 "${CONTAINER_ENGINE}" build -q -t "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker" >/dev/null
@@ -56,17 +56,27 @@ for a in ${AGENTS}; do
   else die "${a} has no Claude credential: add .secrets/${a}.claude or set ANTHROPIC_API_KEY"
   fi
   [[ -n "${secret:-}" ]] || die "${a}: no Claude secret selected"
+  # a blocked agent (#27, scripts/agent-block.sh) stays blocked and stopped across redeploys
+  blocked=$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)
   AGENT="${a}" FORGE_TOKEN="$(cat "${SPIKE_DIR}/.secrets/${a}.token")" AGENTS_NS="${AGENTS_NS}" \
     WAKE_TOKEN="$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" REGISTER_TOKEN="${REGISTER_TOKEN}" \
     WORKER_IMAGE="${WORKER_IMAGE}" REPO="${REPO}" POLL_SECONDS="${POLL_SECONDS}" FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" CLAUDE_SECRET="${secret}" \
     IMAGE_PULL_POLICY=Never FORGE_KIND=gitea FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" MAX_CONCURRENT="${MAX_CONCURRENT}" \
     SCALE_TO_ZERO="${SCALE_TO_ZERO}" IDLE_SECONDS="${IDLE_SECONDS}" BOTBOARD_URL="${BOTBOARD_URL}" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
-    envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" | k apply -f - >/dev/null
+    envsubst < "${SPIKE_DIR}/manifests/agent.yaml.tmpl" \
+    | if [[ "${blocked}" == true ]]; then   # one apply, already at 0 and still annotated: no pod flashes up
+        yq 'select(.kind == "StatefulSet") |= (.spec.replicas = 0 | .metadata.annotations."agentdev/blocked" = "true")'
+      else cat; fi \
+    | k apply -f - >/dev/null
+  if [[ "${blocked}" == true ]]; then
+    warn "${a} is blocked: kept at 0 (scripts/agent-block.sh unblock ${a})"; continue
+  fi
   # pick up a rebuilt image / changed secret
   k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
   ok "${a} deployed (${cred})"
 done
 for a in ${AGENTS}; do
+  [[ "$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)" == true ]] && continue
   k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
 done
 

@@ -118,11 +118,36 @@
       changed_when: false
       no_log: true
 
+    - name: Blocked agents (#27) stay stopped across deploys
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: StatefulSet
+        namespace: "{{ agents_ns }}"
+        label_selectors: [app=coding-agent]
+      register: agent_sts
+
     - name: "Agents (own Claude secret if present, else the shared one; exactly one, see #5)"
       kubernetes.core.k8s:
         <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_agent) | from_yaml_all | list }}"
+        # a blocked agent's StatefulSet is rendered at 0 replicas with its annotation kept, in the same apply
+        definition: >-
+          {%- set docs = lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_agent) | from_yaml_all | list -%}
+          {%- set out = [] -%}
+          {%- for d in docs -%}
+          {%-   if d.kind == 'StatefulSet' and ('agent-' + item.name) in blocked_agents -%}
+          {%-     set _ = out.append(d | combine({'spec': {'replicas': 0}, 'metadata': {'annotations': {'agentdev/blocked': 'true'}}}, recursive=true)) -%}
+          {%-   else -%}{%- set _ = out.append(d) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
       vars:
+        blocked_agents: >-
+          {%- set names = [] -%}
+          {%- for s in agent_sts.resources -%}
+          {%-   if ((s.metadata.annotations | default({}, true)).get('agentdev/blocked')) == 'true' -%}
+          {%-     set _ = names.append(s.metadata.name) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ names }}
         lines: "{{ agent_secrets.results[idx].stdout_lines }}"
         own_claude: "{{ lines[2:] | select('search', '=') | list }}"
         vars_agent:
