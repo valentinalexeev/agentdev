@@ -63,6 +63,7 @@ spec:
         - {name: SCALE_TO_ZERO, value: "${SCALE_TO_ZERO}"}   # ask the router to stop this agent when idle (#35)
         - {name: IDLE_SECONDS,  value: "${IDLE_SECONDS}"}
         - {name: BOTBOARD_URL,  value: "${BOTBOARD_URL}"}   # agent dashboard (#26); empty = off
+        - {name: FORGE_PUBLIC_URL, value: "${FORGE_PUBLIC_URL}"}   # forge address for links people click; empty = FORGE_URL
         - name: READY_ISSUE    # issue to post the readiness report on (#31); set by scripts/bootstrap-project.sh
           valueFrom: {configMapKeyRef: {name: agent-${AGENT}-project, key: READY_ISSUE, optional: true}}
         - name: WAKE_TOKEN
