@@ -68,8 +68,12 @@ jobs:
           BOTBOARD_NS=botboard BOTBOARD_IMAGE=img envsubst < manifests/botboard.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform CONTEXTFORGE_IMAGE=img POSTGRES_IMAGE=img CF_ADMIN_EMAIL=a@b.c SERVICE_CIDR=10.96.0.0/12 \
             CF_ADMIN_PASSWORD=x CF_BASIC_AUTH_PASSWORD=x CF_DEFAULT_USER_PASSWORD=x CF_ENC_SECRET=x CF_JWT_SECRET=x \
-            PG_ADMIN_PASSWORD=x PG_AGENTDEV_PASSWORD=x PG_CF_PASSWORD=x \
+            PG_ADMIN_PASSWORD=x PG_AGENTDEV_PASSWORD=x PG_CF_PASSWORD=x PG_AUTHENTIK_PASSWORD=x \
             envsubst < manifests/platform.yaml.tmpl | ./kubeconform -strict -summary -
+          # authentik chart with our values (#45): renders, and its core objects validate (CRDs skipped)
+          helm repo add authentik https://charts.goauthentik.io >/dev/null
+          helm template authentik authentik/authentik --version "$(sed -n 's/^AUTHENTIK_VERSION="${AUTHENTIK_VERSION:-\(.*\)}".*/\1/p' config.env)" \
+            -n agentdev-platform -f manifests/authentik-values.yaml | ./kubeconform -strict -summary -ignore-missing-schemas -
           AGENT=demo AGENTS_NS=coding-agents FORGE_TOKEN=x WORKER_IMAGE=img REPO=o/r POLL_SECONDS=20 FORGE_ADMIN_USER=owner \
             envsubst < manifests/agent.yaml.tmpl | ./kubeconform -strict -summary -
       - name: router tests (no dependencies, a few seconds)
