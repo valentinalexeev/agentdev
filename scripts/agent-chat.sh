@@ -7,7 +7,8 @@
 #
 # A session is a short-lived Job (manifests/chat.yaml.tmpl) with a fresh clone of the project, under gVisor. It uses the
 # project's chat account: read access plus issues and comments, no push. It ends after IDLE_SECONDS (default 1800)
-# with nobody attached. REMOTE_CONTROL=true also exposes it to the Claude app (#26); that needs a subscription login.
+# with nobody attached. REMOTE_CONTROL=true also exposes it to the Claude app (#26); that needs a full claude.ai
+# login (/login inside the session): API keys and setup-token tokens are inference-only and are refused.
 source "$(dirname "$0")/../lib.sh"
 # shellcheck disable=SC1091
 [[ -f "${SPIKE_DIR}/.env" ]] && { set -a; source "${SPIKE_DIR}/.env"; set +a; }

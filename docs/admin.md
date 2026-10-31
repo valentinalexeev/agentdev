@@ -59,7 +59,7 @@ Secret `chat-<project>`), then starts a Job from `manifests/chat.yaml.tmpl`.
 | `IDLE_SECONDS` | 1800 | end the session after this long with nobody attached |
 | hard cap | 8 h | `activeDeadlineSeconds` in the template, even while attached |
 | `CLAUDE_SECRET` | `claude-shared` | Claude credential the session uses (it is visible inside the session pod) |
-| `REMOTE_CONTROL` | false | also expose the session to the Claude app (#26); needs a subscription login, not an API key |
+| `REMOTE_CONTROL` | false | also expose the session to the Claude app (#26). Needs a full claude.ai login: run `/login` inside the session. API keys and `claude setup-token` tokens are refused (inference-only) |
 | `IMAGE_PULL_POLICY` | Never | `IfNotPresent` outside kind |
 
 Finished sessions are removed 5 minutes after they end. Running ones: `kubectl -n coding-agents get jobs -l app=agent-chat`.
