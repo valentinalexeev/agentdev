@@ -44,6 +44,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Agent operator (#47): `Agent` CRD (`agentdev.dev/v1alpha1`) and a controller-runtime operator
   (`./run.sh 12`, image `ghcr.io/valentinalexeev/agentdev-operator`); creating, pausing or deleting an Agent
   creates, stops or removes its StatefulSet; honours `agentdev/blocked` and router scale-to-zero.
+- Web UI shell (#48): React app `agentdev-ui` (`./run.sh 11`, image `ghcr.io/valentinalexeev/agentdev-ui`): sign in
+  with authentik (code + PKCE), agent overview from the API; nginx serves runtime config and proxies `/api`.
 
 ### Changed
 - Readiness report state is keyed by repository and issue, so an agent re-bootstrapped into another project reports

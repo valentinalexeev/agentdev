@@ -5,6 +5,7 @@ name: Images
 #   ghcr.io/<owner>/agentdev-router   webhook router
 #   ghcr.io/<owner>/agentdev-api      management API (#46)
 #   ghcr.io/<owner>/agentdev-operator Agent operator (#47)
+#   ghcr.io/<owner>/agentdev-ui       management UI (#48)
 # Pull requests build all of them (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest.
 # Multi-arch: linux/amd64 (GKE) and linux/arm64 (kind on Apple Silicon).
 on:
@@ -31,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [worker, router, api, operator]
+        name: [worker, router, api, ui, operator]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3

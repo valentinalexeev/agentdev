@@ -1,0 +1,60 @@
+# agentdev UI (#48), namespace ${PLATFORM_NS}. Rendered by 11-ui.sh. Static React app + /api proxy to the API.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: agentdev-ui, namespace: ${PLATFORM_NS}, labels: {app: agentdev-ui}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: agentdev-ui}}
+  template:
+    metadata: {labels: {app: agentdev-ui}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: ui
+        image: ${UI_IMAGE}
+        env:
+        - {name: OIDC_ISSUER, value: "${OIDC_ISSUER}"}
+        - {name: OIDC_CLIENT_ID, value: agentdev}
+        - {name: API_UPSTREAM, value: "http://agentdev-api.${PLATFORM_NS}.svc.cluster.local:8080"}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        # nginx writes its rendered config, pid and temp files: only these are writable
+        volumeMounts:
+        - {name: conf, mountPath: /etc/nginx/conf.d}
+        - {name: tmp, mountPath: /tmp}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 64Mi}
+      volumes:
+      - {name: conf, emptyDir: {}}
+      - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: agentdev-ui, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: agentdev-ui}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# the API accepts the UI's proxied calls (platform namespace is deny-by-default)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-api-from-ui, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-api}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: agentdev-ui}}}]
+    ports: [{port: 8080}]
+---
+# the UI itself: reached through port-forward locally; an Ingress on GKE (#51) adds its rule
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-ui, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-ui}}
+  policyTypes: [Ingress]
+  ingress: []
