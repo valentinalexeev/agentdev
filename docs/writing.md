@@ -113,11 +113,11 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | port-forward | a `kubectl port-forward` connection from the local computer to a service in the cluster |
 | project | one forge repository with its agents |
 | pull request (PR) | a request to merge a branch |
-| router | the agentdev service that receives forge webhooks and wakes agents |
 | quota | a limit for the pods, the CPU and the memory of the agents namespace |
+| router | the agentdev service that receives forge webhooks and wakes agents |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
-| security event | a record of an action that a guardrail stopped |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
+| security event | a record of an action that a guardrail stopped |
 | setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
 | specification (spec) | the project file, for example `my-project.yaml` |
@@ -130,7 +130,10 @@ These technical names are also allowed in the manuals with their usual meaning: 
 image), namespace, nginx, OIDC, password, PKCE, port, redirect URI, session, SSH tunnel, tab (browser tab), token,
 user name, authentik blueprint, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
 Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terraform, Ansible, playbook, Secret Manager,
-webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log.
+webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
+gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
+Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
+kindnet, Argo CD, Flux, terminal, Claude Code.
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
@@ -144,7 +147,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | clone | copy a git repository with `git clone` |
 | click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
-| log in | start a session on the authentik page (the authentik label is **Log in**) |
+| log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
 | merge | add the changes of a pull request to the main branch |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |

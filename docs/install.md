@@ -107,13 +107,14 @@ CAUTION: The bootstrap makes a project and connects billing. Run the bootstrap o
 WARNING: Do not put secret values in git, in issues or in logs. Put the secret values only in Secret Manager.
 
 1. In the deployment repository, run `terraform plan`.
-2. Examine the plan, then run `terraform apply`.
-3. Get the CI values: `terraform output github_actions_auth`
-4. Set the CI variables of the deployment repository to these values.
-5. Put the secret values into Secret Manager. The list is in `infra/ansible/README.md`.
-6. Open a pull request in the deployment repository.
+2. Examine the plan.
+3. Run `terraform apply`.
+4. Get the CI values: `terraform output github_actions_auth`
+5. Set the CI variables of the deployment repository to these values.
+6. Put the secret values into Secret Manager. The list is in `infra/ansible/README.md`.
+7. Open a pull request in the deployment repository.
    The CI does the Ansible dry run.
-7. Merge the pull request.
+8. Merge the pull request.
    The CI deploys the instance.
 
 NOTE: [`AGENTS.md`](../AGENTS.md) gives all the steps in detail. An AI agent can do these steps with you.

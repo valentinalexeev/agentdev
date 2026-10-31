@@ -15,8 +15,8 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The agent does not write a comment on an assigned issue. | The assignee is not the exact login of the agent. Or the agent does not run. Or the forge token is not valid. | 1. Examine the assignee. 2. Run `kubectl -n coding-agents get pods`. 3. If the log shows `cannot authenticate to forge`, give the agent a new forge token. |
-| The agent writes a comment, but does not open a pull request. | The Claude call failed (credential, quota). Or the agent made no change. | 1. Read the log of the agent. 2. If the agent made no change, the issue shows "could not produce a change". |
-| The bootstrap issue shows `not ready`. | The check in the list failed (forge push access, tracker, Claude). | 1. Correct that item. 2. Start the agent again. The agent writes a new report only when the result changes. |
+| The agent writes a comment, but does not open a pull request. | The Claude call failed (credential, quota). Or the agent made no change. | 1. Read the log of the agent. If the agent made no change, the issue shows "could not produce a change". |
+| The bootstrap issue shows `not ready`. | The check in the list failed (permission to send commits to the forge, tracker, Claude). | 1. Correct that item. 2. Start the agent again. The agent writes a new report only when the result changes. |
 | Agents react only each `POLL_SECONDS`. | Webhooks do not get to the router. Or the agent is not registered. | 1. If the router log shows `rejected delivery (signature)`, make the webhook secrets the same. 2. Make sure that `/status` of the router lists the agent. |
 | The router log shows `no agent among [...]`. | The event is about a person who has no agent. | No procedure. This is correct for issues that are not assigned to an agent. |
 | The agent pod shows `OOMKilled`. | The agent has too many items at the same time for its memory limit. | 1. Decrease `MAX_CONCURRENT`, or increase the memory limit. |
@@ -47,7 +47,7 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The authentik login page shows again after each login. | The port-forward uses http. The session cookies are only for https. | 1. Start the port-forward to port `443`. 2. Use https://localhost:9443/. |
-| The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | 1. Log in through the URL in `API_OIDC_ISSUER`. Or set `API_OIDC_ISSUER` to your URL and run `./run.sh 10` again. |
+| The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
 | In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
 
 ## Report a problem that continues

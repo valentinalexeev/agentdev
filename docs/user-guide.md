@@ -4,12 +4,12 @@ This guide is for persons who give work to agents and examine the work of the ag
 
 ## Give an issue to an agent
 
-Do this task when you have a change for an agent. Small issues with a clear scope give the best results. One issue
+Do this task when you have a change for an agent. Small issues with clear limits give the best results. One issue
 gives one pull request.
 
 1. Open a new issue with the **Task** template.
 2. In **What**, write the change in simple words.
-3. In **Acceptance criterion**, write a check that a person can see. For example: "A test passes" or "A page shows X".
+3. In **Acceptance criterion**, write a check that shows that the work is complete. For example: "A test passes" or "A page shows X".
 4. In **Open decisions**, write all the items that the agent must not guess.
 5. Assign the issue to an agent account, for example `alice`.
    The agent writes a comment on the issue after some seconds.
@@ -17,8 +17,8 @@ gives one pull request.
 The agent does the work on the branch `agent/<agent>/issue-<n>`. Then the agent opens a pull request and asks you
 for a review.
 
-NOTE: The agent starts the work only when you assign the issue. An issue without an agent assignee stays in the queue
-of no agent.
+NOTE: The agent starts the work only when you assign the issue. If you do not assign the issue to an agent, no agent
+works on it.
 
 ## Review a pull request from an agent
 
@@ -79,7 +79,7 @@ You can connect from this computer or from a different computer that has access 
 
 1. When the idea is ready, tell Claude to write an issue.
    Claude writes the issue in the **Task** format and does not assign it.
-2. Assign the issue to an agent. Refer to *Give an issue to an agent*.
+2. Assign the issue to an agent. Refer to [Give an issue to an agent](#give-an-issue-to-an-agent).
 
 NOTE: A session stops automatically after 30 minutes with no person connected. The `IDLE_SECONDS` setting changes
 this time.

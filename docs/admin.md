@@ -154,7 +154,7 @@ of the agents. It shows one card for each issue.
 1. Start the port-forward: `kubectl -n botboard port-forward svc/botboard 8090:80`
 2. Open http://localhost:8090 in a browser.
 
-NOTE: Botboard keeps its state in memory. A restart clears it. The agents send their cards again while they work.
+NOTE: Botboard keeps its state in memory. When botboard starts again, its state is empty. The agents send their cards again while they work.
 
 ### Connect the agents to botboard on GKE
 
@@ -195,7 +195,7 @@ NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated pa
 
 2. Run the sync: `scripts/mcp-sync.sh <spec>`
    The bootstrap also runs this script.
-3. Restart each agent to get the new tools: `kubectl delete pod agent-<name>-0`
+3. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
@@ -233,7 +233,7 @@ Do this task after run.sh step 08.
 2. Run run.sh step 09: `./run.sh 09`
    The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
 
-### Sign in to authentik for the first time
+### Log in to authentik for the first time
 
 WARNING: Change the password and add MFA immediately after the first login. The first password is in a local file.
 
@@ -324,6 +324,7 @@ Before you do this task, make sure that the Secret `agent-<name>` with the forge
    `kubectl -n coding-agents patch agent carol --type merge -p '{"spec":{"paused":true}}'`
    The pod stops. The operator keeps the state.
 2. To resume the agent, run the same command with `"paused":false`.
+   The operator starts the pod again. With scale to zero, the router stops the agent again when it has no work.
 
 ### Delete an Agent object
 
@@ -425,13 +426,15 @@ Put it in Secret Manager (GKE) or in a local Secret.
 3. Examine the permissions, the events and the URLs in the manifest.
 4. Make the form: `scripts/github-app.sh form instance.yml`
    The script writes `.secrets/github-app/register.html`.
-5. Open `.secrets/github-app/register.html` in a browser and confirm the App on github.com.
+5. Open `.secrets/github-app/register.html` in a browser.
+6. Confirm the App on github.com.
    GitHub sends the browser to `<public_url>/github-app/registered?code=...&state=...`.
    A 404 on this page is correct, because no service listens at this time.
-6. In 1 h or less, copy the full URL from the browser and run:
+7. In 1 h or less, copy the full URL from the browser.
+8. Run:
    `scripts/github-app.sh convert instance.yml 'URL'`
    The script keeps the App ID, the private key and the webhook secret in `.secrets/github-app/` (mode 600).
-7. Install the App on the repositories of the agents.
+9. Install the App on the repositories of the agents.
 
 ### Reference: the GitHub App
 
@@ -509,7 +512,7 @@ when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, 
 
 ## Webhooks
 
-Each repository has one webhook to the router. Run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
+Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
 
 ### Show the state of the router
 
