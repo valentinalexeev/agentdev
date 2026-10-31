@@ -109,7 +109,7 @@ Every `/api` call needs an authentik access token of the OIDC application `agent
 | Endpoint | Returns |
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
-| `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `blocked`), replicas |
+| `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57) |
 
 authentik writes the URL you logged in through into the token, so `API_OIDC_ISSUER` (`config.env`) must be that
 URL: locally `https://localhost:9443/application/o/agentdev/` with the 9443 port-forward. The API fetches keys
@@ -136,8 +136,8 @@ kubectl -n coding-agents delete agent carol               # removes the pod; vol
 
 The forge token Secret `agent-<name>` must exist first. Blocked agents (`scripts/agent-block.sh`) stay stopped;
 with `scaleToZero` the router, not the operator, starts and stops the pod. Field reference:
-[`images/operator/README.md`](../images/operator/README.md). Agents created by `06` are not Agents yet: moving
-`06` and the API to Agent objects is the next step (#57), so that the UI can add, pause and remove agents (#4);
+[`images/operator/README.md`](../images/operator/README.md). `06` creates Agent objects (#57), and the API reads
+them (`managed: true`); letting the UI add, pause and remove agents is the next step (#57, #4);
 keeping Agents in the deployment repo with Argo CD or Flux is #58.
 ## Web UI
 

@@ -10,6 +10,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -98,5 +102,33 @@ func TestMe(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &id)
 	if w.Code != http.StatusOK || id.Username != "owner" {
 		t.Errorf("me: %d %+v", w.Code, id)
+	}
+}
+
+func TestAgentsFromAgentObjects(t *testing.T) {
+	s := runtime.NewScheme()
+	ag := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "agentdev.dev/v1alpha1", "kind": "Agent",
+		"metadata": map[string]any{"name": "alice", "namespace": "coding-agents"},
+		"spec":     map[string]any{"repo": "owner/x", "forge": "gitea", "maxConcurrent": int64(3), "paused": true},
+		"status":   map[string]any{"phase": "paused", "ready": int64(0)},
+	}}
+	d := dynfake.NewSimpleDynamicClientWithCustomListKinds(s, map[schema.GroupVersionResource]string{agentsGVR: "AgentList"}, ag)
+	c := fake.NewSimpleClientset(
+		sts("alice", 0, 0, map[string]string{"agentdev/repos": "owner/x"}),
+		sts("legacy", 1, 1, map[string]string{"agentdev/repos": "owner/old"}), // no Agent object yet
+	)
+	h := routes(fakeVerify, &kubeAgents{c: c, d: d, ns: "coding-agents"})
+	w := do(t, h, "/api/agents", "good")
+	var got struct{ Agents []agent }
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Agents) != 2 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	a, l := got.Agents[0], got.Agents[1]
+	if !a.Managed || a.Phase != "paused" || !a.Paused || a.MaxConcurrent != 3 || a.Repos[0] != "owner/x" {
+		t.Errorf("alice from Agent: %+v", a)
+	}
+	if l.Managed || l.Phase != "running" || l.Name != "legacy" {
+		t.Errorf("legacy StatefulSet: %+v", l)
 	}
 }
