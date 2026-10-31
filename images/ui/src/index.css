@@ -1,0 +1,29 @@
+:root {
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1d1d1f;
+  background: #f6f6f7;
+  line-height: 1.5;
+}
+body { margin: 0; }
+header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.75rem 1.5rem; background: #fff; border-bottom: 1px solid #e5e5e7;
+}
+.who { display: flex; gap: 1rem; align-items: center; color: #555; }
+main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
+h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+button {
+  font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #1d1d1f;
+  background: #1d1d1f; color: #fff; cursor: pointer;
+}
+button.link { background: none; border: none; color: #0a58ca; padding: 0; }
+table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e5e7; border-radius: 8px; }
+th, td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid #eee; }
+th { font-weight: 600; color: #555; font-size: 0.85rem; }
+.phase { padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.85rem; }
+.phase.running { background: #dcf5e3; color: #146c2e; }
+.phase.starting { background: #fff4d6; color: #7a5a00; }
+.phase.stopped { background: #eceef1; color: #555; }
+.phase.blocked { background: #fde2e1; color: #a1251f; }
+.error { color: #a1251f; }
+code { background: #eceef1; padding: 0 0.3rem; border-radius: 4px; }

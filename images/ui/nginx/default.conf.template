@@ -1,0 +1,33 @@
+# Rendered by the nginx image at start (envsubst of ${VARS} from the environment).
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+
+  add_header X-Content-Type-Options nosniff always;
+  add_header Referrer-Policy no-referrer always;
+  add_header X-Frame-Options DENY always;
+
+  # runtime config for the SPA; no secrets (public OIDC client)
+  location = /config.json {
+    default_type application/json;
+    add_header Cache-Control no-store;
+    return 200 '{"oidcIssuer":"${OIDC_ISSUER}","oidcClientId":"${OIDC_CLIENT_ID}"}';
+  }
+
+  # same-origin API: the browser never needs CORS. Resolved per request (variable + resolver), so the UI starts
+  # even while the API is down, and follows a changed Service IP.
+  resolver ${NAMESERVER} valid=30s;
+  location /api/ {
+    set $api ${API_UPSTREAM};
+    proxy_pass $api;
+    proxy_set_header Host $host;
+  }
+
+  location = /healthz { access_log off; return 200 ok; }
+
+  # SPA: every other path (including /callback) serves index.html
+  location / {
+    try_files $uri /index.html;
+  }
+  location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
+}
