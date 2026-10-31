@@ -52,9 +52,12 @@ Re-applying the manifests (a redeploy) starts stopped agents once; they stop aga
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents
   namespace when you run bootstrap. Kubernetes refuses pods beyond it, whatever starts them. All projects share that
-  namespace until #17, so the quota caps them together.
+  namespace until #17, so the quota caps them together. With a `cpu` or `memory` limit set, Kubernetes rejects any pod
+  in the namespace that does not declare CPU requests or memory limits. agentdev's agents, router and interactive
+  sessions all declare them; anything else you run there must too.
 - **Block an agent:** `scripts/agent-block.sh block <agent> [reason]` stops it and keeps it stopped: events don't
-  start it (scale to zero), and redeploys keep it at 0. `unblock` starts it again and it picks up waiting work.
+  start it (scale to zero), and redeploys (`./run.sh 06` and the Ansible playbook) keep it at 0. `unblock` starts it
+  again and it picks up waiting work.
   `list` shows blocked agents. The UI (#12) will set the same `agentdev/blocked` annotation.
 
 ## Webhooks

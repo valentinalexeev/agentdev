@@ -107,7 +107,7 @@ async function scalable() {
     return { name: s.metadata.name, enabled: a['agentdev/scale-to-zero'] === 'true', user: a['agentdev/user'],
       blocked: a['agentdev/blocked'] === 'true',
       forge: a['agentdev/forge'] || 'gitea', repos: (a['agentdev/repos'] || '').split(',').filter(Boolean), replicas: s.spec.replicas };
-  }).filter((s) => s.enabled && !s.blocked);   // a blocked agent is never started by events (#27)
+  }).filter((s) => s.enabled);
 }
 const waking = new Map();   // sts name -> time scaled up (no double scale-ups while the pod starts)
 async function wakeStopped(forge, repo, who) {
@@ -115,7 +115,8 @@ async function wakeStopped(forge, repo, who) {
   // Every opted-in agent that is not live is a candidate, whatever its replica count: an agent being scaled down
   // (replicas already 0 or pod terminating) must come back for this event. scaleTo(1) is idempotent.
   const liveNames = new Set(live().map((r) => `agent-${r.agent}`));
-  const todo = (await scalable()).filter((s) => !liveNames.has(s.name) && s.forge === forge && s.repos.includes(repo)
+  // a blocked agent (#27) is never started by events; the idle path below may still stop it
+  const todo = (await scalable()).filter((s) => !s.blocked && !liveNames.has(s.name) && s.forge === forge && s.repos.includes(repo)
     && who.has(s.user) && Date.now() - (waking.get(s.name) || 0) >= 120e3);
   const results = await Promise.allSettled(todo.map((s) => scaleTo(s.name, 1).then(() => {
     waking.set(s.name, Date.now()); stats.scaledUp++;

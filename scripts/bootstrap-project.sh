@@ -103,8 +103,8 @@ k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/
 if [[ "$(yq -r '.limits // "" | length' "${spec}")" != 0 ]]; then
   yq -o json '.limits' "${spec}" | jq --arg ns "${AGENTS_NS}" '{apiVersion:"v1", kind:"ResourceQuota",
     metadata:{name:"agentdev-limits", namespace:$ns, labels:{app:"agentdev"}},
-    spec:{hard:({pods:(.pods // empty | tostring), "requests.cpu":(.cpu // empty | tostring),
-                 "limits.memory":(.memory // empty | tostring)} | with_entries(select(.value != null)))}}' \
+    spec:{hard:({pods:.pods, "requests.cpu":.cpu, "limits.memory":.memory}
+                | with_entries(select(.value != null) | .value |= tostring))}}' \
     | k apply -f - >/dev/null
   ok "quota: $(k -n "${AGENTS_NS}" get resourcequota agentdev-limits -o jsonpath='{.spec.hard}')"
 fi

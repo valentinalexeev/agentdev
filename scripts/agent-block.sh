@@ -12,13 +12,14 @@ sts() { echo "agent-${1:?agent name required}"; }
 case "${1:-}" in
   block)
     s=$(sts "${2:-}"); reason=${3:-blocked by admin}
-    k -n "${AGENTS_NS}" get statefulset "${s}" >/dev/null || die "no agent ${2}"
+    k -n "${AGENTS_NS}" get statefulset "${s}" >/dev/null 2>&1 || die "no agent ${2}"
     k -n "${AGENTS_NS}" annotate statefulset "${s}" --overwrite agentdev/blocked=true \
       "agentdev/blocked-reason=${reason}" "agentdev/blocked-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
     k -n "${AGENTS_NS}" scale statefulset "${s}" --replicas=0 >/dev/null
     ok "${2} blocked and stopped (${reason})" ;;
   unblock)
     s=$(sts "${2:-}")
+    k -n "${AGENTS_NS}" get statefulset "${s}" >/dev/null 2>&1 || die "no agent ${2}"
     k -n "${AGENTS_NS}" annotate statefulset "${s}" agentdev/blocked- agentdev/blocked-reason- agentdev/blocked-at- >/dev/null
     k -n "${AGENTS_NS}" scale statefulset "${s}" --replicas=1 >/dev/null
     ok "${2} unblocked and started" ;;

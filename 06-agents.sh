@@ -70,7 +70,7 @@ for a in ${AGENTS}; do
   ok "${a} deployed (${cred})"
 done
 for a in ${AGENTS}; do
-  [[ "$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}')" == true ]] && continue
+  [[ "$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)" == true ]] && continue
   k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
 done
 
