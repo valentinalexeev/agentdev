@@ -25,25 +25,33 @@ Each task in a manual has this structure:
 
 ## Safety instructions
 
-- **WARNING:** a risk to people, to credentials or to security. **CAUTION:** a risk of damage to data or to the
-  system. **NOTE:** information that is not an instruction.
-- Put a WARNING or a CAUTION immediately before the step it applies to.
-- Start with a clear command, then give the risk: "Do not let people who are not trusted write issues for an agent.
-  An agent can read its forge token at this time."
+- **WARNING:** a risk to credentials, to security or to people. **CAUTION:** a risk of damage to data or to the
+  system. **NOTE:** information that is not an instruction. A NOTE never contains a step.
+- Project adaptation: in STE, WARNING means a risk of injury or death and CAUTION a risk of damage to equipment.
+  This project uses WARNING also for a risk to credentials and security, because for software that is the most
+  serious risk.
+- Put a WARNING or a CAUTION immediately before the step it applies to. If a risk applies to a full task, put it
+  before step 1 of that task.
+- Start with a clear command, then give the risk: "Do not give an agent issues from unknown persons. At this time,
+  an agent can read its forge token."
 
 ## Grammar rules (summary)
 
-- Use the active voice in procedures. In descriptions, use the active voice as much as possible.
+- Use an approved word only with its approved meaning and as its approved part of speech. For example, START is a
+  verb, not a noun, and STEP is a noun for a step of a procedure only. Most violations of STE come from this rule.
+- Use the active voice in procedures. In descriptions, use the active voice as much as possible. You can use the
+  passive (with the past participle) in descriptions, but not frequently.
 - Use the imperative (command) form for instructions: "Start the port-forward", not "The port-forward should be
   started".
 - Use only these verb forms: infinitive, imperative, simple present, simple past, future, and the past participle
-  as an adjective.
+  (as an adjective, or in a passive description).
 - Do not use the -ing form of a verb, except in a technical name ("port-forwarding" is not allowed; "port-forward"
   is a technical name).
 - Use articles ("the", "a") and demonstratives ("this") before nouns where possible.
 - Do not use more than three nouns in a noun cluster. Write "the token of the agent" if "the agent forge token
   secret" is too long.
-- Write one topic in each sentence. Use a vertical list for three or more items.
+- Write one topic in each sentence. Project policy: use a vertical list for three or more items (STE recommends
+  vertical lists for complex text).
 - Use the same word for the same thing everywhere. Do not use synonyms.
 
 ## Approved words: common substitutions
@@ -62,8 +70,8 @@ STE has a dictionary of approved words. These substitutions occur often in this 
 | i.e. | that is |
 | should (for an instruction) | (imperative) |
 | may (for possibility) | can |
-| enable | let, start, set |
-| require | need |
+| enable | let, make ... possible |
+| require | is necessary, must |
 | perform | do |
 | once (meaning when) | when, after |
 | launch | start |
@@ -90,16 +98,25 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
 | kind | the local Kubernetes cluster tool |
-| operator | the agentdev program that creates and updates agent pods from Agent objects |
+| operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
 | port-forward | a `kubectl port-forward` connection from the local computer to a service in the cluster |
 | project | one forge repository with its agents |
 | pull request (PR) | a request to merge a branch |
 | router | the agentdev service that receives forge webhooks and wakes agents |
+| run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | security event | a record of an action that a guardrail stopped |
 | sidecar | a second container in the agent pod |
-| step | one numbered script of the installation (`./run.sh 08`) |
 | web UI | the agentdev management user interface |
+
+Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
+
+These technical names are also allowed in the manuals with their usual meaning: browser, CORS, image (container
+image), namespace, nginx, OIDC, password, PKCE, port, redirect URI, session, SSH tunnel, tab (browser tab), token,
+user name, authentik blueprint, phase (of an agent: running, stopped and so on).
+
+User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
+authentik page. A label is not a word of the text, so a label does not break the word rules.
 
 ### Technical verbs
 
@@ -107,11 +124,12 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 |---|---|
 | approve | accept a pull request or an approval request |
 | assign | give an issue to an agent account |
+| click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
 | merge | add the changes of a pull request to the main branch |
-| pause | stop an agent until a person starts it again |
-| push | send git commits to the forge |
-| resume | start a paused agent again |
+| pause | stop an agent until a person starts it again (STE alternative: stop) |
+| git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
+| resume | start a paused agent again (STE alternative: start again) |
 | sign in, sign out | start or end a session in the web UI |
 
 ## Before you merge a manual change
