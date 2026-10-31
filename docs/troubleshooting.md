@@ -21,6 +21,8 @@ kubectl -n coding-agents logs deploy/webhook-router
 | Bootstrap stops at a branch protection warning | the repo already has a rule; it is kept | fine as is, or `REPLACE_BRANCH_PROTECTION=1` |
 | `agent-chat.sh` says the session has no chat yet | the clone failed or Claude did not start | `kubectl -n coding-agents logs <pod>`; check the chat token and the Claude secret |
 | A chat session ended on its own | nobody attached for `IDLE_SECONDS`, or the 8 h cap | start a new one; the clone is fresh each time |
+| Readiness shows `mcp: ContextForge did not list this project's tools` | ContextForge down, or a server in `mcp:` not reachable | `kubectl -n agentdev-platform get pods`; rerun `scripts/mcp-sync.sh <spec>` and read its gateway errors |
+| Agent lacks a newly added tool | the pod started before the sync | `kubectl -n coding-agents delete pod agent-<name>-0` |
 | A chat session cannot push | by design: read + issues only | file an issue and assign it to an agent |
 
 Still stuck: open an issue with the **Incident** template, including the log excerpt (never credentials).

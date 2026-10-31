@@ -61,6 +61,33 @@ its intended exposure is your tailnet (run it with `TS_AUTHKEY` and use `http://
 URL. Card links use `FORGE_PUBLIC_URL` (`forge_public_url` in Ansible; locally the Gitea host URL) so they open in a
 browser rather than pointing at the in-cluster forge address.
 
+## MCP tools
+
+`./run.sh 08` deploys the platform namespace `agentdev-platform`: Postgres (databases `contextforge` and
+`agentdev`) and ContextForge (`CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE`, `CF_ADMIN_EMAIL` in `config.env`). Generated
+passwords and keys stay in `.secrets/platform/`, never in git. Then list servers in the project spec:
+
+```yaml
+mcp:
+  servers:
+    - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
+```
+
+`scripts/bootstrap-project.sh` runs `scripts/mcp-sync.sh <spec>`, which you can also run alone after changing
+`mcp:`. It is idempotent: it registers each server as gateway `<project>-<name>`, builds virtual server
+`project-<project>` from their tools, mints one token per agent scoped to that server, and stores it in Secret
+`agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`). Restart the agent (`kubectl delete pod agent-<name>-0`) to pick up
+new tools. Tokens are valid for a year; any sync in the last 30 days mints a new one and revokes the old. An agent
+removed from `agents:` (or a spec without `mcp:`) loses its Secret and its token is revoked on the next sync.
+The worker passes Claude `--strict-mcp-config`, so only the gateway's tools are available.
+NetworkPolicies close Postgres to everything but ContextForge, and ContextForge to everything but the agents
+namespace. GKE enforces them; local kind (kindnet) does not.
+The ContextForge admin UI: `kubectl -n agentdev-platform port-forward svc/contextforge 4444:4444`.
+
+If a spec has `mcp:` and `./run.sh 08` was never run, bootstrap stops before deploying agents and says so.
+
+On GKE the Ansible playbook does not deploy ContextForge yet (#51); projects there have no MCP tools until it does.
+
 ## Limits and blocking
 
 - **Quota (#27):** `limits:` in the project spec (`pods`, `cpu`, `memory`) becomes a `ResourceQuota` on the agents

@@ -1,0 +1,143 @@
+# agentdev platform (#14, ADR 0001): the instance's Postgres and the ContextForge MCP gateway, in namespace ${PLATFORM_NS}.
+# Rendered by 08-mcp.sh (envsubst). Postgres is shared: one database and login per component (contextforge now, the
+# agentdev API in #12). Secret values come from .secrets/platform/ (kind) or Secret Manager (GKE); never from git.
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${PLATFORM_NS}}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: platform-db, namespace: ${PLATFORM_NS}}
+stringData:
+  POSTGRES_PASSWORD: "${PG_ADMIN_PASSWORD}"
+  # runs once, on an empty volume
+  init.sql: |
+    CREATE ROLE contextforge LOGIN PASSWORD '${PG_CF_PASSWORD}';
+    CREATE DATABASE contextforge OWNER contextforge;
+    CREATE ROLE agentdev LOGIN PASSWORD '${PG_AGENTDEV_PASSWORD}';
+    CREATE DATABASE agentdev OWNER agentdev;
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: platform-db, namespace: ${PLATFORM_NS}, labels: {app: platform-db}}
+spec:
+  serviceName: platform-db
+  replicas: 1
+  selector: {matchLabels: {app: platform-db}}
+  template:
+    metadata: {labels: {app: platform-db}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 999, runAsGroup: 999, fsGroup: 999, runAsNonRoot: true}   # the image's postgres user
+      containers:
+      - name: postgres
+        image: ${POSTGRES_IMAGE}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        env:
+        - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+        - name: POSTGRES_PASSWORD
+          valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}
+        ports: [{name: pg, containerPort: 5432}]
+        readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 5, timeoutSeconds: 5}
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits:   {cpu: "1", memory: 1Gi}
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/postgresql/data}
+        - {name: init, mountPath: /docker-entrypoint-initdb.d}
+      volumes:
+      - name: init
+        secret: {secretName: platform-db, items: [{key: init.sql, path: init.sql}]}
+  volumeClaimTemplates:
+  - metadata: {name: data}
+    spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 5Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: platform-db, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: platform-db}
+  ports: [{name: pg, port: 5432, targetPort: pg}]
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}}
+stringData:
+  DATABASE_URL: "postgresql+psycopg://contextforge:${PG_CF_PASSWORD}@platform-db:5432/contextforge"
+  JWT_SECRET_KEY: "${CF_JWT_SECRET}"
+  AUTH_ENCRYPTION_SECRET: "${CF_ENC_SECRET}"
+  PLATFORM_ADMIN_PASSWORD: "${CF_ADMIN_PASSWORD}"
+  # v1.1.0 refuses weak defaults at start (min 12 chars): every password-like setting is set explicitly
+  DEFAULT_USER_PASSWORD: "${CF_DEFAULT_USER_PASSWORD}"
+  BASIC_AUTH_PASSWORD: "${CF_BASIC_AUTH_PASSWORD}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}}
+spec:
+  replicas: 1                      # DB cache, no Redis: one replica (ADR 0001)
+  selector: {matchLabels: {app: contextforge}}
+  template:
+    metadata: {labels: {app: contextforge, agentdev/db-client: "true"}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true}   # the image runs as 10001
+      containers:
+      - name: gateway
+        image: ${CONTEXTFORGE_IMAGE}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        envFrom: [{secretRef: {name: contextforge}}]
+        env:
+        - {name: HOST, value: 0.0.0.0}
+        - {name: PORT, value: "4444"}
+        - {name: PLATFORM_ADMIN_EMAIL, value: "${CF_ADMIN_EMAIL}"}
+        - {name: MCPGATEWAY_UI_ENABLED, value: "true"}
+        - {name: MCPGATEWAY_ADMIN_API_ENABLED, value: "true"}
+        - {name: CACHE_TYPE, value: database}
+        # MCP servers run inside the cluster: allow only the Service range, not every private network (SSRF guard)
+        - {name: SSRF_ALLOWED_NETWORKS, value: '["${SERVICE_CIDR}"]'}
+        - {name: GUNICORN_WORKERS, value: "2"}
+        ports: [{name: http, containerPort: 4444}]
+        readinessProbe: {httpGet: {path: /health, port: http}, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 60}
+        resources:
+          requests: {cpu: 100m, memory: 512Mi}
+          limits:   {memory: 1536Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: contextforge}
+  ports: [{name: http, port: 4444, targetPort: http}]
+---
+# Network: agent pods run untrusted code, so the platform is closed by default. Postgres only from its clients in this
+# namespace (ContextForge now, the agentdev API in #46); ContextForge only from the agents namespace (agents call
+# /servers/<id>/mcp with a token scoped to their project). Admin calls come through `kubectl port-forward`, which
+# NetworkPolicy does not filter. Enforced on GKE (Dataplane V2); the kindnet CNI of a local kind cluster does not
+# enforce it (checked: a pod in `default` still reaches ContextForge), so locally this is declared intent only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-ingress, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: platform-db, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: platform-db}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {agentdev/db-client: "true"}}}]
+    ports: [{port: 5432}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: contextforge}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}}]
+    ports: [{port: 4444}]

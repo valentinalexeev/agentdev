@@ -16,6 +16,13 @@ MAX_TURNS="${MAX_TURNS:-40}"
 WAKE_FILE="${WAKE_FILE:-/tmp/agent-wake}"   # touched by webhook-listener.js on a signed forge delivery (#3)
 STATE="${STATE_DIR:-/state}"
 WORK="${STATE}/repo"
+# MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp from scripts/mcp-sync.sh) Claude gets the project's tools.
+# The file holds only a reference to the token; the token itself stays in the environment.
+MCP_CONFIG="${STATE}/mcp.json"
+if [[ -n "${CF_URL:-}" ]]; then
+  mkdir -p "${STATE}"
+  jq -n --arg u "${CF_URL}" '{mcpServers:{project:{type:"http", url:$u, headers:{Authorization:"Bearer ${CF_TOKEN}"}}}}' > "${MCP_CONFIG}"
+fi
 mkdir -p "${STATE}/seen"
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
@@ -140,10 +147,12 @@ worktree() {
 default_branch() { api GET "/repos/${REPO}" | jq -r .default_branch; }
 
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code
-  local dir=$1 out rc err
+  local dir=$1 out rc err mcp=()
   err="${dir}.claude.stderr"
+  # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
+  [[ -n "${CF_URL:-}" && -s "${MCP_CONFIG}" ]] && mcp=(--mcp-config "${MCP_CONFIG}" --strict-mcp-config)
   out=$(cd "${dir}" && claude -p "$2" --output-format json --max-turns "${MAX_TURNS}" \
-          --dangerously-skip-permissions 2>"${err}"); rc=$?
+          --dangerously-skip-permissions "${mcp[@]}" 2>"${err}"); rc=$?
   echo "${out}" | jq -r '.result // empty' 2>/dev/null || echo "${out}"
   [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}")"
   return ${rc}
@@ -358,7 +367,8 @@ api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
 # Readiness report (#31): with READY_ISSUE set (by scripts/bootstrap-project.sh), check every service this agent
 # needs once and post the result on that issue. Reported once per issue (state on the PVC), not on every restart.
 ready_check() {
-  local issue=$1 marker="${STATE}/seen/ready-${1}" lines=() ok=1 perm claude_out body sum
+  # keyed by repo and issue: an agent moved to another project (re-bootstrap) must report there too
+  local issue=$1 marker="${STATE}/seen/ready-${REPO//\//_}-${1}" lines=() ok=1 perm claude_out body sum mcp_tools
   [[ "$(cat "${marker}" 2>/dev/null)" == ready* ]] && return
   perm=$(api GET "/repos/${REPO}" | jq -r '.permissions.push // false' 2>/dev/null)
   if [[ "${perm}" == true ]]; then lines+=("- ✅ forge: ${FORGE_URL}, push access to ${REPO}")
@@ -372,7 +382,12 @@ ready_check() {
     lines+=("- ❌ claude: the check call failed (see the agent's log)"); ok=0
   fi
   if [[ -n "${ROUTER_URL:-}" ]]; then lines+=("- ✅ webhooks: via ${ROUTER_URL}"); else lines+=("- ➖ webhooks: off (polling every ${POLL_SECONDS}s)"); fi
-  lines+=("- ➖ mcp: not configured for this agent yet (#14)")
+  if [[ -z "${CF_URL:-}" ]]; then lines+=("- ➖ mcp: none configured for this project (\`mcp:\` in the project spec, #14)")
+  elif mcp_tools=$(curl -fsS -m 10 -X POST "${CF_URL}" -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' \
+         -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null \
+         | sed -n 's/^data: //p; /^{/p' | jq -r '[.result.tools[]?.name] | length' 2>/dev/null) && [[ "${mcp_tools:-0}" -gt 0 ]]; then
+    lines+=("- ✅ mcp: ${mcp_tools} project tools via ContextForge")
+  else lines+=("- ❌ mcp: ContextForge did not list this project's tools"); ok=0; fi
   local head="🤖 agent \`${FORGE_USER}\`: **ready**"; (( ok )) || head="🤖 agent \`${FORGE_USER}\`: **not ready**"
   body="${head}
 

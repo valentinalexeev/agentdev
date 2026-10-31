@@ -113,6 +113,10 @@ for a in ${AGENTS}; do
     --from-literal=READY_ISSUE="${ready}" --dry-run=client -o yaml | k apply -f - >/dev/null
 done
 
+log "MCP tools (#14)"
+# before the agents start, so their pods pick up the token Secret and the readiness report covers MCP
+"${SPIKE_DIR}/scripts/mcp-sync.sh" "${spec}"
+
 log "4. Agents and webhook"
 "${SPIKE_DIR}/06-agents.sh"
 
