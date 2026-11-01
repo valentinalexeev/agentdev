@@ -594,6 +594,53 @@ filter `AGENTDEV_SECURITY_EVENT`.
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
 
+## Subscription usage limits
+
+Each Claude subscription has a 5-hour usage window and a weekly usage window. After each Claude run, the agent loop
+writes one `AGENTDEV_USAGE` line to the log. The line gives the tokens and the use of each window. The operator adds
+the lines for each subscription. Agents that use the same Claude Secret use the same subscription.
+
+When the use of a window is at the usage limit or more, the operator pauses the new runs of all agents on that
+subscription. Runs in progress continue to the end. At the reset time of the window, the agents start new runs
+again. You do not have to do an action. The operator records each pause as a SecurityEvent with the rule
+`usage-five-hour`, `usage-weekly` or `usage-rate-limited` and the severity `low`.
+
+When Claude refuses a run because of its own rate limit, the agent pauses at once until the reset time. If Claude
+gives no reset time, the pause is 1 hour.
+
+### Set the global usage limits
+
+You must be in the authentik group `agentdev-admins`.
+
+1. Open the web UI. Refer to *Open the web UI*.
+2. Click **Usage**.
+3. In the row **Global (administrators)**, type the 5-hour limit and the weekly limit in percent.
+4. Click **Save**.
+   The API records the change as an `AGENTDEV_AUDIT` line with the action `set-limits`.
+
+NOTE: The default limits are 80 % for the 5-hour window and 90 % for the weekly window.
+
+NOTE: You can also send `PUT /api/usage/global` with `{"fiveHour": 80, "weekly": 90}`.
+
+### Examine the usage of a subscription
+
+1. Open the web UI and click **Usage**.
+   The **Subscriptions** table shows the use of each window, the reset times, the tokens and the runs.
+   The **Paused agents** table shows the agents that start no new runs, the reason and the end time.
+
+NOTE: The operator keeps this data in the ConfigMap `agentdev-usage`. The agent pods read the key `paused.<agent>`.
+
+### Reference: usage limits
+
+| Item | Value |
+|---|---|
+| Global limits | ConfigMap `agentdev-usage-settings`, key `settings.json`. Only the API writes it. |
+| Project limit | Lower than the global limit, or not set. The operator ignores a higher value. |
+| Effective limit | The lower value of the global limit and the project limit. |
+| State and pauses | ConfigMap `agentdev-usage`. Only the operator writes it. Each agent pod mounts it read-only. |
+| Pause event | SecurityEvent, source `operator`, rule `usage-<reason>`, severity `low`. It does not pause the Agent object. |
+| Audit | `AGENTDEV_AUDIT` with `action: set-limits`, for each try (also refused tries). |
+
 ## GitHub App (registration)
 
 On GitHub, the agents use one GitHub App (#2). The webhook URL and the redirect URL are part of the deployment. Thus,

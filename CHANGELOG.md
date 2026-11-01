@@ -11,6 +11,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
   `GET /api/audit` (filters `agent`, `result`, `since`, `limit`, `cursor`), readable only by `agentdev-admins`.
+- Subscription usage limits (#93, incident #92): after each Claude run the worker prints an `AGENTDEV_USAGE {json}`
+  line (tokens, 5-hour and weekly rate-limit windows from the CLI's `rate_limit_event`; the worker now uses
+  `--output-format stream-json`). The operator sums them per Claude credential Secret and, when a window reaches its
+  threshold (defaults 80 % 5-hour, 90 % weekly), pauses **new** runs of every agent on that subscription until the
+  window resets (running jobs finish; automatic resume, also without the operator). A run refused by Claude's rate
+  limit pauses that agent at once (reset time from the CLI, else 1 h) and keeps the work for a retry instead of a
+  "could not produce a change" comment. Each pause is a `SecurityEvent` (source `operator`, rule
+  `usage-five-hour|usage-weekly|usage-rate-limited`, severity low). State in ConfigMap `agentdev-usage` (mounted
+  read-only into agent pods), thresholds in `agentdev-usage-settings`. API: `GET /api/usage`,
+  `PUT /api/usage/global` (agentdev admins), `PUT /api/usage/projects/{owner}/{repo}` (write access; only lower than
+  global, clamped again by the operator); every attempt audited as `set-limits`. Web UI: **Usage** page. RBAC: the
+  operator gets get/update on `agentdev-usage` and get on `agentdev-usage-settings`; the API gets configmap create
+  and get/update on `agentdev-usage-settings`, get on `agentdev-usage`.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
