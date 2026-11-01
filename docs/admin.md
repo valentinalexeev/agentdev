@@ -1062,7 +1062,52 @@ Put it in Secret Manager (GKE) or in a local Secret.
 - `convert` compares `state` with the form that it generated.
 - Permissions: write for contents, issues and pull requests; read for metadata, checks and statuses.
 - The App has no `workflows` permission. Thus, agents cannot change `.github/workflows/`.
-- The worker that uses the App is work that #2 must still do.
+- The forge sidecar of each agent holds the App ID and the private key. It makes installation tokens for 1 h. Each
+  token is only for the repositories of that agent.
+
+### Connect the agents to the GitHub App
+
+WARNING: Do not put the private key in `instance.yml` or in git. The App ID is not secret.
+
+Before you start, register and install the App (see "Register the GitHub App").
+
+On GKE:
+
+1. Put the private key in Secret Manager:
+   `gcloud secrets versions add github-app-private-key --data-file=.secrets/github-app/private-key.pem`
+2. Put the webhook secret in Secret Manager:
+   `gcloud secrets versions add github-app-webhook-secret --data-file=.secrets/github-app/webhook-secret`
+3. In `instance.yml`, set `github_app.app_id` to the value in `.secrets/github-app/app-id`.
+4. Make sure that each agent name has only lowercase letters, digits and hyphens.
+5. Run the playbook.
+
+On kind:
+
+1. In `config.env`, set `FORGE_KIND=github` and set `REPO` to the GitHub repository (`owner/name`).
+2. Run `./run.sh 06`.
+   The agents poll GitHub. Webhooks need a public URL.
+
+### Make the agent labels
+
+GitHub does not let you assign an issue to an App. Thus, you give work to an agent with a label.
+
+1. In each repository of the agents, make one label for each agent: `agent:<name>`, for example `agent:alice`.
+2. Give the write permission (or more) to the persons who can give work to agents.
+
+NOTE: The agent does the work only when the person who added the label last has the write, maintain or admin
+permission. The agent examines this before each start. Else it does not do the work and it sends a security event.
+
+### Reference: agents on GitHub
+
+| Item | Value |
+|---|---|
+| Account on GitHub | `<app-slug>[bot]` for all agents |
+| Commit author | `<agent> (agentdev)`, with the email address of the App account |
+| Comment | ends with the line `agent <agent> (agentdev)`, added by the forge sidecar |
+| Work | open issues with the label `agent:<agent>` |
+| Branches | `agent/<agent>/...` |
+| Security findings | the agent replies in the thread of each `github-advanced-security[bot]` comment. It does not resolve the thread |
+| Not permitted | merge, labels, issue changes, GraphQL, `.github/workflows/` |
 
 ## Limits and blocked agents
 
@@ -1147,7 +1192,9 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
-- For github.com, the router must have a public HTTPS URL (Ingress) and a GitHub App. This is planned in #2.
+- For github.com, the router must have a public HTTPS URL (Ingress) and a GitHub App.
+- On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The
+  login of the App account is the same for all agents. Thus, the router does not use logins on GitHub.
 
 ## Upgrades
 

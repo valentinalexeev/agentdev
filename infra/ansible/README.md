@@ -13,7 +13,8 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 | `claude-shared` | `KEY=VALUE` lines: `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
 | `router-register-token` | random string (`openssl rand -hex 32`) |
 | `github-app-webhook-secret` | the GitHub App's webhook secret (#2) |
-| `agent-<name>-forge-token` | the agent's forge token (until #2 mints GitHub App tokens) |
+| `github-app-private-key` | the GitHub App's private key (PEM, `.secrets/github-app/private-key.pem` from `scripts/github-app.sh convert`, #2) |
+| `agent-<name>-forge-token` | only with `forge_kind: gitea`: the agent's forge token. On GitHub the sidecar mints App installation tokens |
 | `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
