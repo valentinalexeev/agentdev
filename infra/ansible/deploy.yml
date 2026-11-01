@@ -141,6 +141,12 @@
       ansible.builtin.include_role: {name: api}
       when: (api.oidc_issuer | default('')) | length > 0
 
+    # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
+    # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host.
+    - name: Public HTTPS entry point (Gateway)
+      ansible.builtin.include_role: {name: ingress}
+      when: (ingress.host | default('')) | length > 0
+
     - name: Agent operator (#47); it renders every agent's StatefulSet
       kubernetes.core.k8s:
         <<: *k8s

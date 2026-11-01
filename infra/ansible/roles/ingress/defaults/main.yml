@@ -1,0 +1,17 @@
+---
+# Public HTTPS entry point on GKE (#120). Instance values go into instance.yml under `ingress` (example.vars.yml);
+# the names come from `terraform output ingress`. The role is skipped without ingress.host.
+ingress_host: "{{ ingress.host | default('') }}"                  # UI (and API through the UI's /api proxy)
+ingress_webhook_host: "{{ ingress.webhook_host | default(ingress_host) }}"   # GitHub App webhook: https://<this>/hook
+ingress_static_ip_name: "{{ ingress.static_ip_name | default('agentdev-webhook') }}"
+ingress_certificate: "{{ ingress.certificate | default('') }}"    # google_compute_managed_ssl_certificate name
+ingress_ssl_policy: "{{ ingress.ssl_policy | default('agentdev-public') }}"
+ingress_security_policy: "{{ ingress.security_policy | default('') }}"   # Cloud Armor; empty = none
+ingress_hsts_max_age: "{{ ingress.hsts_max_age | default(31536000) }}"   # one year
+# route the web UI (deployed by the role api with api.oidc_issuer); false: webhook only
+ingress_ui: "{{ ingress.ui | default((api.oidc_issuer | default('')) | length > 0) }}"
+# the Gateway lives in the platform namespace; routes in both namespaces attach to it
+ingress_gateway_name: agentdev-public
+ingress_gateway_class: gke-l7-global-external-managed
+# Google Front End and health check source ranges (Google documentation "Firewall rules" of the external ALB)
+ingress_gfe_ranges: [35.191.0.0/16, 130.211.0.0/22]

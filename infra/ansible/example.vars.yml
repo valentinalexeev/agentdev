@@ -10,6 +10,12 @@ agents:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
+# Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
+# ingress:
+#   host: agentdev.example.com              # web UI (DNS A record -> terraform output webhook_ip)
+#   webhook_host: hooks.example.com         # optional, default host; GitHub App webhook https://<this>/hook
+#   certificate: agentdev-public-1a2b3c4d   # managed certificate name
+#   security_policy: agentdev-public        # only with Terraform cloud_armor = true
 # Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
 # defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
 # security:
