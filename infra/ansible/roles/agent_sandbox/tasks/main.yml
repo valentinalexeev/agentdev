@@ -1,0 +1,154 @@
+---
+# Same result as the old 02-agent-sandbox.sh: agent-sandbox (core + extensions) with its CRDs, the agent image in the
+# kind nodes, namespace, optional API key Secret, SandboxTemplate + SandboxWarmPool, and one warm sandbox ready.
+- name: Cache directory for the release manifest
+  ansible.builtin.file: {path: "{{ agent_sandbox_cache_dir }}", state: directory, mode: "0755"}
+
+- name: Download the agent-sandbox release manifest (pinned version, kept once per version)
+  ansible.builtin.get_url:
+    url: "{{ agent_sandbox_manifest_url }}"
+    dest: "{{ agent_sandbox_cache_dir }}/agent-sandbox-{{ agent_sandbox_version }}.yaml"
+    mode: "0644"
+
+# server-side apply: the CRDs are too large for the last-applied annotation of a client-side apply
+- name: Install agent-sandbox {{ agent_sandbox_version }}
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    src: "{{ agent_sandbox_cache_dir }}/agent-sandbox-{{ agent_sandbox_version }}.yaml"
+    server_side_apply: {field_manager: agentdev, force_conflicts: true}
+
+- name: Controller is Available
+  ansible.builtin.command: >-
+    kubectl --context {{ agent_sandbox_context | quote }} -n agent-sandbox-system
+    wait --for=condition=Available deploy --all --timeout=180s
+  changed_when: false
+
+- name: CRDs are served
+  kubernetes.core.k8s_info:
+    context: "{{ agent_sandbox_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: agent_sandbox_crd
+  failed_when: agent_sandbox_crd.resources | length == 0
+  loop:
+    - sandboxes.agents.x-k8s.io
+    - sandboxtemplates.extensions.agents.x-k8s.io
+    - sandboxwarmpools.extensions.agents.x-k8s.io
+    - sandboxclaims.extensions.agents.x-k8s.io
+
+- name: Agent image (kind)
+  when: agent_sandbox_load_image | bool
+  block:
+    # Content hash of the build context (relative paths and file contents). It goes into the image as a label, so
+    # "rebuild needed" and "load needed" are plain string comparisons, not a guess from engine output.
+    - name: Content hash of the agent image build context
+      ansible.builtin.shell:
+        cmd: set -o pipefail && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-64
+        chdir: "{{ agent_sandbox_image_dir }}"
+        executable: /bin/bash
+      register: agent_sandbox_ctx_hash
+      changed_when: false
+
+    - name: Hash label of the local image
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - image
+          - inspect
+          - --format
+          - '{{ "{{" }} index .Config.Labels "{{ agent_sandbox_hash_label }}" {{ "}}" }}'
+          - "{{ agent_sandbox_image }}"
+      register: agent_sandbox_img_hash
+      changed_when: false
+      failed_when: false
+
+    - name: Build the agent image only when the build context changed {{ agent_sandbox_image }}
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - build
+          - -q
+          - --label
+          - "{{ agent_sandbox_hash_label }}={{ agent_sandbox_ctx_hash.stdout }}"
+          - -t
+          - "{{ agent_sandbox_image }}"
+          - "{{ agent_sandbox_image_dir }}"
+      # Gated by the content hash below, so running means a real rebuild.
+      changed_when: true
+      when: agent_sandbox_img_hash.stdout | trim != agent_sandbox_ctx_hash.stdout
+
+    - name: Nodes of the kind cluster
+      ansible.builtin.command: kind get nodes --name {{ agent_sandbox_cluster_name | quote }}
+      register: agent_sandbox_nodes
+      changed_when: false
+
+    # what containerd in each node has; an absent image gives an empty answer
+    - name: Hash label of the image in each node
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - exec
+          - "{{ item }}"
+          - crictl
+          - inspecti
+          - -o
+          - go-template
+          - --template
+          - '{{ "{{" }} index .info.imageSpec.config.Labels "{{ agent_sandbox_hash_label }}" {{ "}}" }}'
+          - "{{ agent_sandbox_image }}"
+      loop: "{{ agent_sandbox_nodes.stdout_lines }}"
+      register: agent_sandbox_node_hash
+      changed_when: false
+      failed_when: false
+
+    - name: Load the image into kind (only when a node has a different hash)
+      ansible.builtin.command: kind load docker-image {{ agent_sandbox_image | quote }} --name {{ agent_sandbox_cluster_name | quote }}
+      register: agent_sandbox_load
+      when: agent_sandbox_node_hash.results | map(attribute='stdout') | map('trim') | reject('equalto', agent_sandbox_ctx_hash.stdout) | list | length > 0
+      # kind v0.33 writes "Image: ... found to be already present on all nodes." to stderr (stdout empty) on a skip
+      changed_when: "'already present on all nodes' not in (agent_sandbox_load.stdout ~ agent_sandbox_load.stderr)"
+
+- name: Namespace {{ agent_sandbox_ns }}
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agent_sandbox_ns }}"}}
+
+- name: Optional API key Secret claude-agent-keys (from ANTHROPIC_API_KEY)
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: claude-agent-keys, namespace: "{{ agent_sandbox_ns }}"}
+      stringData: {ANTHROPIC_API_KEY: "{{ agent_sandbox_api_key }}"}
+  when: agent_sandbox_api_key | length > 0
+  no_log: true
+
+- name: No API key, step 03 skips the live Claude call
+  ansible.builtin.debug:
+    msg: "ANTHROPIC_API_KEY not set: sandboxes start fine, step 03 skips the live Claude call"
+  when: agent_sandbox_api_key | length == 0
+
+- name: SandboxTemplate and SandboxWarmPool
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    namespace: "{{ agent_sandbox_ns }}"
+    src: "{{ agent_sandbox_template }}"
+    apply: true
+
+- name: Warm pool has 1 ready sandbox (cold start incl. PVC bind)
+  kubernetes.core.k8s_info:
+    context: "{{ agent_sandbox_context }}"
+    api_version: extensions.agents.x-k8s.io/v1beta1
+    kind: SandboxWarmPool
+    namespace: "{{ agent_sandbox_ns }}"
+    name: claude-agent-pool
+  register: agent_sandbox_pool
+  until: (agent_sandbox_pool.resources[0].status.readyReplicas | default(0) | int) == 1
+  retries: "{{ (agent_sandbox_warm_timeout | int / 5) | int }}"
+  delay: 5
+
+- name: Result
+  ansible.builtin.debug:
+    msg: "agent-sandbox {{ agent_sandbox_version }} ready, warm pool claude-agent-pool has 1 ready sandbox in {{ agent_sandbox_ns }}"

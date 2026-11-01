@@ -1,0 +1,22 @@
+---
+# agent-sandbox controller, agent image, template and warm pool (#106, was 02-agent-sandbox.sh).
+# The values match config.env; run.sh passes them with -e. The role uses kubernetes.core like deploy.yml, so the GKE
+# playbook can include it with its own context and agent_sandbox_load_image: false (images come from a registry there).
+agent_sandbox_context: kind-agentdev
+agent_sandbox_version: v1.0.8
+agent_sandbox_ns: agents
+agent_sandbox_manifest_url: >-
+  https://github.com/kubernetes-sigs/agent-sandbox/releases/download/{{ agent_sandbox_version }}/sandbox-with-extensions.yaml
+agent_sandbox_cache_dir: "{{ lookup('env', 'HOME') }}/.cache/agentdev"
+agent_sandbox_template: "{{ playbook_dir }}/../../manifests/sandbox-template.yaml"
+# kind only: build the image locally and load it into the nodes
+agent_sandbox_load_image: true
+agent_sandbox_image: agentdev/claude-agent:spike
+agent_sandbox_image_dir: "{{ playbook_dir }}/../../images/agent"
+agent_sandbox_engine: docker
+agent_sandbox_cluster_name: agentdev
+# image label with the content hash of agent_sandbox_image_dir; the build and kind load are skipped when it matches
+agent_sandbox_hash_label: dev.agentdev.context-hash
+# optional, read from the environment so it never appears in -e arguments or logs
+agent_sandbox_api_key: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
+agent_sandbox_warm_timeout: 300

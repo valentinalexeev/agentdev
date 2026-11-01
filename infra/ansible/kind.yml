@@ -5,15 +5,27 @@
 #
 #   cd infra/ansible
 #   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
+#   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #
-# Ported steps (tag: old run.sh step): cluster: 01.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
   gather_facts: false
+  vars:
+    kind_cluster_name: agentdev
   tasks:
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
         name: kind_cluster
         apply: {tags: [cluster]}
       tags: [cluster]
+
+    - name: Agent-sandbox, agent image, template and warm pool (was 02-agent-sandbox.sh)
+      ansible.builtin.include_role:
+        name: agent_sandbox
+        apply: {tags: [sandbox]}
+      vars:
+        agent_sandbox_context: kind-{{ kind_cluster_name }}
+        agent_sandbox_cluster_name: "{{ kind_cluster_name }}"
+      tags: [sandbox]
