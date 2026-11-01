@@ -25,7 +25,7 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
 2. **Tools on the operator machine:** `gcloud`, `terraform` ≥ 1.9, `ansible` ≥ 2.17, `kubectl`.
 3. **Owner logs in** (interactive; ask them): `gcloud auth login && gcloud auth application-default login`.
    Check: `gcloud auth list` shows an active account.
-4. **Owner runs the bootstrap** (project + billing + state bucket) from a checkout of the pinned agentdev release:
+4. **Owner runs the bootstrap** (project + billing + state bucket; for a project that already exists set `create_project = false` in `bootstrap.tfvars`: then only the state bucket and its APIs) from a checkout of the pinned agentdev release:
    ```bash
    cd agentdev/infra/terraform/bootstrap && terraform init
    terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars    # see bootstrap/example.tfvars

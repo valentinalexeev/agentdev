@@ -26,7 +26,9 @@ From the deployment repository (template `examples/deployment/gcp-gke`):
 gcloud auth login && gcloud auth application-default login
 gcloud billing accounts list                     # pick the billing account id
 
-# 1. project, billing link, state bucket (local state), from a checkout of the pinned agentdev release
+# 1. project, billing link, state bucket (local state), from a checkout of the pinned agentdev release.
+#    With an existing project (billing already linked) set `create_project = false` in bootstrap.tfvars:
+#    then only the bootstrap APIs and the state bucket are created.
 cd agentdev/infra/terraform/bootstrap
 terraform init
 terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars     # see bootstrap/example.tfvars

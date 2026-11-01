@@ -7,6 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
+  billing link and makes only the bootstrap APIs and the state bucket. `billing_account_id` is required only when the
+  project is created. The default (`true`) is unchanged.
 - Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
   register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
   App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
