@@ -73,7 +73,9 @@ Run on a real GKE cluster made from the template, at the release candidate image
 
 1. Branch `release/X.Y.Z` from `main`.
 2. In `CHANGELOG.md`, move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]`.
-3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`).
+3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
+   point in `examples/deployment/gcp-gke/terraform/main.tf` (`public_hosts`, `cloud_armor` and `output "ingress"`),
+   so the template matches `private-deployment.md`, which needs `public_hosts` and `terraform output ingress`.
 4. Commit `chore(release): vX.Y.Z`, open the PR with this checklist, and request the owner's review.
 5. After the owner merges, the owner (or the bot on explicit permission) pushes the tag:
    `git tag vX.Y.Z <merge commit> && git push origin vX.Y.Z`

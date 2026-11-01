@@ -5,6 +5,18 @@ The instance runs on GKE, works on GitHub repositories, and signs people in thro
 steps are in [Install](install.md#install-agentdev-for-production-gcpgke). An AI agent can do the steps with you
 (`AGENTS.md`).
 
+NOTE: This guide is for GKE. The local evaluation on kind
+([Install](install.md#install-agentdev-for-a-local-evaluation-kind)) is different in these ways:
+
+| Item | kind | GKE (this guide) |
+|---|---|---|
+| Instance values | `config.env` | `ansible/instance.yml` and `terraform/instance.tfvars` in the deployment repository |
+| Secret values | files in `.secrets/` | Secret Manager |
+| Install and upgrade | `./run.sh` | the playbook `deploy.yml`, from the deployment CI |
+| Sandbox pool | one node with gVisor | a GKE Sandbox (gVisor) node pool with an autoscaler |
+| GitHub events | polling (no public URL) | webhook on `<public_url>/hook`, and polling |
+| Google Workspace sign-in | not available | the authentik Workspace source |
+
 The deployment repository contains all the values of the instance. agentdev itself stays generic. The deployment
 repository uses one agentdev release: the Terraform `ref=vX.Y.Z` and the Ansible `image_tag: "X.Y.Z"`.
 
@@ -81,12 +93,19 @@ makes installation tokens for 1 h.
 WARNING: Do not put the private key in git or in an issue. The private key opens each repository that has the App.
 
 1. Set `github_app.name`, `github_app.owner` and `github_app.public_url` in `ansible/instance.yml`.
-   `public_url` is `https://<ingress.webhook_host>`.
+   `public_url` is `https://<ingress.webhook_host>`. You set `github_app.app_id` in step 4.
 2. Do the procedure in [Administration, "Register the GitHub App"](admin.md#register-the-github-app).
    The webhook URL is `<public_url>/hook`.
 3. Install the App on the repositories of the agents.
-4. Do the procedure in [Administration, "Connect the agents to the GitHub App"](admin.md#connect-the-agents-to-the-github-app).
-5. Make the agent labels. Refer to [Administration, "Make the agent labels"](admin.md#make-the-agent-labels).
+4. Set `github_app.app_id` in `ansible/instance.yml` to the value in `.secrets/github-app/app-id`. This value is
+   necessary and is not secret.
+5. Make sure that each agent name has only lowercase letters, digits and hyphens.
+6. Make the agent labels. Refer to [Administration, "Make the agent labels"](admin.md#make-the-agent-labels).
+
+NOTE: Do not run the playbook now.
+[Administration, "Connect the agents to the GitHub App"](admin.md#connect-the-agents-to-the-github-app) puts the two
+GitHub secrets in Secret Manager and runs the playbook. In this guide, the next section puts the secrets in Secret
+Manager, and "Install agentdev" runs the playbook.
 
 NOTE: The App has no `workflows` permission. Thus, agents cannot change `.github/workflows/`.
 
@@ -102,13 +121,16 @@ WARNING: Do not show a secret value on the screen or in a shell history. Read it
    | Secret | Value |
    |---|---|
    | `claude-shared` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
-   | `router-register-token` | a random string: `openssl rand -hex 32` |
+   | `router-register-token` | a random string (step 2) |
    | `github-app-webhook-secret` | the webhook secret from `.secrets/github-app/` |
    | `github-app-private-key` | the private key from `.secrets/github-app/private-key.pem` |
    | `agent-<name>-claude` | optional: the Claude credential of one agent |
    | `security-siem` | optional: the SIEM output secrets |
 
-2. Delete the local files in `.secrets/github-app/` after you add them, or keep them in a password manager.
+2. Make the router token and put it in Secret Manager in one command. `--data-file=-` reads the value from
+   standard input, thus the value is not shown:
+   `openssl rand -hex 32 | gcloud secrets versions add router-register-token --data-file=- --project=<project_id>`
+3. Delete the local files in `.secrets/github-app/` after you add them, or keep them in a password manager.
 
 NOTE: The full list, with the secrets that the playbook makes on the first run, is in `infra/ansible/README.md`.
 `agent-<name>-forge-token` is only for Gitea. On GitHub, the sidecar uses the App.
@@ -211,7 +233,8 @@ NOTE: To restore, apply the dump to an empty `platform-db` with `psql -U postgre
 
 ## Upgrade the instance
 
-agentdev uses strict SemVer. After `1.0.0`, only a MAJOR version can have changes that are not compatible.
+agentdev uses strict SemVer. While the version is `0.x`, a MINOR version can have changes that are not compatible.
+After `1.0.0`, only a MAJOR version can have changes that are not compatible.
 
 1. Read `CHANGELOG.md` from your version to the new version. Find all **BREAKING** entries.
 2. Make a backup (see "Make a backup").

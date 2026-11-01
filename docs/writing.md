@@ -1,8 +1,9 @@
 # Writing the manuals (ASD-STE100)
 
 The user guide (`user-guide.md`), the installation guide (`install.md`), the administration guide (`admin.md`) and
-troubleshooting (`troubleshooting.md`) and the private-deployment guide (`private-deployment.md`) use **ASD-STE100 Simplified Technical English** (STE). The design pages
-(`concepts.md`, `security.md`, `security-model.md`, `release.md`, `adr/`) are for engineers and use normal technical English.
+troubleshooting (`troubleshooting.md`) and the private-deployment guide (`private-deployment.md`) use
+**ASD-STE100 Simplified Technical English** (STE). The design pages (`concepts.md`, `security.md`,
+`security-model.md`, `release.md`, `adr/`) are for engineers and use normal technical English.
 
 STE makes the manuals easy to read for people whose first language is not English, and easy to translate. Each
 word has one meaning, and each procedure gives one action per step.
