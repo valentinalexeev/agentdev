@@ -17,7 +17,7 @@ decision on #125.
       group are in `agentdev-admins` (#122, PR #134).
 - [ ] **GitHub end to end:** an admin adds an agent for a GitHub repo in the UI; an issue assigned on GitHub becomes a
       PR through the GitHub App (#2, #55); a review reply gets a follow-up push; the owner merges.
-- [ ] **Security model on GKE:** phases 1 to 3 and 5 pass the GKE e2e security checklist (#123): forge creds only in
+- [ ] **Security model on GKE:** phases 1 to 3 and 5 pass the GKE e2e security checklist ([e2e-security.md](e2e-security.md), #123): forge creds only in
       the sidecar, egress allow-list (#65), credential proxy (#66, #118), executors (#69), usage limits (#93),
       approvals on the forge (#67), security events and SIEM outputs (#70, #71).
 - [ ] **Docs:** `install.md`, `admin.md`, `user-guide.md`, `troubleshooting.md` and `private-deployment.md` describe
@@ -36,7 +36,7 @@ Run on a real GKE cluster made from the template, at the release candidate image
 - [ ] `curl -sI https://<host>/` gives `200` with `strict-transport-security`; `https://<host>/status` gives `404`.
 - [ ] The router `/status` lists every agent (command in `AGENTS.md` step 10).
 - [ ] Issue to PR to review reply to merge, on GitHub (gate 3), with the webhook (not only polling).
-- [ ] Every item of the security checklist in #123 passes, with the event visible on the Security page and at the
+- [ ] `scripts/e2e-gke-security.sh` ([e2e-security.md](e2e-security.md)) has no FAIL and every MANUAL item passes, with the event visible on the Security page and at the
       SIEM output.
 - [ ] Upgrade test: deploy the previous release, then upgrade to the candidate by the procedure in
       [Private deployment, "Upgrade the instance"](private-deployment.md#upgrade-the-instance). Agents keep working.

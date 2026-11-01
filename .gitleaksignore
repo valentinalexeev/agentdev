@@ -1,0 +1,2 @@
+# false positive: a deliberately forged bearer token in the e2e script (#141)
+7df53b665cca578e9377a6d8a1f3a9f333401a48:scripts/e2e-gke-security.sh:curl-auth-header:270

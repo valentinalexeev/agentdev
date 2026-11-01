@@ -25,6 +25,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
   billing link and makes only the bootstrap APIs and the state bucket. `billing_account_id` is required only when the
   project is created. The default (`true`) is unchanged.
+- End-to-end security checklist (#123): `scripts/e2e-gke-security.sh` checks a running instance (GKE, or kind
+  with `--kind`) for every "pending GKE e2e" control: no credentials in the agent container, egress default-deny and
+  the metadata server, Claude proxy only, usage reports refused, approvals and executors out of the agent's reach,
+  HTTPS/HSTS, API permission checks, and the #2 GitHub flow (issue, PR with the owner as reviewer, review reply).
+  Read-only or self-cleaning, PASS/FAIL per check, exit 1 on a FAIL. Docs: `docs/e2e-security.md`.
 - GitHub permission check and approval decisions in the API (#87). For an agent on GitHub, the API reads the
   collaborator permission (`GET /repos/{o}/{r}/collaborators/{u}/permission`) with the agents' GitHub App
   (read-only installation tokens) or a read-only `GITHUB_API_TOKEN`, and applies the same rule table as on Gitea
