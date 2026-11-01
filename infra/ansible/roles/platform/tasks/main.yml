@@ -17,6 +17,7 @@
   loop: "{{ platform_secret_keys }}"
   register: platform_sm_created
   changed_when: "'created' in platform_sm_created.stdout"
+  no_log: true
 
 - name: Read platform secrets
   ansible.builtin.command: >-
@@ -83,7 +84,7 @@
         mode: "0600"
       no_log: true
 
-    # stdout is logged: mcp-sync.sh never prints a token
+    # mcp-sync.sh never prints a token; no_log as a second guard (GHAS on #99). Only listed MCP hosts are registered.
     - name: Run scripts/mcp-sync.sh
       ansible.builtin.command:
         argv: ["{{ repo_root }}/scripts/mcp-sync.sh", "{{ item }}"]
@@ -93,9 +94,11 @@
         AGENTS_NS: "{{ agents_ns }}"
         CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
         CF_ADMIN_FILE: "{{ platform_cf_file.path }}"
+        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
       loop: "{{ mcp_projects }}"
       register: platform_mcp_sync
       changed_when: "': registered' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
+      no_log: true
   always:
     - name: Remove the admin password file
       ansible.builtin.file: {path: "{{ platform_cf_file.path }}", state: absent}

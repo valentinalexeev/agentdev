@@ -40,7 +40,8 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
-| On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. | The specification path is not correct, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Install `yq`, `jq` and `curl`. 3. Run the playbook again. |
+| On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. The output is hidden (`no_log`). | The specification path is not correct, a server host is not in `mcp_allowed_hosts`, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Make sure that the host of each server in `mcp:` is in `mcp_allowed_hosts`. 3. Install `yq`, `jq` and `curl`. 4. Run the playbook again. 5. To see the error, run `scripts/mcp-sync.sh <spec>` with `KUBECTL`, `MCP_ALLOWED_HOSTS` and `CF_ADMIN_FILE` set. The script does not show tokens. |
+| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R44). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
 
 ## authentik, API and web UI

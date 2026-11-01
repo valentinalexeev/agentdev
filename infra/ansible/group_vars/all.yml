@@ -41,3 +41,6 @@ security:
 # MCP platform (#51): project specs with an `mcp:` section, synced by scripts/mcp-sync.sh after ContextForge is up.
 # Paths on the operator machine (the deployment repo). Images and the Service range: roles/platform/defaults.
 mcp_projects: []
+# Allow-list of MCP server hosts (host or host:port) that project specs may register (docs/security.md R44).
+# MCP tool metadata and outputs reach the model, so list trusted servers only. Empty: no server is registered.
+mcp_allowed_hosts: []

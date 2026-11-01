@@ -197,6 +197,7 @@ on the first run and keeps them in Secret Manager as `platform-<key>`, for examp
    ```
 
    Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
+   List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
 3. Run the playbook (refer to `infra/ansible/README.md`).
    The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
 4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
@@ -216,9 +217,17 @@ NOTE: The dry run (`--check`) does not run the sync.
        - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
    ```
 
-2. Run the sync: `scripts/mcp-sync.sh <spec>`
+2. Add the host of each server to the allow-list. Use `host` or `host:port`.
+   - On kind: `MCP_ALLOWED_HOSTS` in `config.env` (separate the hosts with spaces).
+   - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
+
+   CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
+   A bad server can put instructions in them (prompt injection). Refer to R44 in `docs/security.md`.
+
+   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
+3. Run the sync: `scripts/mcp-sync.sh <spec>`
    The bootstrap also runs this script.
-3. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
+4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
@@ -231,6 +240,7 @@ agents. The bootstrap tells you the cause.
 
 You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
 
+- It stops if a server host is not in the allow-list.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.

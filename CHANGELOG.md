@@ -12,6 +12,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
   `CF_ADMIN_FILE` of `mcp-sync.sh` can be overridden. `docs/admin.md` shows how to check that Dataplane V2 enforces
   the platform NetworkPolicies.
+- MCP server allow-list (GHAS on #99): `scripts/mcp-sync.sh` registers only servers whose host is in
+  `MCP_ALLOWED_HOSTS` (`config.env`, kind) or `mcp_allowed_hosts` (GKE `instance.yml`). **Breaking for specs with
+  `mcp:`**: the list is empty by default, so add your trusted hosts. Risk entries R44 (MCP prompt injection) and R45
+  (token leaks in logs) in `docs/security.md`; the secret and sync tasks of the platform role have `no_log`.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
