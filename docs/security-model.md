@@ -634,7 +634,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
   ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
 - Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
 - Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
-  egress allow-list for executor Jobs (#65), deciding in the UI (#80), reopening the issue on a failed apply.
+  egress allow-list for executor Jobs (#135), deciding in the UI (#80), reopening the issue on a failed apply.
 
 ### Resources
 
@@ -651,7 +651,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 | Actor | Runs as | Cloud credentials | Can |
 |---|---|---|---|
 | design agent (AI) | agent pod | read-only (viewer, state read) | read code and state, run a plan for itself, open the PR |
-| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, egress allow-list, no service account token) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
+| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, no service account token; egress allow-list planned in #135, today it can reach all hosts) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
 | apply executor | Kubernetes Job | write, scoped to one environment (Workload Identity, lifetime of the Job) | apply exactly the approved plan |
 | person with write access | forge, UI | own | review, merge, `/approve` the apply |
 

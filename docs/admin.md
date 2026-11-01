@@ -1169,7 +1169,7 @@ and the Executor objects.
 - The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
 - The egress allow-list of the agents does not apply to the executors. The executor Jobs do not use the egress proxy,
   because the tools need the cloud APIs of the environment. An executor Job can connect to all hosts. An allow-list
-  for the executors is a follow-up of #65.
+  for the executors is planned in #135.
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
 ## Subscription usage limits
