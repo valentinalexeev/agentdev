@@ -116,6 +116,8 @@ resource "google_container_cluster" "this" {
   }
   # Dataplane V2 (Cilium) enforces NetworkPolicy, needed for #6.
   datapath_provider = "ADVANCED_DATAPATH"
+  # FQDNNetworkPolicy (#65): the egress proxy itself may reach only the allow-listed hosts
+  enable_fqdn_network_policy = true
   workload_identity_config { workload_pool = "${var.project_id}.svc.id.goog" }
   addons_config {
     http_load_balancing { disabled = false }

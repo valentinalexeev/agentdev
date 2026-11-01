@@ -437,3 +437,69 @@ func TestPruneDropsBucketsOfGonePods(t *testing.T) {
 		t.Fatal("bucket of a running pod dropped")
 	}
 }
+
+// #65: a refusal printed by the egress proxy becomes an event of the agent whose pod made the request.
+func TestEgressRefusalBelongsToAgent(t *testing.T) {
+	alice := pod("alice")
+	alice.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.244.0.7"}
+	bob := pod("bob")
+	bob.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.244.0.8"}
+	proxy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "egress-proxy-abc", Namespace: ns, UID: "pod-proxy",
+		Labels: map[string]string{"app": egressApp}}}
+	col, c := collector(t, agent("alice", nil), agent("bob", nil), alice, bob, proxy)
+	log := strings.Join([]string{
+		ts + " 2026/10/31 10:00:00| Starting Squid",
+		line(ts, `{"rule":"egress-host","severity":"medium","client":"10.244.0.7","action":"CONNECT evil.example:443"}`),
+		line("2026-10-31T10:00:01Z", `{"rule":"egress-host","severity":"medium","client":"10.9.9.9","action":"CONNECT x:443"}`),
+	}, "\n")
+	if err := col.consume(context.Background(), strings.NewReader(log), proxy, "squid"); err != nil {
+		t.Fatal(err)
+	}
+	ev := events(t, c)
+	if len(ev) != 1 {
+		t.Fatalf("want 1 event (unknown client dropped), got %d", len(ev))
+	}
+	e := ev[0].Spec
+	if e.Agent != "alice" || e.Source != "egress" || e.Untrusted || e.Pod != alice.Name || e.Container != egressApp ||
+		e.Rule != "egress-host" || e.Action != "CONNECT evil.example:443" {
+		t.Fatalf("event %+v", e)
+	}
+	if ev[0].Labels["agentdev/pod-uid"] != string(alice.UID) {
+		t.Fatal("the event must count against the agent's run, not the proxy")
+	}
+	if pos, _ := col.position(context.Background(), proxy, "squid"); pos == nil {
+		t.Fatal("position of the proxy not saved")
+	}
+}
+
+// #65 review: egress refusals are recorded but do not pause the agent (a build needing a host off the list would
+// otherwise stop it), and they do not count toward the pause of other rules.
+func TestEgressEventsDoNotPause(t *testing.T) {
+	alice := pod("alice")
+	alice.Status = corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.244.0.7"}
+	proxy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "egress-proxy-abc", Namespace: ns, UID: "pod-proxy",
+		Labels: map[string]string{"app": egressApp}}}
+	col, c := collector(t, agent("alice", nil), alice, proxy)
+	col.C.PauseAfter = 2
+	var lines []string
+	for i := 0; i < 30; i++ { // more than the burst: also the rate-limited event must not pause
+		ts := time.Date(2026, 10, 31, 10, 0, 0, i*1_000_000, time.UTC).Format(time.RFC3339Nano)
+		lines = append(lines, line(ts, `{"rule":"egress-host","severity":"medium","client":"10.244.0.7","action":"CONNECT a.example:443"}`))
+	}
+	if err := col.consume(context.Background(), strings.NewReader(strings.Join(lines, "\n")), proxy, "squid"); err != nil {
+		t.Fatal(err)
+	}
+	if getAgent(t, c, "alice").Spec.Paused {
+		t.Fatal("egress refusals paused the agent")
+	}
+	if n := len(events(t, c)); n < 3 {
+		t.Fatalf("events not recorded: %d", n)
+	}
+	// one other medium event: egress events do not count, so 1 <= PauseAfter
+	if err := col.consume(context.Background(), strings.NewReader(line("2026-10-31T10:05:00Z", `{"rule":"git-config","severity":"medium"}`)), alice, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if getAgent(t, c, "alice").Spec.Paused {
+		t.Fatal("egress events counted toward the pause")
+	}
+}

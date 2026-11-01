@@ -111,8 +111,12 @@ runner can start any program. So the security boundary is the pod, not the list 
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
   push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
-- **Known gaps:** egress is open, so anything Claude can read (the repo, its proxy key) could be sent out; the key is
-  worthless outside the cluster. The full list of risks and their status is in [security.md](security.md); the target design
+- **Egress allow-list (#65):** agent pods reach the outside only through the `egress-proxy` (Squid), and it only
+  the hosts in `EGRESS_HOSTS` (forge, package registries; the model API only through `claude-proxy`). A NetworkPolicy denies every other connection
+  where it is enforced: GKE (Dataplane V2) and kind v0.24 or later; elsewhere the proxy is advisory.
+  Each refused request is a security event of the agent that made it.
+- **Known gaps:** an allowed host can still receive data (with HTTPS the proxy sees only the host name); the agent's
+  proxy key is readable by Claude but worthless outside the cluster. The full list of risks and their status is in [security.md](security.md); the target design
   (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI) is in
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
