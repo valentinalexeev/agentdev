@@ -238,8 +238,10 @@ the permission prompt if they were running Claude Code interactively.
   workflows where branch rules require it) needs a user with `admin`.
 - `agentdev-admins` (platform operators) see every project's requests and can **deny** any of them as an emergency
   stop; they approve only in projects where they have write access.
-- If nobody decides before the timeout, the request **expires**, which has the same effect as a denial. History
-  shows it as *expired*.
+- **Lifecycle** (owner on #107): one record per request, ending **approved**, **denied** or **void**. A timeout is not
+  an outcome: it only ends the agent's wait (the action fails closed); the record stays open and decidable. It
+  becomes void when it is no longer needed: the job ends, a newer request supersedes it, the issue or PR closes, or
+  the pod that asked is gone.
 
 ### Forge as an approval surface
 
@@ -297,7 +299,7 @@ sequenceDiagram
 
 ### API (agentdev-api)
 
-- `GET /api/approvals?project=&state=pending|decided|expired|all&agent=&from=&to=` (projects where the caller has
+- `GET /api/approvals?project=&state=pending|decided|void|all&agent=&from=&to=` (projects where the caller has
   write access, or all for `agentdev-admins`), `GET /api/approvals/{id}` (one request with its full context), `GET
   /api/approvals/stream` SSE for live updates.
 - `POST /api/approvals/{id}/decision` with `allow_once | allow_job | deny` and a note. Allowed for users with write
@@ -307,7 +309,7 @@ sequenceDiagram
   compromised agent cannot send its request to a different project.
 - Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent) for the live
   workflow, so the operator, API and sidecar share it without a new database. The API writes the history row first,
-  then the operator removes the `Approval` 7 days after it was decided or expired. **History** (every request and
+  then the operator removes the `Approval` 7 days after it was decided or void. **History** (every request and
   its outcome) is in the `approvals` table of the platform Postgres, next to `security_events` (#70). Retention:
   outcome records 1 year by default; the bulky context (transcript excerpt, diff) 90 days.
 - Request content shown to the approver is the exact tool input (command line, file path, host), rendered as text, never
@@ -331,7 +333,7 @@ sequenceDiagram
   - **Pending:** each request with the agent, the issue or PR it works on, the reason Claude gave, and the three
     buttons.
   - **History:** every request that was raised, with its outcome (**approved once**, **approved for the job**,
-    **denied**, or **expired** after the timeout), who decided, where (UI or forge), when, and the note. Filters by
+    **denied**, or **void** when no longer needed), who decided, where (UI or forge), when, and the note. Filters by
     agent, outcome and date; export as CSV.
 - **Request detail** (from either tab): the full context stored with the request (see API above), with links that open
   the issue or PR, the branch and the commit on the forge, and the agent's transcript excerpt. After a decision, it
@@ -339,8 +341,104 @@ sequenceDiagram
 - Admins get an "all projects" view of both tabs.
 - Agent overview shows "waiting for approval" as a state.
 - The same request also appears on the forge (see *Forge as an approval surface*).
-- **Open question (#67):** whether UI decisions ship in the first version (forge accounts sign in to the UI through
-  authentik) or the UI only shows requests and decisions are taken on the forge.
+- Decided on #67 (owner, 2026-10-31): the first version decides on the forge only; the UI shows Pending and History
+  read-only. Deciding in the UI is #80.
+
+### What is implemented (#67, forge-first)
+
+The design above is the target. The first version (#67) implements this part of it; the rest is #80 (UI decisions,
+SSE stream, decision note) or later (egress requests, GitHub forges, transcript excerpt and diff in the context,
+Postgres history table).
+
+```mermaid
+sequenceDiagram
+  participant C as Claude (agent container)
+  participant S as forge sidecar
+  participant O as operator
+  participant API as agentdev-api
+  participant F as forge (issue / PR)
+  participant U as project member (write access)
+  C->>S: permission prompt (MCP tool approve on localhost) or push touching a protected path
+  S->>S: id = random nonce, contentHash = sha256(id, agent, repo, job, source, tool, input)
+  S-->>O: log line AGENTDEV_APPROVAL_REQUEST (trusted only from the forge container)
+  O->>O: create Approval (spec immutable, hash re-checked)
+  S->>F: comment "waiting for approval <id>"
+  U->>F: /approve <id> | /approve-job <id> | /deny <id>
+  API->>F: read comments of the job's issue or PR, commenter's permission
+  API->>API: rules 1-6, status update with resourceVersion (first wins), audit
+  S->>API: GET /internal/approvals/{agent}/{id} (agent pods only)
+  S-->>C: allow / deny (only if the decided hash is the hash the sidecar computed)
+```
+
+- **Switch.** `APPROVALS=true` (instance config, default off). Off: Claude runs with `--permission-mode dontAsk` and
+  protected pushes are refused, as before. On: Claude runs with `--permission-prompt-tool mcp__agentdev__approve`
+  for tools outside the allow-list; the `--disallowedTools` list stays a hard deny and is never asked about.
+- **Sources.** Claude permission prompts (sidecar `POST /mcp`, a minimal MCP server on localhost) and protected-path
+  pushes. A push waits up to 14 minutes (the loop's request timeout); if still pending, the push is refused with
+  `push-approval-pending` and the next push of the same commit reuses the same request.
+- **Approval resource** (`agentdev.dev/v1alpha1`, short name `apv`, namespace of the agents). The operator creates it
+  from the sidecar's line; its spec is immutable (CEL). The status (`pending | allowed | denied | void`, reason for void, scope,
+  decided by, comment id, decided content hash) is written by agentdev-api only, through the `approvals/status`
+  subresource. Agents have no RBAC on Approvals. Objects are deleted 90 days after creation
+  (`APPROVAL_RETENTION_DAYS`); the audit log keeps the decisions.
+- **Decision rules as implemented.** 1: comments are ignored and audited when they come from the requesting agent's
+  own account (`spec.requesterId`, read by the sidecar with the agent's token from `GET /user`, so a login that
+  differs from the agent name does not matter), from any other agent's account (resolved by login = agent name; an
+  account that cannot be resolved is logged and skipped), from the API's own token account, from a login in
+  `APPROVAL_DENY_ACCOUNTS` (router or App bot, other service accounts), or from a bot account. 2: the comment must quote the
+  id at the start of a line and be created after the request. 3: an edited comment is ignored and audited. 4: the
+  status carries the content hash, and the sidecar acts only if it equals its own. 5: the API reads the comment from
+  the forge and checks the commenter's permission (`write` or more) at decision time. 6: compare-and-set on
+  `resourceVersion`; a lost race is audited. The sidecar refuses to post a comment that starts a line with a decision
+  command (`approval-self-decision`, high).
+- **Scope.** `/approve` allows once. `/approve-job` allows the **same tool with the same input** (or the same commit
+  for a push) again until the job ends; any other input asks again. The grant is kept in the sidecar's memory and
+  never outlives the pod.
+- **Job binding.** The job comes from the agent container (`X-Agentdev-Job`), so the sidecar checks it on the forge
+  before it opens a request: an issue must be assigned to the agent, a PR must come from one of its branches.
+  Otherwise the request is refused (`approval-foreign-job`, high).
+- **Secrets in the request text.** The sidecar replaces the agent's forge token and common credential shapes (GitHub,
+  GitLab, OpenAI-style, Slack and AWS keys, private keys, `password=`/`token:`-style values) with `[redacted]`
+  before the text reaches the forge comment, the log line, the Approval object or the UI. The agent container holds
+  no forge credential (#64), so this guards against secrets Claude read from the repository or an issue; it is a
+  pattern filter, not a guarantee.
+- **Reading the decision.** Each request has a 32-byte secret only the sidecar holds; the Approval stores its SHA-256
+  (`spec.secretHash`). The internal endpoint answers only a caller that sends the secret, so another agent pod cannot
+  read the decision even if it learns the id.
+- **Lifecycle and deduplication** (owner on #107). A request has a fingerprint: job + tool + exact input for a Claude
+  prompt, job + branch + protected paths for a push. The sidecar keeps one record per fingerprint; asking again
+  reuses it, with no new log line, Approval or comment. Timeline:
+  1. Claude asks, or a push hits a protected path: one Approval, one forge comment "waiting for approval".
+  2. The agent waits (Claude prompt: `APPROVAL_TIMEOUT_MINUTES`, default 30; push: at most 14 min, the loop's request
+     limit). With no decision the action fails closed; the comment is edited once to "still open". The record stays
+     `pending` and decidable; there is no expiry.
+  3. A later ask with the same fingerprint (in the same pod) uses the decision of that record: allowed (once: used
+     up), denied (denied again at once, nothing new is filed), or still pending (waits again).
+  4. The record becomes `void` (its comment edited to "void: <reason>", decision commands removed) when: the job ends
+     (the loop calls the sidecar's `POST /job-done`); a newer push of the same branch and paths supersedes it (a new
+     commit); the issue or PR is closed (API, each pass); the pod that asked is gone (API, by the `agentdev/pod-uid`
+     label), since only that sidecar holds the request's secret.
+     On a GitHub forge (#87) the API does not read the issue or PR, so a closed issue or PR does not void the record:
+     it becomes void only by job end, supersede or the pod-gone check.
+     The sidecar tries the void 3 times (2 s, then 4 s apart). If the API stays unreachable, the record stays
+     `pending` until the API sees that the pod is gone; a pod that serves several jobs keeps it pending until the pod
+     restarts. Decisions on it still need the sidecar's secret, so nothing acts on it.
+  5. A decision comment on a decided or void record has no effect and is audited (`approval-decision`, denied, for 7
+     days after it closed). Void transitions are audited as `approval-void` with the reason.
+- **Fail closed.** API unreachable, no job, a job that is not the agent's, unknown answer, hash mismatch or no
+  decision in the waiting time: the action is refused. GitHub-forge requests are not decided yet (#87): they stay
+  pending until void.
+- **Command parsing.** Only a line the person wrote counts: lines inside fenced code blocks (```` ``` ```` or `~~~`),
+  indented code and quoted lines (`>`) are ignored, so a command quoted from tool or plan output never decides.
+- **Audit.** Every decision (`approval-allowed`, `approval-denied`), void (`approval-void`) and refused decision
+  attempt (`approval-decision`, result `denied`) is an `AGENTDEV_AUDIT` line with the request id, repo, job, tool,
+  content hash and comment id.
+- **API.** `GET /api/approvals?state=pending|decided|allowed|denied|void|all&agent=&project=` and
+  `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
+  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
+  sidecar that made the request (per-request secret, see above) with state, scope, decider and decided hash only.
+- **UI.** An **Approvals** tab with a pending count, Pending and History tabs, the request text shown as untrusted
+  plain text.
 
 ### Safety rules
 
@@ -522,6 +620,22 @@ rights applies it, only after a person approved both the code and the run. No AI
 credentials to infrastructure. Owner decisions on #69 (2026-10-31): the trusted plan is required; an apply needs
 the merge **and** an explicit `/approve`; one executor per environment.
 
+Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on a cluster. As built:
+
+- Executors, their runs, Jobs and `exec-*` Secrets live in their own namespace (`EXEC_NS`, default
+  `agentdev-executors`); the operator refuses to start if it equals the agents namespace.
+- The operator polls the forge (no webhook) with the executor's own forge account and creates `ExecutorRun`s:
+  `pr` (head of an open PR into the branch that changes `spec.path`), `merge` (merge commit, fetched from the
+  protected branch only) and `apply`.
+- MVP storage of the plan: a PersistentVolumeClaim per merge run instead of a bucket. The plan Job runs the tool as an
+  init container and then the operator image (`hash-plan`) prints the SHA-256 of `$(PLAN_FILE)`; the apply Job runs
+  `verify-plan` before the tool and mounts the volume read-only.
+- The apply gate is an `Approval` with `source: executor`, `tool: apply`, `job: pr-<N>` and the input "apply executor
+  ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
+- Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
+- Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
+  egress allow-list for executor Jobs (#65), deciding in the UI (#80), reopening the issue on a failed apply.
+
 ### Resources
 
 - `Executor` (`agentdev.dev/v1alpha1`): one per environment and tool, for example `terraform-prod`. It fixes the image
@@ -555,8 +669,10 @@ the merge **and** an explicit `/approve`; one executor per environment.
 5. After the merge, the operator runs the plan executor again **on the merge commit** of main. Only this plan can be
    applied. If it differs from the plan that was reviewed on the PR, the run stops and the PR shows both plans.
 6. An `Approval` request (#67) "apply plan-<merge commit> to prod" appears, with the plan and its hash. It uses the
-   decision rules of phase 4 and is bound to the executor, the environment and the plan hash. It is single-use and
-   expires (default 24 h). A person with write access replies `/approve <id>`. Agents never approve.
+   decision rules of phase 4 and is bound to the executor, the environment, the plan hash, the image digest, the
+   apply command and a hash of the Executor spec (credentials included). It is single-use; a decision counts only
+   within `spec.approvalHours` (default 24 h), and the apply must start within `EXECUTOR_APPLY_START_MINUTES`
+   (default 30) of it. A changed Executor refuses the apply. Closing the merged PR does not void it. A person with write access replies `/approve <id>`. Agents never approve.
 7. The operator runs the **apply executor** with the merge commit and the stored plan, after it checks that the plan
    hash matches the approved one. Terraform refuses a stale plan; the flow then goes back to step 5.
 8. The executor posts the output to the issue. The run is audited and reported as a security event

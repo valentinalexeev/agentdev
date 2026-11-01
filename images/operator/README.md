@@ -51,3 +51,8 @@ go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName
 ```
 
 `render.go` is the only definition of an agent's pod: change it, run `./run.sh 12`, and every agent follows.
+
+**Deterministic executors (#69).** With `EXEC_NS` set, the operator also polls the forge for every `Executor`
+(short name `exe`) in that namespace and runs `ExecutorRun`s (short name `exr`): a plan of each PR head, a plan of each
+merge commit, and an apply after an `Approval` of that plan. The same binary runs `hash-plan <file>` and
+`verify-plan <file> <sha256>` inside the Jobs. Admin guide: `docs/admin.md`, "Deterministic executors".

@@ -148,3 +148,6 @@ spec:
     ports: [{port: 8080}]
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: contextforge}}}]
     ports: [{port: 4444}]
+  # approvals (#67): the forge sidecar asks the API's internal endpoint for decisions (per-request secret, R73)
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}]
+    ports: [{port: 8081}]

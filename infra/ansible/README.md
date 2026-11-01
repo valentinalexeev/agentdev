@@ -30,7 +30,7 @@ the playbook on first run.
 ## Platform (#51)
 The `platform` role deploys Postgres and ContextForge from `manifests/platform.yaml.tmpl` into `platform_ns`,
 then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the operator machine; needs `yq`, `jq`,
-`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R46); the sync output is
+`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
 not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`
@@ -58,6 +58,16 @@ Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, imag
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
 The API checks permissions on Gitea only (#87); with `forge_url` on GitHub only `agentdev-admins` can change agents.
 
+## Public HTTPS entry point (#120)
+The `ingress` role runs last when `instance.yml` sets `ingress.host`. It applies one GKE Gateway
+(`gke-l7-global-external-managed`) on the Terraform static IP (`ingress.static_ip_name`, default `agentdev-webhook`)
+with the Terraform Google-managed certificate (`ingress.certificate`) and SSL policy (`ingress.ssl_policy`). Routes:
+`https://<webhook_host>/hook` to `webhook-router`, `https://<host>/` to `agentdev-ui` (only when the UI is deployed,
+that is with `api.oidc_issuer`), port 80 redirects. HSTS on every HTTPS response; Cloud Armor
+(`ingress.security_policy`) on both backends when set. Values come from `terraform output ingress`. The role stops
+when the cluster does not serve the Gateway API (Terraform `gateway_api_config`). Render test:
+`tests/ingress_render.yml`. The `api` role now also applies `manifests/ui.yaml.tmpl` (`api.ui: false` skips it).
+
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
 ```bash
@@ -70,5 +80,5 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
 
 ## Not here
-GitHub API support in the worker and the public webhook Ingress come with #2; the cutover is phase 4 of #11.
+GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
 Day-2 changes (adding agents, rotating credentials) move to the management UI (#12).

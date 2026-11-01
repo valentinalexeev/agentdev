@@ -39,6 +39,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - get
@@ -48,6 +58,7 @@ rules:
   - ""
   resources:
   - pods/log
+  - secrets
   verbs:
   - get
 - apiGroups:
@@ -76,6 +87,7 @@ rules:
 - apiGroups:
   - agentdev.dev
   resources:
+  - approvals
   - securityevents
   verbs:
   - create
@@ -83,6 +95,35 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - agentdev.dev
+  resources:
+  - executorruns
+  - executorruns/status
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - agentdev.dev
+  resources:
+  - executors
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - agentdev.dev
+  resources:
+  - executors/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - apps
   resources:
@@ -94,4 +135,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - watch

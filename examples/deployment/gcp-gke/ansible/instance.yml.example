@@ -13,17 +13,38 @@ mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.loca
 github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
-  public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+  public_url: https://agentdev.example.com       # https://<ingress.webhook_host>; webhook URL = <public_url>/hook
+  app_id: 1012345                                # from .secrets/github-app/app-id after `convert` (not secret)
+  # installation_id: 51234567                    # optional; looked up from the agent's repo when omitted
+# Agents on GitHub get work by the label agent:<name> on an issue (an App cannot be assigned). Agent names:
+# lowercase letters, digits, - . All repos of one agent must belong to one owner (one App installation).
+# Deterministic executors (#69), optional: an AI agent designs the change, a person merges and /approve-s, the
+# executor applies it. Secret Manager: exec-<name>-forge-token (own forge account), optional exec-<name>-plan-env and
+# exec-<name>-apply-env (KEY=VALUE lines). The two Google service accounts are yours (terraform/main.tf).
+# executors:
+#   - name: tf-prod
+#     environment: prod
+#     repo: my-org/platform
+#     path: infra
+#     image: hashicorp/terraform@sha256:<digest>
+#     plan: [terraform, plan, -input=false, -out=$(PLAN_FILE)]
+#     apply: [terraform, apply, -input=false, $(PLAN_FILE)]
+#     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
+#     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
+#     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
 # Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
 # api:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
-  app_id: 1012345                                # from .secrets/github-app/app-id after `convert` (not secret)
-  # installation_id: 51234567                    # optional; looked up from the agent's repo when omitted
-# Agents on GitHub get work by the label agent:<name> on an issue (an App cannot be assigned). Agent names:
-# lowercase letters, digits, - . All repos of one agent must belong to one owner (one App installation).
+# Public HTTPS entry point (agentdev #120): from `terraform output ingress` after terraform public_hosts is set.
+# DNS: an A record for each name -> `terraform output webhook_ip`. github_app.public_url = https://<webhook_host>.
+# ingress:
+#   host: agentdev.example.com              # web UI
+#   webhook_host: agentdev.example.com      # optional, default host
+#   certificate: agentdev-public-1a2b3c4d
+#   security_policy: agentdev-public        # only with cloud_armor = true
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
 # usage: {five_hour: 80, weekly: 90}
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.

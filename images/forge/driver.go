@@ -73,7 +73,7 @@ func (d *giteaDriver) rules() []rule {
 		r("GET", repoRe+`/issues`, nil),
 		r("GET", repoRe+`/issues/[0-9]+`, nil),
 		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("POST", repoRe+`/issues/[0-9]+/comments`, checkNoDecision), // agents never decide approvals (#67)
 		r("GET", repoRe+`/pulls`, nil),
 		r("POST", repoRe+`/pulls`, checkOwnHead),
 		r("GET", repoRe+`/pulls/[0-9]+`, nil),

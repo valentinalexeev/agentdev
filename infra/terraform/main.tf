@@ -65,7 +65,8 @@ resource "google_compute_router_nat" "nat" {
   }
 }
 
-# Public entry point for the webhook router (#3) so GitHub can deliver (#2).
+# Public entry point (#120): the GKE Gateway of the Ansible role ingress uses it by name (webhook router for the
+# GitHub App, #2, and the web UI with its /api proxy). The name stays for existing instances.
 resource "google_compute_global_address" "webhook" {
   name       = "agentdev-webhook"
   depends_on = [google_project_service.apis]
@@ -121,6 +122,8 @@ resource "google_container_cluster" "this" {
   addons_config {
     http_load_balancing { disabled = false }
   }
+  # Gateway API for the public HTTPS entry point (#120, Ansible role ingress); in-place change on an existing cluster
+  gateway_api_config { channel = "CHANNEL_STANDARD" }
   depends_on = [google_project_service.apis]
 }
 

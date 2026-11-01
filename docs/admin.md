@@ -272,7 +272,7 @@ NOTE: The dry run (`--check`) does not run the sync.
    - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
 
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
-   A bad server can put instructions in them (prompt injection). Refer to R48 in `docs/security.md`.
+   A bad server can put instructions in them (prompt injection). Refer to R51 in `docs/security.md`.
 
    The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
 3. Run the sync: `scripts/mcp-sync.sh <spec>`
@@ -628,7 +628,8 @@ CAUTION: This procedure removes the pod of the agent. The volumes stay.
 ## Web UI
 
 The web UI shows the agents of the instance and their status. You sign in to the web UI through authentik. The web
-UI is in the `agentdev-platform` namespace. For GKE, refer to issue #51.
+UI is in the `agentdev-platform` namespace. On GKE, the role `api` deploys the UI, and the public entry point
+makes it available on HTTPS (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 
 ### Deploy the web UI
 
@@ -686,6 +687,96 @@ NOTE: When you close the browser tab, you also sign out.
 - The address of the web UI must be a strict redirect URI in the authentik blueprint
   (`manifests/authentik-blueprint-agentdev.yaml`). authentik creates its CORS list from these URIs.
 
+## Public HTTPS entry point (GKE)
+
+On GKE, one load balancer gives the instance a public HTTPS address (#120). It sends only two types of request to
+the cluster: GitHub webhooks to the router, and the web UI with its `/api` calls. All other services stay inside
+the cluster. Google makes and renews the TLS certificate.
+
+| Public URL | Service | Notes |
+|---|---|---|
+| `https://<ingress.webhook_host>/hook` | `webhook-router` | GitHub App webhook. The router examines `X-Hub-Signature-256`. |
+| `https://<ingress.host>/` | `agentdev-ui` | The web UI. The UI sends `/api/` to the API inside the cluster. |
+| `http://<host>/...` | none | Redirect (301) to `https://`. |
+
+The router paths `/status`, `/register` and `/idle`, the API Service, ContextForge, Postgres and the agents have no
+public route.
+
+### Make the public entry point
+
+Do this task after the first installation on GKE.
+
+1. Choose one DNS name, or two DNS names (one for the UI, one for the webhook).
+2. In `terraform/instance.tfvars` of the deployment repository, add the names:
+
+   ```hcl
+   public_hosts = ["agentdev.example.com"]
+   ```
+
+3. Optional: to add Cloud Armor, add `cloud_armor = true`.
+   Cloud Armor refuses large requests and limits the requests of each client IP address.
+4. Apply Terraform (the owner does this step).
+   Terraform makes the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+5. Show the values: `terraform output ingress` and `terraform output webhook_ip`.
+6. In your DNS zone, make an `A` record for each name. Use the address from `webhook_ip`.
+7. In `ansible/instance.yml`, add the `ingress` values from step 5:
+
+   ```yaml
+   ingress:
+     host: agentdev.example.com           # the web UI
+     # webhook_host: hooks.example.com    # optional, default: host
+     certificate: agentdev-public-1a2b3c4d
+     # security_policy: agentdev-public   # only with cloud_armor = true
+   ```
+
+8. Run the playbook (the deployment CI or `ansible-playbook`).
+9. Wait until the certificate is active. This can take 60 minutes after the DNS records are correct:
+   `gcloud compute ssl-certificates describe <certificate> --format='value(managed.status)'`
+   The command shows `ACTIVE`.
+10. Make sure that the UI opens: `curl -sI https://agentdev.example.com/`
+    The response is `200` and has the header `strict-transport-security`.
+11. Make sure that an internal path is not public: `curl -s -o /dev/null -w '%{http_code}\n' https://agentdev.example.com/status`
+    The response is `404`.
+
+NOTE: The web UI is routed only when `api.oidc_issuer` is set, because the role `api` deploys the UI. Set
+`ingress.ui: false` to make only the webhook public.
+
+### Use the webhook URL
+
+1. Set `github_app.public_url` in `instance.yml` to `https://<ingress.webhook_host>`.
+2. Register the GitHub App (refer to [GitHub App](#github-app-registration)).
+   The script sets the webhook URL to `https://<ingress.webhook_host>/hook`.
+
+NOTE: If you registered the App before, change the webhook URL on github.com to `https://<host>/hook`. The load
+balancer does not send `/` to the router.
+
+### Open the UI and the router on kind
+
+On `kind`, no load balancer is installed. Use a port-forward. The paths are the same as on GKE.
+
+1. Start the port-forward for the UI:
+   `kubectl -n agentdev-platform port-forward svc/agentdev-ui 8091:8080`
+2. Open `http://localhost:8091/`.
+3. To send a test webhook, start the port-forward for the router:
+   `kubectl -n coding-agents port-forward svc/webhook-router 8080:8080`
+4. Send the request to `http://localhost:8080/hook`.
+
+NOTE: On `kind`, no TLS, HSTS or Cloud Armor applies. Do not make a `kind` cluster public.
+
+### Reference: the public entry point
+
+| Control | Where | Value |
+|---|---|---|
+| TLS | Terraform `google_compute_ssl_policy` | TLS 1.2 or higher, profile `MODERN` |
+| HTTP to HTTPS | `HTTPRoute agentdev-https-redirect` | 301, no backend on port 80 |
+| HSTS | response header on both routes | `max-age=31536000; includeSubDomains` (`ingress.hsts_max_age`) |
+| Request size | router (5 MB for `/hook`), UI nginx (`client_max_body_size 1m`), Cloud Armor (`public_max_request_bytes`) | |
+| Rate limit | Cloud Armor (optional) | `cloud_armor_requests_per_minute` for each client IP, then `429` |
+| Network | NetworkPolicy `agentdev-ui-from-lb` | only the Google load balancer ranges reach the UI pods |
+
+The objects are in `infra/ansible/roles/ingress/templates/gateway.yaml.j2`. Risks: `docs/security.md` R66 to R68.
+Cost: the forwarding rule costs approximately $18 each month; Cloud Armor adds approximately $7 each month.
+
 ## Security events
 
 A security event is a record of an action that a guardrail stopped. The forge sidecar and the agent loop write each
@@ -706,6 +797,33 @@ number to see the events of that agent.
 
 NOTE: You can also use `kubectl -n coding-agents get securityevents` or `GET /api/security-events` (refer to
 *Management API*).
+
+### Turn on approvals
+
+Approvals let agents ask a project member for permission on the forge, instead of a refusal. Design and rules:
+[security-model.md](security-model.md#approvals-and-permission-notifications).
+
+CAUTION: Make sure that the API has a forge token (refer to *Give the API access to the forge*). Without the token,
+the API cannot make a decision, and each request stays open until it becomes void.
+
+IMPORTANT: At this time, approvals operate only on kind. The GKE playbook does not deploy agentdev-api, which
+decides the requests, so the playbook stops with an error if `approvals.enabled` is `true`.
+
+1. Set `APPROVALS=true` in `.env`.
+2. Optional: set the time that the agent waits for a decision with `APPROVAL_TIMEOUT_MINUTES`. The default is 30
+   minutes. After this time, the agent continues without the action, but the request stays open.
+3. Run `./run.sh 10` and then `./run.sh 12`.
+   The operator starts the agent pods again with the new setting.
+
+NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).
+
+NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
+example the account of the router or of a GitHub App), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision (issue #87).
+
+NOTE: Approval objects stay in the cluster for 90 days (`APPROVAL_RETENTION_DAYS`). Use
+`kubectl -n coding-agents get approvals` to see them.
 
 ### Resume an agent that the operator paused
 
@@ -917,6 +1035,113 @@ NOTE: The event shows only the method, the host and the port. The event does not
 
 NOTE: The proxy refuses all private, loopback and link-local addresses, also when an allowed name points to one.
 
+## Deterministic executors
+
+An executor applies a change that a person approved (#69). An AI agent designs the change with read-only
+credentials. The executor has the write credentials. No AI runs in the executor. The image and the commands come
+from the `Executor` object, never from the repository. Only cluster admins can write `Executor` objects.
+
+The flow for each pull request:
+
+1. The executor plans the head commit of the pull request. It uses the read-only credentials. It sets the commit
+   status `agentdev/trusted-plan` and writes the plan output in a comment.
+2. After the merge, the executor plans the merge commit again. It takes the commit from the protected branch only.
+   The operator calculates the SHA-256 of the plan file and writes an approval request on the pull request.
+3. A person with write access replies `/approve <id>`.
+4. The executor applies the plan file with the write credentials. Before the apply, the operator image checks that the
+   plan file has the approved SHA-256. Each approval is for one apply only.
+
+### Set up an executor
+
+Before you do this task, make sure that you have:
+
+- An own forge account for the executor, with write access to the repository. Do not use an agent account.
+- An image of the tool, with a digest (`name@sha256:...`).
+- The read-only credentials and the write credentials of the environment.
+
+1. Make the Secrets in the namespace `agentdev-executors`:
+
+   ```bash
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-forge --from-literal=FORGE_TOKEN=<token>
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-plan --from-env-file=plan.env
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-apply --from-env-file=apply.env
+   ```
+
+   On GKE, use Workload Identity instead of keys. Make two service accounts, `exec-tf-prod-plan` and
+   `exec-tf-prod-apply`, and set the `serviceAccountName` fields below.
+
+2. Apply the Executor object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Executor
+   metadata: {name: tf-prod}
+   spec:
+     environment: prod
+     repo: owner/platform
+     path: infra
+     image: hashicorp/terraform@sha256:<digest>
+     plan: {command: [terraform, plan, -input=false, -out=$(PLAN_FILE)]}
+     apply: {command: [terraform, apply, -input=false, $(PLAN_FILE)]}
+     planCredentials: {secretName: exec-tf-prod-plan}
+     applyCredentials: {secretName: exec-tf-prod-apply}
+     forgeSecret: exec-tf-prod-forge
+   EOF
+   ```
+
+3. In the forge, add the branch protection rule for the branch: require the status check `agentdev/trusted-plan`
+   and require that the branch is up to date.
+4. Add the forge account of the executor to `APPROVAL_DENY_ACCOUNTS` of the API. The executor writes tool output in
+   comments. This step makes sure that no comment of the executor can decide an approval.
+5. Show the executors: `kubectl -n agentdev-executors get executors`
+   The column PHASE shows `ready`.
+
+NOTE: With Ansible, put the executors in `executors:` of the instance file
+(`examples/deployment/gcp-gke/ansible/instance.yml.example`). The playbook makes the Secrets, the service accounts
+and the Executor objects.
+
+### Find the runs of an executor
+
+1. Run `kubectl -n agentdev-executors get executorruns`.
+   The output shows the stage (`pr`, `merge` or `apply`), the pull request, the commit and the phase.
+2. To read the output of a run, run `kubectl -n agentdev-executors logs job/<run name> -c tool`.
+
+### Stop an executor
+
+1. Run `kubectl -n agentdev-executors patch executor tf-prod --type merge -p '{"spec":{"paused":true}}'`.
+   The executor starts no new runs. A run that started continues to the end.
+
+### Reference: executors
+
+| Setting | Default | Where |
+|---|---|---|
+| `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `config.env`; Ansible `exec_ns` |
+| `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `config.env`; Ansible `executor_poll_seconds` |
+| `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `config.env`; Ansible `executor_retention_days` |
+| `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
+| `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
+| `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
+
+- Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
+  `executor.apply` or `executor.refused`.
+- The executor plans only pull requests that change a file below `spec.path`. It plans only merges after the
+  `Executor` object was made, and not older than 24 hours.
+- One executor per environment. If two `Executor` objects have the same `spec.environment`, the oldest one runs.
+  The other ones show the phase `invalid` with the reason `DuplicateEnvironment`, and an `executor.refused` event is
+  recorded. The Ansible playbook stops before it changes anything if two executors have the same environment.
+- By default the executor plans only pull requests from branches of the same repository. A pull request from a fork
+  runs the code of its author with the plan credentials. Set `spec.allowForkPRs: true` only if the plan credentials
+  can read nothing secret (risk R81; egress limits are #65).
+- The approval covers the image digest, the apply command and a SHA-256 of the `Executor` spec (also the
+  credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
+  is closed with `executor spec changed`. Merge a new commit to plan again.
+- The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
+- The egress allow-list of the agents does not apply to the executors. The executor Jobs do not use the egress proxy,
+  because the tools need the cloud APIs of the environment. An executor Job can connect to all hosts. An allow-list
+  for the executors is a follow-up of #65.
+- Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
+
 ## Subscription usage limits
 
 Each Claude subscription has a 5-hour usage window and a weekly usage window. After each Claude run, the agent loop
@@ -1003,7 +1228,7 @@ Put it in Secret Manager (GKE) or in a local Secret.
    github_app:
      name: my-agentdev                         # unique on GitHub
      owner: my-org                             # omit to own it with your personal account
-     public_url: https://agentdev.example.com  # HTTPS address of this deployment's webhook router
+     public_url: https://agentdev.example.com  # https://<ingress.webhook_host> of this deployment
    ```
 
 2. Show the manifest: `scripts/github-app.sh render instance.yml`
@@ -1022,7 +1247,7 @@ Put it in Secret Manager (GKE) or in a local Secret.
 
 ### Reference: the GitHub App
 
-- The webhook URL is `<public_url>/`. The router examines `X-Hub-Signature-256`.
+- The webhook URL is `<public_url>/hook`. The router examines `X-Hub-Signature-256`.
 - `convert` compares `state` with the form that it generated.
 - Permissions: write for contents, issues and pull requests; read for metadata, checks and statuses.
 - The App has no `workflows` permission. Thus, agents cannot change `.github/workflows/`.
@@ -1156,7 +1381,8 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
-- For github.com, the router must have a public HTTPS URL (Ingress) and a GitHub App.
+- For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
+  URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The
   login of the App account is the same for all agents. Thus, the router does not use logins on GitHub.
 

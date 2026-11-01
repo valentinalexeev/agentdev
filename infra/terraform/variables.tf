@@ -63,3 +63,31 @@ variable "github_repository" {
   description = "owner/repo of the DEPLOYMENT repository whose GitHub Actions on main may use the automation service account (Workload Identity Federation)."
   type        = string
 }
+
+variable "public_hosts" {
+  description = "DNS names of the public HTTPS entry point (#120): the webhook host and the UI host (can be the same). Each needs a DNS A record to webhook_ip. Empty: no certificate, no public entry point."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for h in var.public_hosts : can(regex("^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", h))])
+    error_message = "public_hosts: lower-case DNS names without scheme, port, path or wildcard."
+  }
+}
+
+variable "cloud_armor" {
+  description = "Attach a Cloud Armor policy (size limit, per-IP rate limit) to the public backends. Costs about $5/month plus $1 per rule."
+  type        = bool
+  default     = false
+}
+
+variable "cloud_armor_requests_per_minute" {
+  description = "Cloud Armor: requests per minute per client IP before 429."
+  type        = number
+  default     = 300
+}
+
+variable "public_max_request_bytes" {
+  description = "Cloud Armor: largest accepted request body (Content-Length) in bytes. The router accepts at most 5 MB."
+  type        = number
+  default     = 5000000
+}
