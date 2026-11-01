@@ -10,13 +10,16 @@ import (
 
 // Agent keys (#66): the agent container calls the proxy with ANTHROPIC_AUTH_TOKEN=<agent>.<hex HMAC-SHA256(signing
 // key, agent)>. The key names the agent and is worth nothing outside the cluster (the proxy is the only place that
-// adds the real credential, and only for that agent's budget). The signing key is only in the proxy pod.
+// adds the real credential, and only for that agent's budget). The signing key is only in the proxy pod. The deploy
+// computes the same value with openssl (06-agents.sh, the playbook):
+//
+//	printf 'agentdev-claude-proxy/v1:%s' "$agent" | openssl dgst -sha256 -hmac "$signing" -r
 
 var agentRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 func agentKey(signing []byte, agent string) string {
 	m := hmac.New(sha256.New, signing)
-	m.Write([]byte("agentdev-claude-proxy/v1\x00" + agent))
+	m.Write([]byte("agentdev-claude-proxy/v1:" + agent))
 	return agent + "." + hex.EncodeToString(m.Sum(nil))
 }
 

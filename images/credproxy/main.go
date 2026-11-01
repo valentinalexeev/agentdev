@@ -7,7 +7,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,32 +29,25 @@ type credential struct {
 	apiKey string // ANTHROPIC_API_KEY
 }
 
-// credStore reads the credentials from a directory with one file per Claude Secret (claude-shared, claude-<agent>),
-// each with KEY=VALUE lines. The file is re-read on each lookup, so a rotated Secret takes effect without a restart.
+// credStore reads the credentials from a directory with one subdirectory per Claude Secret (claude-shared,
+// claude-<agent>), each mounted as a Secret volume (one file per key). Files are re-read on each lookup, so a rotated
+// Secret takes effect without a restart.
 type credStore struct{ dir string }
+
+func readKey(dir, key string) string {
+	b, err := os.ReadFile(filepath.Join(dir, key))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
 
 // lookup returns claude-<agent> if it holds a credential, else claude-shared (same rule as 06-agents.sh and the
 // playbook). The values never leave this process except in the upstream request header.
 func (c credStore) lookup(agent string) (credential, bool) {
 	for _, name := range []string{"claude-" + agent, "claude-shared"} {
-		data, err := os.ReadFile(filepath.Join(c.dir, name))
-		if err != nil {
-			continue
-		}
-		cr := credential{secret: name}
-		sc := bufio.NewScanner(strings.NewReader(string(data)))
-		for sc.Scan() {
-			k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
-			if !ok {
-				continue
-			}
-			switch strings.TrimSpace(k) {
-			case "CLAUDE_CODE_OAUTH_TOKEN":
-				cr.oauth = strings.TrimSpace(v)
-			case "ANTHROPIC_API_KEY":
-				cr.apiKey = strings.TrimSpace(v)
-			}
-		}
+		d := filepath.Join(c.dir, name)
+		cr := credential{secret: name, oauth: readKey(d, "CLAUDE_CODE_OAUTH_TOKEN"), apiKey: readKey(d, "ANTHROPIC_API_KEY")}
 		if cr.oauth != "" || cr.apiKey != "" {
 			return cr, true
 		}

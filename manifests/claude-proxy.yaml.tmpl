@@ -1,0 +1,89 @@
+# Claude credential proxy (#66, security model phase 3, fixes R11). Rendered by 06-agents.sh (envsubst) and
+# infra/ansible/deploy.yml (same template).
+#
+# - The only pod that mounts the Claude credentials (claude-shared and every claude-<agent>). Agent pods call it as
+#   ANTHROPIC_BASE_URL with a per-agent key (Secret agent-<name>-proxy, an HMAC of the agent name with the signing
+#   key in claude-proxy-signing); the proxy swaps in the agent's real credential and forwards to api.anthropic.com.
+# - It enforces a token budget per agent for 24 h (CLAUDE_BUDGET_TOKENS, per-agent files in ConfigMap
+#   claude-proxy-budgets) and prints the usage of every response as AGENTDEV_USAGE lines for the operator (#93), so
+#   usage no longer comes from inside the agent pod (closes R47).
+# - CLAUDE_SECRET_SOURCES is a list of projected-volume Secret sources, one per Claude Secret, rendered by the caller.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: claude-proxy-budgets, namespace: ${AGENTS_NS}}
+data: {}   # <agent>: "<tokens per 24 h>" overrides CLAUDE_BUDGET_TOKENS for that agent; 0 = no limit
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: claude-proxy, namespace: ${AGENTS_NS}, labels: {app: claude-proxy}}
+spec:
+  replicas: 1   # the budget is counted in this pod; more replicas would each count their own share
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: claude-proxy}}
+  template:
+    metadata:
+      labels: {app: claude-proxy}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 65532, runAsGroup: 65532, runAsNonRoot: true, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: proxy
+        image: ${CLAUDE_PROXY_IMAGE}         # ghcr.io/valentinalexeev/agentdev-credproxy:<tag> (#28)
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
+        env:
+        - {name: CLAUDE_BUDGET_TOKENS, value: "${CLAUDE_BUDGET_TOKENS}"}
+        - {name: BUDGET_DIR, value: /etc/claude-proxy/budgets}
+        - {name: STATE_FILE, value: /var/lib/claude-proxy/spend.json}
+        - {name: CREDENTIALS_DIR, value: /etc/claude-proxy/credentials}
+        - {name: SIGNING_KEY_FILE, value: /etc/claude-proxy/signing/key}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: credentials, mountPath: /etc/claude-proxy/credentials, readOnly: true}
+        - {name: signing, mountPath: /etc/claude-proxy/signing, readOnly: true}
+        - {name: budgets, mountPath: /etc/claude-proxy/budgets, readOnly: true}
+        - {name: state, mountPath: /var/lib/claude-proxy}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits:   {cpu: "1", memory: 256Mi}
+      volumes:
+      - name: credentials
+        projected: {defaultMode: 0400, sources: ${CLAUDE_SECRET_SOURCES}}
+      - name: signing
+        secret: {secretName: claude-proxy-signing, defaultMode: 0400}
+      - name: budgets
+        configMap: {name: claude-proxy-budgets, optional: true}
+      - name: state
+        emptyDir: {sizeLimit: 16Mi}   # spend of the last 24 h; a new pod starts at zero (docs/security.md R11)
+---
+apiVersion: v1
+kind: Service
+metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}
+spec:
+  selector: {app: claude-proxy}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Only agent pods (model calls) and the management API (GET /status for the UI) reach the proxy; the proxy reaches
+# only DNS and HTTPS on public addresses. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (R30). On GKE
+# the playbook adds an FQDNNetworkPolicy that narrows the egress to api.anthropic.com.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: claude-proxy}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from:
+    - podSelector: {matchLabels: {app: coding-agent}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}
+    ports: [{port: 8080}]
+  egress:
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+    ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
+    ports: [{port: 443}]

@@ -67,6 +67,7 @@ func main() {
 		BotboardURL:    os.Getenv("BOTBOARD_URL"),
 		PollSeconds:    env("POLL_SECONDS", "20"),
 		IdleSeconds:    env("IDLE_SECONDS", "900"),
+		ClaudeProxyURL: os.Getenv("CLAUDE_PROXY_URL"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

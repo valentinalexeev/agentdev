@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,8 +40,11 @@ func newFixture(t *testing.T, def int64) *fixture {
 	}))
 	t.Cleanup(up.Close)
 	f.credDir = t.TempDir()
-	os.WriteFile(filepath.Join(f.credDir, "claude-shared"), []byte("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-shared\n"), 0o600)
-	os.WriteFile(filepath.Join(f.credDir, "claude-bob"), []byte("ANTHROPIC_API_KEY=sk-ant-api-bob\n"), 0o600)
+	os.MkdirAll(filepath.Join(f.credDir, "claude-shared"), 0o700)
+	os.MkdirAll(filepath.Join(f.credDir, "claude-bob"), 0o700)
+	os.MkdirAll(filepath.Join(f.credDir, "claude-carol"), 0o700) // optional volume of a Secret that does not exist: empty
+	os.WriteFile(filepath.Join(f.credDir, "claude-shared", "CLAUDE_CODE_OAUTH_TOKEN"), []byte("sk-ant-oat-shared\n"), 0o600)
+	os.WriteFile(filepath.Join(f.credDir, "claude-bob", "ANTHROPIC_API_KEY"), []byte("sk-ant-api-bob"), 0o600)
 	u, _ := url.Parse(up.URL)
 	f.b = newBudget(def, t.TempDir(), filepath.Join(t.TempDir(), "state.json"))
 	f.srv = httptest.NewServer(newServer(testSigning, credStore{f.credDir}, f.b, u, up.Client().Transport))
@@ -85,6 +89,12 @@ func TestKeys(t *testing.T) {
 	}
 	if verifyKey([]byte("short"), agentKey([]byte("short"), "alice")) != "" {
 		t.Error("short signing key accepted")
+	}
+	// the shell computation of the deploy gives the same key
+	sh := exec.Command("sh", "-c", `printf 'agentdev-claude-proxy/v1:%s' alice | openssl dgst -sha256 -hmac "$K" -r | cut -d' ' -f1`)
+	sh.Env = append(os.Environ(), "K="+string(testSigning))
+	if o, err := sh.Output(); err == nil && "alice."+strings.TrimSpace(string(o)) != k {
+		t.Errorf("openssl key %s differs from %s", o, k)
 	}
 	if callerKey("Bearer x", "y") != "x" || callerKey("", " y ") != "y" {
 		t.Error("callerKey")
@@ -210,7 +220,7 @@ func TestRefusals(t *testing.T) {
 		t.Error("refused request reached upstream")
 	}
 	// agent with no credential at all
-	os.Remove(filepath.Join(f.credDir, "claude-shared"))
+	os.RemoveAll(filepath.Join(f.credDir, "claude-shared"))
 	resp := f.post("/v1/messages", agentKey(testSigning, "carol"), `{}`, nil)
 	resp.Body.Close()
 	if resp.StatusCode != 503 || called {

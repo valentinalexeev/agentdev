@@ -18,7 +18,7 @@ import (
 const bucketCount = 24
 
 type agentSpend struct {
-	Hours  [bucketCount]int64 `json:"hours"` // tokens per hour, index = unix hour % 24
+	Hours  [bucketCount]int64 `json:"hours"`  // tokens per hour, index = unix hour % 24
 	Stamps [bucketCount]int64 `json:"stamps"` // unix hour of each bucket
 }
 
