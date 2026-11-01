@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS security_events (
 	stored_at  timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE security_events ADD COLUMN IF NOT EXISTS untrusted boolean NOT NULL DEFAULT false;
+-- per-agent hash chain (#71): prev = chain of the agent's previous row, chain = sha256(prev || '\n' || canonical row)
+ALTER TABLE security_events ADD COLUMN IF NOT EXISTS prev  text NOT NULL DEFAULT '';
+ALTER TABLE security_events ADD COLUMN IF NOT EXISTS chain text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS security_events_agent_id ON security_events (agent, id DESC);
 CREATE INDEX IF NOT EXISTS security_events_time ON security_events (time);
 

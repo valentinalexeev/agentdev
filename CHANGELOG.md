@@ -7,6 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- SIEM outputs (#71): syslog over TLS (RFC 5424 messages, RFC 5425 octet-counted framing, facility 13, structured
+  data `agentdev@32473`) and OTLP logs (OTLP/HTTP JSON to `/v1/logs`, ECS-style attributes, optional headers). Both
+  reuse the webhook's per-agent fair queues and retries and can run together with the webhook. TLS 1.2+, certificates
+  always verified, optional CA and client certificate; no plain-text fallback (`http://` OTLP refused). Settings
+  `SECURITY_SYSLOG_*`, `SECURITY_OTLP_*` in the Secret `agentdev-api-siem` (instance secrets only).
+- Per-agent hash chain for security events (#71): new fields `prev` and `chain` (`sha256(prev + "\n" + canonical
+  event)`) in the table, the API, the webhook body, syslog and OTLP; computed at insert under a per-agent advisory
+  lock. A SIEM detects gaps and edits (`docs/admin.md`, "Do a check of the hash chain"). Schema stays
+  `agentdev.security/v1` (fields added); `schema.sql` adds the columns.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are

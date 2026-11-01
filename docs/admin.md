@@ -570,6 +570,64 @@ container. Claude can write such an event, so do not trust its text.
 NOTE: A SIEM can also read `GET /api/security-events` with the `cursor` parameter, or read the cluster logs with the
 filter `AGENTDEV_SECURITY_EVENT`.
 
+### Send the security events to a syslog server
+
+The API can send each new event to a syslog server over TLS (RFC 5424 and RFC 5425). The API always does a check of
+the certificate of the server.
+
+WARNING: Do not put the keys or the certificates in git. Keep them only in the instance secrets.
+
+1. Get the address of the syslog server, for example `siem.example.com:6514`.
+2. Add the address to the file `.secrets/platform/siem-webhook`:
+   ```
+   SECURITY_SYSLOG_ADDR=siem.example.com:6514
+   ```
+3. If a private CA signed the certificate of the server, add the CA certificate (PEM) to the same file:
+   `SECURITY_SYSLOG_CA=-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----`
+   Write the PEM on one line. Write `\n` for each line break.
+4. If the server requires a client certificate, add `SECURITY_SYSLOG_CLIENT_CERT` and `SECURITY_SYSLOG_CLIENT_KEY`
+   (PEM) to the same file.
+5. Run run.sh step 10: `./run.sh 10`
+   The API starts again. The API log shows no `security outputs` error.
+
+NOTE: Each message has facility 13 (log audit). The severity is 5 (notice) for `low`, 4 (warning) for `medium`
+and 2 (critical) for `high`. The structured data `agentdev@32473` has the fields. The message text is the event in
+JSON.
+
+### Send the security events to an OpenTelemetry collector
+
+The API can send each new event as an OTLP log record over HTTPS.
+
+WARNING: Do not put the API key of the collector in git. Keep it only in the instance secrets.
+
+1. Add the URL of the collector to the file `.secrets/platform/siem-webhook`:
+   ```
+   SECURITY_OTLP_URL=https://collector.example.com:4318/v1/logs
+   ```
+2. If the collector requires an API key, add the headers to the same file:
+   `SECURITY_OTLP_HEADERS=Authorization=Bearer%20<key>`
+3. If a private CA signed the certificate of the collector, add `SECURITY_OTLP_CA` (PEM) to the same file.
+4. Run run.sh step 10: `./run.sh 10`
+   The API starts again. The API log shows no `security outputs` error.
+
+NOTE: The API accepts only an `https://` URL. You can use the webhook, syslog and OTLP at the same time.
+
+### Do a check of the hash chain
+
+Each event has the fields `prev` and `chain`. Use them on the SIEM to find events that are missing or changed.
+
+1. For each agent, keep the `chain` value of the last event that you received.
+2. When a new event of that agent arrives, compare its `prev` with the kept value.
+   If the values are not equal, an event is missing. Use `GET /api/security-events` to find it.
+3. Calculate SHA-256 over `prev`, a newline and the canonical JSON of the event (see `docs/security-model.md`,
+   "Hash chain").
+4. Compare the result with `chain`.
+   If the values are not equal, somebody changed the event.
+5. Keep the new `chain` value.
+
+NOTE: The events from before issue #71 have an empty `prev` and `chain`. After the API deletes old events, the
+first event of an agent can have a `prev` that you do not have. This is correct.
+
 ### Reference: settings
 
 | Setting | Default | Where |
