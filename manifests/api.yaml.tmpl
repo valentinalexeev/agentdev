@@ -12,6 +12,9 @@ rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch, patch, create, delete]}   # Agents only: no Secrets, no StatefulSets, no PVCs
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
+- {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch]}         # approvals (#67): read
+- {apiGroups: [agentdev.dev], resources: [approvals/status], verbs: [update]}            # the decision, nothing else
+- {apiGroups: [""], resources: [pods], verbs: [list]}                                    # void requests of gone agent pods (#67)
 # usage limits (#93): thresholds (written by admins and project writers, audited) and the operator's usage state (read)
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
@@ -44,6 +47,10 @@ spec:
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
+        - {name: APPROVALS, value: "${APPROVALS}"}   # #67: decide approval requests from forge comments
+        # forge logins that never decide (router or App bot, the API's token user, other service accounts); agents are
+        # excluded by account id anyway
+        - {name: APPROVAL_DENY_ACCOUNTS, value: "${APPROVAL_DENY_ACCOUNTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # same defaults as the operator (#93), shown in the web UI
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
@@ -59,7 +66,7 @@ spec:
         # optional SIEM outputs, instance config only: webhook (#70), syslog over TLS and OTLP (#71); keys in outputs.go
         envFrom: [{secretRef: {name: agentdev-api-siem, optional: true}}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: http, containerPort: 8080}]
+        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
         resources:
@@ -92,3 +99,21 @@ spec:
   podSelector: {matchLabels: {app: agentdev-api}}
   policyTypes: [Ingress]
   ingress: []
+---
+# internal listener (#67): the agents' forge sidecars read approval decisions here; no /api routes, no OIDC
+apiVersion: v1
+kind: Service
+metadata: {name: agentdev-api-internal, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: agentdev-api}
+  ports: [{name: internal, port: 8081, targetPort: internal}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-api-internal, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-api}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: coding-agent}}}]
+    ports: [{port: 8081}]

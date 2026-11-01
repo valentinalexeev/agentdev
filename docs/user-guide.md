@@ -11,14 +11,20 @@ gives one pull request.
 2. In **What**, write the change in simple words.
 3. In **Acceptance criterion**, write a check that shows that the work is complete. For example: "A test passes" or "A page shows X".
 4. In **Open decisions**, write all the items that the agent must not guess.
-5. Assign the issue to an agent account, for example `alice`.
+5. Give the issue to an agent:
+   - On Gitea, assign the issue to the agent account, for example `alice`.
+   - On GitHub, add the label `agent:<agent>` to the issue, for example `agent:alice`.
+
    The agent writes a comment on the issue after some seconds.
 
 The agent does the work on the branch `agent/<agent>/issue-<n>`. Then the agent opens a pull request and asks you
 for a review.
 
-NOTE: The agent starts the work only when you assign the issue. If you do not assign the issue to an agent, no agent
-works on it.
+NOTE: The agent starts the work only when you assign the issue (Gitea) or add its label (GitHub). If you do not do
+this, no agent works on it.
+
+NOTE: On GitHub, all agents use the same GitHub App account, `<app>[bot]`. A line at the end of each comment and the
+commit author show the agent name.
 
 ## Review a pull request from an agent
 
@@ -36,6 +42,27 @@ the code that you merge.
 ### Stop the work on a pull request
 
 1. Close the pull request.
+
+## Approve an apply of an executor
+
+Do this task when an executor asks for an approval on a merged pull request (#69). The executor applies a change to
+an environment only after your approval.
+
+1. Read the comment of the executor with the title "trusted plan of the merge commit". It shows the plan output and
+   the SHA-256 of the plan file.
+2. Make sure that the plan does only the change of the pull request.
+3. If the plan is correct, reply `/approve <id>`. Use the id of the approval request.
+   The executor writes "apply started" and then the result.
+4. If the plan is not correct, reply `/deny <id>`.
+
+NOTE: A decision counts only within `spec.approvalHours` (default 24 h) of the request. The apply starts within
+30 minutes of the decision, or not at all.
+
+CAUTION: The approval is for one plan file and one apply only. If the apply fails, the executor does not try again.
+Make a new pull request with the correction.
+
+NOTE: The plan of a pull request before the merge (commit status `agentdev/trusted-plan`) is for the review only. You
+cannot approve it.
 
 ## Check the security findings of a pull request
 
@@ -147,6 +174,46 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 2. Make sure that the name is correct.
 3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
    The agent stops and goes out of the list. The volumes of the agent stay.
+
+## Answer an approval request from an agent
+
+An agent can ask for permission when it needs a tool that is not on its list, or when it must change a protected
+path such as `.github/workflows/`. The administrator turns on this function (`APPROVALS`). The agent writes a comment
+on its issue or pull request: "waiting for approval `<id>`". The comment shows the tool and the request text.
+
+WARNING: Read the request text carefully before you approve it. The agent wrote this text, and it can contain a
+prompt injection from the issue.
+
+1. Read the comment "waiting for approval" on the issue or the pull request.
+2. Write a new comment with one of these lines:
+   - `/approve <id>`: the agent can do this action one time.
+   - `/approve-job <id>`: the agent can do this same action again until the job ends. The tool and the request
+     text must be the same. A different request text makes a new approval request.
+   - `/deny <id>`: the agent cannot do this action.
+   The agent continues, usually in less than one minute.
+
+NOTE: You must have write access to the repository. A decision from a person without write access, or from an agent,
+has no effect.
+
+NOTE: Write the command at the start of a line, outside a code block and outside a quote.
+
+NOTE: Do not edit the comment with the decision. The system ignores an edited comment. Write a new comment.
+
+NOTE: The agent waits 30 minutes for your answer. Then the agent continues without the action. The request stays
+open, and the comment shows "still open". If the agent asks for the same action again, the agent uses your decision.
+The agent does not make a second request for the same action.
+
+NOTE: A request becomes void when the agent does not need it. For example, the job ends, the issue closes, or a new
+commit replaces the old commit. The comment then shows "void". A decision on a void request has no effect.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision. The
+request stays open until it becomes void, and the agent cannot do the action (issue #87).
+
+NOTE: The system removes known types of passwords and tokens from the request text. Do not trust that it removes
+all secrets.
+
+NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
+requests that have no decision. You cannot make a decision in the web UI at this time.
 
 ### Set a lower usage limit for your project
 

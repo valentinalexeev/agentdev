@@ -6,6 +6,21 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- GKE public HTTPS entry point (#120): Terraform `public_hosts` makes a Google-managed certificate and a TLS 1.2+
+  SSL policy, optional `cloud_armor` a Cloud Armor policy (size limit, per-IP rate limit); the cluster turns on the
+  Gateway API. New Ansible role `ingress` (runs when `instance.yml` sets `ingress.host`, values from
+  `terraform output ingress`) applies a Gateway on the existing static IP: `https://<webhook_host>/hook` to the
+  router, `https://<host>/` to the web UI, HTTP to HTTPS redirect, HSTS. Nothing else is public. The role `api` now
+  also deploys the web UI (`manifests/ui.yaml.tmpl`; `api.ui: false` skips it). UI nginx limits bodies to 1 MB.
+  Docs: `docs/admin.md` "Public HTTPS entry point (GKE)", kind parity with port-forward. New risks R66 to R68.
+
+### Changed
+- GitHub App webhook URL is `<public_url>/hook` (was `<public_url>/`), because the Gateway routes only `/hook` to the
+  router (#120). **BREAKING** for an App registered before: change the webhook URL on github.com to
+  `https://<host>/hook`. To apply #120: Terraform `infra/terraform` (gateway_api_config is an in-place cluster update),
+  then the Ansible playbook `deploy.yml` (roles `api` and `ingress`). The router itself still accepts `/`.
+
 ### Changed
 - API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
   scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
@@ -21,6 +36,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   repository, with a `read:repository,read:user` token in Secret `agentdev-api-forge` (kept if it still works for
   `agentdev-api`, never printed; older `agentdev-api*` tokens are deleted, and the API restarts with the new token). On GKE the
   forge token comes from Secret Manager through the Ansible role `api` (#104, #115); the group follows #114.
+- Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
+  (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
+  with the executor's own account, plans every PR that changes `spec.path` (commit status `agentdev/trusted-plan`,
+  output as a comment), plans the merge commit again, asks for an `Approval` (#67, `source: executor`) bound to the
+  plan file SHA-256, and after `/approve <id>` runs the apply once with the write credentials. The image is pinned by
+  digest and the commands come from the Executor only; the operator image hashes and verifies the plan file. Every
+  run is a security event (`executor.plan`, `executor.apply`, `executor.refused`). Wired in `config.env`,
+  `12-operator.sh`, the operator manifest (namespace, Role, NetworkPolicy), Ansible (`executors:`, Secrets from
+  Secret Manager, Workload Identity service accounts) and the GKE example. Also installs the `Approval` CRD (#67).
+  Risks R80 to R83. The approval binds image digest, apply argv and an Executor spec hash (a changed Executor
+  refuses the apply), the apply starts within `EXECUTOR_APPLY_START_MINUTES` (30) of the decision, one executor per
+  environment (operator and Ansible), fork PRs only with `spec.allowForkPRs`. The API does not void executor
+  approvals for their merged (closed) PR.
 - Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
   `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
   `claude-shared` / `claude-<agent>`; agent pods get `ANTHROPIC_BASE_URL` and a per-agent proxy key
@@ -65,6 +93,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`issues/{n}/events`) and requires write, maintain or admin for that person, checked live
   (`collaborators/{user}/permission`, both new on the sidecar allow-list); otherwise it skips the issue and raises
   `label-not-writer` or `label-unverified`.
+  loop never resolves a thread. Failing check runs of the PR head are given to the model as feedback. Gitea unchanged.
+- GitHub routing and deployment (#2, step 4). The router routes GitHub events by the label `agent:<name>` and the
+  branch `agent/<name>/...` (also on check runs), never by login (all agents share the App bot). The operator gives a
+  `forge: github` agent `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and optional `GITHUB_INSTALLATION_ID` from its own
+  Secret `agent-<name>` (forge container only, no `FORGE_TOKEN`; the key as a read-only file, `GITHUB_APP_PRIVATE_KEY_FILE`) and `FORGE_URL` from the new operator setting
+  `GITHUB_URL` (default `https://github.com`). GKE: `instance.yml` gets `github_app.app_id` (and optional
+  `installation_id`), the key comes from the Secret Manager secret `github-app-private-key`; the playbook checks the
+  ids and agent names. kind: `FORGE_KIND=github` in `config.env`, `./run.sh 06` reads `.secrets/github-app/`.
+  Docs: admin.md (connect agents, agent labels, reference), user guide, security model, risks R48 to R50.
+  **Re-run:** GKE: the playbook (operator, agents); kind: `./run.sh 12` and `./run.sh 06` for GitHub agents. Gitea
+  agents need no change.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
@@ -93,6 +132,23 @@ While the version is `0.x`, breaking changes bump MINOR.
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
   `GET /api/audit` (filters `agent`, `result`, `since`, `limit`, `cursor`), readable only by `agentdev-admins`.
+- Approvals, decided on the forge (#67, off by default: `APPROVALS=true` / `approvals.enabled`). Claude's tool
+  permission prompts (`--permission-prompt-tool mcp__agentdev__approve`, served by the forge sidecar) and pushes to
+  protected paths become requests: the sidecar comments "waiting for approval `<id>`", a person with write access
+  answers `/approve <id>`, `/approve-job <id>` or `/deny <id>`. New `Approval` CRD (short name `apv`), created by the
+  operator from the sidecar's `AGENTDEV_APPROVAL_REQUEST` line; status written by agentdev-api with a
+  compare-and-set. Decision rules: comments from the requesting agent (by forge account id), other agents, the API's token user,
+  `APPROVAL_DENY_ACCOUNTS` and bots ignored; job checked to be the agent's own; `/approve-job` covers the same input
+  only; request text redacted; decisions readable only by the requesting sidecar (per-request secret); edited comments ignored, live write-access check,
+  content hash, first decision wins. Lifecycle: one record per request (deduplicated by
+  fingerprint), ending allowed, denied or void; a timeout only ends the agent's wait and the record stays decidable;
+  void when the job ends, a newer request supersedes it, the issue or PR closes, or the pod is gone; the forge
+  comment is edited on each change; decisions on closed records are audited and ignored; commands inside code
+  fences or quotes do not count. Every decision is audited. Read-only
+  `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
+  UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
+  `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80. Kind only for now: the GKE
+  playbook does not deploy agentdev-api and stops if `approvals.enabled` is `true`.
 - Subscription usage limits (#93, incident #92): after each Claude run the worker prints an `AGENTDEV_USAGE {json}`
   line (tokens, 5-hour and weekly rate-limit windows from the CLI's `rate_limit_event`; the worker now uses
   `--output-format stream-json`). The operator sums them per Claude credential Secret and, when a window reaches its

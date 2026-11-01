@@ -13,7 +13,7 @@
 #     owner: my-org                     # org that owns the App; omit for your personal account
 #     public_url: https://agentdev.example.com      # where the webhook router is reachable over HTTPS
 #     homepage_url: https://agentdev.example.com    # optional, defaults to public_url
-# Webhook URL = <public_url>/ (the router verifies X-Hub-Signature-256). After registration GitHub redirects to
+# Webhook URL = <public_url>/hook (the only router path the GKE Gateway routes, #120; the router verifies X-Hub-Signature-256). After registration GitHub redirects to
 # <public_url>/github-app/registered?code=...&state=...; nothing listens there yet (a 404 is fine), so copy the
 # whole URL from the browser address bar into `convert`.
 # The script never registers or installs anything by itself: you confirm on github.com, as the owner.
@@ -37,7 +37,7 @@ url_re='^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$'
 
 # the template fixes the shape; jq fills the values (JSON-escaped), so no value can change the structure
 render() {
-  jq --arg name "${name}" --arg home "${home:-${pub}}" --arg hook "${pub}/" --arg redirect "${pub}/github-app/registered" \
+  jq --arg name "${name}" --arg home "${home:-${pub}}" --arg hook "${pub}/hook" --arg redirect "${pub}/github-app/registered" \
     '.name=$name | .url=$home | .hook_attributes.url=$hook | .redirect_url=$redirect' \
     "${SPIKE_DIR}/manifests/github-app-manifest.json.tmpl"
 }

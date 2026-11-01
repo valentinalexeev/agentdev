@@ -248,7 +248,9 @@ start_job() {
   echo "$$" > "${JOBS}/${key}.lock"
   (
     JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
-    trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"' EXIT
+    # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
+    trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
+          [[ "${APPROVALS:-false}" == true ]] && curl -fsS -m 30 -X POST "${FORGE_API}/job-done?job=${key}" >/dev/null 2>&1 || true' EXIT
     set -o pipefail
     if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
       rm -f "${JOBS}/${key}.retry"
@@ -323,11 +325,20 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
   local dir=$1 out rc err mcp=()
   err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
-  [[ -n "${CF_URL:-}" && -s "${MCP_CONFIG}" ]] && mcp=(--mcp-config "${MCP_CONFIG}" --strict-mcp-config)
+  local mode=(--permission-mode dontAsk) cfg="${MCP_CONFIG}"
+  if [[ "${APPROVALS:-false}" == true && -n "${JOB:-}" ]]; then
+    # approvals (#67): a tool outside the allow-list asks a project member through the forge sidecar's MCP tool,
+    # instead of being refused. The config is per job (the sidecar needs the job to comment on the issue or PR).
+    cfg="${STATE}/jobs/mcp-${JOB}.json"
+    jq -n --arg u "${FORGE_API}/mcp" --arg j "${JOB}" --slurpfile p <( [[ -s "${MCP_CONFIG}" ]] && cat "${MCP_CONFIG}" || echo '{}' ) \
+      '{mcpServers: (($p[0].mcpServers // {}) + {agentdev:{type:"http", url:$u, headers:{"X-Agentdev-Job":$j}}})}' > "${cfg}"
+    mode=(--permission-mode default --permission-prompt-tool mcp__agentdev__approve)
+  fi
+  [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
           claude -p "$2" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
-          --permission-mode dontAsk --allowedTools "${CLAUDE_TOOLS}" \
+          "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "${CLAUDE_GUARD}" \
           "${mcp[@]}" 2>"${err}"); rc=$?
