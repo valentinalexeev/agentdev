@@ -104,7 +104,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("forge: %v", err)
 	}
+	if _, err := newDriver(c); err != nil {
+		log.Fatalf("forge: %v", err)
+	}
 	s := newServer(c)
+	s.git.drv = s.drv
 	if err := s.git.init(); err != nil {
 		log.Fatalf("forge: mirror: %v", err)
 	}
