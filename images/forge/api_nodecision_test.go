@@ -11,6 +11,11 @@ func TestCheckNoDecisionUnit(t *testing.T) {
 		`{"x":"1","X":"2"}`,
 		`{"o":{"k":1,"K":2}}`,
 		"/approve 1a2b3c", // not JSON
+		`{"body":"ok"}{"body":"/approve x"}`,
+		`{"body":"ok"} "/approve"`,
+		`{"body":"ok"} {}`,
+		`{"bod\u0079":"/appr\u006fve x"}`,
+		`{"k":1,"\u212Aey":2,"key":3}`,
 	}
 	for _, b := range bad {
 		if checkNoDecision(nil, []byte(b)) == nil {

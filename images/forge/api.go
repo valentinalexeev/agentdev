@@ -81,6 +81,10 @@ func checkNoDecision(_ *server, body []byte) error {
 		}
 		return nil
 	}
+	// exactly one JSON value: trailing data could be read by a forge parser that this check never saw (review of #116)
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return refuseAs("approval-self-decision", "high", "refused: trailing data after the JSON body")
+	}
 	if hasDecision(v) {
 		return refused
 	}
