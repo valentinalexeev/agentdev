@@ -14,3 +14,21 @@ github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+# Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
+# The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
+# api:
+#   oidc_issuer: https://auth.example.com/application/o/agentdev/
+#   oidc_audience: agentdev
+#   db_retention_days: 365
+# Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
+# Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com

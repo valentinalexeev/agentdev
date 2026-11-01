@@ -5,3 +5,20 @@ image_tag: "0.1.0"                # image tag of a release: the git tag without 
 reviewer: my-github-login         # whose Approve lets an agent PR merge
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+# Optional management API (#104): deployed only with api.oidc_issuer. Forge token: Secret Manager agentdev-api-forge-token.
+# api:
+#   oidc_issuer: https://auth.example.com/application/o/agentdev/
+#   oidc_audience: agentdev
+#   db_retention_days: 365
+# Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
+# defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com
