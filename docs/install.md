@@ -104,6 +104,8 @@ The installation gives:
 
 CAUTION: The bootstrap makes a project and connects billing. Run the bootstrap only one time.
 
+If you already have a project with billing linked, set `create_project = false` in `bootstrap.tfvars` (and omit `billing_account_id`). The bootstrap then makes only the state bucket and enables its APIs. It does not change the project or billing.
+
 1. In `infra/terraform/bootstrap`, run the bootstrap:
    `terraform apply -var-file=<deployment>/terraform/bootstrap.tfvars`
    The bootstrap makes the project, the billing link and the state bucket.

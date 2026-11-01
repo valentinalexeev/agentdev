@@ -63,7 +63,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Build the agent image (only when the build context changed)
+    - name: Build the agent image only when the build context changed {{ agent_sandbox_image }}
       ansible.builtin.command:
         argv:
           - "{{ agent_sandbox_engine }}"
@@ -74,8 +74,9 @@
           - -t
           - "{{ agent_sandbox_image }}"
           - "{{ agent_sandbox_image_dir }}"
-      when: agent_sandbox_img_hash.stdout | trim != agent_sandbox_ctx_hash.stdout
+      # Gated by the content hash below, so running means a real rebuild.
       changed_when: true
+      when: agent_sandbox_img_hash.stdout | trim != agent_sandbox_ctx_hash.stdout
 
     - name: Nodes of the kind cluster
       ansible.builtin.command: kind get nodes --name {{ agent_sandbox_cluster_name | quote }}

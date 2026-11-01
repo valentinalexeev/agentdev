@@ -11,15 +11,26 @@ terraform {
 }
 
 variable "project_id" {
-  description = "GCP project id to create for this agentdev instance."
+  description = "GCP project id of this agentdev instance: created here, or an existing one with create_project = false."
   type        = string
+}
+variable "create_project" {
+  description = "true: create the project and link billing. false: use the existing project project_id (billing must already be linked); only the APIs and the state bucket are created."
+  type        = bool
+  default     = true
 }
 variable "project_name" {
   type    = string
   default = "agentdev"
 }
 variable "billing_account_id" {
-  type = string
+  description = "Billing account to link; required only when create_project is true."
+  type        = string
+  default     = ""
+  validation {
+    condition     = !var.create_project || var.billing_account_id != ""
+    error_message = "billing_account_id is required when create_project is true."
+  }
 }
 variable "org_id" {
   description = "Organization id, if the project belongs to one. Leave empty for a project without an organization."
@@ -35,7 +46,14 @@ provider "google" {
   region = var.region
 }
 
+# The project resource gained a count: keep the address of a project made by an earlier bootstrap run.
+moved {
+  from = google_project.this
+  to   = google_project.this[0]
+}
+
 resource "google_project" "this" {
+  count           = var.create_project ? 1 : 0
   project_id      = var.project_id
   name            = var.project_name
   billing_account = var.billing_account_id
@@ -43,15 +61,20 @@ resource "google_project" "this" {
   deletion_policy = "PREVENT"
 }
 
+locals {
+  project_id = var.project_id
+}
+
 resource "google_project_service" "bootstrap" {
   for_each           = toset(["storage.googleapis.com", "serviceusage.googleapis.com", "cloudresourcemanager.googleapis.com", "cloudbilling.googleapis.com", "billingbudgets.googleapis.com"])
-  project            = google_project.this.project_id
+  project            = local.project_id
   service            = each.value
   disable_on_destroy = false
+  depends_on         = [google_project.this]
 }
 
 resource "google_storage_bucket" "tfstate" {
-  project                     = google_project.this.project_id
+  project                     = local.project_id
   name                        = "${var.project_id}-tfstate"
   location                    = var.region
   uniform_bucket_level_access = true
@@ -61,7 +84,7 @@ resource "google_storage_bucket" "tfstate" {
     condition { num_newer_versions = 20 }
     action { type = "Delete" }
   }
-  depends_on = [google_project_service.bootstrap]
+  depends_on = [google_project_service.bootstrap, google_project.this]
 }
 
 output "next" {
