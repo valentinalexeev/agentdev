@@ -37,3 +37,5 @@
       {{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql') }}
   changed_when: false
   when: not ansible_check_mode
+  # no secret here, but -v would print the whole schema and grants
+  no_log: true

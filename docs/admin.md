@@ -373,6 +373,8 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 - The database login `agentdev_api` can only add and read rows. The role `agentdev_owner` owns the tables.
 - The playbook writes the Secrets `agentdev-api-db`, `agentdev-api-forge` and `agentdev-api-siem`. When a Secret
   changes, the playbook restarts the API.
+- The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
+  version, the playbook acts as if the secret is not there.
 
 ### Connect to the API
 

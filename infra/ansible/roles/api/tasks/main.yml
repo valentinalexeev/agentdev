@@ -38,10 +38,11 @@
       replace: []
   register: api_applied
 
-# a changed Secret does not change the pod template: restart so the API reads new tokens
+# a changed Secret does not change the pod template, and the apply may have changed only a Service, RBAC or a
+# NetworkPolicy: restart on every Secret change so the API reads the new values
 - name: Restart the API after a Secret change
   ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
-  when: (api_secrets_changed | default(false)) and not api_applied.changed and not ansible_check_mode
+  when: (api_secrets_changed | default(false)) and not ansible_check_mode
   changed_when: true
 
 - name: Wait for the API

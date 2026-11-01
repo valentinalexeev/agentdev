@@ -13,7 +13,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agentdev-api-db` (password generated once in Secret Manager `platform-pg-agentdev-api`), `agentdev-api-forge`
   (from the optional Secret Manager `agentdev-api-forge-token`) and `agentdev-api-siem` (from `security.siem.*` and
   the optional `security-siem`, the keys of #71); then `manifests/api.yaml.tmpl`. All secret tasks have `no_log`.
-  Secret lookup is one task file per source so the kind path can reuse the role (#106). authentik on GKE: #114.
+  Secret lookup is one task file per source so the kind path can reuse the role (#106). The API restarts on every
+  Secret change; an optional secret without an enabled version counts as absent. authentik on GKE: #114.
 - GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
   `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
   `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
