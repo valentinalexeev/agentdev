@@ -7,6 +7,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Approval decisions in the web UI (#67, absorbed #80): `POST /api/approvals/{name}/decision`
+  (`approve`, `approve-job`, `deny`, with the `contentHash` the person saw). Human OIDC sessions only: agent
+  sessions and platform accounts are refused; role is the admin group or forge write access. First decision wins,
+  a repeat of the same decision is idempotent. The status records `decidedBy` and `decidedVia: ui`; the audit is in
+  Postgres. UI: **Details** dialog with Approve once, Approve for the job and Deny, and a confirmation. Same on kind
+  and GKE. Docs: `docs/user-guide.md`, `docs/admin.md`, `docs/security-model.md`. New risks R90, R91.
 - GKE public HTTPS entry point (#120): Terraform `public_hosts` makes a Google-managed certificate and a TLS 1.2+
   SSL policy, optional `cloud_armor` a Cloud Armor policy (size limit, per-IP rate limit); the cluster turns on the
   Gateway API. New Ansible role `ingress` (runs when `instance.yml` sets `ingress.host`, values from
