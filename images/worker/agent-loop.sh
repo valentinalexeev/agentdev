@@ -31,6 +31,21 @@ if [[ -n "${CF_URL:-}" ]]; then
   jq -n --arg u "${CF_URL}" '{mcpServers:{project:{type:"http", url:$u, headers:{Authorization:"Bearer ${CF_TOKEN}"}}}}' > "${MCP_CONFIG}"
 fi
 mkdir -p "${STATE}/seen"
+# ---------- Claude credential proxy (#66) ----------
+# With ANTHROPIC_BASE_URL set (review #119), no Claude login may stay on the claude volume from a deployment before the
+# proxy: Claude Code would read it, and it would let the model reach the API around the proxy and its budget. Removed
+# on every start; the proxy key comes from the environment only.
+drop_stale_claude_login() {
+  [[ -n "${ANTHROPIC_BASE_URL:-}" ]] || return 0
+  rm -f "${HOME}/.claude/.credentials.json" "${HOME}/.claude.json.backup"
+  if [[ -f "${HOME}/.claude.json" ]]; then
+    jq 'del(.oauthAccount, .primaryApiKey, .customApiKeyResponses)' "${HOME}/.claude.json" > "${HOME}/.claude.json.tmp" 2>/dev/null \
+      && mv "${HOME}/.claude.json.tmp" "${HOME}/.claude.json"
+    rm -f "${HOME}/.claude.json.tmp"
+  fi
+}
+# ---------- end Claude credential proxy ----------
+drop_stale_claude_login
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
 # security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
@@ -347,7 +362,8 @@ USAGE_LOCAL_MAX="${USAGE_LOCAL_MAX:-18000}"   # a local pause lasts at most 5 h;
 # JSON, a file or the model passes this first: bash evaluates names like a[$(cmd)] in arithmetic (review #102).
 is_epoch() { [[ "$1" =~ ^[0-9]{1,12}$ ]]; }
 # usage_post <json>: hand the report to the sidecar (structured channel); best effort
-usage_post() { sidecar /usage -X POST -H 'Content-Type: application/json' -d "$1" >/dev/null 2>&1 || log "usage report not accepted by the sidecar"; }
+# With the Claude credential proxy (#66, ANTHROPIC_BASE_URL set) the proxy reports usage itself; nothing is posted.
+usage_post() { [[ -n "${ANTHROPIC_BASE_URL:-}" ]] && return 0; sidecar /usage -X POST -H 'Content-Type: application/json' -d "$1" >/dev/null 2>&1 || log "usage report not accepted by the sidecar"; }
 # report_usage <stream-json output> <stderr tail>: sends the usage report; returns 1 when the run was rate limited.
 # Rate limited = a rejected rate_limit_event, or an error run whose CLI stderr says so. The result text (written by the
 # model) is never used, and a reset time comes only from the structured rate_limit_event, never from text (review #102).

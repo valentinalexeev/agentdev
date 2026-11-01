@@ -14,6 +14,16 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
+  `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
+  `claude-shared` / `claude-<agent>`; agent pods get `ANTHROPIC_BASE_URL` and a per-agent proxy key
+  (`agent-<name>-proxy`). Per-agent token budget for 24 h (`CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens`, default 0 =
+  none; per agent in ConfigMap `claude-proxy-budgets`), shown in the UI column **Claude tokens (24 h)** through
+  `GET /api/agents` (`budgetUsed`, `budgetLimit`). The proxy writes `AGENTDEV_USAGE` lines from the response
+  headers; with the proxy on, the operator takes usage only from the proxy pods, the forge sidecar refuses
+  `POST /usage` and the loop posts nothing (closes R47). The loop removes an old Claude login from the `claude` volume
+  at start. On GKE an FQDNNetworkPolicy limits the proxy to `api.anthropic.com` when the cluster serves the type.
+  New risks R60 to R65.
 - Forge sidecar: forge drivers (#2, step 1). The API location, the per-request credential, the git credential and
   the REST allow-list are now one `driver` per `FORGE_KIND`; only `gitea` exists so far and behaves as before. An
   unknown `FORGE_KIND` stops the sidecar at start. Prepares the GitHub App driver.
@@ -176,6 +186,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
+- **BREAKING** (#66): agent pods no longer get the Claude credential. Re-run `./run.sh 06 12 10` on `kind`
+  (06: proxy, signing key and agent keys; 12: operator `CLAUDE_PROXY_URL`; 10: API `CLAUDE_PROXY_STATUS_URL`), or the
+  full `infra/ansible/deploy.yml` on GKE (the proxy tasks, the operator and the API). The playbook creates the Secret
+  Manager entry `claude-proxy-signing` on its first run. Agent images must be updated too (the loop removes an old
+  Claude login on start, and the forge sidecar gets `USAGE_REPORTS`). To roll back, set `CLAUDE_PROXY=false` /
+  `claude_proxy: false` (deprecated, removed in the next minor release).
 - The manuals (`user-guide.md`, `install.md`, `admin.md`, `troubleshooting.md`) use ASD-STE100 Simplified Technical
   English: task procedures with numbered steps, safety notes before their steps, a reference part per section, and
   troubleshooting as symptom / cause / procedure tables (#75). New technical words are in `docs/writing.md`.

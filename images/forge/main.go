@@ -25,16 +25,18 @@ import (
 
 type Config struct {
 	ForgeURL, ForgeUser, Token string
-	Repos                      []string // owner/name, the only repos the API and git talk to
-	Listen, WebhookListen      string
-	MirrorDir                  string // the sidecar's own bare mirror, on a volume only the sidecar mounts
-	IncomingDir                string // private temp dir for uploaded bundles
-	Protected                  []string
-	MaxPushBytes               int64
-	WakeFile                   string
-	RouterURL, SelfURL         string
-	WakeToken, RegisterToken   string
-	AgentName, ForgeKind       string
+	// NoUsage (#66): the Claude credential proxy reports usage, so POST /usage is refused (USAGE_REPORTS=off)
+	NoUsage                  bool
+	Repos                    []string // owner/name, the only repos the API and git talk to
+	Listen, WebhookListen    string
+	MirrorDir                string // the sidecar's own bare mirror, on a volume only the sidecar mounts
+	IncomingDir              string // private temp dir for uploaded bundles
+	Protected                []string
+	MaxPushBytes             int64
+	WakeFile                 string
+	RouterURL, SelfURL       string
+	WakeToken, RegisterToken string
+	AgentName, ForgeKind     string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
 	RegisterEvery                                   time.Duration
@@ -71,7 +73,7 @@ func loadConfig() (*Config, error) {
 		RouterURL:     os.Getenv("ROUTER_URL"), SelfURL: os.Getenv("SELF_URL"),
 		WakeToken: os.Getenv("WAKE_TOKEN"), RegisterToken: os.Getenv("REGISTER_TOKEN"),
 		AgentName: getenv("AGENT_NAME", os.Getenv("FORGE_USER")), ForgeKind: getenv("FORGE_KIND", "gitea"),
-		Git:         getenv("GIT", "git"),
+		Git: getenv("GIT", "git"), NoUsage: os.Getenv("USAGE_REPORTS") == "off",
 		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
 		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 	}

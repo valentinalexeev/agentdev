@@ -64,6 +64,8 @@ WARNING: Do not put the credential in git or in an issue.
 NOTE: Each agent uses one Claude credential. It uses its own credential if it has one. If not, it uses the shared
 credential (#5). The shared credential is `.env` on `kind` and Secret Manager `claude-shared` on GKE.
 
+NOTE: Only the Claude proxy reads the credential. The agent pod gets a proxy key, not the credential (#66).
+
 ### Replace a credential
 
 Use this task to replace a Claude credential or a forge token.
@@ -99,7 +101,7 @@ Agents read the forge at this interval when webhooks do not operate.
 
 | Item | Value |
 |---|---|
-| Containers | `agent` (the loop and Claude, no forge credentials) and `forge` (the sidecar that keeps the forge token, image `agentdev-forge`, #64) |
+| Containers | `agent` (the loop and Claude, no forge credentials, no Claude credential: only a proxy key, #66) and `forge` (the sidecar that keeps the forge token, image `agentdev-forge`, #64) |
 | Log of the sidecar | `kubectl -n coding-agents logs agent-<name>-0 -c forge` |
 | The sidecar refuses a `git push` | to a branch outside `agent/<name>/*`; that touches `PROTECTED_PATHS` (default: the workflow directories); of more than `MAX_PUSH_MB` (50) |
 | Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
@@ -112,6 +114,53 @@ Agents read the forge at this interval when webhooks do not operate.
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
+
+## Claude proxy and token budget
+
+The Claude proxy (`claude-proxy`) is the only pod that has the Claude credentials (#66). An agent sends its model
+requests to the proxy with its proxy key. The proxy adds the real credential and sends the request to the Anthropic
+API. The proxy also counts the tokens of each agent and stops an agent that used its budget.
+
+### Set the token budget of all agents
+
+The budget is the number of tokens (input, cache and output) that one agent can use in 24 hours.
+
+1. On `kind`: set `CLAUDE_BUDGET_TOKENS` in `config.env`. On GKE: set `claude_budget_tokens` in `instance.yml`.
+2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+
+NOTE: The value 0 means no limit. This is the default.
+
+### Set the token budget of one agent
+
+1. Run this command (use 0 for no limit):
+   `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
+2. Wait one minute. Kubernetes updates the file in the proxy pod, and the proxy reads it at the next request.
+
+NOTE: A deploy does not change this value. The template of the ConfigMap has no data.
+
+### Look at the token use
+
+1. Open the web UI. The column **Claude tokens (24 h)** shows the tokens of each agent and the budget.
+2. Or run this command:
+   `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
+
+### Reference: the Claude proxy
+
+| Item | Value |
+|---|---|
+| Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
+| Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
+| Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
+| Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
+| Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
+| When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
+| Usage of the subscription | the proxy reads the rate-limit headers of each response and writes `AGENTDEV_USAGE` lines (#93) |
+| Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
+| Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
+| Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
+
+WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that
+agent from inside the cluster.
 
 ## Scale to zero
 

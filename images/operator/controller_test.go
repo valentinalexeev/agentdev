@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -252,5 +253,42 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 	}
 	if _, ok := mounts(ag)["forge"]; ok || mounts(fg)["forge"] != "/forge" {
 		t.Error("the sidecar's mirror volume is the sidecar's alone")
+	}
+}
+
+// #66: with the credential proxy, the agent container holds no Claude credential, only its proxy key.
+func TestClaudeProxyNoCredentialInPod(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	for _, ct := range s.Spec.Template.Spec.Containers {
+		for _, f := range ct.EnvFrom {
+			if f.SecretRef != nil && strings.HasPrefix(f.SecretRef.Name, "claude-") {
+				t.Errorf("%s mounts %s", ct.Name, f.SecretRef.Name)
+			}
+		}
+		for _, e := range ct.Env {
+			if e.Name == "CLAUDE_CODE_OAUTH_TOKEN" || e.Name == "ANTHROPIC_API_KEY" {
+				t.Errorf("%s has %s", ct.Name, e.Name)
+			}
+		}
+	}
+	ag := container(s, "agent")
+	var base, key bool
+	for _, e := range ag.Env {
+		base = base || (e.Name == "ANTHROPIC_BASE_URL" && e.Value == r.D.ClaudeProxyURL)
+		key = key || (e.Name == "ANTHROPIC_AUTH_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef.Name == "agent-alice-proxy")
+	}
+	if !base || !key {
+		t.Errorf("proxy env missing: %v", ag.Env)
+	}
+	for _, e := range container(s, "forge").Env {
+		if e.Name == "USAGE_REPORTS" && e.Value != "off" {
+			t.Errorf("forge USAGE_REPORTS=%s with the proxy on", e.Value)
+		}
+	}
+	if hasEnv(container(s, "forge"), "ANTHROPIC_AUTH_TOKEN") {
+		t.Error("forge sidecar has the proxy key")
 	}
 }

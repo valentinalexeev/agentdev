@@ -1,0 +1,11 @@
+{#- Projected-volume sources of the Claude credential proxy (#66): one optional Secret per Claude Secret, keys under a
+    directory with the Secret's name. Same output as scripts/claude-proxy-sources.sh (kind). -#}
+{%- set names = ['claude-shared'] -%}
+{%- for a in agents -%}{%- set _ = names.append('claude-' ~ a.name) -%}{%- endfor -%}
+{%- set src = [] -%}
+{%- for s in names -%}
+{%-   set _ = src.append({'secret': {'name': s, 'optional': true, 'items': [
+        {'key': 'CLAUDE_CODE_OAUTH_TOKEN', 'path': s ~ '/CLAUDE_CODE_OAUTH_TOKEN'},
+        {'key': 'ANTHROPIC_API_KEY', 'path': s ~ '/ANTHROPIC_API_KEY'}]}}) -%}
+{%- endfor -%}
+{{ src | to_json }}
