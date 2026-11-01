@@ -35,7 +35,8 @@ type ExecutorCredentials struct {
 
 // ExecutorSpec is written by cluster admins only.
 type ExecutorSpec struct {
-	// Environment this executor changes, for example prod. One executor per environment (owner decision on #69).
+	// Environment this executor changes, for example prod. One executor per environment (owner decision on #69):
+	// the operator marks every later Executor of the same environment invalid.
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:validation:MaxLength=30
 	Environment string `json:"environment"`
@@ -83,6 +84,10 @@ type ExecutorSpec struct {
 	// Paused: no new runs are started; running Jobs finish.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+	// AllowForkPRs: also plan pull requests whose head is in another repository (a fork). Off by default: a fork PR
+	// runs code of anyone who can open a PR with the read-only plan credentials (docs/security.md R81, egress #65).
+	// +optional
+	AllowForkPRs bool `json:"allowForkPRs,omitempty"`
 }
 
 // ExecutorStatus is written by the operator only.
@@ -152,6 +157,14 @@ type ExecutorRunSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^([0-9a-f]{64})?$`
 	PlanHash string `json:"planHash,omitempty"`
+	// apply: SHA-256 of the Executor spec (image digest, commands, credentials, repo, branch, path) the merge plan ran
+	// with and the approval covers; the apply is refused when the Executor differs.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9a-f]{64})?$`
+	SpecHash string `json:"specHash,omitempty"`
+	// apply: the Job is not started after this time (decision time plus EXECUTOR_APPLY_START_MINUTES).
+	// +optional
+	NotAfter *metav1.Time `json:"notAfter,omitempty"`
 }
 
 // ExecutorRunStatus is written by the operator only.
@@ -162,6 +175,9 @@ type ExecutorRunStatus struct {
 	// plan: SHA-256 of the plan file, computed by the operator's own image in the Job (not by the tool).
 	// +optional
 	PlanHash string `json:"planHash,omitempty"`
+	// merge plan: SHA-256 of the Executor spec the plan ran with (see ExecutorRunSpec.SpecHash).
+	// +optional
+	SpecHash string `json:"specHash,omitempty"`
 	// merge plan: name of the Approval requested for the apply.
 	// +optional
 	Approval string `json:"approval,omitempty"`

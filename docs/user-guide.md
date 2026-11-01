@@ -49,6 +49,9 @@ an environment only after your approval.
    The executor writes "apply started" and then the result.
 4. If the plan is not correct, reply `/deny <id>`.
 
+NOTE: A decision counts only within `spec.approvalHours` (default 24 h) of the request. The apply starts within
+30 minutes of the decision, or not at all.
+
 CAUTION: The approval is for one plan file and one apply only. If the apply fails, the executor does not try again.
 Make a new pull request with the correction.
 

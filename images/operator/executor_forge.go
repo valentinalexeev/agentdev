@@ -26,6 +26,7 @@ var (
 type pullRequest struct {
 	Number   int64
 	Head     string // head commit
+	HeadRepo string // owner/name of the head repository (another one for a fork; empty if it was deleted)
 	Merge    string // merge commit (merged PRs)
 	Base     string
 	MergedAt time.Time
@@ -100,7 +101,10 @@ func (f *restForge) do(ctx context.Context, method, path string, body, out any) 
 type rawPR struct {
 	Number int64 `json:"number"`
 	Head   struct {
-		SHA string `json:"sha"`
+		SHA  string `json:"sha"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
@@ -118,6 +122,9 @@ func (f *restForge) pulls(ctx context.Context, state string) ([]pullRequest, err
 	var out []pullRequest
 	for _, r := range raw {
 		p := pullRequest{Number: r.Number, Head: r.Head.SHA, Base: r.Base.Ref}
+		if r.Head.Repo != nil {
+			p.HeadRepo = r.Head.Repo.FullName
+		}
 		if r.MergedAt != nil {
 			p.MergedAt, p.Merge = *r.MergedAt, r.MergeSHA
 		}

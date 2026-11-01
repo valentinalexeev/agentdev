@@ -16,7 +16,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   run is a security event (`executor.plan`, `executor.apply`, `executor.refused`). Wired in `config.env`,
   `12-operator.sh`, the operator manifest (namespace, Role, NetworkPolicy), Ansible (`executors:`, Secrets from
   Secret Manager, Workload Identity service accounts) and the GKE example. Also installs the `Approval` CRD (#67).
-  Risks R80 to R83.
+  Risks R80 to R83. The approval binds image digest, apply argv and an Executor spec hash (a changed Executor
+  refuses the apply), the apply starts within `EXECUTOR_APPLY_START_MINUTES` (30) of the decision, one executor per
+  environment (operator and Ansible), fork PRs only with `spec.allowForkPRs`. The API does not void executor
+  approvals for their merged (closed) PR.
 - GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
   `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
   `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new

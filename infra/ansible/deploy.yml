@@ -28,6 +28,26 @@
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
+    # Executor names and environments become parts of shell commands and object names below: check them before any
+    # task uses them, with the same rules as the operator's validExecutor and the CRD (#69, review of #116).
+    - name: Executors are valid (names, environments, image by digest, one executor per environment)
+      ansible.builtin.assert:
+        that:
+          - item.name is defined and item.name is string and item.name is match('^[a-z0-9-]{1,40}$')
+          - item.environment is defined and item.environment is string and item.environment is match('^[a-z0-9]([-a-z0-9]{0,28}[a-z0-9])?$')
+          - item.repo is defined and item.repo is match('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') and '..' not in item.repo
+          - item.image is defined and item.image is match('^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$')
+          - item.plan is defined and item.plan is sequence and item.plan is not string and item.plan | length > 0
+          - item.apply is defined and item.apply is sequence and item.apply is not string and item.apply | length > 0
+          - "'..' not in (item.path | default(''))"
+          - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
+          - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
+          - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+        fail_msg: "executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest, plan/apply argv lists, no '..', one executor per environment)"
+        quiet: true
+      loop: "{{ executors }}"
+      loop_control: {label: "{{ item.name | default('?') }}"}
+
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
       changed_when: false
@@ -168,6 +188,7 @@
             EXEC_NS: "{{ exec_ns }}"
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
             EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
+            EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
           replace: []
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
@@ -236,6 +257,7 @@
             applyCredentials: {secretName: "exec-{{ item.name }}-apply", serviceAccountName: "exec-{{ item.name }}-apply"}
             forgeSecret: "exec-{{ item.name }}-forge"
             approvalHours: "{{ item.approval_hours | default(24) | int }}"
+            allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name }}"}
       when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)

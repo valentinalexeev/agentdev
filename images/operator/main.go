@@ -113,10 +113,11 @@ func main() {
 			C: ExecConfig{NS: execNS, AgentsNS: ns, HelperImage: env("OPERATOR_IMAGE", "ghcr.io/valentinalexeev/agentdev-operator:latest"),
 				GitImage: env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"), PullPolicy: env("IMAGE_PULL_POLICY", "IfNotPresent"),
 				ForgeURL: os.Getenv("FORGE_URL"), GitHubAPI: os.Getenv("GITHUB_API_URL"), GitHubURL: os.Getenv("GITHUB_URL"),
-				Poll:      time.Duration(envInt("EXECUTOR_POLL_SECONDS", 60)) * time.Second,
-				Lookback:  time.Duration(envInt("EXECUTOR_LOOKBACK_HOURS", 24)) * time.Hour,
-				Retention: time.Duration(envInt("EXECUTOR_RETENTION_DAYS", 30)) * 24 * time.Hour,
-				Storage:   env("EXECUTOR_PLAN_STORAGE", "1Gi")}}
+				Poll:       time.Duration(envInt("EXECUTOR_POLL_SECONDS", 60)) * time.Second,
+				Lookback:   time.Duration(envInt("EXECUTOR_LOOKBACK_HOURS", 24)) * time.Hour,
+				Retention:  time.Duration(envInt("EXECUTOR_RETENTION_DAYS", 30)) * 24 * time.Hour,
+				Storage:    env("EXECUTOR_PLAN_STORAGE", "1Gi"),
+				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute}}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)

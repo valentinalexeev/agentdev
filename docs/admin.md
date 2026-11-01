@@ -749,12 +749,23 @@ and the Executor objects.
 | `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `config.env`; Ansible `exec_ns` |
 | `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `config.env`; Ansible `executor_poll_seconds` |
 | `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `config.env`; Ansible `executor_retention_days` |
-| `spec.approvalHours` (time until an approval request expires) | 24 | `Executor` |
+| `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
+| `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
+| `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
 
 - Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
   `executor.apply` or `executor.refused`.
 - The executor plans only pull requests that change a file below `spec.path`. It plans only merges after the
   `Executor` object was made, and not older than 24 hours.
+- One executor per environment. If two `Executor` objects have the same `spec.environment`, the oldest one runs.
+  The other ones show the phase `invalid` with the reason `DuplicateEnvironment`, and an `executor.refused` event is
+  recorded. The Ansible playbook stops before it changes anything if two executors have the same environment.
+- By default the executor plans only pull requests from branches of the same repository. A pull request from a fork
+  runs the code of its author with the plan credentials. Set `spec.allowForkPRs: true` only if the plan credentials
+  can read nothing secret (risk R81; egress limits are #65).
+- The approval covers the image digest, the apply command and a SHA-256 of the `Executor` spec (also the
+  credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
+  is closed with `executor spec changed`. Merge a new commit to plan again.
 - The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 

@@ -52,4 +52,5 @@ approvals:                          # #67: agents ask a project member on the fo
 exec_ns: agentdev-executors
 executor_poll_seconds: 60
 executor_retention_days: 30
+executor_apply_start_minutes: 30   # an allowed apply starts at most this long after the decision, else nothing applies
 executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa}]

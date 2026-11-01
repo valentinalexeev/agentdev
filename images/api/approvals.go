@@ -477,7 +477,9 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 	if a.Forge != "" && a.Forge != "gitea" {
 		return nil // GitHub decisions are not supported yet: the request stays pending until void; see #87
 	}
-	if st, err := d.forge.IssueState(ctx, a.Repo, n); err == nil && st == "closed" {
+	// an executor apply (#69) is requested on the merged, so closed, pull request: closing does not end it (its own
+	// deadline, spec.approvalHours, is enforced by the operator)
+	if st, err := d.forge.IssueState(ctx, a.Repo, n); err == nil && st == "closed" && a.Source != "executor" {
 		return d.void(ctx, u, a, "the "+map[string]string{"issue": "issue", "pr": "pull request"}[kind]+" is closed")
 	}
 	cs, verbs, err := d.commands(ctx, a)

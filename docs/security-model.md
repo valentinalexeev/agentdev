@@ -527,8 +527,10 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 5. After the merge, the operator runs the plan executor again **on the merge commit** of main. Only this plan can be
    applied. If it differs from the plan that was reviewed on the PR, the run stops and the PR shows both plans.
 6. An `Approval` request (#67) "apply plan-<merge commit> to prod" appears, with the plan and its hash. It uses the
-   decision rules of phase 4 and is bound to the executor, the environment and the plan hash. It is single-use and
-   expires (default 24 h). A person with write access replies `/approve <id>`. Agents never approve.
+   decision rules of phase 4 and is bound to the executor, the environment, the plan hash, the image digest, the
+   apply command and a hash of the Executor spec (credentials included). It is single-use; a decision counts only
+   within `spec.approvalHours` (default 24 h), and the apply must start within `EXECUTOR_APPLY_START_MINUTES`
+   (default 30) of it. A changed Executor refuses the apply. Closing the merged PR does not void it. A person with write access replies `/approve <id>`. Agents never approve.
 7. The operator runs the **apply executor** with the merge commit and the stored plan, after it checks that the plan
    hash matches the approved one. Terraform refuses a stale plan; the flow then goes back to step 5.
 8. The executor posts the output to the issue. The run is audited and reported as a security event

@@ -27,3 +27,4 @@ github_app:
 #     apply: [terraform, apply, -input=false, $(PLAN_FILE)]
 #     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
 #     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
+#     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)

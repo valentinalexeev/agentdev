@@ -35,6 +35,7 @@ PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR
   SECURITY_RATE_PER_MIN="${SECURITY_RATE_PER_MIN:-10}" SECURITY_RATE_BURST="${SECURITY_RATE_BURST:-20}" APPROVAL_RETENTION_DAYS="${APPROVAL_RETENTION_DAYS:-90}" \
   APPROVALS="${APPROVALS:-false}" APPROVAL_TIMEOUT_MINUTES="${APPROVAL_TIMEOUT_MINUTES:-30}" \
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
+  EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-operator --timeout=120s >/dev/null || die "operator did not become ready"

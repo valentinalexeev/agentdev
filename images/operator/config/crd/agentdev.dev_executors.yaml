@@ -56,6 +56,11 @@ spec:
           spec:
             description: ExecutorSpec is written by cluster admins only.
             properties:
+              allowForkPRs:
+                description: |-
+                  AllowForkPRs: also plan pull requests whose head is in another repository (a fork). Off by default: a fork PR
+                  runs code of anyone who can open a PR with the read-only plan credentials (docs/security.md R81, egress #65).
+                type: boolean
               apply:
                 description: 'Apply command: must apply exactly $(PLAN_FILE).'
                 properties:
@@ -97,8 +102,9 @@ spec:
                 pattern: ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$
                 type: string
               environment:
-                description: 'Environment this executor changes, for example prod.
-                  One executor per environment (owner decision on #69).'
+                description: |-
+                  Environment this executor changes, for example prod. One executor per environment (owner decision on #69):
+                  the operator marks every later Executor of the same environment invalid.
                 maxLength: 30
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string

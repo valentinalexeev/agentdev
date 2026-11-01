@@ -35,6 +35,11 @@
 | The executor shows the phase `error`. | The forge token is not valid, or the forge cannot be reached. | 1. Read the message of the condition `Ready`. 2. Replace `FORGE_TOKEN` in `exec-<name>-forge`. |
 | The run shows `no plan hash from the helper container`. | The plan command did not write `$(PLAN_FILE)`. | 1. Correct `spec.plan.command`. |
 | The apply Job fails in the container `verify`. | The plan file is not the approved file. | Do not apply. Examine the namespace for changes, and make a new pull request. |
+| The executor shows the phase `invalid` with the reason `DuplicateEnvironment`. | An other `Executor` has the same `spec.environment`. Only the oldest one runs. | 1. Delete the duplicate `Executor`, or give it its own environment. |
+| A pull request gets no plan, and its branch is in a fork. | Pull requests from forks are not planned by default. | 1. Push the branch to the repository, or set `spec.allowForkPRs: true` (read admin.md first). |
+| The checkout of a merge or apply run takes long. | The commit is more than 200 commits deep on the branch. The checkout then fetches the full history of the branch. | No action. The checkout fetches only the protected branch, never a commit by id. |
+| The run shows `executor spec changed since the merge plan` or the apply run shows `executor spec changed since the approval`. | The `Executor` was changed (image, commands, credentials, repository, branch or path) after the plan. | 1. Make sure that the change was intended. 2. Merge a new commit to plan again. |
+| The run shows `approval decided more than 30m0s ago, apply not started` or `approval decided after its deadline`. | The operator was not running after the decision, or the decision came after `spec.approvalHours`. | 1. Merge a new commit to plan again. |
 | The run shows `approval does not match the merge plan`. | The approval request was changed or replaced. | This is a security event (`executor.refused`, high). Examine who can write approvals. |
 
 ## Interactive sessions

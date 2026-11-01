@@ -102,6 +102,7 @@ spec:
         - {name: OPERATOR_IMAGE, value: "${OPERATOR_IMAGE}"}
         - {name: EXECUTOR_POLL_SECONDS, value: "${EXECUTOR_POLL_SECONDS}"}
         - {name: EXECUTOR_RETENTION_DAYS, value: "${EXECUTOR_RETENTION_DAYS}"}
+        - {name: EXECUTOR_APPLY_START_MINUTES, value: "${EXECUTOR_APPLY_START_MINUTES}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

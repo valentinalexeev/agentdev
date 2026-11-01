@@ -7,10 +7,14 @@ package main
 //     read-only credentials, sandboxed). Commit status agentdev/trusted-plan; the plan output as a PR comment.
 //  2. merged pull request: an ExecutorRun stage=merge (plan of the merge commit, fetched from spec.branch only). The
 //     operator's own helper container hashes the plan file; on success an Approval (#67, source executor) bound to
-//     executor, environment, commit and plan hash is created on the PR.
-//  3. that Approval allowed by a person, with the content hash the operator computed, before it expires: an
-//     ExecutorRun stage=apply, once (the run's name is the single-use marker). Its Job verifies the plan file hash
-//     before the tool starts, and only this Job gets the write credentials.
+//     executor, environment, commit, plan hash, image digest and Executor spec hash is created on the PR.
+//  3. that Approval allowed by a person, with the content hash the operator computed, before its deadline (spec.
+//     approvalHours): an ExecutorRun stage=apply, once (the run's name is the single-use marker), started at most
+//     EXECUTOR_APPLY_START_MINUTES after the decision and only while the Executor spec still has the approved hash.
+//     Its Job verifies the plan file hash before the tool starts, and only this Job gets the write credentials.
+//
+// One executor per environment: of several Executors with the same spec.environment the oldest runs, the others
+// are invalid. Pull requests from forks are planned only with spec.allowForkPRs.
 //
 // Everything the operator takes from the forge is checked against a pattern before use (commit ^[0-9a-f]{40}$, PR
 // numbers >= 1); image, command, branch and path come from the Executor only. Every run start and result is a
@@ -21,6 +25,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -59,7 +64,10 @@ const (
 	maxOutput      = 60000 // bytes of tool output posted to the PR
 )
 
-var hashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var (
+	hashRE  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	imageRE = regexp.MustCompile(`^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$`) // same as the CRD pattern
+)
 
 // ExecConfig holds the operator-wide executor settings (env on the operator, see main.go).
 type ExecConfig struct {
@@ -75,6 +83,7 @@ type ExecConfig struct {
 	Lookback    time.Duration // merged PRs older than this are never planned (and never before the Executor existed)
 	Retention   time.Duration // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
 	Storage     string        // plan volume size
+	ApplyStart  time.Duration // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
 }
 
 // podLogs returns at most limit bytes of a container's log.
@@ -144,8 +153,13 @@ func (p *ExecutorPoller) PollAll(ctx context.Context) {
 		log.FromContext(ctx).Error(err, "list executors")
 		return
 	}
+	owner := envOwners(list.Items)
 	for i := range list.Items {
 		e := &list.Items[i]
+		if o := owner[e.Spec.Environment]; o != e.Name {
+			p.duplicate(ctx, e, o)
+			continue
+		}
 		if err := p.Poll(ctx, e); err != nil {
 			log.FromContext(ctx).Error(err, "executor", "executor", e.Name)
 			p.setPhase(ctx, e, "error", "PollFailed", err.Error())
@@ -154,6 +168,52 @@ func (p *ExecutorPoller) PollAll(ctx context.Context) {
 	if err := p.prune(ctx); err != nil {
 		log.FromContext(ctx).Error(err, "prune executor runs")
 	}
+}
+
+// envOwners maps each environment to the Executor that may change it: the oldest (then the first by name).
+func envOwners(items []v1.Executor) map[string]string {
+	owner := map[string]*v1.Executor{}
+	for i := range items {
+		e := &items[i]
+		o := owner[e.Spec.Environment]
+		if o == nil || e.CreationTimestamp.Before(&o.CreationTimestamp) ||
+			(e.CreationTimestamp.Equal(&o.CreationTimestamp) && e.Name < o.Name) {
+			owner[e.Spec.Environment] = e
+		}
+	}
+	out := map[string]string{}
+	for env, e := range owner {
+		out[env] = e.Name
+	}
+	return out
+}
+
+// duplicate marks an Executor invalid whose environment already has an executor; nothing of it runs. The refusal
+// is recorded once, when the Executor becomes a duplicate.
+func (p *ExecutorPoller) duplicate(ctx context.Context, e *v1.Executor, owner string) {
+	msg := "environment " + e.Spec.Environment + " already has executor " + owner + " (one executor per environment)"
+	if c := meta.FindStatusCondition(e.Status.Conditions, "Ready"); c == nil || c.Reason != "DuplicateEnvironment" || c.Message != msg {
+		log.FromContext(ctx).Info("executor refused", "executor", e.Name, "reason", msg)
+		if err := p.record(ctx, e, "", e.Name, "executor.refused", "high", "refused executor "+e.Name+": "+msg); err != nil {
+			log.FromContext(ctx).Error(err, "record refusal")
+		}
+	}
+	p.setPhase(ctx, e, "invalid", "DuplicateEnvironment", msg)
+}
+
+// specHash is the SHA-256 of everything in the Executor spec that decides what an apply does: image digest,
+// commands, credentials, repository, branch, path and environment. The approval covers it; an apply refuses to start
+// when the Executor no longer has it.
+func specHash(e *v1.Executor) string {
+	b, _ := json.Marshal(struct {
+		Env, Repo, Forge, Branch, Path, Image string
+		Plan, Apply                           []string
+		PlanCreds, ApplyCreds                 v1.ExecutorCredentials
+		ForgeSecret                           string
+	}{e.Spec.Environment, e.Spec.Repo, forgeOf(e), branchOf(e), e.Spec.Path, e.Spec.Image, e.Spec.Plan.Command,
+		e.Spec.Apply.Command, e.Spec.PlanCredentials, e.Spec.ApplyCredentials, e.Spec.ForgeSecret})
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 // validExecutor repeats the CRD rules the operator relies on (fail closed if the CRD was changed or bypassed).
@@ -170,7 +230,7 @@ func validExecutor(e *v1.Executor) string {
 		return "spec.applyCredentials.secretName must be exec-" + n + "-apply"
 	case e.Spec.PlanCredentials.ServiceAccountName != "" && e.Spec.PlanCredentials.ServiceAccountName == e.Spec.ApplyCredentials.ServiceAccountName:
 		return "plan and apply must use different service accounts"
-	case !regexp.MustCompile(`^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$`).MatchString(e.Spec.Image):
+	case !imageRE.MatchString(e.Spec.Image):
 		return "spec.image must be pinned by digest"
 	case !repoRE.MatchString(e.Spec.Repo) || strings.Contains(e.Spec.Repo, ".."):
 		return "invalid spec.repo"
@@ -233,6 +293,9 @@ func (p *ExecutorPoller) discover(ctx context.Context, e *v1.Executor, f forgeAP
 	for _, pr := range open {
 		if pr.Base != branch || pr.Number < 1 || !shaRE.MatchString(pr.Head) {
 			continue
+		}
+		if !e.Spec.AllowForkPRs && !strings.EqualFold(pr.HeadRepo, e.Spec.Repo) {
+			continue // a fork (or a deleted head repository): its code is not planned unless the admin opted in
 		}
 		if err := p.ensurePlan(ctx, e, f, "pr", pr.Number, pr.Head); err != nil {
 			return err
@@ -318,13 +381,22 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 	if e.Spec.Paused {
 		return nil
 	}
-	if r.Spec.Stage == "apply" && !hashRE.MatchString(r.Spec.PlanHash) {
-		return p.finish(ctx, e, f, r, "Failed", "apply run without a plan hash", true)
+	if r.Spec.Stage == "apply" {
+		switch {
+		case !hashRE.MatchString(r.Spec.PlanHash):
+			return p.finish(ctx, e, f, r, "Failed", "apply run without a plan hash", true)
+		case !hashRE.MatchString(r.Spec.SpecHash) || r.Spec.SpecHash != specHash(e):
+			// the Executor (image, commands, credentials, ...) changed after the approval: not what was approved
+			return p.finish(ctx, e, f, r, "Failed", "executor spec changed since the approval", true)
+		case r.Spec.NotAfter == nil || p.Now().After(r.Spec.NotAfter.Time):
+			return p.finish(ctx, e, f, r, "Failed", "apply not started within the start window after the decision", true)
+		}
 	}
 	if r.Spec.Stage == "merge" {
 		if err := p.ensurePlanVolume(ctx, e, r); err != nil {
 			return err
 		}
+		r.Status.SpecHash = specHash(e) // the spec this plan runs with; the approval and the apply are bound to it
 	}
 	job := p.renderJob(e, r)
 	if err := controllerutil.SetControllerReference(r, job, p.Scheme()); err != nil {
@@ -511,12 +583,19 @@ func (p *ExecutorPoller) refuse(ctx context.Context, e *v1.Executor, r *v1.Execu
 }
 
 // followApproval requests the apply approval for a successful merge plan and starts the apply once it is allowed.
+//
+// Deadlines (#107 keeps requests decidable without expiry; an executor apply decides its own): a decision counts
+// only if made before the request's Expires (spec.approvalHours), and the apply must start within ApplyStart of the
+// decision. Later, the merge run closes and nothing is applied; plan again by merging a new commit.
 func (p *ExecutorPoller) followApproval(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun) error {
-	if r.Status.Message == "approval denied" || r.Status.Message == "approval expired" || strings.HasPrefix(r.Status.Message, "apply ") {
-		return nil // closed
+	if r.Status.Message != "" {
+		return nil // closed: apply started, denied, void, expired or refused
 	}
 	if !hashRE.MatchString(r.Status.PlanHash) {
 		return p.closeMerge(ctx, e, r, "merge plan without a hash", true)
+	}
+	if !hashRE.MatchString(r.Status.SpecHash) || r.Status.SpecHash != specHash(e) {
+		return p.closeMerge(ctx, e, r, "executor spec changed since the merge plan", true)
 	}
 	if r.Status.Approval == "" {
 		return p.requestApproval(ctx, e, f, r)
@@ -524,7 +603,7 @@ func (p *ExecutorPoller) followApproval(ctx context.Context, e *v1.Executor, f f
 	var a v1.Approval
 	if err := p.Direct.Get(ctx, types.NamespacedName{Namespace: p.C.AgentsNS, Name: r.Status.Approval}, &a); err != nil {
 		if apierrors.IsNotFound(err) {
-			return p.closeMerge(ctx, e, r, "approval expired", false)
+			return p.closeMerge(ctx, e, r, "approval gone", false)
 		}
 		return err
 	}
@@ -533,28 +612,40 @@ func (p *ExecutorPoller) followApproval(ctx context.Context, e *v1.Executor, f f
 		a.Spec.Input != approvalInput(e, r) || a.Spec.Job != fmt.Sprintf("pr-%d", r.Spec.PR) {
 		return p.closeMerge(ctx, e, r, "approval does not match the merge plan", true)
 	}
+	now := p.Now()
 	switch a.Status.State {
 	case "allowed":
-		if a.Status.ContentHash != a.Spec.ContentHash {
+		switch {
+		case a.Status.ContentHash != a.Spec.ContentHash:
 			return p.closeMerge(ctx, e, r, "approval decided for another content hash", true)
+		case a.Status.DecidedAt == nil || a.Status.DecidedAt.After(a.Spec.Expires.Time):
+			return p.closeMerge(ctx, e, r, "approval decided after its deadline", false)
+		case now.After(a.Status.DecidedAt.Add(p.applyStart())):
+			// e.g. the operator was down: an old decision does not start an apply on a world that moved on
+			return p.closeMerge(ctx, e, r, "approval decided more than "+p.applyStart().String()+" ago, apply not started", false)
 		}
-		if p.Now().After(a.Spec.Expires.Time) && (a.Status.DecidedAt == nil || a.Status.DecidedAt.After(a.Spec.Expires.Time)) {
-			return p.closeMerge(ctx, e, r, "approval expired", false)
-		}
+		notAfter := metav1.NewTime(a.Status.DecidedAt.Add(p.applyStart()))
 		if err := p.createRun(ctx, e, v1.ExecutorRunSpec{Executor: e.Name, Action: "apply", Stage: "apply", Commit: r.Spec.Commit,
-			PR: r.Spec.PR, Approval: a.Name, PlanHash: r.Status.PlanHash}); err != nil {
+			PR: r.Spec.PR, Approval: a.Name, PlanHash: r.Status.PlanHash, SpecHash: r.Status.SpecHash, NotAfter: &notAfter}); err != nil {
 			return err
 		}
 		return p.closeMerge(ctx, e, r, "apply "+runName(e, "apply", r.Spec.Commit)+" by "+clip(a.Status.DecidedBy, 60), false)
 	case "denied":
 		return p.closeMerge(ctx, e, r, "approval denied", false)
-	case "expired":
-		return p.closeMerge(ctx, e, r, "approval expired", false)
+	case "void":
+		return p.closeMerge(ctx, e, r, "approval void: "+clip(a.Status.Reason, 100), false)
 	}
-	if p.Now().After(a.Spec.Expires.Time) {
+	if now.After(a.Spec.Expires.Time) {
 		return p.closeMerge(ctx, e, r, "approval expired", false)
 	}
 	return nil
+}
+
+func (p *ExecutorPoller) applyStart() time.Duration {
+	if p.C.ApplyStart <= 0 {
+		return 30 * time.Minute
+	}
+	return p.C.ApplyStart
 }
 
 // closeMerge records the end of the approval phase of a merge run; the plan volume stays only for a started apply.
@@ -572,11 +663,15 @@ func (p *ExecutorPoller) closeMerge(ctx context.Context, e *v1.Executor, r *v1.E
 	return nil
 }
 
-// approvalInput is what the person approves: executor, environment, commit and plan hash. Built only from checked
-// values (no tool output), so it is the same every time it is computed.
+// approvalInput is what the person approves: executor, environment, commit, plan hash, image digest, apply argv and
+// the Executor spec hash (which also covers the credentials). Built only from checked values (no tool output), so it
+// is the same every time it is computed; a changed Executor gives another input and the approval no longer matches.
 func approvalInput(e *v1.Executor, r *v1.ExecutorRun) string {
-	return fmt.Sprintf("apply executor %s to environment %s: repository %s, merge commit %s of PR #%d, plan file sha256 %s",
-		e.Name, e.Spec.Environment, e.Spec.Repo, r.Spec.Commit, r.Spec.PR, r.Status.PlanHash)
+	argv, _ := json.Marshal(e.Spec.Apply.Command)
+	return fmt.Sprintf("apply executor %s to environment %s: repository %s, merge commit %s of PR #%d, plan file sha256 %s, "+
+		"image %s, apply argv %s, executor spec sha256 %s",
+		e.Name, e.Spec.Environment, e.Spec.Repo, r.Spec.Commit, r.Spec.PR, r.Status.PlanHash, e.Spec.Image,
+		clip(string(argv), 1500), r.Status.SpecHash)
 }
 
 // approvalHash is the content hash of an Approval (#67): SHA-256 over the fields, each followed by a NUL byte. Same
@@ -624,9 +719,10 @@ func (p *ExecutorPoller) requestApproval(ctx context.Context, e *v1.Executor, f 
 		return err
 	}
 	body := fmt.Sprintf("🤖 agentdev executor `%s`: the merge commit `%s` is planned. **Apply to `%s` needs an approval.**\n\n"+
-		"Plan file sha256: `%s`. Review the plan output above, then a person with write access replies `/approve %s` "+
-		"(or `/deny %s`). The approval expires in %d h, is single-use, and covers only this plan file.",
-		e.Name, r.Spec.Commit, e.Spec.Environment, r.Status.PlanHash, id, id, hours)
+		"Plan file sha256: `%s`, image `%s`, executor spec sha256 `%s`. Review the plan output above, then a person "+
+		"with write access replies `/approve %s` (or `/deny %s`). A decision counts only within %d h, the apply starts "+
+		"within %s of it, is single-use, and covers only this plan file and this executor spec.",
+		e.Name, r.Spec.Commit, e.Spec.Environment, r.Status.PlanHash, e.Spec.Image, r.Status.SpecHash, id, id, hours, p.applyStart())
 	if err := f.Comment(ctx, r.Spec.PR, body); err != nil {
 		log.FromContext(ctx).Error(err, "comment approval request")
 	}
@@ -635,10 +731,15 @@ func (p *ExecutorPoller) requestApproval(ctx context.Context, e *v1.Executor, f 
 
 // event records a SecurityEvent for an executor run in the agents namespace, where the API copies it to Postgres.
 func (p *ExecutorPoller) event(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun, rule, severity, action string) error {
+	return p.record(ctx, e, fmt.Sprintf("pr-%d", r.Spec.PR), r.Name, rule, severity, action)
+}
+
+// record writes one SecurityEvent; job may be empty (an event about the Executor itself).
+func (p *ExecutorPoller) record(ctx context.Context, e *v1.Executor, job, pod, rule, severity, action string) error {
 	now := p.Now()
-	h := sha256.Sum256([]byte(r.Name + "\x00" + rule + "\x00" + action + "\x00" + now.UTC().Format(time.RFC3339Nano)))
+	h := sha256.Sum256([]byte(pod + "\x00" + rule + "\x00" + action + "\x00" + now.UTC().Format(time.RFC3339Nano)))
 	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "executor", Rule: rule, Severity: severity, Agent: e.Name,
-		Job: fmt.Sprintf("pr-%d", r.Spec.PR), Action: clip(action, 503), Time: metav1.NewTime(now), Pod: r.Name,
+		Job: job, Action: clip(action, 503), Time: metav1.NewTime(now), Pod: pod,
 		Container: "executor", Hash: hex.EncodeToString(h[:])}
 	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: p.C.AgentsNS,
 		Labels: map[string]string{"agent": e.Name, "agentdev/severity": severity, "agentdev/job": spec.Job, "agentdev/source": "executor"}},
@@ -834,7 +935,9 @@ func res(cpuReq, memReq, cpuLim, memLim string) corev1.ResourceRequirements {
 // checkoutScript fetches REF from REPO_URL and checks out COMMIT. All values come from the environment (set by the
 // operator, COMMIT checked against ^[0-9a-f]{40}$); the token is passed as a header, never stored in the checkout,
 // and .git is removed so the tool sees only the tree. A COMMIT that is not reachable from REF fails the checkout:
-// merge and apply runs fetch the protected branch only, so they can only run commits that are on it.
+// merge and apply runs fetch the protected branch only, so they can only run commits that are on it. The first fetch
+// is shallow (200 commits); a COMMIT deeper on a busy branch is found by fetching the full history of REF (never the
+// commit by id, which would accept commits that are not on the branch).
 const checkoutScript = `set -eu
 case "$COMMIT" in *[!0-9a-f]*) echo "invalid commit" >&2; exit 2;; esac
 [ "${#COMMIT}" -eq 40 ] || { echo "invalid commit" >&2; exit 2; }
@@ -844,6 +947,10 @@ cd /work/src
 auth=$(printf '%s:%s' "$GIT_USER" "$FORGE_TOKEN" | base64 | tr -d '\n')
 git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
   fetch -q --no-tags --depth 200 -- "$REPO_URL" "$REF"
+if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+  git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
+    fetch -q --no-tags --unshallow -- "$REPO_URL" "$REF"
+fi
 git -c advice.detachedHead=false checkout -q --detach "$COMMIT"
 [ "$(git rev-parse HEAD)" = "$COMMIT" ]
 rm -rf .git
