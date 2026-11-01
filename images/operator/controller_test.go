@@ -254,3 +254,39 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 		t.Error("the sidecar's mirror volume is the sidecar's alone")
 	}
 }
+
+// #2: a GitHub agent gets the App credentials from its own Secret, in the forge container only, and github.com URLs.
+func TestGitHubAgentCredentials(t *testing.T) {
+	r, c := setup(t, agent("gina", func(a *v1.Agent) { a.Spec.Forge = "github"; a.Spec.Repo = "octo-org/repo" }))
+	r.D.GitHubURL = "https://github.com"
+	reconcile(t, r, "gina")
+	s := getSTS(t, c, "gina")
+	ag, fg := container(s, "agent"), container(s, "forge")
+	for _, k := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID", "FORGE_TOKEN"} {
+		if hasEnv(ag, k) {
+			t.Errorf("agent container has %s", k)
+		}
+	}
+	if hasEnv(fg, "FORGE_TOKEN") {
+		t.Error("github forge container still asks for FORGE_TOKEN")
+	}
+	for _, e := range fg.Env {
+		switch e.Name {
+		case "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID":
+			if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil || e.ValueFrom.SecretKeyRef.Name != "agent-gina" {
+				t.Errorf("%s not from agent-gina", e.Name)
+			}
+		case "FORGE_KIND":
+			if e.Value != "github" {
+				t.Errorf("FORGE_KIND %s", e.Value)
+			}
+		case "FORGE_URL":
+			if e.Value != "https://github.com" {
+				t.Errorf("FORGE_URL %s", e.Value)
+			}
+		}
+	}
+	if !hasEnv(fg, "GITHUB_APP_PRIVATE_KEY") || s.Annotations["agentdev/forge"] != "github" {
+		t.Errorf("forge env or annotation missing: %v", s.Annotations)
+	}
+}
