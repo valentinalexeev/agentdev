@@ -148,6 +148,13 @@ jobs:
         if: needs.scope.outputs.credproxy == 'true'
         working-directory: images/credproxy
         run: go vet ./... && go test ./...
+      - name: Go dead code (staticcheck U1000, #132)
+        if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          for m in api operator forge credproxy; do
+            (cd images/$m && "$(go env GOPATH)/bin/staticcheck" -checks U1000 ./...) || exit 1
+          done
       - uses: actions/setup-node@v4
         if: needs.scope.outputs.ui == 'true'
         with: {node-version-file: images/ui/package.json, cache: npm, cache-dependency-path: images/ui/package-lock.json}
