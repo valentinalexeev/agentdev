@@ -121,7 +121,7 @@ export function maxConcurrentError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 8 ? '' : 'max. concurrent: 1 to 8'
 }
 
-// Approval requests (#67): read-only here; decisions are forge comments (/approve <id>), UI decisions are #80.
+// Approval requests (#67): decided by a forge comment (/approve <id>) or here by a person with write access.
 export type ApprovalState = 'pending' | 'allowed' | 'denied' | 'void'
 
 export interface Approval {
@@ -131,7 +131,7 @@ export interface Approval {
   repo: string
   forge: string
   job: string
-  source: 'claude' | 'push'
+  source: 'claude' | 'push' | 'executor'
   tool: string
   input: string // written by the agent: untrusted, shown as text only
   untrusted: boolean
@@ -143,6 +143,15 @@ export interface Approval {
   decidedVia?: string
   decidedAt?: string
   reason?: string // why it became void
+  contentHash: string
+}
+
+export type Decision = 'approve' | 'approve-job' | 'deny'
+
+// The content hash binds the decision to what the person saw: a changed request is refused (409).
+export async function decideApproval(token: string, a: Approval, decision: Decision): Promise<Approval> {
+  return (await call(token, 'POST', `/api/approvals/${encodeURIComponent(a.name)}/decision`,
+    { decision, contentHash: a.contentHash })).json()
 }
 
 export async function listApprovals(token: string, state: 'pending' | 'decided' | 'all'): Promise<Approval[]> {
