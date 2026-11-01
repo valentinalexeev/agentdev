@@ -40,7 +40,8 @@ printf 'DATABASE_URL=postgres://agentdev_api:%s@platform-db:5432/agentdev?sslmod
   | k -n "${PLATFORM_NS}" create secret generic agentdev-api-db --from-env-file=/dev/stdin --dry-run=client -o yaml \
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
 ok "database agentdev"
-# SIEM outputs (optional): SECURITY_WEBHOOK_*, SECURITY_SYSLOG_*, SECURITY_OTLP_* (images/api/outputs.go) in .secrets/platform/siem-webhook
+# SIEM outputs (optional): SECURITY_WEBHOOK_*, SECURITY_SYSLOG_*, SECURITY_OTLP_* (images/api/outputs.go) in
+# .secrets/platform/siem-webhook. Same keys as the GKE path (infra/ansible deploy.yml; table in docs/admin.md).
 if [[ -s "${S}/siem-webhook" ]]; then
   k -n "${PLATFORM_NS}" create secret generic agentdev-api-siem --from-env-file="${S}/siem-webhook" --dry-run=client -o yaml \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null

@@ -655,6 +655,26 @@ first event of an agent can have a `prev` that you do not have. This is correct.
 | `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `config.env`; Ansible `security.rate_burst` |
 | `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env`; `./run.sh 10` writes it to the database |
 
+SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All keys are optional.
+
+| Key | Secret | kind (`./run.sh 10`) | GKE (Ansible) |
+|---|---|---|---|
+| `SECURITY_WEBHOOK_URL` | no | `.secrets/platform/siem-webhook` | `security.siem.webhook_url` |
+| `SECURITY_WEBHOOK_SECRET` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_SYSLOG_ADDR` | no | `.secrets/platform/siem-webhook` | `security.siem.syslog_addr` |
+| `SECURITY_SYSLOG_SERVER_NAME` | no | `.secrets/platform/siem-webhook` | `security.siem.syslog_server_name` |
+| `SECURITY_SYSLOG_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_URL` | no | `.secrets/platform/siem-webhook` | `security.siem.otlp_url` |
+| `SECURITY_OTLP_SERVER_NAME` | no | `.secrets/platform/siem-webhook` | `security.siem.otlp_server_name` |
+| `SECURITY_OTLP_HEADERS` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+
+NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. At this
+time, the Ansible playbook does not install the API on GKE (issue #105). The playbook writes the Secret, but no
+API reads it yet.
+
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
 

@@ -16,6 +16,9 @@ github_app:
 #   pause_after: 5
 #   retention_days: 30
 #   max_per_agent: 500
-#   siem:
+#   siem:                         # the API that reads these is not deployed on GKE yet (agentdev #105)
+#     webhook_url: https://siem.example.com/agentdev
 #     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
 #     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com
