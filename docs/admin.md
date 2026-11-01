@@ -346,13 +346,26 @@ password that you set in the UI is final.
 
 ### Map people to forge users
 
-The API finds the forge user of a person from the token claim `forge_login` (#88). It does not use the authentik
-username, because a user can choose a username. The claim comes from the authentik user attribute `forge_login`.
-Users cannot change this attribute in the default setup, but only by configuration (see the WARNING below). The blueprint adds the scope `forge`, which sends this claim to the API.
+The API finds the forge user of a person from token claims (#88, #122). It does not use the authentik username,
+because a user can choose a username. A person can have one login for each forge kind:
+
+| Claim | Used for | User attribute |
+|---|---|---|
+| `forge_login_github` | agents on GitHub (`forge: github`) | `forge_login_github` |
+| `forge_login_gitea` | agents on Gitea (`forge: gitea`) | `forge_login_gitea` |
+| `forge_login` | fallback, when the claim of the agent's forge is absent | `forge_login` |
+
+The API takes the claim of the forge of the agent's repository. If that claim is absent, it takes `forge_login`. It
+never takes the claim of another forge, and it never falls back to the username. Several logins on one forge are not
+supported.
+
+The claims come from the authentik user attributes of the same names. Users cannot change these attributes in the
+default setup, but only by configuration (see the WARNING below). The blueprint adds the scope `forge`, which sends
+these claims to the API.
 
 The intended setup: authentik keeps no users and passwords of its own. It signs people in through the same company
 single sign-on as the forge (for example Google Workspace). The source property mapping of that identity provider
-sets `forge_login`. For Google Workspace, the blueprint does this for you (see "Sign in with Google Workspace").
+sets these attributes. For Google Workspace, the blueprint does this for you (see "Sign in with Google Workspace").
 
 To set the forge login from the company identity provider (kind and GKE):
 
@@ -377,23 +390,25 @@ To set the forge login for one user (for example on kind, without a source):
 
 1. Go to **Directory > Users** and open the user.
 2. Click **Edit**.
-3. In **Attributes**, add `forge_login: <forge login>`.
+3. In **Attributes**, add `forge_login_github: <GitHub login>`, `forge_login_gitea: <Gitea login>`, or the fallback
+   `forge_login: <forge login>`.
 4. Click **Update**.
 
 The person logs out and logs in again. Then the new token has the claim.
 
-WARNING: Do not let users edit `forge_login`. Only the identity provider or the administrators set it. A person with
-a wrong `forge_login` can act as that forge user.
+WARNING: Do not let users edit `forge_login`, `forge_login_github` or `forge_login_gitea`. Only the identity
+provider or the administrators set them. A person with a wrong value can act as that forge user.
 
 - Do not add an enrollment flow. The blueprint has none.
-- No flow, stage or prompt may write `attributes.forge_login`. authentik writes every prompt whose field key is
+- No flow, stage or prompt may write `attributes.forge_login`, `attributes.forge_login_github` or
+  `attributes.forge_login_gitea`. authentik writes every prompt whose field key is
   `attributes.<name>` to the user. The default user settings flow (`default-user-settings-flow`) already writes
   `attributes.settings.locale` this way. A prompt with the field key `attributes.forge_login` in the user settings
   flow, an enrollment flow or a source flow lets users choose their forge user. Check this in
   **Flows and Stages > Prompts** (search `forge_login`) after setup and after each authentik upgrade.
 - Use the forge login in lower case.
 
-NOTE: If the token has no `forge_login`, or the value has upper case letters or characters other than `a-z`, `0-9`,
+NOTE: If the token has neither the claim of the agent's forge nor `forge_login`, or the value has upper case letters or characters other than `a-z`, `0-9`,
 `.`, `_`, `-`, the API finds no forge user. The person can read, but cannot change agents. Members of
 `agentdev-admins` can pause, add and remove agents without a forge user.
 
@@ -410,7 +425,8 @@ values in `instance.yml` and one secret in Secret Manager.
 The source does these three things at each sign-in:
 
 - It creates the authentik user at the first sign-in.
-- It sets the user attribute `forge_login` from a Workspace custom attribute (#88).
+- It sets the user attributes `forge_login_github`, `forge_login_gitea` and `forge_login` from Workspace custom
+  attributes (#88, #122).
 - It synchronizes one Workspace group with the authentik group `agentdev-admins-sso`.
 
 The group `agentdev-admins-sso` is a child of `agentdev-admins`. Thus, its members are agentdev administrators.
@@ -438,16 +454,20 @@ You must be a Google Workspace super administrator.
 
 1. In the Google Admin console, go to **Directory > Users > More options > Manage custom attributes**.
 2. Add a custom attribute category, for example `agentdev`.
-3. Add the field `githubLogin`. Set **Visibility** to **Visible to admin**. Set **Info type** to **Text**.
-   Users cannot edit custom attributes. Only directory administrators can edit them.
-4. For each person, open the user, and set **agentdev > githubLogin** to the forge login of that person.
+3. Add the fields `githubLogin`, `giteaLogin` and `forgeLogin`. For each, set **Visibility** to
+   **Visible to admin** and **Info type** to **Text**. Users cannot edit custom attributes. Only directory
+   administrators can edit them. You need only the fields of the forges that you use.
+4. For each person, open the user, and set **agentdev > githubLogin** to the GitHub login and
+   **agentdev > giteaLogin** to the Gitea login of that person. Use **agentdev > forgeLogin** only when the person
+   has the same login on every forge.
 5. Make a Workspace group for the agentdev administrators, for example `agentdev-admins@example.com`.
 6. Go to **Apps > Web and mobile apps > Add app > Add custom SAML app**.
 7. Write down the **SSO URL** and download the **Certificate**.
 8. Set **ACS URL** to `https://<authentik host>/source/saml/agentdev-sso/acs/`.
 9. Set **Entity ID** to `https://<authentik host>/source/saml/agentdev-sso/metadata/`.
 10. Set **Name ID format** to **EMAIL** and **Name ID** to **Basic Information > Primary email**.
-11. In **Attribute mapping**, map **agentdev > githubLogin** to the app attribute `githubLogin`.
+11. In **Attribute mapping**, map **agentdev > githubLogin** to the app attribute `githubLogin`,
+    **agentdev > giteaLogin** to `giteaLogin`, and **agentdev > forgeLogin** to `forgeLogin`.
 12. In **Group membership**, add the administrator group. Set the app attribute to
     `http://schemas.xmlsoap.org/claims/Group`.
 13. Turn on the app for the people that use agentdev.
@@ -457,21 +477,24 @@ You must be a Google Workspace super administrator.
 1. Put the certificate from step 7 into Secret Manager:
    `gcloud secrets create authentik-sso-idp-cert --data-file=google.pem --project <project>`
 2. In `instance.yml` of the deployment repository, add `authentik.sso` (see `infra/ansible/example.vars.yml`):
-   `kind: saml`, `admin_group`, `allowed_domains`, `forge_attribute` and `saml_sso_url`.
+   `kind: saml`, `admin_group`, `allowed_domains` and `saml_sso_url`. If your app attributes have other names than
+   in step 11, also set `forge_attribute_github` (default `githubLogin`), `forge_attribute_gitea` (default
+   `giteaLogin`) and `forge_attribute` (default `forgeLogin`).
 3. Open a pull request in the deployment repository. After the merge, the playbook writes the Secret `authentik-sso`
    and restarts authentik.
 4. Sign in to the agentdev UI with **Google Workspace**.
-5. In authentik, go to **Directory > Users**, open your user, and make sure that `forge_login` is correct.
+5. In authentik, go to **Directory > Users**, open your user, and make sure that `forge_login_github`, `forge_login_gitea` or `forge_login` is correct.
 
-The playbook makes sure that `admin_group`, `allowed_domains` and `forge_attribute` contain only safe characters.
+The playbook makes sure that `admin_group`, `allowed_domains` and the `forge_attribute*` values contain only safe
+characters.
 Without `allowed_domains`, the playbook stops. These values go into
 the property mapping expressions.
 
-NOTE: A person has one forge login at this time. Use the GitHub login in `githubLogin`. Logins for each forge
-(for example GitHub and Gitea) are a proposal on #122 that waits for a decision.
+NOTE: A person has at most one login for each forge kind (GitHub, Gitea), plus the fallback (decision on #122).
+Several logins on one forge are not supported.
 
-NOTE: If the custom attribute is empty or is not a valid forge login, `forge_login` is empty. The person can read,
-but cannot change agents.
+NOTE: If a custom attribute is empty or is not a valid forge login, its user attribute is empty. If the agent's forge
+then has no login and `forge_login` is also empty, the person can read, but cannot change agents.
 
 NOTE: The playbook does not deploy authentik yet (#114). Until then, the Secret `authentik-sso` waits in the
 namespace `agentdev-platform`.
@@ -674,8 +697,8 @@ The owner decided this rule on #57. The API checks the permission on the forge a
 | Resume an agent, change `maxConcurrent` or `scaleToZero` | write access to the repository of the agent |
 | Add or remove an agent | admin access to the repository, or the group `agentdev-admins` |
 
-- The API finds the forge user from the claim `forge_login` (scope `forge`). If the token has no such claim, the
-  API refuses the change. Refer to "Map people to forge users". The function `forgeUserOf` in
+- The API finds the forge user from the claim of the agent's forge, `forge_login_github` or `forge_login_gitea`, or
+  else from `forge_login` (scope `forge`). If the token has neither, the API refuses the change. Refer to "Map people to forge users". The function `forgeUserOf` in
   `images/api/forge.go` does this mapping.
 - The API reads the groups from the `groups` claim of the token (scope `profile`).
 - If the API cannot reach the forge, it refuses the change (503). Only the group `agentdev-admins` can then pause,

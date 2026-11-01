@@ -109,14 +109,18 @@ if [[ "${SSO_STANDIN:-1}" == 1 ]]; then
   k apply --server-side --force-conflicts --field-manager=agentdev -f "${SPIKE_DIR}/manifests/kind/sso-standin.yaml" >/dev/null
   k -n "${PLATFORM_NS}" rollout status deploy/sso-standin --timeout=180s >/dev/null
   # same patterns as the playbook (infra/ansible/roles/authentik_sso): these values go into blueprint expressions
-  admin_group="${SSO_ADMIN_GROUP:-agentdev-admins@example.com}"; forge_attr="${SSO_FORGE_ATTR:-githubLogin}"
+  admin_group="${SSO_ADMIN_GROUP:-agentdev-admins@example.com}"; forge_attr="${SSO_FORGE_ATTR:-forgeLogin}"
+  forge_attr_github="${SSO_FORGE_ATTR_GITHUB:-githubLogin}"; forge_attr_gitea="${SSO_FORGE_ATTR_GITEA:-giteaLogin}"
   [[ "${admin_group}" =~ ^[A-Za-z0-9._@+-]{1,128}$ ]] || die "SSO_ADMIN_GROUP: letters, digits and ._@+- only"
   domains="${SSO_ALLOWED_DOMAINS:-example.com}"
   [[ "${domains}" =~ ^[a-z0-9]([a-z0-9.-]{0,252})(,[a-z0-9]([a-z0-9.-]{0,252}))*$ ]] || die "SSO_ALLOWED_DOMAINS: comma-separated lower-case domains"
-  [[ "${forge_attr}" =~ ^[A-Za-z][A-Za-z0-9_.]{0,63}$ ]] || die "SSO_FORGE_ATTR: an attribute name"
+  for a in "${forge_attr}" "${forge_attr_github}" "${forge_attr_gitea}"; do
+    [[ "${a}" =~ ^[A-Za-z][A-Za-z0-9_.]{0,63}$ ]] || die "SSO_FORGE_ATTR*: an attribute name"
+  done
   inner="http://sso-standin.${PLATFORM_NS}.svc.cluster.local:8080/default"
   { printf 'AGENTDEV_SSO_OIDC=true\nAGENTDEV_SSO_NAME=Company SSO (local stand-in)\n'
     printf 'AGENTDEV_SSO_ADMIN_GROUP=%s\nAGENTDEV_SSO_FORGE_ATTR=%s\nAGENTDEV_SSO_ALLOWED_DOMAINS=%s\n' "${admin_group}" "${forge_attr}" "${domains}"
+    printf 'AGENTDEV_SSO_FORGE_ATTR_GITHUB=%s\nAGENTDEV_SSO_FORGE_ATTR_GITEA=%s\n' "${forge_attr_github}" "${forge_attr_gitea}"
     printf 'AGENTDEV_SSO_OIDC_CLIENT_ID=authentik\nAGENTDEV_SSO_OIDC_CLIENT_SECRET=%s\n' "$(sec sso-standin-client-secret)"
     printf 'AGENTDEV_SSO_OIDC_AUTHORIZE_URL=http://localhost:18080/default/authorize\n'   # the browser, port-forward
     printf 'AGENTDEV_SSO_OIDC_TOKEN_URL=%s/token\nAGENTDEV_SSO_OIDC_USERINFO_URL=%s/userinfo\n' "${inner}" "${inner}"
@@ -152,7 +156,7 @@ PY
   if [[ "${SSO_CHECK:-1}" == 1 ]]; then
     need python3
     python3 "${SPIKE_DIR}/scripts/sso-check.py" --context "kind-${CLUSTER_NAME}" --namespace "${PLATFORM_NS}" \
-      --admin-group "${admin_group}" --forge-attr "${forge_attr}" --domain "${domains%%,*}" || die "SSO check failed"
+      --admin-group "${admin_group}" --forge-attr "${forge_attr}" --forge-attr-github "${forge_attr_github}" --forge-attr-gitea "${forge_attr_gitea}" --domain "${domains%%,*}" || die "SSO check failed"
     ok "SSO check passed"
     record "authentik SSO stand-in: group sync and forge_login checked"
   fi

@@ -24,12 +24,15 @@
           - authentik_sso_env | dict2items | map(attribute='key') | reject('in', blueprint) | list == []
           - authentik_sso_env.AGENTDEV_SSO_SAML == 'true'
           - authentik_sso_env.AGENTDEV_SSO_ALLOWED_DOMAINS == 'example.com,example.org'
-          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR == 'githubLogin'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR == 'forgeLogin'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITHUB == 'githubLogin'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITEA == 'giteaLogin'
           - "'AGENTDEV_SSO_OIDC' not in authentik_sso_env"
     - name: The kind script writes the OIDC keys of the blueprint
       ansible.builtin.assert:
         that: "item in kind_script"
-      loop: [AGENTDEV_SSO_OIDC=true, AGENTDEV_SSO_ADMIN_GROUP, AGENTDEV_SSO_ALLOWED_DOMAINS, AGENTDEV_SSO_FORGE_ATTR, AGENTDEV_SSO_OIDC_CLIENT_ID,
+      loop: [AGENTDEV_SSO_OIDC=true, AGENTDEV_SSO_ADMIN_GROUP, AGENTDEV_SSO_ALLOWED_DOMAINS, AGENTDEV_SSO_FORGE_ATTR, AGENTDEV_SSO_FORGE_ATTR_GITHUB,
+             AGENTDEV_SSO_FORGE_ATTR_GITEA, AGENTDEV_SSO_OIDC_CLIENT_ID,
              AGENTDEV_SSO_OIDC_CLIENT_SECRET, AGENTDEV_SSO_OIDC_AUTHORIZE_URL, AGENTDEV_SSO_OIDC_TOKEN_URL,
              AGENTDEV_SSO_OIDC_USERINFO_URL]
     - name: No blueprint sets group members (#103)

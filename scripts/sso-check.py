@@ -4,10 +4,10 @@
 Drives real browser sign-ins through authentik and the local OIDC stand-in (manifests/kind/sso-standin.yaml), then
 reads the result inside the authentik worker. Checks the owner rule of #103 and the default of #122:
   1. A person in the directory group is added to agentdev-admins-sso and gets agentdev-admins in the token claim.
-     forge_login comes from the custom attribute, normalised. Other directory groups do not reach authentik.
+     forge_login, forge_login_github and forge_login_gitea come from their custom attributes, normalised. Other directory groups do not reach authentik.
   2. A member added by hand (directly to agentdev-admins) and akadmin are kept.
   3. When the person leaves the directory group, the next sign-in removes them from agentdev-admins-sso only.
-     A bad custom attribute clears forge_login (read-only, fail closed).
+     A bad or absent custom attribute clears forge_login / forge_login_github / forge_login_gitea (fail closed).
   4. authentik logged each membership change.
 The test user is deleted at the end. Standard library only; no credential is printed.
 """
@@ -156,6 +156,8 @@ print("RESULT=" + json.dumps({
   "in_sso": bool(u) and sso.users.filter(pk=u.pk).exists(),
   "in_admins_direct": bool(u) and adm.users.filter(pk=u.pk).exists(),
   "forge_login": (u.attributes.get("forge_login") if u else None),
+  "forge_login_github": (u.attributes.get("forge_login_github") if u else None),
+  "forge_login_gitea": (u.attributes.get("forge_login_gitea") if u else None),
   "claims": claims,
   "akadmin_admin": adm.users.filter(username="akadmin").exists(),
   "groups_from_source": sorted(Group.objects.filter(groupsourceconnection__source__slug="agentdev-sso").values_list("name", flat=True)),
@@ -199,7 +201,9 @@ def main():
     ap.add_argument("--context", required=True)
     ap.add_argument("--namespace", required=True)
     ap.add_argument("--admin-group", required=True)
-    ap.add_argument("--forge-attr", required=True)
+    ap.add_argument("--forge-attr", required=True, help="fallback attribute (forge_login)")
+    ap.add_argument("--forge-attr-github", required=True)
+    ap.add_argument("--forge-attr-gitea", required=True)
     ap.add_argument("--domain", required=True, help="an allowed company domain")
     a = ap.parse_args()
     ctx, ns = a.context, a.namespace
@@ -229,7 +233,8 @@ def main():
                          "print('RESULT=' + json.dumps(timezone.now().isoformat()))")
         ak_shell(ctx, ns, CLEANUP % {"user": TEST_USER, "foreign": FOREIGN_USER})
         claims = {"preferred_username": TEST_USER, "email": f"{TEST_USER}@{a.domain}", "name": "SSO check",
-                  "groups": ["engineering", a.admin_group], a.forge_attr: " Alice-1 "}
+                  "groups": ["engineering", a.admin_group], a.forge_attr: " Alice-1 ",
+                  a.forge_attr_github: "Alice-GH", a.forge_attr_gitea: "alice-gitea"}
 
         print("1. sign-in as a member of the directory group")
         sign_in(base, idp, claims)
@@ -240,6 +245,9 @@ def main():
         check("agentdev-admins" in s["claims"].get("groups", []), "token claim groups has agentdev-admins (inherited)")
         check(s["forge_login"] == "alice-1" and s["claims"].get("forge_login") == "alice-1",
               "forge_login from the custom attribute, normalised")
+        check(s["forge_login_github"] == "alice-gh" and s["claims"].get("forge_login_github") == "alice-gh"
+              and s["forge_login_gitea"] == "alice-gitea" and s["claims"].get("forge_login_gitea") == "alice-gitea",
+              "forge_login_github and forge_login_gitea from their custom attributes")
         check(s["groups_from_source"] == ["agentdev-admins-sso"], "no other directory group reached authentik")
 
         print("2. a member added by hand is kept when the blueprints are re-applied")
@@ -251,13 +259,17 @@ def main():
         check(s["akadmin_admin"], "akadmin still in agentdev-admins after the re-apply")
 
         print("3. sign-in after leaving the directory group, with a bad custom attribute")
-        claims.update({"groups": ["engineering"], a.forge_attr: "bad login!"})
+        claims.update({"groups": ["engineering"], a.forge_attr: "bad login!", a.forge_attr_github: "bad/gh"})
+        del claims[a.forge_attr_gitea]
         sign_in(base, idp, claims)
         s = ak_shell(ctx, ns, STATE % {"user": TEST_USER, "since": since})
         check(not s["in_sso"], "removed from agentdev-admins-sso")
         check(s["in_admins_direct"], "hand-added membership of agentdev-admins kept")
         check(s["akadmin_admin"], "akadmin still in agentdev-admins")
         check(s["forge_login"] == "" and "forge_login" not in s["claims"], "bad attribute clears forge_login")
+        check(s["forge_login_github"] == "" and "forge_login_github" not in s["claims"]
+              and s["forge_login_gitea"] == "" and "forge_login_gitea" not in s["claims"],
+              "bad or absent per-forge attribute clears forge_login_github / forge_login_gitea")
 
         print("4. company domain")
         for label, extra in [("foreign e-mail domain", {"email": f"{FOREIGN_USER}@evil.example"}),

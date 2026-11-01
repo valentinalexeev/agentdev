@@ -821,7 +821,7 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 		fail(http.StatusConflict, "denied", "the request changed since you opened it; reload and check it again")
 		return
 	}
-	decider := forgeUserOf(id)
+	decider := forgeUserOf(id, a.Forge)
 	if decider == "" {
 		decider = id.Username
 	}
@@ -886,7 +886,7 @@ func (ar *approvalReader) agentIdentity(ctx context.Context, id *identity, a app
 			names[strings.ToLower(ag.Name)] = true
 		}
 	}
-	for _, n := range []string{forgeUserOf(id), strings.ToLower(id.Username)} {
+	for _, n := range append(allForgeUsers(id), strings.ToLower(id.Username)) {
 		if n != "" && (names[n] || approvalDenyLogins[n]) {
 			return n, true
 		}

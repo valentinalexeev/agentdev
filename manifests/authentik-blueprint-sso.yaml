@@ -34,7 +34,7 @@ entries:
     name: agentdev-admins-sso
     parents: [!KeyOf admins]                # members inherit agentdev-admins; no users here either
     attributes: {agentdev/source-group: !Env AGENTDEV_SSO_ADMIN_GROUP}
-# Returning users: update name, e-mail and attributes.forge_login from the directory at each sign-in, then log in.
+# Returning users: update name, e-mail and the attributes forge_login* from the directory at each sign-in, then log in.
 # The default source authentication flow only logs in, so a changed directory value would never arrive.
 - model: authentik_flows.flow
   id: auth-flow
@@ -129,7 +129,8 @@ entries:
 # ---- Google Workspace (SAML) ----
 # Google sends groups only through SAML ("Group membership" in the SAML app), and custom attributes only through SAML
 # attribute mapping. Set in the Workspace SAML app: Name ID = primary e-mail; Group membership -> app attribute
-# `http://schemas.xmlsoap.org/claims/Group`; the custom attribute (for example agentdev.githubLogin) -> app attribute
+# `http://schemas.xmlsoap.org/claims/Group`; the custom attributes (agentdev.githubLogin, agentdev.giteaLogin and the
+# fallback agentdev.forgeLogin) -> app attributes AGENTDEV_SSO_FORGE_ATTR_GITHUB, AGENTDEV_SSO_FORGE_ATTR_GITEA and
 # AGENTDEV_SSO_FORGE_ATTR (docs/admin.md).
 - model: authentik_crypto.certificatekeypair
   id: saml-idp-cert
@@ -162,18 +163,23 @@ entries:
                     change="add" if now else "remove", group="agentdev-admins-sso", directory_group=admin_group,
                     username=conn.user.username if conn else properties.get("username"),
                     source_slug=source.slug).save()
-      # forge_login (#88) from the directory custom attribute. Not a valid forge login (or absent): empty, which the
-      # agentdev scope mapping does not emit, so the API gives read-only (fail closed).
-      login = properties.pop("%s", None)
-      if isinstance(login, list):
-          login = login[0] if len(login) == 1 else None
-      login = login.strip().lower() if isinstance(login, str) else ""
-      if not regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$"):
-          login = ""
+      # forge logins (#88, #122) from admin-only directory custom attributes: forge_login_github and forge_login_gitea
+      # per forge kind, forge_login as the fallback. Not a valid forge login (or absent): empty, which the agentdev
+      # scope mapping does not emit, so the API gives read-only (fail closed).
+      def forge_login(attr):
+          login = properties.pop(attr, None)
+          if isinstance(login, list):
+              login = login[0] if len(login) == 1 else None
+          login = login.strip().lower() if isinstance(login, str) else ""
+          return login if regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$") else ""
+      logins = {"forge_login": forge_login("%s"), "forge_login_github": forge_login("%s"),
+                "forge_login_gitea": forge_login("%s")}
       # e-mail = Name ID (primary e-mail in the Workspace app); the domain policy checks it
-      return {"email": str(name_id.text or "").strip().lower(), "attributes": {"forge_login": login}}
+      return {"email": str(name_id.text or "").strip().lower(), "attributes": logins}
     - !Env AGENTDEV_SSO_ADMIN_GROUP
     - !Env AGENTDEV_SSO_FORGE_ATTR
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITHUB
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITEA
 - model: authentik_sources_saml.samlsourcepropertymapping
   id: saml-group
   conditions: [!Env AGENTDEV_SSO_SAML]
@@ -229,16 +235,19 @@ entries:
                     change="add" if now else "remove", group="agentdev-admins-sso", directory_group=admin_group,
                     username=conn.user.username if conn else properties.get("username"),
                     source_slug=source.slug).save()
-      login = info.get("%s")
-      login = login.strip().lower() if isinstance(login, str) else ""
-      if not regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$"):
-          login = ""
-      out = {"attributes": {"forge_login": login}}
+      def forge_login(attr):
+          login = info.get(attr)
+          login = login.strip().lower() if isinstance(login, str) else ""
+          return login if regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$") else ""
+      out = {"attributes": {"forge_login": forge_login("%s"), "forge_login_github": forge_login("%s"),
+                            "forge_login_gitea": forge_login("%s")}}
       if not properties.get("username"):
           out["username"] = info.get("email")    # the enrollment flow has no username prompt
       return out
     - !Env AGENTDEV_SSO_ADMIN_GROUP
     - !Env AGENTDEV_SSO_FORGE_ATTR
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITHUB
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITEA
 - model: authentik_sources_oauth.oauthsourcepropertymapping
   id: oidc-group
   conditions: [!Env AGENTDEV_SSO_OIDC]
