@@ -24,6 +24,11 @@ api() {  # stub of the sidecar: record the call, answer from the fixtures
     "GET /repos/octo-org/repo/pulls") cat "${fx}/pulls_open.json" ;;
     "GET /repos/octo-org/repo/pulls/14/comments") cat "${fx}/pull_comments.json" ;;
     "GET /repos/octo-org/repo/commits/"*"/check-runs") cat "${fx}/check_runs.json" ;;
+    "GET /repos/octo-org/repo/issues/12/events") cat "${fx}/events_writer.json" ;;
+    "GET /repos/octo-org/repo/issues/13/events") cat "${fx}/events_triage.json" ;;
+    "GET /repos/octo-org/repo/issues/14/events") echo '[]' ;;
+    "GET /repos/octo-org/repo/collaborators/octo-dev/permission") cat "${PERM_FILE:-${fx}/permission_write.json}" ;;
+    "GET /repos/octo-org/repo/collaborators/tria-ger/permission") cat "${fx}/permission_triage.json" ;;
     POST*) echo '{}' ;;
     *) echo '[]' ;;
   esac
@@ -48,6 +53,16 @@ check "issues by label agent:alice, per_page" "[[ \$(assigned_issues_path) == '/
 issues=$(api GET "$(assigned_issues_path)" | jq -c '[.[] | select(.pull_request == null)]')
 check "PRs dropped from the issue list" "[[ \$(jq -r '[.[].number] | join(\",\")' <<<\"\${issues}\") == 12 ]]"
 check "PR links use /pull/" "[[ \$(pr_url 14) == https://github.com/octo-org/repo/pull/14 ]]"
+
+# --- who gave the work: the last labeler of agent:alice must be a writer, live (#130 review) ---
+security_event() { echo "EVENT $1" >> "${tmp}/events"; }
+check "writer labeled (last labeled event wins over an earlier triage one)" "labeler_ok 12"
+check "triage-only labeler refused" "! labeler_ok 13 && grep -q label-not-writer \"\${tmp}/events\""
+check "no labeled event refused (fail closed)" "! labeler_ok 14 && grep -q label-unverified \"\${tmp}/events\""
+check "a bad issue number is refused" "! labeler_ok '1;x'"
+PERM_FILE="${fx}/permission_triage.json"
+check "the labeler later lost write access: refused" "! labeler_ok 12"
+unset PERM_FILE
 
 # --- my PRs: App bot author AND my own branch prefix ---
 mine=$(api GET "/repos/${REPO}/pulls?state=open&$(per_page 50)" | jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "[${MY_PRS} | .number] | join(\" \")")
@@ -89,5 +104,6 @@ check "bad head sha: no call" "[[ -z \$(failed_checks '{\"head\":{\"sha\":\"main
 FORGE_KIND=gitea
 check "gitea: assigned_by and limit" "[[ \$(assigned_issues_path) == '/repos/octo-org/repo/issues?state=open&type=issues&assigned_by=alice&limit=50' ]]"
 check "gitea: no GHAS calls" "[[ -z \$(security_threads 14 2026-11-01T09:00:00Z) ]]"
+check "gitea: no labeler check" "labeler_ok 13"
 check "gitea: PR links use /pulls/" "[[ \$(pr_url 14) == https://github.com/octo-org/repo/pulls/14 ]]"
 exit "${fail}"

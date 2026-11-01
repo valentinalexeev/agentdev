@@ -79,6 +79,23 @@ assigned_issues_path() {
   if [[ "${FORGE_KIND}" == github ]]; then echo "/repos/${REPO}/issues?state=open&labels=agent:${FORGE_USER}&$(per_page 50)"
   else echo "/repos/${REPO}/issues?state=open&type=issues&assigned_by=${FORGE_USER}&$(per_page 50)"; fi
 }
+# labeler_ok <issue>: on GitHub anyone with triage access can add a label, so the label alone does not give work to
+# an agent. The person who added agent:<name> last must have write, maintain or admin on the repo, checked live
+# before each start (a person who lost write access no longer counts). Fails closed: no event, a bot, an unknown
+# answer -> no. Gitea: assignment needs write access already, so always yes.
+labeler_ok() {
+  [[ "${FORGE_KIND}" == github ]] || return 0
+  local n=$1 actor perm
+  [[ "${n}" =~ ^[1-9][0-9]{0,15}$ ]] || return 1
+  actor=$(api GET "/repos/${REPO}/issues/${n}/events?$(per_page 100)" | jq -r --arg l "agent:${FORGE_USER}" \
+    '[.[] | select(.event == "labeled" and .label.name == $l)] | last | .actor.login // ""' 2>/dev/null)
+  [[ "${actor}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]] || { security_event label-unverified medium "issue #${n}: no valid labeler for agent:${FORGE_USER}"; return 1; }
+  perm=$(api GET "/repos/${REPO}/collaborators/${actor}/permission" | jq -r '.permission // ""' 2>/dev/null)
+  case "${perm}" in
+    admin|maintain|write) return 0 ;;
+    *) security_event label-not-writer medium "issue #${n}: agent:${FORGE_USER} added by ${actor} (permission ${perm:-none})"; return 1 ;;
+  esac
+}
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
 MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
 pr_url() { if [[ "${FORGE_KIND}" == github ]]; then web_url "pull/$1"; else web_url "pulls/$1"; fi; }
@@ -417,6 +434,7 @@ handle_issues() {
     fi
     is_running "issue-${n}" && continue
     backing_off "issue-${n}" && continue   # failed recently; retried after its backoff
+    labeler_ok "${n}" || { log "issue #${n}: label not added by a writer, skipped"; continue; }
     if start_job "issue-${n}" issue_job "${n}" "${base}"; then
       log "issue #${n}: ${title} (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
     else
