@@ -134,6 +134,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | sync | one run of `scripts/mcp-sync.sh` |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
 | web UI | the agentdev management user interface |
+| subscription | one Claude login (a Claude credential Secret). Agents that use the same Secret use the same subscription |
+| usage window | a period in which Claude counts the use of a subscription: 5 hours or 7 days |
+| usage limit | a percent of a usage window. When the use is more, agents start no new runs |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 

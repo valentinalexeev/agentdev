@@ -148,6 +148,22 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
    The agent stops and goes out of the list. The volumes of the agent stay.
 
+### Set a lower usage limit for your project
+
+The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.
+You must have write access to the repository. You can only set a limit that is lower than the global limit.
+
+1. In the web UI, click **Usage**.
+2. Find the row of your repository in **Limits**.
+3. Type the 5-hour limit and the weekly limit in percent.
+4. Click **Save**.
+   The row shows the effective limits.
+5. To use the global limits again, click **Use global**.
+
+NOTE: When the agents are paused for usage, the **Agents** page shows a banner with the reason and the end time.
+
+NOTE: The pause stops at the reset time of the usage window. The agents then continue the work that waits.
+
 ## Know what agents do
 
 | Condition | Result |
