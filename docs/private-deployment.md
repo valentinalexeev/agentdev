@@ -209,7 +209,7 @@ membership of `agentdev-admins` by a script.
    The agent writes a comment and opens a pull request.
 8. Write a review comment on the pull request.
    The agent pushes a follow-up commit.
-9. Do the security checklist of #123 on the instance.
+9. Do the end-to-end security checks of [e2e-security.md](e2e-security.md) (#123) on the instance.
 
 ## Make a backup
 
@@ -250,7 +250,7 @@ NOTE: Do not deploy from a branch. Use only release tags.
 
 ## Security checklist
 
-Do these checks before you give the instance to users, and after each upgrade. The full e2e checklist is in #123.
+Do these checks before you give the instance to users, and after each upgrade. The scripted e2e checklist is in [e2e-security.md](e2e-security.md) (#123).
 
 - [ ] The deployment repository is private, and `main` is protected.
 - [ ] No secret value is in git, in an issue, in a pull request or in a CI log.

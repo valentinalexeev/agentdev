@@ -123,6 +123,8 @@ WARNING: Do not put secret values in git, in issues or in logs. Put the secret v
 8. Merge the pull request.
    The CI deploys the instance.
 
+9. Do the end-to-end security checks. Refer to [e2e-security.md](e2e-security.md).
+
 NOTE: [Private deployment](private-deployment.md) gives the full procedure for GKE, GitHub and Google Workspace.
 
 NOTE: [`AGENTS.md`](../AGENTS.md) gives all the steps in detail. An AI agent can do these steps with you.
