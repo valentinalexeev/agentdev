@@ -150,7 +150,7 @@ type writer struct {
 }
 
 func (w *writer) who(id *identity) auditWho {
-	return auditWho{Subject: id.Subject, Username: id.Username, ForgeUser: forgeUserOf(id), Groups: id.Groups}
+	return auditWho{Subject: id.Subject, Username: id.Username, ForgeUser: validForgeLogin(id.ForgeLogin), Groups: id.Groups}
 }
 
 func (w *writer) isAdmin(id *identity) bool {
@@ -159,7 +159,7 @@ func (w *writer) isAdmin(id *identity) bool {
 
 // repoPerm asks the forge. The error is already wrapped for the response (fail closed).
 func (w *writer) repoPerm(ctx context.Context, id *identity, forge, repo string) (perm, error) {
-	user := forgeUserOf(id)
+	user := forgeUserOf(id, forge)
 	if user == "" {
 		return permNone, nil
 	}
@@ -185,13 +185,9 @@ func (w *writer) authorize(ctx context.Context, id *identity, forge, repo string
 	if adminOK && w.isAdmin(id) {
 		return "admin-group", nil
 	}
-	if forge == "github" {
-		return "", denied("changes to GitHub agents are not supported yet for repository users; ask an agentdev " +
-			"administrator (follow-up: https://github.com/valentinalexeev/agentdev/issues/87)")
-	}
 	p, err := w.repoPerm(ctx, id, forge, repo)
 	if err != nil {
-		log.Printf("forge permission check %s on %s: %v", forgeUserOf(id), repo, err)
+		log.Printf("forge permission check %s on %s: %v", forgeUserOf(id, forge), repo, err)
 		return "", &httpErr{http.StatusServiceUnavailable, "error", "cannot check your permission on the forge; try again later"}
 	}
 	if p < need {

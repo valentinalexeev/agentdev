@@ -282,8 +282,10 @@ func commandLines(body string) string {
 type decider struct {
 	store  approvalStore
 	agents agentLister
-	forge  commentReader
-	perms  permChecker
+	forge  commentReader // Gitea
+	perms  permChecker   // by forge kind (forgePerms)
+	// github reads GitHub repos (#87); nil: GitHub requests stay pending (no decision without a live check)
+	github *githubForge
 	pods   podChecker // nil: do not void requests of gone pods
 	now    func() time.Time
 	// platform forge accounts that never decide (APPROVAL_DENY_ACCOUNTS: router or App bot, the API's own token user,
@@ -298,6 +300,19 @@ type decider struct {
 func newDecider(store approvalStore, agents agentLister, forge commentReader, perms permChecker) *decider {
 	return &decider{store: store, agents: agents, forge: forge, perms: perms, now: func() time.Time { return time.Now().UTC() },
 		agentIDs: map[string]int64{}, seen: map[int64]time.Time{}, denyLogins: map[string]bool{}}
+}
+
+// reader is the comment reader of a request's forge; nil when that forge is not configured or not supported.
+func (d *decider) reader(a approval) commentReader {
+	switch a.Forge {
+	case "", "gitea":
+		return d.forge
+	case "github":
+		if d.github != nil {
+			return d.github
+		}
+	}
+	return nil
 }
 
 // run polls every interval until ctx ends.
@@ -324,6 +339,9 @@ func (d *decider) agentAccounts(ctx context.Context) (map[int64]string, error) {
 	}
 	out := map[int64]string{}
 	for _, a := range list {
+		if a.Forge == "github" {
+			continue // GitHub agents write as the App bot (decide: deny list and type Bot), not as a Gitea user
+		}
 		d.mu.Lock()
 		id, ok := d.agentIDs[a.Name]
 		d.mu.Unlock()
@@ -338,8 +356,14 @@ func (d *decider) agentAccounts(ctx context.Context) (map[int64]string, error) {
 		}
 		out[id] = a.Name
 	}
-	// the API's own token account never decides either (it can read every repository)
-	if self, err := d.forge.Self(ctx); err == nil && self > 0 {
+	// the API's own token account never decides either (it can read every repository). Unknown (the forge did not
+	// answer): nil, and decide refuses every Gitea decision in this pass (fail closed); GitHub builds its own list.
+	self, err := d.forge.Self(ctx)
+	if err != nil {
+		log.Printf("approvals: the API's own Gitea account: %v (no Gitea decision in this pass)", err)
+		return nil, nil
+	}
+	if self > 0 {
 		out[self] = "agentdev-api"
 	}
 	return out, nil
@@ -382,6 +406,12 @@ func (d *decider) pass(ctx context.Context) error {
 	return nil
 }
 
+func (d *decider) denied(login string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.denyLogins[strings.ToLower(login)]
+}
+
 // pruneSeen forgets refused comments after the late window (their request is no longer read).
 func (d *decider) pruneSeen() {
 	cut := d.now()
@@ -416,7 +446,11 @@ func (d *decider) commands(ctx context.Context, a approval) ([]forgeComment, []s
 	if err != nil {
 		return nil, nil, fmt.Errorf("bad job %q", a.Job)
 	}
-	comments, err := d.forge.Comments(ctx, a.Repo, n, a.Created)
+	fr := d.reader(a)
+	if fr == nil {
+		return nil, nil, fmt.Errorf("%w: no reader for forge %q", errForgeUnavailable, a.Forge)
+	}
+	comments, err := fr.Comments(ctx, a.Repo, n, a.Created)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -438,7 +472,7 @@ func (d *decider) commands(ctx context.Context, a approval) ([]forgeComment, []s
 
 // late audits decision comments written after a request closed: they have no effect.
 func (d *decider) late(ctx context.Context, a approval) error {
-	if a.Forge != "" && a.Forge != "gitea" {
+	if d.reader(a) == nil {
 		return nil
 	}
 	cs, _, err := d.commands(ctx, a)
@@ -475,14 +509,38 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 			return d.void(ctx, u, a, "the agent pod that asked is gone")
 		}
 	}
-	if a.Forge != "" && a.Forge != "gitea" {
-		// GitHub decisions are not supported yet (#87). This return also skips the closed issue/PR check below, so a
-		// GitHub record becomes void only by job end, supersede (sidecar) or the pod-gone check above.
+	fr := d.reader(a)
+	if fr == nil {
+		// a forge without a configured reader (GitHub without GITHUB_APP_ID or GITHUB_API_TOKEN): nobody decides on
+		// the forge (fail closed). The record becomes void by job end, supersede (sidecar) or the pod-gone check above.
 		return nil
+	}
+	// agents on GitHub all write as the App bot (#2), not as users named after them: refuse that login and the API's
+	// own token user; Gitea agent ids do not apply there (another forge's id space)
+	if a.Forge == "github" {
+		agentIDs = map[int64]string{}
+		self, err := d.github.Self(ctx)
+		if err != nil {
+			return err // without the static token's own user no decision (fail closed); next pass
+		}
+		if self > 0 {
+			agentIDs[self] = "agentdev-api"
+		}
+		bot, err := d.github.AppBot(ctx)
+		if err != nil {
+			return err // without the bot login no decision (fail closed); next pass
+		}
+		if bot != "" {
+			d.mu.Lock()
+			d.denyLogins[strings.ToLower(bot)] = true
+			d.mu.Unlock()
+		}
+	} else if agentIDs == nil {
+		return fmt.Errorf("the API's own Gitea account is unknown: no decision (fail closed); next pass")
 	}
 	// an executor apply (#69) is requested on the merged, so closed, pull request: closing does not end it (its own
 	// deadline, spec.approvalHours, is enforced by the operator)
-	if st, err := d.forge.IssueState(ctx, a.Repo, n); err == nil && st == "closed" && a.Source != "executor" {
+	if st, err := fr.IssueState(ctx, a.Repo, n); err == nil && st == "closed" && a.Source != "executor" {
 		return d.void(ctx, u, a, "the "+map[string]string{"issue": "issue", "pr": "pull request"}[kind]+" is closed")
 	}
 	cs, verbs, err := d.commands(ctx, a)
@@ -493,7 +551,7 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		verb := verbs[i]
 		switch {
 		case c.UserID == a.requesterID || a.requesterID <= 0 || agentIDs[c.UserID] != "" || c.Bot ||
-			d.denyLogins[strings.ToLower(c.Login)]:
+			d.denied(c.Login):
 			d.refuse(a, c, "decision by an agent or bot account is ignored")
 			continue
 		case c.Created.Before(a.Created.Truncate(time.Second)): // forge times have second precision
@@ -821,7 +879,7 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 		fail(http.StatusConflict, "denied", "the request changed since you opened it; reload and check it again")
 		return
 	}
-	decider := forgeUserOf(id)
+	decider := forgeUserOf(id, a.Forge)
 	if decider == "" {
 		decider = id.Username
 	}
@@ -886,7 +944,7 @@ func (ar *approvalReader) agentIdentity(ctx context.Context, id *identity, a app
 			names[strings.ToLower(ag.Name)] = true
 		}
 	}
-	for _, n := range []string{forgeUserOf(id), strings.ToLower(id.Username)} {
+	for _, n := range append(allForgeUsers(id), strings.ToLower(id.Username)) {
 		if n != "" && (names[n] || approvalDenyLogins[n]) {
 			return n, true
 		}

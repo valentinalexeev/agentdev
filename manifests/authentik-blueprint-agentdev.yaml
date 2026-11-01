@@ -5,20 +5,27 @@
 version: 1
 metadata: {name: agentdev OIDC application}
 entries:
-# forge login claim (#88): the API maps a person to the forge user only through forge_login, never through the
-# username (users can choose it). Source: the user attribute forge_login, set by the company SSO source property
-# mapping or by an administrator (users cannot edit it only while no flow/prompt writes attributes.forge_login, admin.md). No attribute: no claim, the API gives read-only.
+# forge login claims (#88, #122): the API maps a person to the forge user only through forge_login_<kind> (github,
+# gitea) or the fallback forge_login, never through the username (users can choose it). Source: the user attributes
+# of the same names, set by the company SSO source property
+# mapping or by an administrator (users cannot edit it only while no flow/prompt writes attributes.forge_login*, admin.md). No attribute: no claim, the API gives read-only.
 - model: authentik_providers_oauth2.scopemapping
   id: forge-login
   identifiers: {name: "agentdev: forge login"}
   attrs:
     scope_name: forge
-    description: Forge login (agentdev)
+    description: Forge login and groups (agentdev)
     expression: |
-      login = request.user.attributes.get("forge_login")
-      if isinstance(login, str) and login:
-          return {"forge_login": login}
-      return {}
+      # groups with inherited ones (#122): the profile scope lists direct groups only, so a member of
+      # agentdev-admins-sso (child of agentdev-admins, synced from the company SSO) would not get agentdev-admins.
+      # authentik merges this list into the profile one.
+      claims = {"groups": sorted({g.name for g in request.user.all_groups()})}
+      # forge_login_<kind> per forge kind (#122), forge_login as the fallback; the API picks the one of the agent's forge
+      for key in ("forge_login", "forge_login_github", "forge_login_gitea"):
+          login = request.user.attributes.get(key)
+          if isinstance(login, str) and login:
+              claims[key] = login
+      return claims
 - model: authentik_providers_oauth2.oauth2provider
   id: provider
   identifiers: {name: agentdev}

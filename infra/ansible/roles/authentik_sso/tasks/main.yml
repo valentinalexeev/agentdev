@@ -1,0 +1,36 @@
+---
+# Company SSO for authentik (#122): the Secret authentik-sso in {{ platform_ns }}, read by the authentik pods
+# (manifests/authentik-values.yaml) and used by manifests/authentik-blueprint-sso.yaml. Same keys as 09-authentik.sh
+# writes for the kind stand-in. The playbook does not deploy authentik yet (#114): until then the Secret waits for it.
+# The blueprint never sets group members (#103): see docs/admin.md, "Sign in with Google Workspace".
+- name: Read the SSO secret from Secret Manager
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest --project {{ gcp_project }}
+    --secret {{ authentik_sso_sm_idp_cert if authentik_sso_kind == 'saml' else authentik_sso_sm_oidc_client_secret }}
+  register: authentik_sso_sm
+  changed_when: false
+  check_mode: false
+  failed_when: authentik_sso_sm.rc != 0 and not ansible_check_mode
+  no_log: true
+
+- name: Keep it in a fact (not logged)
+  ansible.builtin.set_fact:
+    authentik_sso_idp_cert: "{{ authentik_sso_sm.stdout if authentik_sso_kind == 'saml' else '' }}"
+    authentik_sso_oidc_client_secret: "{{ authentik_sso_sm.stdout if authentik_sso_kind == 'oidc' else '' }}"
+  no_log: true
+
+- name: Build the SSO settings
+  ansible.builtin.include_tasks: env.yml
+  when: not ansible_check_mode or authentik_sso_sm.rc == 0
+
+- name: Secret authentik-sso
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: "{{ authentik_sso_secret }}", namespace: "{{ platform_ns }}"}
+      stringData: "{{ authentik_sso_env }}"
+  when: authentik_sso_env is defined
+  notify: Restart authentik for the SSO settings
+  no_log: true
