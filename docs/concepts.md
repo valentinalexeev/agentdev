@@ -79,7 +79,8 @@ many tools an agent sees.
 An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
 task (#38). It runs as a short-lived pod (same image, gVisor) with a fresh clone of the project and a
 **read-only** forge account (`<project>-chat`): it can read code, comment and file issues, but never push. Ideas
-turn into code only through the normal path: an issue, an agent, a PR, your review. Claude runs inside tmux, so a
+turn into code only through the normal path: an issue, an agent, a PR, your review. Like an agent, the session holds
+no Claude credential: it calls the credential proxy with the key of one agent of the project, which pays for it (#118). Claude runs inside tmux, so a
 session survives disconnects and can be re-attached from any terminal with cluster access. It ends after 30 minutes
 with nobody attached, or after 8 hours at most.
 

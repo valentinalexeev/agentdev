@@ -7,8 +7,9 @@
 #   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
+#   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -38,3 +39,11 @@
       vars:
         sandbox_test_context: kind-{{ kind_cluster_name }}
       tags: [sandbox-test]
+
+    - name: Gitea forge, owner and agent accounts, seeded repo, branch protection (was 05-forge.sh)
+      ansible.builtin.include_role:
+        name: gitea_forge
+        apply: {tags: [forge]}
+      vars:
+        gitea_forge_context: kind-{{ kind_cluster_name }}
+      tags: [forge]

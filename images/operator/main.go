@@ -133,7 +133,8 @@ func main() {
 				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute,
 				// executor egress (#135): proxy URL and the hosts every executor may reach
 				EgressProxy: os.Getenv("EXECUTOR_EGRESS_PROXY"),
-				EgressHosts: strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS"))},
+				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
+				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
 			EgressLogs: kubeSinceLogs(cs)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")

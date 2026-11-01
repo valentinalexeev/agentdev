@@ -7,7 +7,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Security
-- Executor egress allow-list (#135, 1.0.0 gate, R81, new R96). Executor Jobs (#69) could connect to any host. Now
+- Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
   their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
   in-cluster forge and the GKE metadata server for Workload Identity). The proxy (`executor-egress-proxy`, Squid,
   same image as the agents' proxy) allows each executor only `EXECUTOR_EGRESS_HOSTS` (default
@@ -17,9 +17,21 @@ While the version is `0.x`, breaking changes bump MINOR.
   proxy to the hosts of all executors; on kind `executor-egress-proxy-web` allows 80/443. Each refused request is a
   SecurityEvent of the executor (source `egress`, rule `egress-host`). Same templates for kind (`./run.sh 12`) and
   GKE (`deploy.yml`). Operator RBAC in `EXEC_NS`: create Secrets, get/update `executor-egress-proxy`.
-  **Action needed:** an executor that uses cloud APIs needs them in `spec.egressHosts` / `egress_hosts` (for example
-  `oauth2.googleapis.com`, `storage.googleapis.com`), else its plan fails with refused hosts. Docs: admin.md
-  ("Add a host for an executor"), security-model.md phase 5, security.md R25, R81, R96.
+  Refusals are aggregated: one event per executor run, host and 10-minute window, at most `SECURITY_RATE_BURST`
+  (default 20) hosts per run and window, then one rate-limited event; the rest are counted as dropped.
+  **BREAKING:** existing executors that use cloud APIs stop working (their plan fails with refused hosts) until they
+  declare those hosts. To upgrade: before you roll out this release, add the hosts to each such executor, Ansible
+  `executors[].egress_hosts` (or `spec.egressHosts` on the Executor), for example `oauth2.googleapis.com`,
+  `storage.googleapis.com`, then run the playbook (GKE) or `./run.sh 12` (kind). Docs: admin.md
+  ("Add a host for an executor"), security-model.md phase 5, security.md R25, R81, R97.
+- Interactive sessions (#118, follow-up of #66, R11): `scripts/agent-chat.sh` no longer mounts a Claude Secret
+  (`CLAUDE_SECRET`, default `claude-shared`) in the session pod. The session calls `claude-proxy`
+  (`ANTHROPIC_BASE_URL`) with the proxy key of one agent of the project (`CHAT_AGENT`, default the first agent in the
+  project file), so the budget and the usage count for that agent. The NetworkPolicies `agent-egress`, `egress-proxy`
+  and `claude-proxy` now also select `app=agent-chat`: the session cannot reach `api.anthropic.com` directly and uses
+  `egress-proxy` for other hosts. Same manifests on `kind` and GKE. **BREAKING:** `CLAUDE_SECRET` is removed;
+  `REMOTE_CONTROL=true` is refused (it needs a claude.ai login in the pod); sessions need `CLAUDE_PROXY=true`.
+  To apply: run `./run.sh 06` (kind) or the playbook (GKE) to update the NetworkPolicies, then start new sessions.
 
 ### Deprecated
 - Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
@@ -44,6 +56,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   workspace, warm pool to 0, optional headless Claude turn). Changed: the claim has the fixed name
   `agentdev-sandbox-test` (was `spike-<time>`), so a second run reuses it and changes nothing, and the warm pool and
   sandbox are restored also after a failed check. GKE does not change.
+- Step 05 (#106): `05-forge.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags forge` (new role
+  `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
+  `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
+  when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

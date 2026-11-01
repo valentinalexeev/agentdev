@@ -11,7 +11,9 @@ package main
 //   - the Job's checkout and tool containers get HTTPS_PROXY with that credential (from the Secret by the kubelet).
 //     A key opens only its own executor's hosts, so a PR that reads it gains nothing.
 //   - every refused request is one AGENTDEV_SECURITY_EVENT line of the proxy; the poller reads them and records a
-//     SecurityEvent of the executor whose pod had the client IP (source egress, rule egress-host).
+//     SecurityEvent of the executor whose pod had the client IP (source egress, rule egress-host): one per run, host
+//     and 10-minute window, at most SECURITY_RATE_BURST hosts per run and window, then one rate-limited event. PR
+//     code controls the requests, so it must not be able to flood the event store; dropped lines are counted.
 
 import (
 	"bufio"
@@ -236,6 +238,9 @@ func (p *ExecutorPoller) collectEgress(ctx context.Context, items []v1.Executor)
 			p.egressSince[px.UID] = last
 		}
 	}
+	if n := p.EgressDropped.Load(); n > 0 {
+		log.FromContext(ctx).V(1).Info("executor egress refusals not recorded as their own event (total since start)", "dropped", n)
+	}
 }
 
 // consumeEgress records the refusal lines of one proxy log; returns the time of the last line read.
@@ -273,10 +278,28 @@ func (p *ExecutorPoller) consumeEgress(ctx context.Context, r io.Reader, px *cor
 		if e == nil {
 			continue
 		}
-		h := sha256.Sum256([]byte(string(px.UID) + "\x00squid\x00" + ts + "\x00" + rest))
+		job := pod.Labels["job-name"]
+		host := egressHostOf(ev.Action)
+		win := t.Truncate(p.egressWindow())
+		rec, first := p.admitEgress(e.Name+"/"+job, host, win)
+		if !rec && !first {
+			p.EgressDropped.Add(1)
+			continue
+		}
+		// one event per executor run (Job), host and window: the name is derived from them, so a line read twice
+		// (operator restart) or the next refusal of the same host in the window is the same event.
+		h := sha256.Sum256([]byte(e.Name + "\x00" + job + "\x00" + host + "\x00" + win.UTC().Format(time.RFC3339)))
 		spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "egress", Rule: "egress-host", Severity: "medium",
-			Agent: e.Name, Job: pod.Labels["job-name"], Action: clip(ev.Action, 503), Time: metav1.NewTime(t), Pod: pod.Name,
+			Agent: e.Name, Job: job, Action: clip(ev.Action, 503), Time: metav1.NewTime(t), Pod: pod.Name,
 			Container: execEgressApp, Hash: hex.EncodeToString(h[:])}
+		if !rec { // first refusal over the cap in this window: one rate-limited event, the rest are dropped
+			p.EgressDropped.Add(1)
+			hr := sha256.Sum256([]byte(e.Name + "\x00" + job + "\x00" + win.UTC().Format(time.RFC3339)))
+			spec.Hash = hex.EncodeToString(hr[:])
+			spec = rateLimited(spec, p.egressCap())
+			spec.Action = fmt.Sprintf("more than %d refused hosts in %s from executor run %s; further refusals dropped",
+				p.egressCap(), p.egressWindow(), job)
+		}
 		if !jobRE.MatchString(spec.Job) {
 			spec.Job = "" // Job names are <executor>-<stage>-...; the event store keeps issue-/pr- job ids only
 		}
@@ -285,6 +308,80 @@ func (p *ExecutorPoller) consumeEgress(ctx context.Context, r io.Reader, px *cor
 		}
 	}
 	return last
+}
+
+// egressHostOf is the target host of a refused request ("CONNECT host:443" or "GET http://host/path").
+func egressHostOf(action string) string {
+	f := strings.Fields(action)
+	if len(f) < 2 {
+		return ""
+	}
+	t := f[1]
+	if u, err := url.Parse(t); err == nil && strings.Contains(t, "://") {
+		return strings.ToLower(u.Hostname())
+	}
+	if h, _, ok := strings.Cut(t, ":"); ok {
+		t = h
+	}
+	return strings.ToLower(clip(t, 253))
+}
+
+func (p *ExecutorPoller) egressWindow() time.Duration {
+	if p.C.EgressWindow > 0 {
+		return p.C.EgressWindow
+	}
+	return 10 * time.Minute
+}
+
+func (p *ExecutorPoller) egressCap() int {
+	if p.C.EgressMaxEvents > 0 {
+		return p.C.EgressMaxEvents
+	}
+	return 20
+}
+
+// egressAgg is the flood state of one executor run (executor/Job) in one window: hosts already recorded and whether
+// the rate-limited event was written.
+type egressAgg struct {
+	win     time.Time
+	hosts   map[string]bool
+	limited bool
+}
+
+// admitEgress decides on one refusal: rec=true for the first refusal of a host in the window (record it), as long as
+// the run has fewer than egressCap hosts in the window; first=true for the first refusal over the cap (record one
+// rate-limited event). Repeats and the rest are dropped by the caller and counted in EgressDropped. State of older
+// windows is forgotten; event names are deterministic, so a restart re-creates nothing.
+func (p *ExecutorPoller) admitEgress(run, host string, win time.Time) (rec, first bool) {
+	if p.egressAgg == nil {
+		p.egressAgg = map[string]*egressAgg{}
+	}
+	for k, a := range p.egressAgg {
+		if win.Sub(a.win) >= p.egressWindow() {
+			delete(p.egressAgg, k)
+		}
+	}
+	a := p.egressAgg[run]
+	if a == nil || !a.win.Equal(win) {
+		if a != nil && a.win.After(win) { // an older line (another proxy replica lags): judge it by the newer window
+			win = a.win
+		} else {
+			a = &egressAgg{win: win, hosts: map[string]bool{}}
+			p.egressAgg[run] = a
+		}
+	}
+	if a.hosts[host] {
+		return false, false
+	}
+	if len(a.hosts) < p.egressCap() {
+		a.hosts[host] = true
+		return true, false
+	}
+	if a.limited {
+		return false, false
+	}
+	a.limited = true
+	return false, true
 }
 
 // recordSpec writes one executor SecurityEvent in the agents namespace (idempotent by name).

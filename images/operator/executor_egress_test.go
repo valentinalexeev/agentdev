@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -231,6 +232,53 @@ func TestExecutorEgressRefusalEvent(t *testing.T) {
 		ev.Spec.Severity != "medium" || ev.Spec.Action != "CONNECT exfil.example:443" || ev.Spec.Pod != "tf-prod-pr-1-x" ||
 		ev.Labels["agentdev/source"] != "egress" {
 		t.Fatalf("event %+v %v", ev.Spec, ev.Labels)
+	}
+}
+
+// #135 review: PR code controls the refused requests, so a flood must not flood the event store. Repeats of a host
+// in the window are one event; past the cap there is one rate-limited event and the rest are counted as dropped; a
+// new window starts again; a second read of the same log adds nothing.
+func TestExecutorEgressRefusalFlood(t *testing.T) {
+	e := executor(nil)
+	x := newExecEnv(t, e)
+	x.p.C.EgressMaxEvents = 3
+	px := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "executor-egress-proxy-a", Namespace: execNS, UID: "px"}}
+	pods := []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "tf-prod-pr-1-x", Namespace: execNS,
+		Labels: map[string]string{"app": "agentdev-executor", "agentdev/executor": "tf-prod", "job-name": "tf-prod-pr-1"}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9"}}}
+	var lines []string
+	for i := 0; i < 1000; i++ { // 1000 refusals of 100 hosts within one minute
+		ts := fmt.Sprintf("2026-11-01T10:00:%02d.%06dZ", i/20, i)
+		lines = append(lines, line(ts, fmt.Sprintf(`{"rule":"egress-host","severity":"medium","client":"10.0.0.9","action":"CONNECT h%d.example:443"}`, i%100)))
+	}
+	lines = append(lines, line("2026-11-01T10:20:00Z", `{"rule":"egress-host","severity":"medium","client":"10.0.0.9","action":"GET http://late.example/x"}`))
+	byName := map[string]*v1.Executor{"tf-prod": e}
+	for i := 0; i < 2; i++ {
+		x.p.consumeEgress(context.Background(), strings.NewReader(strings.Join(lines, "\n")), px, pods, byName)
+	}
+	var evs v1.SecurityEventList
+	if err := x.c.List(context.Background(), &evs); err != nil {
+		t.Fatal(err)
+	}
+	rules := map[string]int{}
+	var actions []string
+	for _, ev := range evs.Items {
+		rules[ev.Spec.Rule]++
+		actions = append(actions, ev.Spec.Action)
+	}
+	if len(evs.Items) != 5 || rules["egress-host"] != 4 || rules["rate-limited"] != 1 {
+		t.Fatalf("want 3 hosts + 1 rate-limited + 1 in the next window, got %v %v", rules, actions)
+	}
+	for _, ev := range evs.Items {
+		if ev.Spec.Rule == "rate-limited" && (ev.Spec.Severity != "medium" || ev.Spec.Agent != "tf-prod") {
+			t.Fatalf("rate-limited event %+v", ev.Spec)
+		}
+	}
+	if got := x.p.EgressDropped.Load(); got < 1990 {
+		t.Fatalf("dropped %d, want the repeats and the lines over the cap counted", got)
+	}
+	if h := egressHostOf("GET http://Late.example:8080/x"); h != "late.example" {
+		t.Fatalf("host %q", h)
 	}
 }
 

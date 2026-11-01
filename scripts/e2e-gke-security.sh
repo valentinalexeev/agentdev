@@ -199,6 +199,25 @@ if section claude; then
       [(.spec.volumes[]?|.secret.secretName//empty),(.spec.containers[]|(.env[]?|.valueFrom.secretKeyRef.name//empty),(.envFrom[]?|.secretRef.name//empty))]|
       map(select(test("^claude-shared$|-claude$")))|select(length>0)|$p' | sort -u | tr '\n' ' ')
     [ -z "$users" ]; check $? "only claude-proxy uses the Claude credential Secrets" "also: $users"
+    # chat sessions (scripts/agent-chat.sh, #118): agent-egress applies, no claude-* Secret, no direct api.anthropic.com
+    k -n "$AGENTS_NS" get networkpolicy agent-egress -o json 2>/dev/null | jq -e '.spec.podSelector.matchExpressions[]?|
+      select(.key=="app" and .operator=="In" and (.values|index("agent-chat")))' >/dev/null
+    check $? "agent-egress selects chat session pods (app=agent-chat)"
+    chat=$(k -n "$AGENTS_NS" get pods -l app=agent-chat --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$chat" ]; then
+      cj=$(k -n "$AGENTS_NS" get pod "$chat" -o json)
+      refs=$(echo "$cj" | jq -r '[(.spec.volumes[]?|.secret.secretName//empty),(.spec.containers[]|(.env[]?|.valueFrom.secretKeyRef.name//empty),(.envFrom[]?|.secretRef.name//empty))]|
+        map(select(test("^claude-")))|join(" ")')
+      [ -z "$refs" ]; check $? "chat session $chat: no claude-* Secret reference" "$refs"
+      base=$(echo "$cj" | jq -r '.spec.containers[]|select(.name=="chat")|.env[]?|select(.name=="ANTHROPIC_BASE_URL")|.value')
+      case "$base" in *claude-proxy*) pass "chat session uses claude-proxy (ANTHROPIC_BASE_URL)";; *) fail "chat session: ANTHROPIC_BASE_URL does not point to claude-proxy";; esac
+      code=$(k -n "$AGENTS_NS" exec "$chat" -c chat -- sh -c "$PROBE" probe https://api.anthropic.com/ direct 2>/dev/null | tail -1)
+      ! reached "$code" && [ "$code" != 404 ]; check $? "chat session: api.anthropic.com directly is blocked" "HTTP $code"
+      code=$(k -n "$AGENTS_NS" exec "$chat" -c chat -- sh -c "$PROBE" probe https://api.anthropic.com/ 2>/dev/null | tail -1)
+      ! reached "$code" && [ "$code" != 404 ]; check $? "chat session: api.anthropic.com is refused by the egress proxy" "HTTP $code"
+    else
+      manual "no running chat session: start one (scripts/agent-chat.sh) and re-run --only claude for the session pod checks"
+    fi
   else
     fail "claude-proxy is not deployed: agents hold the Claude credential (R11) and reach the API directly (R64)"
   fi

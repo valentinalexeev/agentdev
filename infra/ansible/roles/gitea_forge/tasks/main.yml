@@ -1,0 +1,163 @@
+---
+# Same result as the old 05-forge.sh. Every step reads the state first, so a second run reports changed=0.
+- name: Gitea manifest (namespace, PVC, deployment, service)
+  kubernetes.core.k8s:
+    context: "{{ gitea_forge_context }}"
+    definition: "{{ gitea_forge_rendered | from_yaml_all | select | list }}"
+  vars:
+    # only these two are substituted (webhook allow-list); other $ signs in the manifest stay literal
+    gitea_forge_rendered: >-
+      {{ lookup('ansible.builtin.file', gitea_forge_manifest)
+         | replace('${AGENTS_NS}', gitea_forge_agents_ns) | replace('${SERVICE_CIDR}', gitea_forge_service_cidr) }}
+
+- name: Gitea rollout is complete
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ gitea_forge_context }}", -n, "{{ gitea_forge_ns }}", rollout, status, deploy/gitea,
+           "--timeout={{ gitea_forge_timeout }}s"]
+  changed_when: false
+
+- name: Gitea answers on {{ gitea_forge_url }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_url }}/api/healthz"
+  register: gitea_forge_health
+  until: gitea_forge_health.status == 200
+  retries: 24
+  delay: 5
+
+- name: Facts for the Gitea CLI and API
+  ansible.builtin.set_fact:
+    gitea_forge_cli: [kubectl, --context, "{{ gitea_forge_context }}", -n, "{{ gitea_forge_ns }}", exec, deploy/gitea,
+                      --, gitea]
+    gitea_forge_api: "{{ gitea_forge_url }}/api/v1"
+
+- name: Existing forge users
+  ansible.builtin.command:
+    argv: "{{ gitea_forge_cli + ['admin', 'user', 'list'] }}"
+  register: gitea_forge_users
+  changed_when: false
+
+- name: Owner account {{ gitea_forge_admin_user }}
+  ansible.builtin.command:
+    argv: "{{ gitea_forge_cli + ['admin', 'user', 'create', '--username', gitea_forge_admin_user,
+           '--password', gitea_forge_admin_password, '--email', gitea_forge_admin_user ~ '@agents.local',
+           '--must-change-password=false', '--admin'] }}"
+  when: gitea_forge_admin_user not in gitea_forge_user_names
+  changed_when: true
+  no_log: true
+  vars:
+    gitea_forge_user_names: "{{ gitea_forge_users.stdout | regex_findall('(?m)^\\d+\\s+(\\S+)') }}"
+
+- name: Repo {{ gitea_forge_repo }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}"
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: gitea_forge_repo_info
+  no_log: true
+
+- name: Create and seed the repo
+  when: gitea_forge_repo_info.status == 404
+  block:
+    - name: Create the repo
+      ansible.builtin.uri:
+        url: "{{ gitea_forge_api }}/user/repos"
+        method: POST
+        user: "{{ gitea_forge_admin_user }}"
+        password: "{{ gitea_forge_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: {name: "{{ gitea_forge_repo.split('/')[1] }}", auto_init: true, default_branch: "{{ gitea_forge_branch }}",
+               description: Playground for coding agents}
+        status_code: 201
+      changed_when: true
+      no_log: true
+
+    - name: Temporary clone directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: gitea_forge_tmp
+
+    - name: Seed a tiny Python project so the agents have something real to change and test
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          git clone -q "$URL" r
+          cp -R "$SEED/." r/
+          git -C r add -A
+          git -C r -c user.name="$OWNER" -c user.email="$OWNER@agents.local" commit -qm "chore: seed playground project"
+          git -C r push -q origin {{ gitea_forge_branch | quote }}
+        chdir: "{{ gitea_forge_tmp.path }}"
+      environment:
+        URL: "{{ gitea_forge_url | regex_replace('://', '://' ~ gitea_forge_userinfo ~ '@') }}/{{ gitea_forge_repo }}.git"
+        SEED: "{{ gitea_forge_seed_dir }}"
+        OWNER: "{{ gitea_forge_admin_user }}"
+      vars:
+        gitea_forge_userinfo: "{{ gitea_forge_admin_user }}:{{ gitea_forge_admin_password | urlencode }}"
+      changed_when: true
+      no_log: true
+  always:
+    - name: Remove the temporary clone
+      ansible.builtin.file:
+        path: "{{ gitea_forge_tmp.path }}"
+        state: absent
+      when: gitea_forge_tmp.path is defined
+
+- name: Agent accounts, collaborators and tokens
+  ansible.builtin.include_tasks: agent.yml
+  loop: "{{ gitea_forge_agents }}"
+  loop_control:
+    loop_var: gitea_forge_agent
+
+- name: Branch protection of {{ gitea_forge_branch }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/branch_protections/{{ gitea_forge_branch }}"
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: gitea_forge_protection
+  no_log: true
+
+# Agents push branches and open PRs; only an approval by the owner merges, a new push dismisses it, and nobody pushes
+# to the branch directly (#7). The rule is replaced only when it differs.
+- name: Replace the branch protection when it differs
+  when: >-
+    gitea_forge_protection.status == 404 or
+    (gitea_forge_protection.json | dict2items | selectattr('key', 'in', gitea_forge_rule.keys()) | items2dict)
+    != gitea_forge_rule
+  vars:
+    gitea_forge_rule:
+      rule_name: "{{ gitea_forge_branch }}"
+      enable_push: false
+      required_approvals: 1
+      enable_approvals_whitelist: true
+      approvals_whitelist_username: ["{{ gitea_forge_admin_user }}"]
+      dismiss_stale_approvals: true
+      block_on_rejected_reviews: true
+      block_on_outdated_branch: false
+  block:
+    - name: Delete the old rule
+      ansible.builtin.uri:
+        url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/branch_protections/{{ gitea_forge_branch }}"
+        method: DELETE
+        user: "{{ gitea_forge_admin_user }}"
+        password: "{{ gitea_forge_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]
+      changed_when: true
+      no_log: true
+
+    - name: Create the rule
+      ansible.builtin.uri:
+        url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/branch_protections"
+        method: POST
+        user: "{{ gitea_forge_admin_user }}"
+        password: "{{ gitea_forge_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: "{{ gitea_forge_rule }}"
+        status_code: 201
+      changed_when: true
+      no_log: true

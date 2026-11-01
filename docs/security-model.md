@@ -655,7 +655,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 - The apply gate is an `Approval` with `source: executor`, `tool: apply`, `job: pr-<N>` and the input "apply executor
   ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
 - Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
-- Egress (#135, R81, R96): executor pods are default deny (`executor-egress`: DNS, the executor egress proxy, the
+- Egress (#135, R81, R97): executor pods are default deny (`executor-egress`: DNS, the executor egress proxy, the
   in-cluster forge, the GKE metadata server for Workload Identity). The only way out is `executor-egress-proxy` in
   `EXEC_NS`, a second Squid like the agents' proxy (#65, same image and guardrails) rather than the agents' proxy:
   the hosts differ per executor, and a shared proxy would let an agent use an executor's list. The operator gives

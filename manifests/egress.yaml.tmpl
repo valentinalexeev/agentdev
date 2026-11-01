@@ -1,7 +1,7 @@
 # Egress allow-list for agent pods (#65, security model phase 2, fixes R10). Rendered by 06-agents.sh (envsubst) and
 # infra/ansible/deploy.yml (same template).
 #
-# - agent-egress: agent pods may open connections only to DNS, the egress proxy, the webhook router, the in-cluster
+# - agent-egress: agent pods and chat sessions (#118) may open connections only to DNS, the egress proxy, the webhook router, the in-cluster
 #   forge, botboard and ContextForge. Everything else (the internet, the metadata server, other platform services) is
 #   denied. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (docs/security.md R30).
 # - egress-proxy: a Squid forward proxy, the only way out. The operator sets HTTPS_PROXY/HTTP_PROXY on both containers
@@ -101,7 +101,7 @@ spec:
   selector: {app: egress-proxy}
   ports: [{name: proxy, port: 3128, targetPort: proxy}]
 ---
-# only agent pods may use the proxy
+# only agent pods and chat sessions may use the proxy
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
@@ -109,7 +109,7 @@ spec:
   podSelector: {matchLabels: {app: egress-proxy}}
   policyTypes: [Ingress]
   ingress:
-  - from: [{podSelector: {matchLabels: {app: coding-agent}}}]
+  - from: [{podSelector: {matchExpressions: [{key: app, operator: In, values: [coding-agent, agent-chat]}]}}]   # agents and chat sessions (#118)
     ports: [{port: 3128}]
 ---
 # the proxy's own egress: DNS only. 80/443 come from a second policy: on GKE the FQDNNetworkPolicy of the playbook
@@ -129,7 +129,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agent-egress, namespace: ${AGENTS_NS}}
 spec:
-  podSelector: {matchLabels: {app: coding-agent}}
+  podSelector: {matchExpressions: [{key: app, operator: In, values: [coding-agent, agent-chat]}]}   # agents and chat sessions (#118)
   policyTypes: [Egress]
   egress:
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]

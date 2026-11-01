@@ -30,6 +30,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -86,6 +87,10 @@ type ExecConfig struct {
 	ApplyStart  time.Duration // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
 	EgressProxy string        // executor egress proxy URL (#135, EXECUTOR_EGRESS_PROXY); empty: Jobs get no proxy env
 	EgressHosts []string      // hosts every executor may reach (EXECUTOR_EGRESS_HOSTS), plus spec.egressHosts
+	// refusal events: one per run, host and window; at most EgressMaxEvents hosts per run and window, then one
+	// rate-limited event (SECURITY_RATE_BURST, default 20; window 10 minutes)
+	EgressMaxEvents int
+	EgressWindow    time.Duration
 }
 
 // podLogs returns at most limit bytes of a container's log.
@@ -114,6 +119,10 @@ type ExecutorPoller struct {
 	// EgressLogs reads the executor egress proxy's log (#135); nil: refusals are not collected.
 	EgressLogs  sinceLogs
 	egressSince map[types.UID]time.Time // proxy pod -> time of the last log line read
+	egressAgg   map[string]*egressAgg   // executor/Job -> refusals of the current window (flood protection)
+	// EgressDropped counts refusal lines not recorded as their own event (repeat of a host in the window, or over
+	// the cap); logged after each pass.
+	EgressDropped atomic.Int64
 }
 
 func (p *ExecutorPoller) defaultForge(e *v1.Executor, token string) (forgeAPI, error) {
