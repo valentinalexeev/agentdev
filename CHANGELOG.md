@@ -54,7 +54,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   a job and the event just recorded; operator RBAC on ConfigMaps narrowed to `agentdev-security-positions` for
   get/update. Postgres: new owner role `agentdev_owner`; the API login `agentdev_api` gets INSERT/SELECT and the
   SECURITY DEFINER `security_events_prune()` only; the retention lives in `security_settings` and the API's
-  `SECURITY_RETENTION_DAYS` env is gone. **BREAKING** for deployments: re-run `./run.sh 10` (moves ownership, grants);
+  `SECURITY_RETENTION_DAYS` env is gone. **BREAKING** for deployments: re-run `./run.sh 06 10 12` (10 moves
+  ownership and grants, 12 installs the `SecurityEvent` CRD, 06 loads the forge image);
   the API no longer creates its schema unless `DATABASE_MIGRATE=true`.
 - The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
   missing or wrong `base` cannot let a workflow change through (review of #68).

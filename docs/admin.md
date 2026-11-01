@@ -721,6 +721,21 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
 
+### Upgrade the local installation
+
+Do this task after you pull a new `main` into an existing `kind` cluster.
+
+1. Read `CHANGELOG.md`. Find the run.sh steps that each **BREAKING** entry names.
+2. Run these steps in this sequence: `./run.sh 06 10 12`
+   - Step 06 builds the worker and forge images and loads them into `kind`.
+   - Step 10 builds the API and applies the database grants.
+   - Step 12 builds the operator and applies the CRDs, for example `SecurityEvent`.
+3. Make sure that the agent pods show `2/2 Running`:
+   `kubectl --context kind-agentdev -n coding-agents get pods`
+
+CAUTION: Do not run only step 10. The API needs the CRDs from step 12, and the agent pods need the forge image from
+step 06. If you remove Docker images (for example with `docker image prune`), run step 06 again.
+
 ## Remove agentdev
 
 ### Remove the local installation
