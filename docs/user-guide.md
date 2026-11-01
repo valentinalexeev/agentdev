@@ -37,6 +37,24 @@ the code that you merge.
 
 1. Close the pull request.
 
+## Approve an apply of an executor
+
+Do this task when an executor asks for an approval on a merged pull request (#69). The executor applies a change to
+an environment only after your approval.
+
+1. Read the comment of the executor with the title "trusted plan of the merge commit". It shows the plan output and
+   the SHA-256 of the plan file.
+2. Make sure that the plan does only the change of the pull request.
+3. If the plan is correct, reply `/approve <id>`. Use the id of the approval request.
+   The executor writes "apply started" and then the result.
+4. If the plan is not correct, reply `/deny <id>`.
+
+CAUTION: The approval is for one plan file and one apply only. If the apply fails, the executor does not try again.
+Make a new pull request with the correction.
+
+NOTE: The plan of a pull request before the merge (commit status `agentdev/trusted-plan`) is for the review only. You
+cannot approve it.
+
 ## Answer a question from an agent
 
 An agent asks a question when an issue is not clear. The agent does not guess. The instructions in `AGENTS.md` (from

@@ -665,6 +665,99 @@ filter `AGENTDEV_SECURITY_EVENT`.
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
 
+## Deterministic executors
+
+An executor applies a change that a person approved (#69). An AI agent designs the change with read-only
+credentials. The executor has the write credentials. No AI runs in the executor. The image and the commands come
+from the `Executor` object, never from the repository. Only cluster admins can write `Executor` objects.
+
+The flow for each pull request:
+
+1. The executor plans the head commit of the pull request. It uses the read-only credentials. It sets the commit
+   status `agentdev/trusted-plan` and writes the plan output in a comment.
+2. After the merge, the executor plans the merge commit again. It takes the commit from the protected branch only.
+   The operator calculates the SHA-256 of the plan file and writes an approval request on the pull request.
+3. A person with write access replies `/approve <id>`.
+4. The executor applies the plan file with the write credentials. Before the apply, the operator image checks that the
+   plan file has the approved SHA-256. Each approval is for one apply only.
+
+### Set up an executor
+
+Before you do this task, make sure that you have:
+
+- An own forge account for the executor, with write access to the repository. Do not use an agent account.
+- An image of the tool, with a digest (`name@sha256:...`).
+- The read-only credentials and the write credentials of the environment.
+
+1. Make the Secrets in the namespace `agentdev-executors`:
+
+   ```bash
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-forge --from-literal=FORGE_TOKEN=<token>
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-plan --from-env-file=plan.env
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-apply --from-env-file=apply.env
+   ```
+
+   On GKE, use Workload Identity instead of keys. Make two service accounts, `exec-tf-prod-plan` and
+   `exec-tf-prod-apply`, and set the `serviceAccountName` fields below.
+
+2. Apply the Executor object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Executor
+   metadata: {name: tf-prod}
+   spec:
+     environment: prod
+     repo: owner/platform
+     path: infra
+     image: hashicorp/terraform@sha256:<digest>
+     plan: {command: [terraform, plan, -input=false, -out=$(PLAN_FILE)]}
+     apply: {command: [terraform, apply, -input=false, $(PLAN_FILE)]}
+     planCredentials: {secretName: exec-tf-prod-plan}
+     applyCredentials: {secretName: exec-tf-prod-apply}
+     forgeSecret: exec-tf-prod-forge
+   EOF
+   ```
+
+3. In the forge, add the branch protection rule for the branch: require the status check `agentdev/trusted-plan`
+   and require that the branch is up to date.
+4. Add the forge account of the executor to `APPROVAL_DENY_ACCOUNTS` of the API. The executor writes tool output in
+   comments. This step makes sure that no comment of the executor can decide an approval.
+5. Show the executors: `kubectl -n agentdev-executors get executors`
+   The column PHASE shows `ready`.
+
+NOTE: With Ansible, put the executors in `executors:` of the instance file
+(`examples/deployment/gcp-gke/ansible/instance.yml.example`). The playbook makes the Secrets, the service accounts
+and the Executor objects.
+
+### Find the runs of an executor
+
+1. Run `kubectl -n agentdev-executors get executorruns`.
+   The output shows the stage (`pr`, `merge` or `apply`), the pull request, the commit and the phase.
+2. To read the output of a run, run `kubectl -n agentdev-executors logs job/<run name> -c tool`.
+
+### Stop an executor
+
+1. Run `kubectl -n agentdev-executors patch executor tf-prod --type merge -p '{"spec":{"paused":true}}'`.
+   The executor starts no new runs. A run that started continues to the end.
+
+### Reference: executors
+
+| Setting | Default | Where |
+|---|---|---|
+| `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `config.env`; Ansible `exec_ns` |
+| `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `config.env`; Ansible `executor_poll_seconds` |
+| `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `config.env`; Ansible `executor_retention_days` |
+| `spec.approvalHours` (time until an approval request expires) | 24 | `Executor` |
+
+- Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
+  `executor.apply` or `executor.refused`.
+- The executor plans only pull requests that change a file below `spec.path`. It plans only merges after the
+  `Executor` object was made, and not older than 24 hours.
+- The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
+- Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
+
 ## GitHub App (registration)
 
 On GitHub, the agents use one GitHub App (#2). The webhook URL and the redirect URL are part of the deployment. Thus,

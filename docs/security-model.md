@@ -478,6 +478,22 @@ rights applies it, only after a person approved both the code and the run. No AI
 credentials to infrastructure. Owner decisions on #69 (2026-10-31): the trusted plan is required; an apply needs
 the merge **and** an explicit `/approve`; one executor per environment.
 
+Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on a cluster. As built:
+
+- Executors, their runs, Jobs and `exec-*` Secrets live in their own namespace (`EXEC_NS`, default
+  `agentdev-executors`); the operator refuses to start if it equals the agents namespace.
+- The operator polls the forge (no webhook) with the executor's own forge account and creates `ExecutorRun`s:
+  `pr` (head of an open PR into the branch that changes `spec.path`), `merge` (merge commit, fetched from the
+  protected branch only) and `apply`.
+- MVP storage of the plan: a PersistentVolumeClaim per merge run instead of a bucket. The plan Job runs the tool as an
+  init container and then the operator image (`hash-plan`) prints the SHA-256 of `$(PLAN_FILE)`; the apply Job runs
+  `verify-plan` before the tool and mounts the volume read-only.
+- The apply gate is an `Approval` with `source: executor`, `tool: apply`, `job: pr-<N>` and the input "apply executor
+  ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
+- Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
+- Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
+  egress allow-list for executor Jobs (#65), deciding in the UI (#80), reopening the issue on a failed apply.
+
 ### Resources
 
 - `Executor` (`agentdev.dev/v1alpha1`): one per environment and tool, for example `terraform-prod`. It fixes the image

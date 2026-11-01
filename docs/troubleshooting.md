@@ -27,6 +27,16 @@
 | The agent log shows `AGENTDEV_SECURITY_EVENT` lines. | A guardrail stopped an action. The JSON gives the rule and the action. | 1. For `high`, read the issue or the review of the job and look for an injection attempt. 2. Also examine `medium` git-config and hook events after a Claude run. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
+## Executors
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The pull request shows no `agentdev/trusted-plan` status. | The pull request does not change a file below `spec.path`. Or the executor is paused or `invalid`. | 1. Run `kubectl -n agentdev-executors get executors`. 2. Read the condition `Ready` of the executor. |
+| The executor shows the phase `error`. | The forge token is not valid, or the forge cannot be reached. | 1. Read the message of the condition `Ready`. 2. Replace `FORGE_TOKEN` in `exec-<name>-forge`. |
+| The run shows `no plan hash from the helper container`. | The plan command did not write `$(PLAN_FILE)`. | 1. Correct `spec.plan.command`. |
+| The apply Job fails in the container `verify`. | The plan file is not the approved file. | Do not apply. Examine the namespace for changes, and make a new pull request. |
+| The run shows `approval does not match the merge plan`. | The approval request was changed or replaced. | This is a security event (`executor.refused`, high). Examine who can write approvals. |
+
 ## Interactive sessions
 
 | Symptom | Cause | Procedure |

@@ -7,6 +7,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
+  (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
+  with the executor's own account, plans every PR that changes `spec.path` (commit status `agentdev/trusted-plan`,
+  output as a comment), plans the merge commit again, asks for an `Approval` (#67, `source: executor`) bound to the
+  plan file SHA-256, and after `/approve <id>` runs the apply once with the write credentials. The image is pinned by
+  digest and the commands come from the Executor only; the operator image hashes and verifies the plan file. Every
+  run is a security event (`executor.plan`, `executor.apply`, `executor.refused`). Wired in `config.env`,
+  `12-operator.sh`, the operator manifest (namespace, Role, NetworkPolicy), Ansible (`executors:`, Secrets from
+  Secret Manager, Workload Identity service accounts) and the GKE example. Also installs the `Approval` CRD (#67).
+  Risks R80 to R83.
 - GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
   `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
   `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
