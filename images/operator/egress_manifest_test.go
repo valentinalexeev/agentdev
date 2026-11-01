@@ -174,6 +174,13 @@ func TestChatSessionUsesClaudeProxy(t *testing.T) {
 		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_TOKENS": "0", "CLAUDE_SECRET_SOURCES": "[]"}
 	docs = append(renderTmpl(t, "../../manifests/egress.yaml.tmpl", vals), renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals)...)
 	podLabels := labels.Set(job.Spec.Template.Labels)
+	// "agent" selects the agent Service (controller.go) and is the security attribution (security.go): not on a chat pod
+	if _, ok := podLabels["agent"]; ok {
+		t.Errorf("chat pod has the label agent=%q: it would match the Service and the security events of the agent", podLabels["agent"])
+	}
+	if podLabels["agentdev/chat-agent"] != "alice" {
+		t.Errorf("chat pod label agentdev/chat-agent = %q, want alice", podLabels["agentdev/chat-agent"])
+	}
 	found := map[string]bool{}
 	for _, d := range docs {
 		var p networkingv1.NetworkPolicy

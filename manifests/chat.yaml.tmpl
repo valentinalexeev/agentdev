@@ -3,6 +3,7 @@
 # Claude (#118): no claude-* Secret is mounted. Claude Code calls claude-proxy (ANTHROPIC_BASE_URL) with the proxy key
 # of CHAT_AGENT (Secret agent-<agent>-proxy), so budget and usage count for that agent. The pod has the label
 # app=agent-chat, which agent-egress selects (manifests/egress.yaml.tmpl): no direct path to api.anthropic.com, the rest through egress-proxy.
+# The agent is in the label agentdev/chat-agent, not "agent": that one selects the agent Service and is the security attribution.
 # The Job ends when the session goes idle (agent-chat-session) and is removed after ttlSecondsAfterFinished.
 apiVersion: batch/v1
 kind: Job
@@ -15,7 +16,7 @@ spec:
   activeDeadlineSeconds: 28800    # hard cap 8 h, even with someone attached
   ttlSecondsAfterFinished: 300
   template:
-    metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}", agent: "${CHAT_AGENT}"}}
+    metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}", agentdev/chat-agent: "${CHAT_AGENT}"}}   # not "agent": that label selects the agent Service and security attribution
     spec:
       restartPolicy: Never
       runtimeClassName: gvisor
