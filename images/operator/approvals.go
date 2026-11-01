@@ -45,6 +45,8 @@ type rawApproval struct {
 	Input       string `json:"input"`
 	ContentHash string `json:"contentHash"`
 	TimeoutSec  int    `json:"timeoutSeconds"`
+	RequesterID int64  `json:"requesterId"`
+	SecretHash  string `json:"secretHash"`
 }
 
 // ApprovalHash is the content hash the sidecar computes (images/forge/approvals.go, same fields and order).
@@ -81,7 +83,7 @@ func approvalFromLine(line string, pod *corev1.Pod, container, ns string) (*v1.A
 	if r.Forge == "" {
 		r.Forge = "gitea"
 	}
-	if !approvalIDRe.MatchString(r.ID) || !approvalHashRe.MatchString(r.ContentHash) || !approvalJobRe.MatchString(r.Job) ||
+	if !approvalIDRe.MatchString(r.ID) || !approvalHashRe.MatchString(r.ContentHash) || !approvalHashRe.MatchString(r.SecretHash) || r.RequesterID <= 0 || !approvalJobRe.MatchString(r.Job) ||
 		!approvalRepoRe.MatchString(r.Repo) || len(r.Repo) > 201 || (r.Source != "claude" && r.Source != "push") ||
 		(r.Forge != "gitea" && r.Forge != "github") || r.Tool == "" || len(r.Tool) > 128 || len(r.Input) > 4100 {
 		return nil, false
@@ -97,7 +99,7 @@ func approvalFromLine(line string, pod *corev1.Pod, container, ns string) (*v1.A
 		ObjectMeta: metav1.ObjectMeta{Name: agent + "-" + r.ID, Namespace: ns,
 			Labels: map[string]string{"agent": agent, "agentdev/job": r.Job, "agentdev/source": r.Source}},
 		Spec: v1.ApprovalSpec{ID: r.ID, Agent: agent, Repo: r.Repo, Forge: r.Forge, Job: r.Job, Source: r.Source,
-			Tool: r.Tool, Input: r.Input, ContentHash: r.ContentHash, Created: metav1.NewTime(t),
+			Tool: r.Tool, Input: r.Input, ContentHash: r.ContentHash, RequesterID: r.RequesterID, SecretHash: r.SecretHash, Created: metav1.NewTime(t),
 			Expires: metav1.NewTime(t.Add(timeout))},
 	}, true
 }

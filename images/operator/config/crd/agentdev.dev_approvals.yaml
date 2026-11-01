@@ -110,6 +110,19 @@ spec:
                   with write access to it may decide.'
                 maxLength: 201
                 type: string
+              requesterId:
+                description: |-
+                  Forge account id of the requesting agent, looked up by the sidecar with the agent's own token (GET /user). The
+                  API never accepts a decision from this account, whatever its login is (review of #107).
+                format: int64
+                minimum: 1
+                type: integer
+              secretHash:
+                description: |-
+                  SHA-256 (hex) of a per-request secret only the sidecar holds. The sidecar sends the secret when it reads the
+                  decision, so no other pod can read it (review of #107).
+                pattern: ^[a-f0-9]{64}$
+                type: string
               source:
                 description: |-
                   What asks: claude (a tool permission prompt), push (a push touching a protected path) or executor (an apply
@@ -133,6 +146,8 @@ spec:
             - input
             - job
             - repo
+            - requesterId
+            - secretHash
             - source
             - tool
             type: object

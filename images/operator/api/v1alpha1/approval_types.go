@@ -38,6 +38,14 @@ type ApprovalSpec struct {
 	// hash; the sidecar acts only on a decision with the hash it computed.
 	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
 	ContentHash string `json:"contentHash"`
+	// Forge account id of the requesting agent, looked up by the sidecar with the agent's own token (GET /user). The
+	// API never accepts a decision from this account, whatever its login is (review of #107).
+	// +kubebuilder:validation:Minimum=1
+	RequesterID int64 `json:"requesterId"`
+	// SHA-256 (hex) of a per-request secret only the sidecar holds. The sidecar sends the secret when it reads the
+	// decision, so no other pod can read it (review of #107).
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	SecretHash string `json:"secretHash"`
 	// When the sidecar asked (container runtime timestamp of the line).
 	Created metav1.Time `json:"created"`
 	// After this time the request expires (same effect as a denial).

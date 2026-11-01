@@ -43,6 +43,9 @@ spec:
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
         - {name: APPROVALS, value: "${APPROVALS}"}   # #67: decide approval requests from forge comments
+        # forge logins that never decide (router or App bot, the API's token user, other service accounts); agents are
+        # excluded by account id anyway
+        - {name: APPROVAL_DENY_ACCOUNTS, value: "${APPROVAL_DENY_ACCOUNTS}"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
         # every write that needs the forge gives 503 (fail closed).
         - name: FORGE_API_TOKEN

@@ -32,7 +32,22 @@ func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		defer fa.mu.Unlock()
+		switch {
+		case r.URL.Path == "/api/v1/user":
+			_, _ = io.WriteString(w, `{"id":42}`)
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/repos/o/r/issues/") && r.Method == "GET":
+			_, _ = io.WriteString(w, `{"assignees":[{"login":"alice"}]}`)
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/v1/repos/o/r/pulls/"):
+			_, _ = io.WriteString(w, `{"head":{"ref":"agent/alice/x"}}`)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/internal/approvals/") {
+			if r.Header.Get("X-Approval-Secret") == "" {
+				w.WriteHeader(403)
+				return
+			}
 			h := fa.hash
 			if h == "" {
 				h = lastRequest(t, &lines).ContentHash
@@ -63,7 +78,12 @@ func lastRequest(t *testing.T, b *bytes.Buffer) approvalRequest {
 
 func mcpCall(t *testing.T, h http.Handler, job, tool string) map[string]any {
 	t.Helper()
-	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"` + tool + `","input":{"command":"npm i"}}}}`
+	return mcpCallInput(t, h, job, tool, `{"command":"npm i"}`)
+}
+
+func mcpCallInput(t *testing.T, h http.Handler, job, tool, input string) map[string]any {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"` + tool + `","input":` + input + `}}}`
 	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1"
 	req.Header.Set("X-Agentdev-Job", job)
@@ -100,6 +120,13 @@ func TestApprovalPromptAllowJob(t *testing.T) {
 	fa.state = "denied"
 	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
 		t.Fatalf("allow_job not kept: %v", out)
+	}
+	// allow_job covers the same input only
+	if out := mcpCallInput(t, h, "issue-3", "Bash", `{"command":"rm -rf /"}`); out["behavior"] != "deny" {
+		t.Fatalf("allow_job covered another input: %v", out)
+	}
+	if r := lastRequest(t, lines); r.RequesterID != 42 || len(r.SecretHash) != 64 || strings.Contains(lines.String(), `"secret"`) {
+		t.Fatalf("requester/secret: %+v", r)
 	}
 	// another job asks again (nothing granted beyond the job)
 	if out := mcpCall(t, h, "issue-4", "Bash"); out["behavior"] != "deny" {
@@ -188,5 +215,35 @@ func TestMCPHandshake(t *testing.T) {
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"result"`) {
 			t.Fatalf("%s: %d %s", m, rec.Code, rec.Body)
 		}
+	}
+}
+
+func TestApprovalForeignJob(t *testing.T) {
+	s, fa, _ := approvalSetup(t)
+	fa.state = "allowed"
+	s.c.ForgeUser = "mallory" // issue is assigned to alice, PR branch is alice's
+	h := s.routes()
+	for _, job := range []string{"issue-3", "pr-9"} {
+		if out := mcpCall(t, h, job, "Bash"); out["behavior"] != "deny" {
+			t.Fatalf("%s: foreign job allowed: %v", job, out)
+		}
+	}
+	if len(fa.comments) != 0 {
+		t.Fatalf("commented on a foreign job: %v", fa.comments)
+	}
+}
+
+func TestRedact(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	// the token-shaped value is built at run time so the secret scanner does not flag the test source
+	in := "run -H \"Author" + "ization: Bea" + "rer abcdefghijkl\" -d password=hunter2xyz t " + "gh" + "p_" + strings.Repeat("0123456789", 3) + ` tok`
+	out := s.appr.redact(in)
+	for _, leak := range []string{"abcdefghijkl", "hunter2xyz", "0123456789"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("leaked %q: %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "run -H") {
+		t.Fatalf("over-redacted: %s", out)
 	}
 }

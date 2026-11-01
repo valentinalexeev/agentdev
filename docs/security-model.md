@@ -274,24 +274,39 @@ sequenceDiagram
   decided by, comment id, decided content hash) is written by agentdev-api only, through the `approvals/status`
   subresource. Agents have no RBAC on Approvals. Objects are deleted 90 days after creation
   (`APPROVAL_RETENTION_DAYS`); the audit log keeps the decisions.
-- **Decision rules as implemented.** 1: comments from any agent's forge account (by account id; a pass with an
-  unresolvable agent account decides nothing) or a bot account are ignored and audited. 2: the comment must quote the
+- **Decision rules as implemented.** 1: comments are ignored and audited when they come from the requesting agent's
+  own account (`spec.requesterId`, read by the sidecar with the agent's token from `GET /user`, so a login that
+  differs from the agent name does not matter), from any other agent's account (resolved by login = agent name; an
+  account that cannot be resolved is logged and skipped), from the API's own token account, from a login in
+  `APPROVAL_DENY_ACCOUNTS` (router or App bot, other service accounts), or from a bot account. 2: the comment must quote the
   id at the start of a line and be created after the request. 3: an edited comment is ignored and audited. 4: the
   status carries the content hash, and the sidecar acts only if it equals its own. 5: the API reads the comment from
   the forge and checks the commenter's permission (`write` or more) at decision time. 6: compare-and-set on
   `resourceVersion`; a lost race is audited. The sidecar refuses to post a comment that starts a line with a decision
   command (`approval-self-decision`, high).
-- **Scope.** `/approve` allows once. `/approve-job` allows the same tool (or the same commit for a push) until the job
-  ends; the grant is kept in the sidecar's memory and never outlives the pod.
-- **Fail closed.** API unreachable, no job, unknown answer, hash mismatch or timeout: denied. GitHub-forge requests
-  are not decided yet (they expire, #87).
+- **Scope.** `/approve` allows once. `/approve-job` allows the **same tool with the same input** (or the same commit
+  for a push) again until the job ends; any other input asks again. The grant is kept in the sidecar's memory and
+  never outlives the pod.
+- **Job binding.** The job comes from the agent container (`X-Agentdev-Job`), so the sidecar checks it on the forge
+  before it opens a request: an issue must be assigned to the agent, a PR must come from one of its branches.
+  Otherwise the request is refused (`approval-foreign-job`, high).
+- **Secrets in the request text.** The sidecar replaces the agent's forge token and common credential shapes (GitHub,
+  GitLab, OpenAI-style, Slack and AWS keys, private keys, `password=`/`token:`-style values) with `[redacted]`
+  before the text reaches the forge comment, the log line, the Approval object or the UI. The agent container holds
+  no forge credential (#64), so this guards against secrets Claude read from the repository or an issue; it is a
+  pattern filter, not a guarantee.
+- **Reading the decision.** Each request has a 32-byte secret only the sidecar holds; the Approval stores its SHA-256
+  (`spec.secretHash`). The internal endpoint answers only a caller that sends the secret, so another agent pod cannot
+  read the decision even if it learns the id.
+- **Fail closed.** API unreachable, no job, a job that is not the agent's, unknown answer, hash mismatch or timeout:
+  denied. GitHub-forge requests are not decided yet (they expire, #87).
 - **Audit.** Every decision (`approval-allowed`, `approval-denied`), expiry (`approval-expire`) and refused decision
   attempt (`approval-decision`, result `denied`) is an `AGENTDEV_AUDIT` line with the request id, repo, job, tool,
   content hash and comment id.
 - **API.** `GET /api/approvals?state=pending|decided|allowed|denied|expired|all&agent=&project=` and
   `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
   The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
-  sidecar with state, scope, decider and decided hash only.
+  sidecar that made the request (per-request secret, see above) with state, scope, decider and decided hash only.
 - **UI.** An **Approvals** tab with a pending count, Pending and History tabs, the request text shown as untrusted
   plain text.
 

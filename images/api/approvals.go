@@ -18,6 +18,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,19 +65,23 @@ type approval struct {
 	DecidedAt   time.Time `json:"decidedAt,omitzero"`
 	DecidedHash string    `json:"decidedHash,omitempty"`
 
-	rv string
+	rv          string
+	requesterID int64
+	secretHash  string
 }
 
 func fromApprovalObject(u *unstructured.Unstructured) approval {
 	str := func(f ...string) string { v, _, _ := unstructured.NestedString(u.Object, f...); return v }
 	tm := func(f ...string) time.Time { t, _ := time.Parse(time.RFC3339, str(f...)); return t }
 	cid, _, _ := unstructured.NestedInt64(u.Object, "status", "commentId")
+	rid, _, _ := unstructured.NestedInt64(u.Object, "spec", "requesterId")
 	a := approval{Name: u.GetName(), ID: str("spec", "id"), Agent: str("spec", "agent"), Repo: str("spec", "repo"),
 		Forge: str("spec", "forge"), Job: str("spec", "job"), Source: str("spec", "source"), Tool: str("spec", "tool"),
 		Input: str("spec", "input"), Untrusted: true, ContentHash: str("spec", "contentHash"), Created: tm("spec", "created"),
 		Expires: tm("spec", "expires"), State: str("status", "state"), Scope: str("status", "scope"),
 		DecidedBy: str("status", "decidedBy"), DecidedVia: str("status", "decidedVia"), CommentID: cid,
-		DecidedAt: tm("status", "decidedAt"), DecidedHash: str("status", "contentHash"), rv: u.GetResourceVersion()}
+		DecidedAt: tm("status", "decidedAt"), DecidedHash: str("status", "contentHash"), rv: u.GetResourceVersion(),
+		requesterID: rid, secretHash: str("spec", "secretHash")}
 	if a.State == "" {
 		a.State = "pending"
 	}
@@ -125,6 +132,7 @@ type forgeComment struct {
 type commentReader interface {
 	Comments(ctx context.Context, repo string, number int, since time.Time) ([]forgeComment, error)
 	UserID(ctx context.Context, login string) (int64, error)
+	Self(ctx context.Context) (int64, error) // the account of the API's own forge token
 }
 
 func (g *giteaPerms) get(ctx context.Context, path string, out any) error {
@@ -175,6 +183,16 @@ func (g *giteaPerms) Comments(ctx context.Context, repo string, number int, sinc
 	return out, nil
 }
 
+func (g *giteaPerms) Self(ctx context.Context) (int64, error) {
+	var u struct {
+		ID int64 `json:"id"`
+	}
+	if err := g.get(ctx, "/api/v1/user", &u); err != nil {
+		return 0, err
+	}
+	return u.ID, nil
+}
+
 func (g *giteaPerms) UserID(ctx context.Context, login string) (int64, error) {
 	var u struct {
 		ID int64 `json:"id"`
@@ -185,6 +203,11 @@ func (g *giteaPerms) UserID(ctx context.Context, login string) (int64, error) {
 	return u.ID, nil
 }
 
+var (
+	approvalIDRe = regexp.MustCompile(`^[a-f0-9]{16}$`)
+	secretRe     = regexp.MustCompile(`^[a-f0-9]{64}$`)
+)
+
 var decisionRe = regexp.MustCompile(`(?im)^\s*/(approve|approve-job|deny)\s+([a-f0-9]{16})\b`)
 
 // decider applies forge decisions to pending Approvals.
@@ -194,15 +217,18 @@ type decider struct {
 	forge  commentReader
 	perms  permChecker
 	now    func() time.Time
+	// platform forge accounts that never decide (APPROVAL_DENY_ACCOUNTS: router or App bot, the API's own token user,
+	// any other service account), matched by login, case-insensitive
+	denyLogins map[string]bool
 
 	mu       sync.Mutex
-	agentIDs map[string]int64 // agent forge login -> account id (rule 1)
-	seen     map[int64]bool   // comment ids already audited as refused
+	agentIDs map[string]int64    // agent forge login -> account id (rule 1)
+	seen     map[int64]time.Time // comment ids already audited as refused, with the request's expiry (pruned after it)
 }
 
 func newDecider(store approvalStore, agents agentLister, forge commentReader, perms permChecker) *decider {
 	return &decider{store: store, agents: agents, forge: forge, perms: perms, now: func() time.Time { return time.Now().UTC() },
-		agentIDs: map[string]int64{}, seen: map[int64]bool{}}
+		agentIDs: map[string]int64{}, seen: map[int64]time.Time{}, denyLogins: map[string]bool{}}
 }
 
 // run polls every interval until ctx ends.
@@ -217,8 +243,11 @@ func (d *decider) run(ctx context.Context, every time.Duration) {
 	}
 }
 
-// agentAccounts returns the forge account ids of every agent (by login = agent name). An agent whose id cannot be
-// resolved makes the pass fail closed: no decision is taken while we cannot tell agents from people.
+// agentAccounts returns the forge account ids of every agent. The forge login of an agent is its name: the operator
+// renders FORGE_USER=<name> and the forge token Secret agent-<name> belongs to that account. The requesting agent is
+// also excluded by its own account id (spec.requesterId, from GET /user with its token), so a login that differs from
+// the name cannot approve its own request. An account that cannot be resolved is logged and skipped: the requester
+// check still holds, and the other agents are excluded when the forge answers again.
 func (d *decider) agentAccounts(ctx context.Context) (map[int64]string, error) {
 	list, err := d.agents.List(ctx)
 	if err != nil {
@@ -231,13 +260,18 @@ func (d *decider) agentAccounts(ctx context.Context) (map[int64]string, error) {
 		d.mu.Unlock()
 		if !ok {
 			if id, err = d.forge.UserID(ctx, a.Name); err != nil {
-				return nil, fmt.Errorf("forge account of agent %s: %w", a.Name, err)
+				log.Printf("approvals: forge account of agent %s: %v (skipped in this pass)", a.Name, err)
+				continue
 			}
 			d.mu.Lock()
 			d.agentIDs[a.Name] = id
 			d.mu.Unlock()
 		}
 		out[id] = a.Name
+	}
+	// the API's own token account never decides either (it can read every repository)
+	if self, err := d.forge.Self(ctx); err == nil && self > 0 {
+		out[self] = "agentdev-api"
 	}
 	return out, nil
 }
@@ -261,6 +295,7 @@ func (d *decider) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.pruneSeen()
 	for _, u := range pending {
 		if err := d.decide(ctx, u, agentIDs); err != nil {
 			log.Printf("approval %s: %v", u.GetName(), err)
@@ -269,10 +304,22 @@ func (d *decider) pass(ctx context.Context) error {
 	return nil
 }
 
+// pruneSeen forgets refused comments of requests that expired more than a day ago (they are never read again).
+func (d *decider) pruneSeen() {
+	cut := d.now().Add(-24 * time.Hour)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id, exp := range d.seen {
+		if exp.Before(cut) {
+			delete(d.seen, id)
+		}
+	}
+}
+
 func (d *decider) refuse(a approval, c forgeComment, reason string) {
 	d.mu.Lock()
-	dup := d.seen[c.ID]
-	d.seen[c.ID] = true
+	_, dup := d.seen[c.ID]
+	d.seen[c.ID] = a.Expires
 	d.mu.Unlock()
 	if dup {
 		return
@@ -322,7 +369,8 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 			continue
 		}
 		switch {
-		case agentIDs[c.UserID] != "" || c.Bot:
+		case c.UserID == a.requesterID || a.requesterID <= 0 || agentIDs[c.UserID] != "" || c.Bot ||
+			d.denyLogins[strings.ToLower(c.Login)]:
 			d.refuse(a, c, "decision by an agent or bot account is ignored")
 			continue
 		case c.Created.Before(a.Created.Truncate(time.Second)): // forge times have second precision
@@ -386,12 +434,13 @@ func (d *decider) write(ctx context.Context, u *unstructured.Unstructured, a app
 // ---- HTTP ----
 
 // internalDecision: GET /internal/approvals/{agent}/{id}, for the forge sidecar. Answers state, scope, decider and the
-// decided content hash, nothing else. No auth: the listener is reachable from agent pods only (NetworkPolicy), and the
-// answer is no secret; a decision is useful only to the sidecar holding the request.
+// decided content hash, nothing else. The caller must send X-Approval-Secret, the per-request secret whose SHA-256 is
+// spec.secretHash: only the sidecar that made the request has it. The listener is reachable from agent pods only
+// (NetworkPolicy). Before the operator has created the object, any caller gets "pending" (nothing to learn).
 func internalDecision(store approvalStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agent, id := r.PathValue("agent"), r.PathValue("id")
-		if !agentNameRe.MatchString(agent) || !regexp.MustCompile(`^[a-f0-9]{16}$`).MatchString(id) {
+		if !agentNameRe.MatchString(agent) || !approvalIDRe.MatchString(id) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 			return
 		}
@@ -405,7 +454,11 @@ func internalDecision(store approvalStore) http.Handler {
 			return
 		}
 		a := fromApprovalObject(u)
-		if a.Agent != agent {
+		// bound to the caller: only the sidecar that made the request knows the secret behind spec.secretHash
+		sec := r.Header.Get("X-Approval-Secret")
+		sum := sha256.Sum256([]byte(sec))
+		if a.Agent != agent || !secretRe.MatchString(a.secretHash) || len(sec) != 64 ||
+			subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(a.secretHash)) != 1 {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}

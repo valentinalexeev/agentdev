@@ -589,6 +589,11 @@ the API cannot make a decision, and each request expires.
 
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).
 
+NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
+example the account of the router or of a GitHub App), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, each request expires (issue #87).
+
 NOTE: Approval objects stay in the cluster for 90 days (`APPROVAL_RETENTION_DAYS`). Use
 `kubectl -n coding-agents get approvals` to see them.
 

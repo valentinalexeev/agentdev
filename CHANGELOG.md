@@ -25,7 +25,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   protected paths become requests: the sidecar comments "waiting for approval `<id>`", a person with write access
   answers `/approve <id>`, `/approve-job <id>` or `/deny <id>`. New `Approval` CRD (short name `apv`), created by the
   operator from the sidecar's `AGENTDEV_APPROVAL_REQUEST` line; status written by agentdev-api with a
-  compare-and-set. Decision rules: agent and bot comments ignored, edited comments ignored, live write-access check,
+  compare-and-set. Decision rules: comments from the requesting agent (by forge account id), other agents, the API's token user,
+  `APPROVAL_DENY_ACCOUNTS` and bots ignored; job checked to be the agent's own; `/approve-job` covers the same input
+  only; request text redacted; decisions readable only by the requesting sidecar (per-request secret); edited comments ignored, live write-access check,
   content hash, first decision wins, timeout (30 min) = denied. Every decision is audited. Read-only
   `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
   UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,

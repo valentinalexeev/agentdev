@@ -47,6 +47,10 @@ type approvalRequest struct {
 	Input       string `json:"input"`
 	ContentHash string `json:"contentHash"`
 	TimeoutSec  int    `json:"timeoutSeconds"`
+	RequesterID int64  `json:"requesterId"` // the agent's forge account id (GET /user with its own token)
+	SecretHash  string `json:"secretHash"`  // sha256 of secret; only the sidecar knows secret
+
+	secret string // sent when reading the decision (X-Approval-Secret); never logged
 }
 
 // decision is the API's internal answer (GET {APPROVALS_URL}/internal/approvals/{agent}/{id}).
@@ -74,9 +78,10 @@ type approvals struct {
 	poll     time.Duration
 	apiURL   string // agentdev-api internal listener, e.g. http://agentdev-api-internal.agentdev.svc:8081
 	mu       sync.Mutex
-	jobTools map[string]bool             // job + "\x00" + tool: allowed for the rest of the job (allow_job)
+	jobTools map[string]bool             // job + tool + exact input: allowed again in this job (allow_job)
 	pushes   map[string]*approvalRequest // job + tip + paths: the open request of a held push
 	now      func() time.Time
+	selfID   int64 // the agent's forge account id, looked up once
 }
 
 func newApprovals(s *server, apiURL string, timeout time.Duration) *approvals {
@@ -86,6 +91,25 @@ func newApprovals(s *server, apiURL string, timeout time.Duration) *approvals {
 	}
 	return &approvals{s: s, apiURL: strings.TrimRight(apiURL, "/"), timeout: timeout, pushHold: hold, poll: 10 * time.Second,
 		jobTools: map[string]bool{}, pushes: map[string]*approvalRequest{}, now: time.Now}
+}
+
+// secretRe matches common credential shapes; redact replaces them before the request text leaves the sidecar (forge
+// comment, log line, Approval object, UI). The agent container holds no forge, wake or register token (#64), so this
+// is defence in depth against a secret Claude read from the repository or an issue (GHAS review of #107).
+var secretRe = regexp.MustCompile(`(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|` +
+	`sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|` +
+	`((?:password|passwd|secret|token|api[_-]?key|authorization)["']?\s*[:=]\s*["']?(?:bearer\s+|token\s+)?)[^\s"',}]{6,})`)
+
+func (a *approvals) redact(s string) string {
+	if t := a.s.c.Token; len(t) >= 8 {
+		s = strings.ReplaceAll(s, t, "[redacted]")
+	}
+	return secretRe.ReplaceAllStringFunc(s, func(m string) string {
+		if sm := secretRe.FindStringSubmatch(m); sm[2] != "" {
+			return sm[2] + "[redacted]"
+		}
+		return "[redacted]"
+	})
 }
 
 func clipInput(s string) string {
@@ -100,12 +124,27 @@ func (a *approvals) open(job, source, tool, input string) (*approvalRequest, err
 	if !jobRe.MatchString(job) {
 		return nil, errors.New("no job: an approval needs the issue or PR the agent works on")
 	}
+	// the job comes from the agent container (X-Agentdev-Job): check on the forge that it is this agent's work
+	if err := a.ownJob(job); err != nil {
+		emitEvent(a.s.c.AgentName, "", "approval-foreign-job", "high", fmt.Sprintf("approval for %s: %v", job, err))
+		return nil, err
+	}
+	self, err := a.requester()
+	if err != nil {
+		return nil, err
+	}
 	var rnd [8]byte
+	var sec [32]byte
 	if _, err := rand.Read(rnd[:]); err != nil {
 		return nil, err
 	}
+	if _, err := rand.Read(sec[:]); err != nil {
+		return nil, err
+	}
+	sh := sha256.Sum256([]byte(hex.EncodeToString(sec[:])))
 	r := &approvalRequest{ID: hex.EncodeToString(rnd[:]), Repo: a.s.c.Repos[0], Forge: a.s.c.ForgeKind, Job: job,
-		Source: source, Tool: clip(tool, 128), Input: clipInput(input), TimeoutSec: int(a.timeout.Seconds())}
+		Source: source, Tool: clip(tool, 128), Input: clipInput(a.redact(input)), TimeoutSec: int(a.timeout.Seconds()),
+		RequesterID: self, SecretHash: hex.EncodeToString(sh[:]), secret: hex.EncodeToString(sec[:])}
 	r.ContentHash = approvalHash(r.ID, a.s.c.AgentName, r.Repo, r.Job, r.Source, r.Tool, r.Input)
 	b, _ := json.Marshal(r)
 	eventMu.Lock()
@@ -122,6 +161,80 @@ func clip(s string, n int) string {
 	return s
 }
 
+// forgeGet reads a forge API path with the agent's token into out.
+func (a *approvals) forgeGet(path string, out any) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.s.c.ForgeURL+"/api/v1"+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+a.s.c.Token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := a.s.client.Do(req)
+	if err != nil {
+		return errors.New("forge unreachable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("forge: HTTP %d for %s", resp.StatusCode, path)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+}
+
+// requester is the agent's forge account id, so the API can refuse decisions from it whatever its login is.
+func (a *approvals) requester() (int64, error) {
+	a.mu.Lock()
+	id := a.selfID
+	a.mu.Unlock()
+	if id > 0 {
+		return id, nil
+	}
+	var u struct {
+		ID int64 `json:"id"`
+	}
+	if err := a.forgeGet("/user", &u); err != nil || u.ID <= 0 {
+		return 0, fmt.Errorf("cannot read the agent's forge account: %v", err)
+	}
+	a.mu.Lock()
+	a.selfID = u.ID
+	a.mu.Unlock()
+	return u.ID, nil
+}
+
+// ownJob checks that job is work of this agent: an issue assigned to it, or a PR from its own branch.
+func (a *approvals) ownJob(job string) error {
+	kind, num, _ := strings.Cut(job, "-")
+	if kind == "issue" {
+		var is struct {
+			Assignees []struct {
+				Login string `json:"login"`
+			} `json:"assignees"`
+		}
+		if err := a.forgeGet(fmt.Sprintf("/repos/%s/issues/%s", a.s.c.Repos[0], num), &is); err != nil {
+			return err
+		}
+		for _, u := range is.Assignees {
+			if strings.EqualFold(u.Login, a.s.c.ForgeUser) {
+				return nil
+			}
+		}
+		return fmt.Errorf("issue %s is not assigned to %s", num, a.s.c.ForgeUser)
+	}
+	var pr struct {
+		Head struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err := a.forgeGet(fmt.Sprintf("/repos/%s/pulls/%s", a.s.c.Repos[0], num), &pr); err != nil {
+		return err
+	}
+	if checkBranch(a.s.c.ForgeUser, pr.Head.Ref) != nil {
+		return fmt.Errorf("PR %s is not from a branch of %s", num, a.s.c.ForgeUser)
+	}
+	return nil
+}
+
 // comment posts "waiting for approval" on the job's issue or PR (Gitea serves PR comments under /issues too). The
 // request text is quoted in a code block; a failed comment does not stop the request (the UI still shows it).
 func (a *approvals) comment(r *approvalRequest) {
@@ -132,7 +245,8 @@ func (a *approvals) comment(r *approvalRequest) {
 	}
 	body := fmt.Sprintf("🤖 agent `%s`: **waiting for approval** `%s` (%s `%s`)\n\n%s\n%s\n%s\n\n"+
 		"A person with write access to this repository can answer with one of these comments:\n"+
-		"- `/approve %s`: allow once\n- `/approve-job %s`: allow for this job\n- `/deny %s`: deny\n\n"+
+		"- `/approve %s`: allow once\n- `/approve-job %s`: allow exactly this request again until the job ends "+
+		"(the same tool with the same input; any other input asks again)\n- `/deny %s`: deny\n\n"+
 		"No answer in %d minutes: denied. The text above comes from the agent and is not checked.",
 		a.s.c.AgentName, r.ID, r.Source, r.Tool, fence, r.Input, fence, r.ID, r.ID, r.ID, r.TimeoutSec/60)
 	b, _ := json.Marshal(map[string]string{"body": body})
@@ -159,6 +273,7 @@ func (a *approvals) check(ctx context.Context, r *approvalRequest) decision {
 	if err != nil {
 		return decision{State: "pending"}
 	}
+	req.Header.Set("X-Approval-Secret", r.secret)
 	resp, err := a.s.client.Do(req)
 	if err != nil {
 		return decision{State: "pending"}
@@ -281,7 +396,8 @@ func (a *approvals) prompt(ctx context.Context, job, tool string, input json.Raw
 	if tool == "" {
 		return deny("no tool name")
 	}
-	key := job + "\x00" + tool
+	// allow_job covers the same tool with the same input only (review of #107): what the person read
+	key := job + "\x00" + tool + "\x00" + clipInput(a.redact(string(input)))
 	a.mu.Lock()
 	ok := a.jobTools[key]
 	a.mu.Unlock()

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +27,7 @@ func approvalObj(agent, id, repo string, created time.Time) *unstructured.Unstru
 		"metadata": map[string]any{"name": agent + "-" + id, "namespace": "coding-agents"},
 		"spec": map[string]any{"id": id, "agent": agent, "repo": repo, "forge": "gitea", "job": "issue-3", "source": "claude",
 			"tool": "Bash", "input": `{"command":"npm i"}`, "contentHash": strings.Repeat("ab", 32),
+			"requesterId": int64(99), "secretHash": secretHashOf(testSecret),
 			"created": created.Format(time.RFC3339), "expires": created.Add(30 * time.Minute).Format(time.RFC3339)},
 	}}
 }
@@ -38,6 +41,8 @@ type fakeComments struct {
 func (f *fakeComments) Comments(context.Context, string, int, time.Time) ([]forgeComment, error) {
 	return f.list, f.err
 }
+func (f *fakeComments) Self(context.Context) (int64, error) { return 15, nil }
+
 func (f *fakeComments) UserID(_ context.Context, login string) (int64, error) {
 	if id, ok := f.ids[login]; ok {
 		return id, nil
@@ -75,6 +80,10 @@ func status(t *testing.T, k *kubeAgents, name string) approval {
 
 const aid = "0123456789abcdef"
 
+var testSecret = strings.Repeat("5", 64)
+
+func secretHashOf(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+
 func TestDeciderRules(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -86,7 +95,11 @@ func TestDeciderRules(t *testing.T) {
 		{"write user approves once", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "allowed", "once", false},
 		{"approve for the job", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "ok\n/approve-job " + aid, Created: t0.Add(time.Minute)}, "allowed", "job", false},
 		{"deny", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/deny " + aid, Created: t0.Add(time.Minute)}, "denied", "", false},
-		{"agent account", forgeComment{ID: 1, UserID: 99, Login: "wendy2", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
+		{"agent account", forgeComment{ID: 1, UserID: 55, Login: "wendy2", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
+		{"requester with another login", forgeComment{ID: 1, UserID: 99, Login: "carol-bot", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
+		{"other agent", forgeComment{ID: 1, UserID: 77, Login: "dave", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
+		{"platform account", forgeComment{ID: 1, UserID: 14, Login: "Router-Bot", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
+		{"API token account", forgeComment{ID: 1, UserID: 15, Login: "svc", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
 		{"bot account", forgeComment{ID: 1, UserID: 11, Login: "wendy", Bot: true, Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
 		{"read only", forgeComment{ID: 1, UserID: 12, Login: "rita", Body: "/approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", true},
 		{"older than request", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(-time.Minute)}, "pending", "", true},
@@ -97,8 +110,11 @@ func TestDeciderRules(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			k, buf := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
-			fc := &fakeComments{list: []forgeComment{c.c}, ids: map[string]int64{"carol": 99}}
-			d := newDecider(k, agentsFixed{{Name: "carol"}}, fc, permMap{"wendy": permWrite, "rita": permRead})
+			// carol's forge login differs from her name: her id is only known from spec.requesterId
+			fc := &fakeComments{list: []forgeComment{c.c}, ids: map[string]int64{"carol": 55, "dave": 77}}
+			d := newDecider(k, agentsFixed{{Name: "carol"}, {Name: "dave"}}, fc,
+				permMap{"wendy": permWrite, "rita": permRead, "carol-bot": permWrite, "dave": permWrite, "Router-Bot": permWrite, "svc": permAdmin})
+			d.denyLogins["router-bot"] = true
 			d.now = func() time.Time { return t0.Add(5 * time.Minute) }
 			if err := d.pass(context.Background()); err != nil {
 				t.Fatal(err)
@@ -155,14 +171,21 @@ func TestDeciderFirstWinsAndExpiry(t *testing.T) {
 func TestDeciderFailsClosed(t *testing.T) {
 	k, _ := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
 	c := forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute)}
-	// agent account id cannot be resolved: no decision
-	d := newDecider(k, agentsFixed{{Name: "carol"}}, &fakeComments{list: []forgeComment{c}}, permMap{"wendy": permWrite})
+	// an agent account that cannot be resolved is skipped; the requester is still refused by its id
+	self := forgeComment{ID: 2, UserID: 99, Login: "carol", Body: "/approve " + aid, Created: t0.Add(30 * time.Second)}
+	d := newDecider(k, agentsFixed{{Name: "carol"}, {Name: "ghost"}}, &fakeComments{list: []forgeComment{self, c}}, permMap{"wendy": permWrite, "carol": permWrite})
 	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
-	if err := d.pass(context.Background()); err == nil {
-		t.Fatal("want error")
+	if err := d.pass(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if a := status(t, k, "carol-"+aid); a.State != "pending" {
-		t.Fatalf("decided without knowing agent accounts: %+v", a)
+	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.DecidedBy != "wendy" {
+		t.Fatalf("want wendy's decision, not the requester's: %+v", a)
+	}
+	// seen is pruned after the request expired
+	d.now = func() time.Time { return t0.Add(48 * time.Hour) }
+	d.pruneSeen()
+	if len(d.seen) != 0 {
+		t.Fatalf("seen not pruned: %v", d.seen)
 	}
 }
 
@@ -190,9 +213,12 @@ func TestInternalDecision(t *testing.T) {
 	h := internalDecision(k)
 	mux := http.NewServeMux()
 	mux.Handle("GET /internal/approvals/{agent}/{id}", h)
+	secret := testSecret
 	get := func(p string) (int, map[string]string) {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		req := httptest.NewRequest("GET", p, nil)
+		req.Header.Set("X-Approval-Secret", secret)
+		mux.ServeHTTP(rec, req)
 		var m map[string]string
 		_ = json.Unmarshal(rec.Body.Bytes(), &m)
 		return rec.Code, m
@@ -202,6 +228,10 @@ func TestInternalDecision(t *testing.T) {
 	}
 	if _, m := get("/internal/approvals/carol/fedcba9876543210"); m["state"] != "pending" {
 		t.Fatalf("unknown: %v", m)
+	}
+	secret = strings.Repeat("6", 64) // another pod without the request's secret
+	if code, m := get("/internal/approvals/carol/" + aid); code != 404 || m["state"] != "" {
+		t.Fatalf("wrong secret: %d %v", code, m)
 	}
 	if code, _ := get("/internal/approvals/carol/..%2f"); code != 400 {
 		t.Fatalf("bad id: %d", code)

@@ -147,7 +147,8 @@ prompt injection from the issue.
 1. Read the comment "waiting for approval" on the issue or the pull request.
 2. Write a new comment with one of these lines:
    - `/approve <id>`: the agent can do this action one time.
-   - `/approve-job <id>`: the agent can do this action until the job ends.
+   - `/approve-job <id>`: the agent can do this same action again until the job ends. The tool and the request
+     text must be the same. A different request text makes a new approval request.
    - `/deny <id>`: the agent cannot do this action.
    The agent continues, usually in less than one minute.
 
@@ -157,6 +158,12 @@ has no effect.
 NOTE: Do not edit the comment with the decision. The system ignores an edited comment. Write a new comment.
 
 NOTE: If nobody answers in 30 minutes, the system denies the request.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, each request expires and the agent
+cannot do the action (issue #87).
+
+NOTE: The system removes known types of passwords and tokens from the request text. Do not trust that it removes
+all secrets.
 
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
 requests that have no decision. You cannot make a decision in the web UI at this time.
