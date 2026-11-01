@@ -27,7 +27,7 @@ The platform NetworkPolicies are enforced because the Terraform cluster uses Dat
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`
 (must match the Terraform `services` range, `roles/platform/defaults/main.yml`).
 On a first `--check` run the platform secrets do not exist yet, so the diff shows empty passwords; the real run
-creates them first. Other roles that need a platform password (for example the API, #95) read `platform-<key>`
+creates them first. Other roles that need a platform password (for example the API database login, once the API is deployed on GKE) read `platform-<key>`
 from Secret Manager and run after `include_role: platform`.
 
 ## Run
