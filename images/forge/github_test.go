@@ -77,7 +77,7 @@ func testKey(t *testing.T) (*rsa.PrivateKey, string) {
 
 func ghConfig(t *testing.T, api string) (*Config, *rsa.PrivateKey) {
 	k, p := testKey(t)
-	t.Setenv("GITHUB_API_URL", api)
+	t.Setenv("FORGE_API_URL", api)
 	return &Config{ForgeURL: "https://github.com", ForgeUser: "alice", AgentName: "alice", ForgeKind: "github",
 		Repos: []string{"octo-org/repo"}, GitHubAppID: "1012345", GitHubAppKey: p}, k
 }
@@ -98,6 +98,8 @@ func newTestGitHub(t *testing.T) (*githubDriver, *rsa.PrivateKey, func() []ghCal
 
 func TestGitHubDriverConfigValidation(t *testing.T) {
 	_, p := testKey(t)
+	t.Setenv("GITHUB_API_URL", "https://api.github.com") // as in GitHub Actions: must not matter
+	t.Setenv("FORGE_API_URL", "")
 	base := func() *Config {
 		return &Config{ForgeURL: "https://github.com", ForgeUser: "alice", AgentName: "alice", ForgeKind: "github",
 			Repos: []string{"octo-org/repo"}, GitHubAppID: "1012345", GitHubAppKey: p}
@@ -116,6 +118,8 @@ func TestGitHubDriverConfigValidation(t *testing.T) {
 		"two owners":   func(c *Config) { c.Repos = []string{"a/x", "b/y"} },
 		"repo owner":   func(c *Config) { c.Repos = []string{"-bad/x"} },
 		"forge url":    func(c *Config) { c.ForgeURL = "::" },
+		"http forge":   func(c *Config) { c.ForgeURL = "http://github.com" },
+		"forge creds":  func(c *Config) { c.ForgeURL = "https://x:y@github.com" },
 		"unknown kind": func(c *Config) { c.ForgeKind = "gitlab" },
 	}
 	for name, mut := range bad {
@@ -125,11 +129,11 @@ func TestGitHubDriverConfigValidation(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	t.Setenv("GITHUB_API_URL", "https://user:pw@evil.example")
+	t.Setenv("FORGE_API_URL", "https://user:pw@evil.example")
 	if _, err := newGitHubDriver(base()); err == nil {
 		t.Error("API URL with credentials accepted")
 	}
-	t.Setenv("GITHUB_API_URL", "")
+	t.Setenv("FORGE_API_URL", "")
 	if d, _ := newGitHubDriver(base()); d.api != "https://api.github.com" {
 		t.Errorf("github.com api: %s", d.api)
 	}

@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// githubDriver: GitHub (github.com, or GHES via GITHUB_API_URL) through one GitHub App (#2). All agents act as the
+// githubDriver: GitHub (github.com, or GHES; FORGE_API_URL overrides the API base) through one GitHub App (#2). All agents act as the
 // App's installation; the App's private key and the installation tokens minted from it exist only in this process.
 //
 //   - App JWT (RS256, 9 min) -> POST /app/installations/{id}/access_tokens, narrowed to the agent's repos and to the
@@ -60,16 +60,17 @@ var (
 )
 
 func githubAPIBase(forgeURL string) (string, error) {
-	if v := strings.TrimRight(os.Getenv("GITHUB_API_URL"), "/"); v != "" {
-		u, err := url.Parse(v)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
-			return "", fmt.Errorf("GITHUB_API_URL %q is not a plain URL", v)
+	u, err := url.Parse(forgeURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" {
+		return "", fmt.Errorf("FORGE_URL %q: a plain https:// URL", forgeURL)
+	}
+	// FORGE_API_URL, not GITHUB_API_URL: GitHub Actions and other tools set that name for their own use
+	if v := strings.TrimRight(os.Getenv("FORGE_API_URL"), "/"); v != "" {
+		a, err := url.Parse(v)
+		if err != nil || (a.Scheme != "https" && a.Scheme != "http") || a.Host == "" || a.User != nil || a.RawQuery != "" {
+			return "", fmt.Errorf("FORGE_API_URL %q is not a plain URL", v)
 		}
 		return v, nil
-	}
-	u, err := url.Parse(forgeURL)
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("bad FORGE_URL %q", forgeURL)
 	}
 	if strings.EqualFold(u.Host, "github.com") {
 		return "https://api.github.com", nil
