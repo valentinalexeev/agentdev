@@ -1,0 +1,1 @@
+{"token":"ghs_TESTTOKEN0000000000000000000000000000","expires_at":"2026-11-01T12:00:00Z","permissions":{"checks":"read","contents":"write","issues":"write","metadata":"read","pull_requests":"write","statuses":"read"},"repository_selection":"selected","repositories":[{"id":700001,"name":"repo","full_name":"octo-org/repo","private":true}]}
