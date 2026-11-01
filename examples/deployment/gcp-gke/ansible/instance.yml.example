@@ -32,6 +32,9 @@ github_app:
 #     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
 #     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
 #     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
+#     # hosts this executor may reach through the executor egress proxy (#135), besides executor_egress_hosts and
+#     # github.com; everything else is refused and recorded as a security event
+#     egress_hosts: [oauth2.googleapis.com, sts.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com]
 # Management API (agentdev #104): deployed with ingress.auth_host (authentik is the issuer, #114) or an explicit
 # api.oidc_issuer (another OIDC provider; then set authentik.enabled: false).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).

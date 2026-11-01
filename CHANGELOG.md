@@ -7,6 +7,23 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Security
+- Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
+  their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
+  in-cluster forge and the GKE metadata server for Workload Identity). The proxy (`executor-egress-proxy`, Squid,
+  same image as the agents' proxy) allows each executor only `EXECUTOR_EGRESS_HOSTS` (default
+  `registry.terraform.io releases.hashicorp.com`), its forge's git host and the new field `spec.egressHosts`
+  (Ansible `executors[].egress_hosts`). The operator generates a proxy credential per executor and the Squid rules in
+  Secret `executor-egress-proxy`; the proxy reloads them without a restart. On GKE an FQDNNetworkPolicy limits the
+  proxy to the hosts of all executors; on kind `executor-egress-proxy-web` allows 80/443. Each refused request is a
+  SecurityEvent of the executor (source `egress`, rule `egress-host`). Same templates for kind (`./run.sh 12`) and
+  GKE (`deploy.yml`). Operator RBAC in `EXEC_NS`: create Secrets, get/update `executor-egress-proxy`.
+  Refusals are aggregated: one event per executor run, host and 10-minute window, at most `SECURITY_RATE_BURST`
+  (default 20) hosts per run and window, then one rate-limited event; the rest are counted as dropped.
+  **BREAKING:** existing executors that use cloud APIs stop working (their plan fails with refused hosts) until they
+  declare those hosts. To upgrade: before you roll out this release, add the hosts to each such executor, Ansible
+  `executors[].egress_hosts` (or `spec.egressHosts` on the Executor), for example `oauth2.googleapis.com`,
+  `storage.googleapis.com`, then run the playbook (GKE) or `./run.sh 12` (kind). Docs: admin.md
+  ("Add a host for an executor"), security-model.md phase 5, security.md R25, R81, R97.
 - Interactive sessions (#118, follow-up of #66, R11): `scripts/agent-chat.sh` no longer mounts a Claude Secret
   (`CLAUDE_SECRET`, default `claude-shared`) in the session pod. The session calls `claude-proxy`
   (`ANTHROPIC_BASE_URL`) with the proxy key of one agent of the project (`CHAT_AGENT`, default the first agent in the

@@ -49,6 +49,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml (ex
 - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
 - {apiGroups: [""], resources: [pods/log], verbs: [get]}
 - {apiGroups: [""], resources: [secrets], verbs: [get]}   # exec-<name>-forge only by name (no list or watch)
+# executor egress (#135): the operator writes the per-executor proxy credentials and Squid rules
+- {apiGroups: [""], resources: [secrets], verbs: [create]}   # create cannot be narrowed by name
+- {apiGroups: [""], resources: [secrets], resourceNames: [executor-egress-proxy], verbs: [get, update]}
 - {apiGroups: [""], resources: [events], verbs: [create, patch]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -57,7 +60,7 @@ metadata: {name: agentdev-operator, namespace: ${EXEC_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
 ---
-# executor Jobs take no inbound traffic; outbound stays open (the forge, the cloud APIs and registries they change)
+# executor Jobs take no inbound traffic; outbound: manifests/executor-egress.yaml.tmpl (default deny plus proxy, #135)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: executors-no-ingress, namespace: ${EXEC_NS}}
@@ -108,6 +111,9 @@ spec:
         - {name: EXECUTOR_POLL_SECONDS, value: "${EXECUTOR_POLL_SECONDS}"}
         - {name: EXECUTOR_RETENTION_DAYS, value: "${EXECUTOR_RETENTION_DAYS}"}
         - {name: EXECUTOR_APPLY_START_MINUTES, value: "${EXECUTOR_APPLY_START_MINUTES}"}
+        # executor egress (#135): Jobs go out only through this proxy, to these hosts plus each spec.egressHosts
+        - {name: EXECUTOR_EGRESS_PROXY, value: "http://executor-egress-proxy.${EXEC_NS}.svc.cluster.local:3128"}
+        - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

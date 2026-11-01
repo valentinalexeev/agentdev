@@ -1,0 +1,11 @@
+# kind only (#135): the executor egress proxy may open 80/443 to any address; Squid's per-executor allow-list
+# decides. GKE uses an FQDNNetworkPolicy instead (infra/ansible/deploy.yml), which also limits the proxy at the
+# network level to the hosts of all Executors.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: executor-egress-proxy-web, namespace: ${EXEC_NS}}
+spec:
+  podSelector: {matchLabels: {app: executor-egress-proxy}}
+  policyTypes: [Egress]
+  egress:
+  - ports: [{port: 443, protocol: TCP}, {port: 80, protocol: TCP}]

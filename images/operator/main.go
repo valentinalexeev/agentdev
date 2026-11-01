@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -129,7 +130,12 @@ func main() {
 				Lookback:   time.Duration(envInt("EXECUTOR_LOOKBACK_HOURS", 24)) * time.Hour,
 				Retention:  time.Duration(envInt("EXECUTOR_RETENTION_DAYS", 30)) * 24 * time.Hour,
 				Storage:    env("EXECUTOR_PLAN_STORAGE", "1Gi"),
-				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute}}
+				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute,
+				// executor egress (#135): proxy URL and the hosts every executor may reach
+				EgressProxy: os.Getenv("EXECUTOR_EGRESS_PROXY"),
+				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
+				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
+			EgressLogs: kubeSinceLogs(cs)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)

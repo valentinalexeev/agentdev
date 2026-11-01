@@ -83,7 +83,12 @@ exec_ns: agentdev-executors
 executor_poll_seconds: 60
 executor_retention_days: 30
 executor_apply_start_minutes: 30   # an allowed apply starts at most this long after the decision, else nothing applies
-executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa}]
+executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa, egress_hosts}]
+# Executor egress (#135). Executor Jobs reach the outside only through the executor egress proxy, and it only these
+# hosts plus the forge's git host and each executor's egress_hosts (Squid dstdomain: a leading dot = the domain and
+# its subdomains). Cloud APIs belong to the executor that needs them, for example
+# egress_hosts: [oauth2.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com].
+executor_egress_hosts: [registry.terraform.io, releases.hashicorp.com]
 # Management API (#104), optional: deployed only when api.oidc_issuer is set. Keys: oidc_issuer (https, required),
 # oidc_discovery_url, oidc_audience (agentdev), forge_url, db_retention_days (365). Defaults: roles/api/defaults.
 api: {}

@@ -655,8 +655,21 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 - The apply gate is an `Approval` with `source: executor`, `tool: apply`, `job: pr-<N>` and the input "apply executor
   ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
 - Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
+- Egress (#135, R81, R97): executor pods are default deny (`executor-egress`: DNS, the executor egress proxy, the
+  in-cluster forge, the GKE metadata server for Workload Identity). The only way out is `executor-egress-proxy` in
+  `EXEC_NS`, a second Squid like the agents' proxy (#65, same image and guardrails) rather than the agents' proxy:
+  the hosts differ per executor, and a shared proxy would let an agent use an executor's list. The operator gives
+  each runnable Executor a random proxy credential and writes Squid rules that bind it to the executor's hosts
+  (`EXECUTOR_EGRESS_HOSTS`, the forge's git host, `spec.egressHosts`) into Secret `executor-egress-proxy`; the proxy
+  reloads them without a restart. The checkout and tool containers get `HTTPS_PROXY` with that credential (kubelet
+  expansion, never a literal). On GKE an FQDNNetworkPolicy limits the proxy to the union of all executors' hosts
+  (the playbook builds it from `executor_egress_hosts` and each `egress_hosts`), so cloud APIs stay reachable by
+  name; on kind `executor-egress-proxy-web` allows 80/443 and Squid alone enforces the list. A refused request is a
+  SecurityEvent of that executor (source `egress`, rule `egress-host`, severity `medium`); it never pauses
+  anything. No lockout: an empty list refuses everything but changes no other policy, and an admin adds a host with
+  `spec.egressHosts` (not in the spec hash, so a pending approval stays valid).
 - Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
-  egress allow-list for executor Jobs (#135), reopening the issue on a failed apply.
+  reopening the issue on a failed apply.
 
 ### Resources
 
@@ -673,7 +686,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 | Actor | Runs as | Cloud credentials | Can |
 |---|---|---|---|
 | design agent (AI) | agent pod | read-only (viewer, state read) | read code and state, run a plan for itself, open the PR |
-| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, no service account token; egress allow-list planned in #135, today it can reach all hosts) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
+| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, no service account token; default-deny egress, only its own allow-list through the executor egress proxy, #135) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
 | apply executor | Kubernetes Job | write, scoped to one environment (Workload Identity, lifetime of the Job) | apply exactly the approved plan |
 | person with write access | forge, UI | own | review, merge, `/approve` the apply |
 

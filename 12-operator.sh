@@ -37,11 +37,17 @@ PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR
   SECURITY_RATE_PER_MIN="${SECURITY_RATE_PER_MIN:-10}" SECURITY_RATE_BURST="${SECURITY_RATE_BURST:-20}" APPROVAL_RETENTION_DAYS="${APPROVAL_RETENTION_DAYS:-90}" \
   APPROVALS="${APPROVALS:-false}" APPROVAL_TIMEOUT_MINUTES="${APPROVAL_TIMEOUT_MINUTES:-30}" \
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
-  EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" \
+  EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
+# executor egress (#135): default deny for executor Jobs, the executor proxy, and (kind) 80/443 for the proxy
+EXEC_NS="${EXEC_NS}" FORGE_NS="${FORGE_NS}" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
+  envsubst '${EXEC_NS} ${FORGE_NS} ${EGRESS_PROXY_IMAGE}' < "${SPIKE_DIR}/manifests/executor-egress.yaml.tmpl" | k apply -f - >/dev/null
+EXEC_NS="${EXEC_NS}" envsubst '${EXEC_NS}' < "${SPIKE_DIR}/manifests/executor-egress-web.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-operator --timeout=120s >/dev/null || die "operator did not become ready"
 ok "agentdev-operator ready"
+k -n "${EXEC_NS}" rollout status deploy/executor-egress-proxy --timeout=180s >/dev/null || die "executor egress proxy did not become ready"
+ok "executor-egress-proxy up; executors may reach: ${EXECUTOR_EGRESS_HOSTS} plus their spec.egressHosts"
 record "agentdev operator up in ${PLATFORM_NS}, watching Agents in ${AGENTS_NS}"
