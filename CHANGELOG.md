@@ -63,7 +63,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   fences or quotes do not count. Every decision is audited. Read-only
   `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
   UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
-  `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80.
+  `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80. Kind only for now: the GKE
+  playbook does not deploy agentdev-api and stops if `approvals.enabled` is `true`.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are

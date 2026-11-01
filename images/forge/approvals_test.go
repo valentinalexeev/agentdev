@@ -318,3 +318,58 @@ func TestRedact(t *testing.T) {
 		t.Fatalf("over-redacted: %s", out)
 	}
 }
+
+// Reviewer on #107: concurrent asks with the same fingerprint file one record and one comment.
+func TestApprovalConcurrentDedup(t *testing.T) {
+	s, fa, _ := approvalSetup(t)
+	var wg sync.WaitGroup
+	ids := make([]string, 8)
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r, err := s.appr.request("issue-3", "push", "git push", "agent/alice/x abc", "fp-1")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			ids[i] = r.ID
+		}(i)
+	}
+	wg.Wait()
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("two records: %v", ids)
+		}
+	}
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if len(fa.comments) != 1 {
+		t.Fatalf("comments: %d", len(fa.comments))
+	}
+}
+
+// A void that fails with a 5xx is retried; a 409 (decided meanwhile) is not.
+func TestApprovalVoidRetry(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	s.appr.voidWait = time.Millisecond
+	var calls []int
+	codes := []int{503, 503, 200}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := codes[len(calls)%len(codes)]
+		calls = append(calls, c)
+		w.WriteHeader(c)
+	}))
+	defer api.Close()
+	s.appr.apiURL = api.URL
+	r := &approvalRequest{ID: "a1", fp: "fp", state: "pending", secret: "s"}
+	s.appr.void(r, "test")
+	if len(calls) != 3 {
+		t.Fatalf("attempts: %v", calls)
+	}
+	codes, calls = []int{409}, nil
+	s.appr.void(&approvalRequest{ID: "a2", fp: "fp2", state: "pending", secret: "s"}, "test")
+	if len(calls) != 1 {
+		t.Fatalf("409 retried: %v", calls)
+	}
+}

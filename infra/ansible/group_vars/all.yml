@@ -47,7 +47,7 @@ mcp_projects: []
 # MCP tool metadata and outputs reach the model, so list trusted servers only. Empty: no server is registered.
 mcp_allowed_hosts: []
 approvals:                          # #67: agents ask a project member on the forge (docs/security-model.md)
-  enabled: false                    # true: Claude prompts and protected pushes become approval requests
+  enabled: false                    # must stay false on GKE: the playbook does not deploy agentdev-api yet (kind only)
   timeout_minutes: 30               # no decision in this time: denied (expired)
   retention_days: 90                # Approval objects; decisions stay in the audit log
 # deterministic executors (#69): namespace, poll and retention; the executors themselves come from the deployment

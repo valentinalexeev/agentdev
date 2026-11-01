@@ -581,11 +581,13 @@ Approvals let agents ask a project member for permission on the forge, instead o
 CAUTION: Make sure that the API has a forge token (refer to *Give the API access to the forge*). Without the token,
 the API cannot make a decision, and each request stays open until it becomes void.
 
-1. On kind, set `APPROVALS=true` in `.env`. On GKE, set `approvals.enabled: true` in `ansible/instance.yml`.
-2. Optional: set the time that the agent waits for a decision. Use `APPROVAL_TIMEOUT_MINUTES` on kind or
-   `approvals.timeout_minutes` on GKE. The default is 30 minutes. After this time, the agent continues without the
-   action, but the request stays open.
-3. On kind, run `./run.sh 10` and then `./run.sh 12`. On GKE, run the playbook.
+IMPORTANT: At this time, approvals operate only on kind. The GKE playbook does not deploy agentdev-api, which
+decides the requests, so the playbook stops with an error if `approvals.enabled` is `true`.
+
+1. Set `APPROVALS=true` in `.env`.
+2. Optional: set the time that the agent waits for a decision with `APPROVAL_TIMEOUT_MINUTES`. The default is 30
+   minutes. After this time, the agent continues without the action, but the request stays open.
+3. Run `./run.sh 10` and then `./run.sh 12`.
    The operator starts the agent pods again with the new setting.
 
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).

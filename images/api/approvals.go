@@ -475,7 +475,9 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		}
 	}
 	if a.Forge != "" && a.Forge != "gitea" {
-		return nil // GitHub decisions are not supported yet: the request stays pending until void; see #87
+		// GitHub decisions are not supported yet (#87). This return also skips the closed issue/PR check below, so a
+		// GitHub record becomes void only by job end, supersede (sidecar) or the pod-gone check above.
+		return nil
 	}
 	// an executor apply (#69) is requested on the merged, so closed, pull request: closing does not end it (its own
 	// deadline, spec.approvalHours, is enforced by the operator)
