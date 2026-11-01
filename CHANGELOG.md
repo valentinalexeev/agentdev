@@ -12,6 +12,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   the metadata server, Claude proxy only, usage reports refused, approvals and executors out of the agent's reach,
   HTTPS/HSTS, API permission checks, and the #2 GitHub flow (issue, PR with the owner as reviewer, review reply).
   Read-only or self-cleaning, PASS/FAIL per check, exit 1 on a FAIL. Docs: `docs/e2e-security.md`.
+- Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
+  register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
+  App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
+  backup, upgrade, security checklist). Docs only.
 - GKE parity with run.sh (#121): the playbook fills every value of `manifests/api.yaml.tmpl` (`APPROVALS`,
   `APPROVAL_DENY_ACCOUNTS` from the new `api.approval_deny_accounts`, `USAGE_FIVE_HOUR`, `USAGE_WEEKLY`; before,
   they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web

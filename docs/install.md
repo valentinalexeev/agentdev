@@ -119,6 +119,8 @@ WARNING: Do not put secret values in git, in issues or in logs. Put the secret v
 
 9. Do the end-to-end security checks. Refer to [e2e-security.md](e2e-security.md).
 
+NOTE: [Private deployment](private-deployment.md) gives the full procedure for GKE, GitHub and Google Workspace.
+
 NOTE: [`AGENTS.md`](../AGENTS.md) gives all the steps in detail. An AI agent can do these steps with you.
 
 NOTE: For the costs and the size of the instance, refer to
