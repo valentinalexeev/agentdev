@@ -346,7 +346,7 @@ of `REPO` and of the repository of each Gitea agent. It makes a token with the s
 works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
 `./run.sh 10` again.
 
-On GKE, do these steps manually:
+On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.
