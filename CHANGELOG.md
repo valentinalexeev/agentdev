@@ -8,10 +8,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Added
 - kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
-  (on kind, a second blueprint `manifests/kind/authentik-blueprint-local-admin.yaml` adds `akadmin`), and
+  without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
+  process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and
   `./run.sh 10` makes the Gitea account `agentdev-api`, admin collaborator of `REPO` and of every Gitea agent
   repository, with a `read:repository,read:user` token in Secret `agentdev-api-forge` (kept if it still works for
-  `agentdev-api`, never printed). GKE stays a manual step (`docs/admin.md`), as the playbook does not deploy the API
+  `agentdev-api`, never printed; older `agentdev-api*` tokens are deleted, and the API restarts with the new token). GKE stays a manual step (`docs/admin.md`), as the playbook does not deploy the API
   yet (#51, #104).
 - SIEM outputs (#71): syslog over TLS (RFC 5424 messages, RFC 5425 octet-counted framing, facility 13, structured
   data `agentdev@32473`) and OTLP logs (OTLP/HTTP JSON to `/v1/logs`, ECS-style attributes, optional headers). Both

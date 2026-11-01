@@ -79,6 +79,15 @@ if k -n "${FORGE_NS}" get deploy gitea >/dev/null 2>&1; then
       | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
     ok "new token in Secret agentdev-api-forge"
   fi
+  # The reuse check above reads the login only, not the scopes: a wider token put into the Secret by hand is kept.
+  # Stale tokens: delete every other agentdev-api* token of the account, so only the one in the Secret stays valid
+  # (sudo: the owner acts as agentdev-api; ids and names only, the token value is never listed by Gitea).
+  last8=${have: -8}   # Gitea lists token_last_eight, never the value: match the token in the Secret by it
+  n=0; for id in $(ga GET "/users/${api_user}/tokens?sudo=${api_user}" \
+      | jq -r --arg k "${last8}" '.[] | select((.name | startswith("agentdev-api")) and .token_last_eight != $k) | .id'); do
+    ga DELETE "/users/${api_user}/tokens/${id}?sudo=${api_user}" >/dev/null && n=$((n+1))
+  done
+  ok "deleted ${n} stale agentdev-api token(s)"
   unset have
   ok "${api_user}: admin of $(tr '\n' ' ' <<<"${repos}")"
 else ok "no Gitea in ${FORGE_NS}: skipped (see docs/admin.md)"; fi
@@ -88,7 +97,12 @@ disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/age
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
   envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
-k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
+# restart: local images keep their tag, and the token Secret may have changed (env is read at start only). The
+# annotation records the Secret's hash (not its value), so a changed token is visible in the pod template too.
+fh=$(k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data}' 2>/dev/null | shasum -a 256 | cut -c1-16)
+k -n "${PLATFORM_NS}" patch deploy/agentdev-api --type merge \
+  -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"agentdev/forge-token-hash\":\"${fh}\"}}}}}" >/dev/null
+k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"
 ok "agentdev-api ready"
 record "agentdev API up in ${PLATFORM_NS} (issuer ${API_OIDC_ISSUER})"

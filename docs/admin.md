@@ -315,7 +315,12 @@ Such a user can read, but cannot change agents. A stable forge-login claim is pl
 ### Give a person admin rights for agents
 
 The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
-09 makes this group. On `kind`, step 09 also adds `akadmin` to the group. On other instances, the group is empty.
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+
+IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
+set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
+and never removes a member. Step 09 checks this each run: it adds a test user, re-applies the blueprints, and fails
+if a member is gone. Add and remove members by hand in authentik only.
 
 1. Log in to authentik as an administrator.
 2. Go to **Directory > Groups** and open `agentdev-admins`.
@@ -331,7 +336,8 @@ CAUTION: Give this group to platform operators only. A member can add an agent t
 - The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
 - The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
 - The blueprint `manifests/authentik-blueprint-agentdev.yaml` makes the OIDC application and the group
-  `agentdev-admins`. On `kind`, `manifests/kind/authentik-blueprint-local-admin.yaml` adds `akadmin` to the group.
+  `agentdev-admins`, without members. On `kind`, `09-authentik.sh` adds `akadmin` to the group through the authentik
+  API (add only, never remove).
 - The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
   to authentik.
 
