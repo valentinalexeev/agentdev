@@ -8,6 +8,7 @@ results.md
 .coder/
 .secrets/
 __pycache__/
+*.py[cod]
 
 # Terraform
 .terraform/

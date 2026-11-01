@@ -10,6 +10,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
   (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under
   `seed/` although `seed/.gitignore` excludes them.
+- Tracked Python bytecode (`seed/**/__pycache__/*.pyc`, committed in bee146e before `.gitignore` covered it; ignore
+  rules never untrack files). The root `.gitignore` now also has `*.py[cod]`, and the new
+  `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
 - Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
