@@ -1,0 +1,23 @@
+# Test of egress_fqdn.j2 (#65): ansible-playbook infra/ansible/tests/egress_fqdn.yml (no cluster needed).
+- name: Squid host list to FQDNNetworkPolicy matches
+  hosts: localhost
+  gather_facts: false
+  vars:
+    egress_hosts: [api.anthropic.com, .github.com]
+    egress_extra_hosts: [.example.org]
+    want:
+      - {name: api.anthropic.com}
+      - {name: github.com}
+      - {pattern: "*.github.com"}
+      - {name: example.org}
+      - {pattern: "*.example.org"}
+  tasks:
+    - name: Render
+      ansible.builtin.set_fact:
+        got: "{{ lookup('ansible.builtin.template', '../egress_fqdn.j2') | from_yaml }}"
+    - name: Check
+      ansible.builtin.assert:
+        that:
+          - got == want
+
+        fail_msg: "{{ got | to_json }}"

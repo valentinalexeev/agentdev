@@ -19,9 +19,8 @@ operator_image: "{{ image_registry }}/agentdev-operator:{{ image_tag }}"
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts
 # in instance.yml. egress_fqdn_policy also limits the proxy pod itself with a GKE FQDNNetworkPolicy (needs
 # enable_fqdn_network_policy on the cluster, set by infra/terraform).
-egress_hosts: [api.anthropic.com, statsig.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org,
-               pypi.org, files.pythonhosted.org, proxy.golang.org, sum.golang.org, storage.googleapis.com,
-               index.crates.io, static.crates.io]
+egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
+               files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
 egress_extra_hosts: []
 egress_fqdn_policy: true
 egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029

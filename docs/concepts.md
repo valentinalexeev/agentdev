@@ -106,7 +106,8 @@ runner can start any program. So the security boundary is the pod, not the list 
   push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
 - **Egress allow-list (#65):** agent pods reach the outside only through the `egress-proxy` (Squid), and it only
-  the hosts in `EGRESS_HOSTS` (model API, forge, package registries). A NetworkPolicy denies every other connection.
+  the hosts in `EGRESS_HOSTS` (model API, forge, package registries). A NetworkPolicy denies every other connection
+  where it is enforced: GKE (Dataplane V2) and kind v0.24 or later; elsewhere the proxy is advisory.
   Each refused request is a security event of the agent that made it.
 - **Known gaps:** an allowed host can still receive data (with HTTPS the proxy sees only the host name), and the
   Claude login is still in the pod (phase 3). The full list of risks and their status is in [security.md](security.md); the target design

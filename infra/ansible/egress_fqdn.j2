@@ -1,0 +1,12 @@
+{#- egress_hosts + egress_extra_hosts (Squid dstdomain) as FQDNNetworkPolicy matches (#65): ".x.org" allows x.org
+    and its subdomains in Squid, so it becomes the name x.org plus the pattern *.x.org. GKE patterns match one level
+    only, so a deeper subdomain (a.b.x.org) is refused at the network level although Squid allows it. -#}
+{%- set m = [] -%}
+{%- for h in egress_hosts + egress_extra_hosts -%}
+{%-   if h.startswith('.') -%}
+{%-     set _ = m.extend([{'name': h[1:]}, {'pattern': '*' ~ h}]) -%}
+{%-   else -%}
+{%-     set _ = m.append({'name': h}) -%}
+{%-   endif -%}
+{%- endfor -%}
+{{ m | to_json }}

@@ -49,6 +49,7 @@ egress_render() {
     < "${SPIKE_DIR}/manifests/egress.yaml.tmpl"
 }
 egress_render | k apply -f - >/dev/null
+AGENTS_NS="${AGENTS_NS}" envsubst '${AGENTS_NS}' < "${SPIKE_DIR}/manifests/egress-proxy-web.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout status deploy/egress-proxy --timeout=180s >/dev/null
 ok "egress-proxy up; agents may reach only: ${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}"
 

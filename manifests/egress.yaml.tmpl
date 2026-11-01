@@ -9,7 +9,8 @@
 #   private or link-local address, and prints one AGENTDEV_SECURITY_EVENT line per refused request; the operator turns
 #   that into a SecurityEvent of the agent with that pod IP (source egress).
 # - On GKE the playbook also adds an FQDNNetworkPolicy for the proxy itself, so even a misconfigured proxy cannot
-#   reach hosts outside the list.
+#   reach hosts outside the list. That policy isolates the proxy for egress, so egress-proxy-dns below allows its DNS.
+# - The image is a *_beta tag of ubuntu/squid (Canonical publishes no non-beta tag for 24.04), pinned by digest.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
@@ -27,8 +28,10 @@ data:
     forwarded_for delete
     # allowed hosts: a leading dot allows the domain and every subdomain (EGRESS_HOSTS, EGRESS_EXTRA_HOSTS)
     acl allowed dstdomain -n ${EGRESS_HOSTS}
-    # never a cluster, node, metadata or loopback address, even if a public name resolves to one
-    acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 ::1 fc00::/7 fe80::/10
+    # never a cluster, node, metadata, loopback, multicast or reserved address, even if a public name resolves to one
+    # (IPv4-mapped and NAT64 IPv6 forms too)
+    acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4
+    acl private_dst dst ::/128 ::1 ::ffff:0:0/96 64:ff9b::/96 fc00::/7 fe80::/10
     acl SSL_ports port 443
     acl Safe_ports port 80 443
     http_access deny !Safe_ports
@@ -36,8 +39,9 @@ data:
     http_access deny private_dst
     http_access allow allowed
     http_access deny all
-    # one line per refused request; %# URL-encodes, so the request cannot break the JSON or the line
-    logformat agentdev AGENTDEV_SECURITY_EVENT {"rule":"egress-host","severity":"medium","client":"%>a","action":"%#rm %#ru"}
+    # one line per refused request: method and destination host:port only, never the path, query or userinfo (they
+    # can carry credentials, and the line becomes a SecurityEvent). %# URL-encodes, so it cannot break the JSON
+    logformat agentdev AGENTDEV_SECURITY_EVENT {"rule":"egress-host","severity":"medium","client":"%>a","action":"%#rm %#>rd:%>rP"}
     acl refused http_status 403
     access_log /var/log/squid/access.log logformat=agentdev refused
 ---
@@ -45,7 +49,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: egress-proxy, namespace: ${AGENTS_NS}, labels: {app: egress-proxy}}
 spec:
-  replicas: 1
+  replicas: 1   # a restart (each allow-list change) breaks agent egress for a few seconds; new pod first:
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 1, maxUnavailable: 0}}
   selector: {matchLabels: {app: egress-proxy}}
   template:
     metadata:
@@ -94,6 +99,19 @@ spec:
   - from: [{podSelector: {matchLabels: {app: coding-agent}}}]
     ports: [{port: 3128}]
 ---
+# the proxy's own egress: DNS only. 80/443 come from a second policy: on GKE the FQDNNetworkPolicy of the playbook
+# (allow-listed names only), on kind manifests/egress-proxy-web.yaml (any address; Squid enforces the list there).
+# Policies add up, so 80/443 must not be allowed here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: egress-proxy-dns, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: egress-proxy}}
+  policyTypes: [Egress]
+  egress:
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+    ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agent-egress, namespace: ${AGENTS_NS}}
@@ -107,7 +125,9 @@ spec:
     ports: [{port: 3128}]
   - to: [{podSelector: {matchLabels: {app: webhook-router}}}]   # registration
     ports: [{port: 8080}]
-  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${FORGE_NS}}}}]   # in-cluster Gitea (kind)
+  # in-cluster Gitea (kind). NetworkPolicy cannot tell containers apart: the agent container reaches it too (it holds
+  # no token since #64)
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${FORGE_NS}}}}]
     ports: [{port: 3000}]
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${BOTBOARD_NS}}}}]
     ports: [{port: 8080}]

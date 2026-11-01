@@ -22,7 +22,7 @@ planned target, [security-model.md](security-model.md).
 | R7 | Git hooks or config-defined programs written by Claude run in the loop's git (with the token) | CodeQL #59, review | fixed (unit-tested; live e2e pending) | `lgit` (no hooks, fsmonitor, global or system config), `scrub_git_config` (4d6026f); worktree `.git` and `commondir` pinned before every loop git use, admin dir must be a single real directory, no writes through symlinks (cdef2b4, and the follow-up in this PR) |
 | R8 | Credential helper answered any host (redirect or rewritten remote leaks the token) | CodeQL #59 | fixed | Answers only the forge's `scheme://host`; push to the forge URL, not `origin` (4d6026f) |
 | R9 | Claude's stderr written into the worktree and committed | CodeQL #59 | fixed | Written under `/state/jobs` and deleted (4d6026f) |
-| R10 | **Open egress**: anything Claude can read can be sent anywhere | review, #6 | mitigated (#65), pending GKE e2e | Default-deny `agent-egress` NetworkPolicy plus the `egress-proxy` allow-list (security-model.md phase 2); refusals are security events. Residual: an allowed host (for example github.com, a package registry) can still receive data; whether the NetworkPolicy is enforced on kind depends on the kindnet version (R30) |
+| R10 | **Open egress**: anything Claude can read can be sent anywhere | review, #6 | mitigated (#65), pending GKE e2e | Default-deny `agent-egress` NetworkPolicy plus the `egress-proxy` allow-list (security-model.md phase 2); refusals are security events. Residual: an allowed host (for example github.com, a package registry) can still receive data; the NetworkPolicy needs kind v0.24 or later (R30), without it the proxy is advisory. GKE: the metadata check of the e2e list (security-model.md phase 2) must pass before this counts as mitigated there |
 | R11 | Claude login (subscription or API key) is in the agent pod and readable by Claude | design review | **open** | Credential proxy (security-model.md phase 3, #66) |
 | R12 | Prompt injection through issue and review text steers edits | CodeQL #59 | mitigated | Fenced as untrusted, fixed system rule, agent pushes only to its own branch, owner review before merge |
 | R13 | Loop pushes without an approval gate | CodeQL #59 | mitigated | Push only to `agent/<name>/*`; merge to main needs the owner's approval (branch protection) |
@@ -46,7 +46,7 @@ planned target, [security-model.md](security-model.md).
 
 | ID | Risk | Source | Status | Where / how |
 |----|------|--------|--------|-------------|
-| R30 | Postgres and ContextForge admin reachable from agent pods | review #50 | mitigated | NetworkPolicies (f57e518). **Not enforced on kind** (kindnet); enforced on GKE (#51) |
+| R30 | Postgres and ContextForge admin reachable from agent pods | review #50 | mitigated | NetworkPolicies (f57e518). Enforced on GKE (Dataplane V2, #51) and on kind v0.24 or later (kindnet network policies; `00-prereqs.sh` refuses older kind). Checked on kind v0.33 (#65): a pod in `default` no longer reaches ContextForge |
 | R31 | MCP token scope | review #50 | fixed | Per-agent token scoped to the project's virtual server; revoke and renewal (#50) |
 | R32 | In-cluster OIDC key fetch over plain http | review #53 | open | TLS inside the cluster, #51 |
 | R33 | UI security headers dropped on some routes; no CSP | review #56 | fixed | Shared header snippet, strict CSP, `frame-ancestors 'none'` (4e1f9be) |

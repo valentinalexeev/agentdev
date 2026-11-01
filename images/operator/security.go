@@ -407,6 +407,9 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 func rateLimited(s v1.SecurityEventSpec, rate int) v1.SecurityEventSpec {
 	h := sha256.Sum256([]byte("rate-limited\x00" + s.Hash))
 	s.Rule, s.Severity, s.Job = "rate-limited", "high", ""
+	if s.Source == "egress" { // many refused requests are a build, not an attack on the collector: no pause (maybePause)
+		s.Severity = "medium"
+	}
 	s.Action = fmt.Sprintf("more than %d security events per minute from container %s; further lines dropped", rate, s.Container)
 	s.Hash = hex.EncodeToString(h[:])
 	return s
@@ -433,6 +436,11 @@ func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityE
 // (spec.paused=false) after looking; the reason stays in the SecurityPaused condition.
 func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, spec v1.SecurityEventSpec) error {
 	reason, msg := "", ""
+	if spec.Source == "egress" && spec.Severity != "high" {
+		// a build that needs a host not on the list makes one refusal per request: recorded and reported, but not
+		// counted toward the pause until a person can approve a host (phase 4, #67)
+		return nil
+	}
 	if spec.Severity == "high" {
 		reason, msg = "HighSeverity", fmt.Sprintf("high severity %s/%s: %s", spec.Source, spec.Rule, clip(spec.Action, 200))
 	} else {
@@ -442,7 +450,7 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 		}
 		n := 1 // the event just recorded
 		for _, e := range list.Items {
-			if e.Name != name && e.Spec.Job == spec.Job {
+			if e.Name != name && e.Spec.Job == spec.Job && e.Spec.Source != "egress" {
 				n++
 			}
 		}

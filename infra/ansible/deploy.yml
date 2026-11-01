@@ -106,20 +106,22 @@
           replace: []
 
     # Dataplane V2 enforces this on the proxy pod: even a changed squid.conf reaches nothing else. Squid's
-    # ".example.com" becomes the name example.com plus the pattern *.example.com (GKE patterns match one level only).
+    # ".example.com" becomes the name example.com plus the pattern *.example.com (GKE patterns match one level only);
+    # the mapping lives in egress_fqdn.j2 (tested by tests/egress_fqdn.yml).
     - name: Egress hosts as FQDNNetworkPolicy matches
       ansible.builtin.set_fact:
-        egress_fqdn_matches: >-
-          {%- set m = [] -%}
-          {%- for h in egress_hosts + egress_extra_hosts -%}
-          {%-   if h.startswith('.') -%}
-          {%-     set _ = m.extend([{'name': h[1:]}, {'pattern': '*' ~ h}]) -%}
-          {%-   else -%}
-          {%-     set _ = m.append({'name': h}) -%}
-          {%-   endif -%}
-          {%- endfor -%}
-          {{ m }}
+        egress_fqdn_matches: "{{ lookup('ansible.builtin.template', 'egress_fqdn.j2') | from_yaml }}"
 
+    - name: Is the FQDNNetworkPolicy type served (enable_fqdn_network_policy)?
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: fqdnnetworkpolicies.networking.gke.io
+      register: fqdn_crd
+      when: egress_fqdn_policy | bool
+
+    # also runs in --check (a dry run against the served type) when the type exists; without it the proxy has DNS only
     - name: Egress proxy FQDNNetworkPolicy (GKE, #65)
       kubernetes.core.k8s:
         <<: *k8s
@@ -132,7 +134,23 @@
             egress:
               - matches: "{{ egress_fqdn_matches }}"
                 ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
-      when: egress_fqdn_policy | bool and not ansible_check_mode
+      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length > 0)
+
+    - name: The FQDN policy is on, but the cluster does not serve it
+      ansible.builtin.fail:
+        msg: "egress_fqdn_policy is true, but FQDNNetworkPolicy is not available: apply infra/terraform (enable_fqdn_network_policy) or set egress_fqdn_policy: false"
+      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length == 0) and not ansible_check_mode
+
+    - name: Egress proxy may reach any address on 80/443 when the FQDN policy is off (Squid alone enforces the list)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: "{{ 'absent' if egress_fqdn_policy | bool else 'present' }}"
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_web) | from_yaml }}"
+      vars:
+        vars_web:
+          src: "{{ repo_root }}/manifests/egress-proxy-web.yaml.tmpl"
+          values: {AGENTS_NS: "{{ agents_ns }}"}
+          replace: []
 
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |

@@ -283,3 +283,24 @@ func TestEgressProxyEnv(t *testing.T) {
 		}
 	}
 }
+
+// #65: in-cluster URLs given to agent pods are full service names, so NO_PROXY (.svc.cluster.local) sends them direct;
+// a short name would go to the proxy and get a 403.
+func TestInClusterURLsBypassProxy(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.EgressProxy, r.D.ForgeURL = "http://egress-proxy.coding-agents.svc.cluster.local:3128", "http://gitea.forge.svc.cluster.local:3000"
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	for _, ct := range s.Spec.Template.Spec.Containers {
+		for _, e := range ct.Env {
+			if !strings.HasSuffix(e.Name, "_URL") || !strings.HasPrefix(e.Value, "http://") || strings.HasPrefix(e.Value, "http://127.0.0.1") {
+				continue
+			}
+			host := strings.Split(strings.TrimPrefix(e.Value, "http://"), "/")[0]
+			host = strings.Split(host, ":")[0]
+			if !strings.HasSuffix(host, ".svc.cluster.local") {
+				t.Errorf("%s/%s=%s is not a full service name", ct.Name, e.Name, e.Value)
+			}
+		}
+	}
+}

@@ -599,7 +599,8 @@ for the rows in Postgres. The API cannot change the database retention.
 
 The agents can connect to the internet only through the egress proxy (`egress-proxy`, #65). The proxy lets an agent
 connect only to the hosts on the allow-list. The default list contains the Claude API, GitHub, npm, PyPI, the Go
-module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods.
+module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods. On `kind`, this
+NetworkPolicy operates only with kind v0.24 or later. `./run.sh 00` makes sure of this.
 
 ### Add a host to the allow-list
 
@@ -616,6 +617,7 @@ WARNING: Add only a host that you trust. An agent can send data to each host on 
    - On `kind`: run `./run.sh 06`.
    - On GKE: run the playbook (open a pull request in the deployment repository).
    The proxy starts again with the new list.
+   NOTE: During the restart of the proxy, the agents cannot connect to the internet for some seconds.
 
 ### Find the connections that the proxy refused
 
@@ -624,7 +626,10 @@ WARNING: Add only a host that you trust. An agent can send data to each host on 
    The output shows one line for each refused request, with the IP address of the agent pod.
 2. Open the **Security** page of the web UI. The events have the source `egress` and the rule `egress-host`.
 
-NOTE: The operator pauses an agent after more than 5 events in one job. Many refusals can thus pause an agent.
+NOTE: The operator does not pause an agent because of egress events. Look at the events and add the host, or find the
+cause of the requests.
+
+NOTE: The event shows only the method, the host and the port. The event does not show the path of the request.
 
 ### Reference: egress
 
@@ -632,9 +637,9 @@ NOTE: The operator pauses an agent after more than 5 events in one job. Many ref
 |---|---|---|
 | Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `config.env`; Ansible `egress_hosts` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
-| Proxy image | `ubuntu/squid` (pinned digest) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
+| Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
-| FQDN policy for the proxy (GKE) | on | Ansible `egress_fqdn_policy`; Terraform `enable_fqdn_network_policy` |
+| FQDN policy for the proxy (GKE) | on | Ansible `egress_fqdn_policy`; Terraform `enable_fqdn_network_policy`. If it is on and the cluster does not have it, the playbook stops |
 
 NOTE: The proxy refuses all private, loopback and link-local addresses, also when an allowed name points to one.
 

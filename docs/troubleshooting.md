@@ -27,6 +27,8 @@
 | The agent log shows `AGENTDEV_SECURITY_EVENT` lines. | A guardrail stopped an action. The JSON gives the rule and the action. | 1. For `high`, read the issue or the review of the job and look for an injection attempt. 2. Also examine `medium` git-config and hook events after a Claude run. |
 | A build or a download in the agent fails with `403` or `CONNECT tunnel failed`. | The host is not on the egress allow-list (#65). | 1. Find the host in the log of `egress-proxy` (refer to *Egress allow-list* in admin.md). 2. If the project needs the host, add it to the allow-list. |
 | A tool in the agent cannot connect, but the proxy log shows no line for it. | The tool does not use `HTTPS_PROXY`. The NetworkPolicy stops the direct connection. | 1. Set the proxy for the tool (for example in its configuration file). |
+| All agents cannot connect to the internet after the GKE deploy. The proxy log shows DNS errors. | The policy `egress-proxy-dns` is missing. | 1. Run the playbook again. 2. Run `kubectl -n coding-agents get networkpolicy egress-proxy-dns`. |
+| The playbook stops with `FQDNNetworkPolicy is not available`. | The cluster does not have FQDN network policy. | 1. Apply `infra/terraform`. 2. On a Standard cluster, run `kubectl -n kube-system rollout restart ds anetd`. |
 | `egress-proxy` shows `OOMKilled`. | Squid uses more memory than its limit. | 1. Increase the memory limit in `manifests/egress.yaml.tmpl`. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
