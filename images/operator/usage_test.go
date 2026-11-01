@@ -36,6 +36,16 @@ func TestEffectiveThresholds(t *testing.T) {
 	}
 }
 
+func TestEffectiveAll(t *testing.T) {
+	s := UsageSettings{Global: Thresholds{80, 90}, Projects: map[string]Thresholds{"o/a": {60, 0}, "o/b": {0, 70}}}
+	if got := s.EffectiveAll("o/a", "o/b"); got != (Thresholds{60, 70}) {
+		t.Fatalf("lowest over all repos: %+v", got)
+	}
+	if got := s.EffectiveAll(); got != (Thresholds{80, 90}) {
+		t.Fatalf("no repo: global: %+v", got)
+	}
+}
+
 func TestDecide(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	reset5, resetW := now.Add(2*time.Hour).Unix(), now.Add(72*time.Hour).Unix()
@@ -44,7 +54,7 @@ func TestDecide(t *testing.T) {
 	if _, ok := decide(s, th, now); ok {
 		t.Fatal("below the threshold: no pause")
 	}
-	s.FiveHour.Utilization = 0.80
+	s.FiveHour.Utilization = 0.80 // exactly at the limit pauses (>=), as the docs say
 	if p, ok := decide(s, th, now); !ok || p.Reason != "five-hour" || p.Until != reset5 {
 		t.Fatalf("at 80%% of 5h: want pause until the 5h reset, got %+v %v", p, ok)
 	}
@@ -85,10 +95,27 @@ func TestApplyRateLimitAndForgery(t *testing.T) {
 	if s2.FiveHour.Utilization != 0.9 {
 		t.Fatalf("utilization went down inside the window: %v", s2.FiveHour.Utilization)
 	}
-	// a new window resets the token counters
-	s2.apply(usageLine{InputTokens: 10, FiveHour: &Window{0.2, s2.FiveHour.ResetsAt + 3600}}, at.Add(2*time.Minute))
+	// review #102 finding 1: a forged report with a slightly later reset must not start a new window (lift the pause)
+	runs := s2.Runs
+	s2.apply(usageLine{FiveHour: &Window{0, s2.FiveHour.ResetsAt + 1}}, at.Add(90*time.Second))
+	if s2.FiveHour.Utilization != 0.9 || s2.Runs != runs+1 {
+		t.Fatalf("forged later reset lifted the window: %+v", s2)
+	}
+	if _, ok := decide(s2, Thresholds{80, 90}, at.Add(2*time.Minute)); !ok {
+		t.Fatal("forged line lifted the pause")
+	}
+	// a real new window: the old one has reset; this resets the token counters
+	reset := s2.FiveHour.ResetsAt
+	next := time.Unix(reset+1, 0)
+	s2.apply(usageLine{InputTokens: 10, FiveHour: &Window{0.2, next.Add(5 * time.Hour).Unix()}}, next)
 	if s2.FiveHour.Utilization != 0.2 || s2.InputTokens != 10 || s2.Runs != 1 {
-		t.Fatalf("new window: %+v", s2)
+		t.Fatalf("new window after the reset: %+v", s2)
+	}
+	// also a new window when the reset moves by most of a window length (the report came late)
+	s3 := &SubscriptionState{FiveHour: Window{0.95, at.Add(time.Hour).Unix()}}
+	s3.apply(usageLine{FiveHour: &Window{0.1, at.Add(5 * time.Hour).Unix()}}, at)
+	if s3.FiveHour.Utilization != 0.1 {
+		t.Fatalf("reset 4h later (80 %% of the window) is a new window: %+v", s3.FiveHour)
 	}
 }
 

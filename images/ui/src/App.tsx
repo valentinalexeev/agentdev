@@ -3,7 +3,7 @@ import type { UserManager, User } from './auth'
 import {
   listAgents, listSecurityEvents, patchAgent, createAgent, deleteAgent, Unauthorized,
   nameError, repoError, maxConcurrentError, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
-  getUsage, setGlobalLimits, setProjectLimits, pctError, type Usage, type UsageWindow,
+  getUsage, setGlobalLimits, setProjectLimits, pctError, type Usage, type UsageWindow, type UsagePause,
 } from './api'
 
 export function App({ um }: { um: UserManager }) {
@@ -106,12 +106,16 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // usage pauses (#93): shown as a banner and as a state in the agent rows; a failed read only hides them
+  const [pauses, setPauses] = useState<{ list: Record<string, UsagePause>; at: number }>({ list: {}, at: 0 })
 
   const load = useCallback(() => {
     listAgents(token)
       .then((a) => { setAgents(a); setError('') })
       .catch((e) => (e instanceof Unauthorized ? onExpired() : setError(e.message)))
+    getUsage(token).then((u) => setPauses({ list: u.pauses ?? {}, at: Date.now() })).catch(() => setPauses({ list: {}, at: 0 }))
   }, [token, onExpired])
+  const usagePaused = Object.entries(pauses.list).filter(([, p]) => p.until * 1000 > pauses.at)
 
   useEffect(() => {
     load()
@@ -145,6 +149,13 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
         <button onClick={() => setCreating(true)}>Add agent</button>
       </div>
       {notice && !deleting && !creating && <p className="error" role="alert">{notice}</p>}
+      {usagePaused.length > 0 && (
+        <p className="banner" role="status">
+          Subscription usage limit: {usagePaused.map(([a, p]) =>
+            `${a} (${p.reason}, until ${new Date(p.until * 1000).toLocaleString()})`).join(', ')} start no new runs.{' '}
+          <a href="#usage">Usage</a>
+        </p>
+      )}
       {agents.length === 0
         ? <p>No agents yet. Add one, or connect a project with <code>scripts/bootstrap-project.sh</code>.</p>
         : (
@@ -156,7 +167,10 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
               {agents.map((a) => (
                 <tr key={a.name}>
                   <td>{a.name}</td>
-                  <td><span className={`phase ${a.phase}`}>{a.phase}</span></td>
+                  <td>
+                    <span className={`phase ${a.phase}`}>{a.phase}</span>
+                    {usagePaused.some(([n]) => n === a.name) && <> <span className="phase usage-paused">usage-paused</span></>}
+                  </td>
                   <td>{(a.repos ?? []).join(', ')}</td>
                   <td>{a.forge ?? ''}</td>
                   <td>

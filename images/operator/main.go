@@ -79,6 +79,8 @@ func main() {
 		os.Exit(1)
 	}
 	// subscription usage limits (#93): fed by the collector, re-evaluated every 30 s (thresholds, window resets)
+	DefaultFiveHour = envPct("USAGE_FIVE_HOUR", DefaultFiveHour)
+	DefaultWeekly = envPct("USAGE_WEEKLY", DefaultWeekly)
 	usage := &Usage{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Now: time.Now}
 	if err := mgr.Add(usage); err != nil {
 		log.Error(err, "usage")
@@ -104,4 +106,12 @@ func main() {
 		log.Error(err, "run")
 		os.Exit(1)
 	}
+}
+
+// envPct reads a percent 1..100; any other value keeps def.
+func envPct(k string, def int) int {
+	if n := envInt(k, def); n >= 1 && n <= 100 {
+		return n
+	}
+	return def
 }

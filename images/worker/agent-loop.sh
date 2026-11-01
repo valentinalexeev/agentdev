@@ -267,7 +267,8 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
           --append-system-prompt "${CLAUDE_GUARD}" \
           "${mcp[@]}" 2>"${err}"); rc=$?
   # stream-json: one event per line; the last one with a result is the answer
-  jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty' <<<"${out}" 2>/dev/null || echo "${out}"
+  # if jq fails, print nothing: the raw transcript must never become a PR or issue comment
+  jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty' <<<"${out}" 2>/dev/null || log "claude output is not stream-json" >&2
   [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}")"
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"

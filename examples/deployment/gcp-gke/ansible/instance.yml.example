@@ -10,3 +10,5 @@ github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+# Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
+# usage: {five_hour: 80, weekly: 90}

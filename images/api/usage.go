@@ -26,6 +26,11 @@ import (
 const (
 	usageCM         = "agentdev-usage"          // written by the operator: state and pauses (read only here)
 	usageSettingsCM = "agentdev-usage-settings" // thresholds, written here
+)
+
+// defaultFiveHour and defaultWeekly: the global thresholds when none is set (#92: 80 and 90); USAGE_FIVE_HOUR and
+// USAGE_WEEKLY change them (same variables as the operator, config.env and Ansible usage.*).
+var (
 	defaultFiveHour = 80
 	defaultWeekly   = 90
 )
@@ -66,6 +71,17 @@ func (s usageSettings) effective(repo string) thresholds {
 		if validPct(p.Weekly) && p.Weekly < t.Weekly {
 			t.Weekly = p.Weekly
 		}
+	}
+	return t
+}
+
+// effectiveAll is the lowest effective threshold over all repositories of an agent: the same rule as
+// UsageSettings.EffectiveAll in the operator, which uses the Agent's spec.repo.
+func (s usageSettings) effectiveAll(repos []string) thresholds {
+	t := s.global()
+	for _, r := range repos {
+		e := s.effective(r)
+		t.FiveHour, t.Weekly = min(t.FiveHour, e.FiveHour), min(t.Weekly, e.Weekly)
 	}
 	return t
 }
@@ -144,8 +160,10 @@ func (k *kubeAgents) State(ctx context.Context) (map[string]json.RawMessage, err
 type usageView struct {
 	Global   thresholds            `json:"global"`             // with defaults filled in
 	Projects map[string]thresholds `json:"projects,omitempty"` // as set (lower values only)
-	// Effective per agent project, so the UI need not repeat the clamp rule.
+	// Effective per project of a managed agent (the projects the operator applies limits to), so the UI need not
+	// repeat the clamp rule; Agents: the limits that apply to each managed agent.
 	Effective map[string]thresholds `json:"effective"`
+	Agents    map[string]thresholds `json:"agents"`
 	State     json.RawMessage       `json:"state,omitempty"`  // per Claude Secret: windows, tokens (operator)
 	Pauses    json.RawMessage       `json:"pauses,omitempty"` // per agent: until, reason (operator)
 }
@@ -157,20 +175,36 @@ func (w *writer) getUsage(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, http.StatusBadGateway, map[string]string{"error": "cannot read the usage settings"})
 		return
 	}
-	v := usageView{Global: s.global(), Projects: s.Projects, Effective: map[string]thresholds{}}
-	if agents, ok := w.store.(agentLister); ok {
-		if list, err := agents.List(r.Context()); err == nil {
-			for _, a := range list {
-				for _, repo := range a.Repos {
-					v.Effective[repo] = s.effective(repo)
-				}
-			}
+	v := usageView{Global: s.global(), Projects: s.Projects, Effective: map[string]thresholds{}, Agents: map[string]thresholds{}}
+	for _, a := range w.managedAgents(r.Context()) {
+		for _, repo := range a.Repos {
+			v.Effective[repo] = s.effective(repo)
 		}
+		v.Agents[a.Name] = s.effectiveAll(a.Repos)
 	}
 	if st, err := w.usage.State(r.Context()); err == nil {
 		v.State, v.Pauses = st["state"], st["pauses"]
 	}
 	writeJSON(rw, http.StatusOK, v)
+}
+
+// managedAgents: only agents with an Agent object have usage pauses (the operator renders their pods).
+func (w *writer) managedAgents(ctx context.Context) []agent {
+	agents, ok := w.store.(agentLister)
+	if !ok {
+		return nil
+	}
+	list, err := agents.List(ctx)
+	if err != nil {
+		return nil
+	}
+	out := list[:0]
+	for _, a := range list {
+		if a.Managed {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // limitsBody reads {fiveHour, weekly}. Each is an integer 1..100, or null / 0 to clear (project only).
@@ -234,6 +268,14 @@ func (w *writer) putGlobal(rw http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(ctxIdentity{}).(*identity)
 	la := &limitsAudit{Scope: "global"}
 	e := auditEntry{Who: w.who(id), Action: "set-limits", Request: la}
+	// read first, so that refused and invalid attempts also record the values they tried to change
+	s, rv, err := w.usage.Settings(r.Context())
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	before := s.global()
+	la.Before = &before
 	if !w.isAdmin(id) {
 		w.fail(rw, e, denied("only agentdev administrators can change the global usage limits"))
 		return
@@ -244,13 +286,6 @@ func (w *writer) putGlobal(rw http.ResponseWriter, r *http.Request) {
 		w.fail(rw, e, err)
 		return
 	}
-	s, rv, err := w.usage.Settings(r.Context())
-	if err != nil {
-		w.fail(rw, e, err)
-		return
-	}
-	before := s.global()
-	la.Before = &before
 	if t.FiveHour != 0 {
 		s.Global.FiveHour = t.FiveHour
 	}
@@ -271,15 +306,10 @@ var repoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]
 
 // forgeOfRepo returns the forge of the agents on repo; a project without an agent is not known here.
 func (w *writer) forgeOfRepo(ctx context.Context, repo string) (string, error) {
-	agents, ok := w.store.(agentLister)
-	if !ok {
+	if _, ok := w.store.(agentLister); !ok {
 		return "", errors.New("agent store cannot list")
 	}
-	list, err := agents.List(ctx)
-	if err != nil {
-		return "", err
-	}
-	for _, a := range list {
+	for _, a := range w.managedAgents(ctx) {
 		for _, r := range a.Repos {
 			if r == repo {
 				if a.Forge == "" {
@@ -289,7 +319,7 @@ func (w *writer) forgeOfRepo(ctx context.Context, repo string) (string, error) {
 			}
 		}
 	}
-	return "", &httpErr{http.StatusNotFound, "invalid", "no agent works on this project"}
+	return "", &httpErr{http.StatusNotFound, "invalid", "no managed agent works on this project"}
 }
 
 // PUT /api/usage/projects/{owner}/{repo}: a user with write access to the project (or an agentdev admin). Values
@@ -304,6 +334,13 @@ func (w *writer) putProject(rw http.ResponseWriter, r *http.Request) {
 		w.fail(rw, e, invalid("project must be owner/name"))
 		return
 	}
+	s, rv, err := w.usage.Settings(r.Context())
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	cur := s.Projects[repo]
+	la.Before = &cur
 	t, set, err := limitsBody(r, true)
 	if err != nil {
 		w.fail(rw, e, err)
@@ -320,18 +357,11 @@ func (w *writer) putProject(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Grant = grant
-	s, rv, err := w.usage.Settings(r.Context())
-	if err != nil {
-		w.fail(rw, e, err)
-		return
-	}
 	g := s.global()
 	if t.FiveHour > g.FiveHour || t.Weekly > g.Weekly {
 		w.fail(rw, e, invalid(fmt.Sprintf("a project can only lower the limits (global: %d%% 5-hour, %d%% weekly)", g.FiveHour, g.Weekly)))
 		return
 	}
-	cur := s.Projects[repo]
-	la.Before = &cur
 	next := cur
 	if set["fiveHour"] {
 		next.FiveHour = t.FiveHour

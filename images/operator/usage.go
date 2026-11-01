@@ -42,11 +42,15 @@ const (
 	usagePrefix     = "AGENTDEV_USAGE "
 	usageCM         = "agentdev-usage"          // state and pauses, written by the operator, mounted into agent pods
 	usageSettingsCM = "agentdev-usage-settings" // thresholds, written by the API
-	// DefaultFiveHour and DefaultWeekly are the global thresholds in percent when no setting exists (#92 decision).
-	DefaultFiveHour = 80
-	DefaultWeekly   = 90
 	// rateLimitPause is used when a run hit the rate limit and the CLI gave no reset time.
 	rateLimitPause = time.Hour
+)
+
+// DefaultFiveHour and DefaultWeekly are the global thresholds in percent when no setting exists (#92 decision: 80 and
+// 90). The instance can change them with USAGE_FIVE_HOUR and USAGE_WEEKLY (config.env, Ansible usage.*), set in main.
+var (
+	DefaultFiveHour = 80
+	DefaultWeekly   = 90
 )
 
 // Thresholds in percent of a window. 0 means "not set" in a project override.
@@ -78,6 +82,17 @@ func (s UsageSettings) Effective(repo string) Thresholds {
 		if valid(p.Weekly) && p.Weekly < t.Weekly {
 			t.Weekly = p.Weekly
 		}
+	}
+	return t
+}
+
+// EffectiveAll is the lowest effective threshold over all repositories of an agent. An Agent has one (spec.repo)
+// today; the API uses the same rule (images/api/usage.go), so a limit shown as effective always applies.
+func (s UsageSettings) EffectiveAll(repos ...string) Thresholds {
+	t := s.Effective("")
+	for _, r := range repos {
+		e := s.Effective(r)
+		t.FiveHour, t.Weekly = min(t.FiveHour, e.FiveHour), min(t.Weekly, e.Weekly)
 	}
 	return t
 }
@@ -162,22 +177,27 @@ type Usage struct {
 	paused map[string]Pause // by agent name, last written
 }
 
-// merge takes a new report of a window. Within the same window utilization only rises: the line comes from the agent
-// container, where Claude could print a forged one, so a forged line can add a pause but never lift one.
-func merge(cur *Window, w *Window) bool {
+// merge takes a new report of a window at time at; length is the window's length. The line comes from the agent
+// container, where Claude could print a forged one, so a report can add a pause but never lift one: within the same
+// window utilization only rises. A report counts as a new window only when the current one has reset (ResetsAt is
+// past) or its reset is at least 80 % of a window length later; anything else is taken as the same window (max).
+// Returns true for a new window.
+func merge(cur *Window, w *Window, at time.Time, length time.Duration) bool {
 	if w == nil {
 		return false
 	}
-	if w.ResetsAt == cur.ResetsAt {
-		cur.Utilization = math.Max(cur.Utilization, w.Utilization)
-		return false
-	}
-	if w.ResetsAt < cur.ResetsAt && w.ResetsAt != 0 {
+	if w.ResetsAt != 0 && w.ResetsAt < cur.ResetsAt {
 		return false // an older window reported late
 	}
-	newWindow := cur.ResetsAt != 0
-	*cur = *w
-	return newWindow
+	expired := cur.ResetsAt <= at.Unix()
+	later := w.ResetsAt >= cur.ResetsAt+int64((length*8/10)/time.Second)
+	if cur.ResetsAt == 0 || expired || later {
+		newWindow := cur.ResetsAt != 0
+		*cur = *w
+		return newWindow
+	}
+	cur.Utilization = math.Max(cur.Utilization, w.Utilization)
+	return false
 }
 
 func capReset(w *Window, at time.Time, d time.Duration) {
@@ -194,10 +214,10 @@ func (s *SubscriptionState) apply(u usageLine, at time.Time) {
 	if u.ResetsAt > at.Add(7*24*time.Hour).Unix() {
 		u.ResetsAt = at.Add(7 * 24 * time.Hour).Unix()
 	}
-	if merge(&s.FiveHour, u.FiveHour) {
+	if merge(&s.FiveHour, u.FiveHour, at, 5*time.Hour) {
 		s.InputTokens, s.OutputTokens, s.Runs = 0, 0, 0 // a new 5-hour window
 	}
-	merge(&s.Weekly, u.Weekly)
+	merge(&s.Weekly, u.Weekly, at, 7*24*time.Hour)
 	s.InputTokens += u.InputTokens
 	s.OutputTokens += u.OutputTokens
 	s.Runs++
@@ -328,7 +348,7 @@ func (u *Usage) Evaluate(ctx context.Context) error {
 		if s == nil {
 			continue
 		}
-		if p, ok := decide(s, settings.Effective(a.Spec.Repo), now); ok {
+		if p, ok := decide(s, settings.EffectiveAll(a.Spec.Repo), now); ok {
 			next[a.Name] = p
 		}
 	}
@@ -350,7 +370,7 @@ func (u *Usage) Evaluate(ctx context.Context) error {
 			}
 		}
 		p := next[name]
-		t := settings.Effective(repo)
+		t := settings.EffectiveAll(repo)
 		u.event(ctx, name, p, fmt.Sprintf("new runs paused on subscription %s until %s: %s (thresholds %d%% 5h, %d%% weekly)",
 			secret, time.Unix(p.Until, 0).UTC().Format(time.RFC3339), p.Reason, t.FiveHour, t.Weekly), now)
 	}
@@ -403,6 +423,8 @@ func equalData(a, b map[string]string) bool {
 // event records the pause as a SecurityEvent (source operator, low severity: no auto-pause of the agent itself).
 func (u *Usage) event(ctx context.Context, agent string, p Pause, action string, now time.Time) {
 	h := sha256.Sum256([]byte(fmt.Sprintf("usage\x00%s\x00%s\x00%d", agent, p.Reason, p.Until)))
+	// one event per agent (the agent is the unit the Security page and the SIEM filter by); the action names the
+	// subscription, so N agents on one Secret give N events with the same subscription
 	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "usage-" + p.Reason, Severity: "low",
 		Agent: agent, Action: clip(action, 500), Time: metav1.NewTime(now), Pod: "", Container: "", Hash: hex.EncodeToString(h[:])}
 	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: u.NS,

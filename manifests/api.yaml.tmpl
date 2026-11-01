@@ -44,6 +44,8 @@ spec:
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
+        - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # same defaults as the operator (#93), shown in the web UI
+        - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
         # every write that needs the forge gives 503 (fail closed).
         - name: FORGE_API_TOKEN

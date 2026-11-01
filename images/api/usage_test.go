@@ -3,8 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
 func TestUsageEffectiveClamp(t *testing.T) {
 	s := usageSettings{Global: thresholds{70, 85}, Projects: map[string]thresholds{"o/low": {50, 0}, "o/high": {95, 99}}}
@@ -16,6 +26,9 @@ func TestUsageEffectiveClamp(t *testing.T) {
 	}
 	if e := s.effective("o/high"); e != (thresholds{70, 85}) {
 		t.Fatalf("project above global is clamped: %+v", e)
+	}
+	if e := s.effectiveAll([]string{"o/low", "o/high"}); e != (thresholds{50, 85}) {
+		t.Fatalf("lowest over all repos: %+v", e)
 	}
 }
 
@@ -54,6 +67,11 @@ func TestUsageLimitsAPI(t *testing.T) {
 			t.Fatalf("%s: audit %+v", c.name, a)
 		}
 	}
+	// review #102 finding 6: a refused attempt records the current values
+	e.call("PUT", "/api/usage/global", "writer", `{"fiveHour":10}`)
+	if a := e.lastAudit(t); a.Result != "denied" || !strings.Contains(string(mustJSON(t, a.Request)), `"before":{"fiveHour":70,"weekly":85}`) {
+		t.Fatalf("refused attempt without before: %+v", a.Request)
+	}
 	s := settings()
 	if s.Global != (thresholds{70, 85}) || s.Projects["owner/x"] != (thresholds{FiveHour: 50}) {
 		t.Fatalf("stored: %+v", s)
@@ -71,7 +89,7 @@ func TestUsageLimitsAPI(t *testing.T) {
 	w := e.call("GET", "/api/usage", "reader", "")
 	var v usageView
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.Global != (thresholds{70, 85}) ||
-		v.Effective["owner/x"] != (thresholds{70, 85}) {
+		v.Effective["owner/x"] != (thresholds{70, 85}) || v.Agents["alice"] != (thresholds{70, 85}) {
 		t.Fatalf("GET /api/usage: %d %s", w.Code, w.Body)
 	}
 }

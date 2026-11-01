@@ -78,11 +78,20 @@ func main() {
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
+	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
 	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp, usage: agents}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// envPct reads a percent 1..100; any other value keeps def.
+func envPct(k string, def int) int {
+	if n := envInt(k, def); validPct(n) {
+		return n
+	}
+	return def
 }
 
 func envInt(k string, def int) int {
@@ -185,6 +194,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
+		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
 		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))

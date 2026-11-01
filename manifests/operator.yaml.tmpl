@@ -58,6 +58,8 @@ spec:
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
         - {name: SECURITY_RATE_PER_MIN, value: "${SECURITY_RATE_PER_MIN}"}
         - {name: SECURITY_RATE_BURST, value: "${SECURITY_RATE_BURST}"}
+        - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
+        - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

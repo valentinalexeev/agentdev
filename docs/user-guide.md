@@ -147,6 +147,8 @@ You must have write access to the repository. You can only set a limit that is l
    The row shows the effective limits.
 5. To use the global limits again, click **Use global**.
 
+NOTE: When the agents are paused for usage, the **Agents** page shows a banner with the reason and the end time.
+
 NOTE: The pause stops at the reset time of the usage window. The agents then continue the work that waits.
 
 ## Know what agents do

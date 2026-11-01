@@ -603,10 +603,15 @@ the lines for each subscription. Agents that use the same Claude Secret use the 
 When the use of a window is at the usage limit or more, the operator pauses the new runs of all agents on that
 subscription. Runs in progress continue to the end. At the reset time of the window, the agents start new runs
 again. You do not have to do an action. The operator records each pause as a SecurityEvent with the rule
-`usage-five-hour`, `usage-weekly` or `usage-rate-limited` and the severity `low`.
+`usage-five-hour`, `usage-weekly` or `usage-rate-limited` and the severity `low`. The operator makes one SecurityEvent
+for each agent. Thus, when 3 agents use one subscription, one pause gives 3 events. The action text of each event
+gives the name of the subscription.
 
-When Claude refuses a run because of its own rate limit, the agent pauses at once until the reset time. If Claude
-gives no reset time, the pause is 1 hour.
+When Claude refuses a run because of its own rate limit, that agent pauses at once until the reset time. Then the
+operator pauses all agents on the same subscription until that time. If Claude gives no reset time, the pause is
+1 hour.
+
+The **Agents** page shows a banner when an agent is paused for usage. The row of the agent shows `usage-paused`.
 
 ### Set the global usage limits
 
@@ -618,7 +623,9 @@ You must be in the authentik group `agentdev-admins`.
 4. Click **Save**.
    The API records the change as an `AGENTDEV_AUDIT` line with the action `set-limits`.
 
-NOTE: The default limits are 80 % for the 5-hour window and 90 % for the weekly window.
+NOTE: The default limits are 80 % for the 5-hour window and 90 % for the weekly window. To change the defaults, set
+`USAGE_FIVE_HOUR` and `USAGE_WEEKLY` in `config.env`, or `usage.five_hour` and `usage.weekly` in the Ansible
+`instance.yml`. A value that an administrator sets in the web UI replaces the default.
 
 NOTE: You can also send `PUT /api/usage/global` with `{"fiveHour": 80, "weekly": 90}`.
 
@@ -636,7 +643,10 @@ NOTE: The operator keeps this data in the ConfigMap `agentdev-usage`. The agent 
 |---|---|
 | Global limits | ConfigMap `agentdev-usage-settings`, key `settings.json`. Only the API writes it. |
 | Project limit | Lower than the global limit, or not set. The operator ignores a higher value. |
-| Effective limit | The lower value of the global limit and the project limit. |
+| Effective limit | The lower value of the global limit and the project limit. For an agent with more than one repository, the lowest value of all its repositories. |
+| Default limits | `USAGE_FIVE_HOUR` (80) and `USAGE_WEEKLY` (90): `config.env`; Ansible `usage.five_hour`, `usage.weekly`. |
+| Scope of a rate-limit pause | All agents on the same Claude Secret. |
+| Who can read the usage | Each user who can sign in to the web UI (`GET /api/usage`). Refer to risk R35 in `security.md`. |
 | State and pauses | ConfigMap `agentdev-usage`. Only the operator writes it. Each agent pod mounts it read-only. |
 | Pause event | SecurityEvent, source `operator`, rule `usage-<reason>`, severity `low`. It does not pause the Agent object. |
 | Audit | `AGENTDEV_AUDIT` with `action: set-limits`, for each try (also refused tries). |

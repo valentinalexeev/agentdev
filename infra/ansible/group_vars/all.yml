@@ -38,3 +38,7 @@ security:
   pause_after: 5                    # more than N events in one job pause the agent
   retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history
   max_per_agent: 500
+# subscription usage limits (#93): default global thresholds in percent until an admin sets them in the web UI
+usage:
+  five_hour: 80                     # pause new runs at this use of the 5-hour window
+  weekly: 90                        # and of the weekly window
