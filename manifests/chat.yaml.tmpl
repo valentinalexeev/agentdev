@@ -1,5 +1,8 @@
 # Interactive session (#38): one short-lived Job per session, rendered by scripts/agent-chat.sh (envsubst).
 # Same worker image as the agents, gVisor, no Kubernetes token. Forge identity: the project's read-only chat account.
+# Claude (#118): no claude-* Secret is mounted. Claude Code calls claude-proxy (ANTHROPIC_BASE_URL) with the proxy key
+# of CHAT_AGENT (Secret agent-<agent>-proxy), so budget and usage count for that agent. The pod has the label
+# app=agent-chat, which agent-egress selects (manifests/egress.yaml.tmpl): no direct path to api.anthropic.com, the rest through egress-proxy.
 # The Job ends when the session goes idle (agent-chat-session) and is removed after ttlSecondsAfterFinished.
 apiVersion: batch/v1
 kind: Job
@@ -12,7 +15,7 @@ spec:
   activeDeadlineSeconds: 28800    # hard cap 8 h, even with someone attached
   ttlSecondsAfterFinished: 300
   template:
-    metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}"}}
+    metadata: {labels: {app: agent-chat, project: "${PROJECT}", session: "${SESSION}", agent: "${CHAT_AGENT}"}}
     spec:
       restartPolicy: Never
       runtimeClassName: gvisor
@@ -39,8 +42,16 @@ spec:
         - {name: CHAT_URL,       value: "${CHAT_URL}"}       # the UI's chat page (#12), the card's link; empty until the UI exists
         - name: FORGE_TOKEN
           valueFrom: {secretKeyRef: {name: chat-${PROJECT}, key: FORGE_TOKEN}}
-        envFrom:
-        - secretRef: {name: ${CLAUDE_SECRET}}
+        - {name: ANTHROPIC_BASE_URL, value: "${CLAUDE_PROXY_URL}"}   # credential proxy (#66, #118)
+        - name: ANTHROPIC_AUTH_TOKEN                                 # the agent's proxy key, never the credential
+          valueFrom: {secretKeyRef: {name: agent-${CHAT_AGENT}-proxy, key: ANTHROPIC_AUTH_TOKEN}}
+        - {name: HTTPS_PROXY, value: "${EGRESS_PROXY}"}               # the only way out (#65)
+        - {name: HTTP_PROXY,  value: "${EGRESS_PROXY}"}
+        - {name: https_proxy, value: "${EGRESS_PROXY}"}
+        - {name: http_proxy,  value: "${EGRESS_PROXY}"}
+        - {name: NO_PROXY, value: "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"}
+        - {name: no_proxy, value: "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"}
+        - {name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, value: "1"}
         resources:
           requests: {cpu: 200m, memory: 512Mi}
           limits:   {cpu: "2", memory: 2Gi}
