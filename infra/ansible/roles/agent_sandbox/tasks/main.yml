@@ -1,0 +1,103 @@
+---
+# Same result as the old 02-agent-sandbox.sh: agent-sandbox (core + extensions) with its CRDs, the agent image in the
+# kind nodes, namespace, optional API key Secret, SandboxTemplate + SandboxWarmPool, and one warm sandbox ready.
+- name: Cache directory for the release manifest
+  ansible.builtin.file: {path: "{{ agent_sandbox_cache_dir }}", state: directory, mode: "0755"}
+
+- name: Download the agent-sandbox release manifest (pinned version, kept once per version)
+  ansible.builtin.get_url:
+    url: "{{ agent_sandbox_manifest_url }}"
+    dest: "{{ agent_sandbox_cache_dir }}/agent-sandbox-{{ agent_sandbox_version }}.yaml"
+    mode: "0644"
+
+# server-side apply: the CRDs are too large for the last-applied annotation of a client-side apply
+- name: Install agent-sandbox {{ agent_sandbox_version }}
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    src: "{{ agent_sandbox_cache_dir }}/agent-sandbox-{{ agent_sandbox_version }}.yaml"
+    server_side_apply: {field_manager: agentdev, force_conflicts: true}
+
+- name: Controller is Available
+  ansible.builtin.command: >-
+    kubectl --context {{ agent_sandbox_context | quote }} -n agent-sandbox-system
+    wait --for=condition=Available deploy --all --timeout=180s
+  changed_when: false
+
+- name: CRDs are served
+  kubernetes.core.k8s_info:
+    context: "{{ agent_sandbox_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+  register: agent_sandbox_crd
+  failed_when: agent_sandbox_crd.resources | length == 0
+  loop:
+    - sandboxes.agents.x-k8s.io
+    - sandboxtemplates.extensions.agents.x-k8s.io
+    - sandboxwarmpools.extensions.agents.x-k8s.io
+    - sandboxclaims.extensions.agents.x-k8s.io
+
+- name: Agent image (kind)
+  when: agent_sandbox_load_image | bool
+  block:
+    - name: Image id before the build
+      ansible.builtin.command: "{{ agent_sandbox_engine }} image inspect --format '{{ '{{' }}.Id{{ '}}' }}' {{ agent_sandbox_image | quote }}"
+      register: agent_sandbox_img_before
+      changed_when: false
+      failed_when: false
+
+    # the layer cache makes a rebuild a no-op
+    - name: Build the agent image {{ agent_sandbox_image }}
+      ansible.builtin.command: "{{ agent_sandbox_engine }} build -q -t {{ agent_sandbox_image | quote }} {{ agent_sandbox_image_dir | quote }}"
+      register: agent_sandbox_build
+      changed_when: agent_sandbox_build.stdout | trim != agent_sandbox_img_before.stdout | trim
+
+    # kind compares image ids and says "already present" when every node has this image
+    - name: Load the image into kind
+      ansible.builtin.command: kind load docker-image {{ agent_sandbox_image | quote }} --name {{ agent_sandbox_cluster_name | quote }}
+      register: agent_sandbox_load
+      changed_when: "'already present' not in (agent_sandbox_load.stdout ~ agent_sandbox_load.stderr)"
+
+- name: Namespace {{ agent_sandbox_ns }}
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agent_sandbox_ns }}"}}
+
+- name: Optional API key Secret claude-agent-keys (from ANTHROPIC_API_KEY)
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: claude-agent-keys, namespace: "{{ agent_sandbox_ns }}"}
+      stringData: {ANTHROPIC_API_KEY: "{{ agent_sandbox_api_key }}"}
+  when: agent_sandbox_api_key | length > 0
+  no_log: true
+
+- name: No API key, step 03 skips the live Claude call
+  ansible.builtin.debug:
+    msg: "ANTHROPIC_API_KEY not set: sandboxes start fine, step 03 skips the live Claude call"
+  when: agent_sandbox_api_key | length == 0
+
+- name: SandboxTemplate and SandboxWarmPool
+  kubernetes.core.k8s:
+    context: "{{ agent_sandbox_context }}"
+    namespace: "{{ agent_sandbox_ns }}"
+    src: "{{ agent_sandbox_template }}"
+    apply: true
+
+- name: Warm pool has 1 ready sandbox (cold start incl. PVC bind)
+  kubernetes.core.k8s_info:
+    context: "{{ agent_sandbox_context }}"
+    api_version: extensions.agents.x-k8s.io/v1beta1
+    kind: SandboxWarmPool
+    namespace: "{{ agent_sandbox_ns }}"
+    name: claude-agent-pool
+  register: agent_sandbox_pool
+  until: (agent_sandbox_pool.resources[0].status.readyReplicas | default(0) | int) == 1
+  retries: "{{ (agent_sandbox_warm_timeout | int / 5) | int }}"
+  delay: 5
+
+- name: Result
+  ansible.builtin.debug:
+    msg: "agent-sandbox {{ agent_sandbox_version }} ready, warm pool claude-agent-pool has 1 ready sandbox in {{ agent_sandbox_ns }}"

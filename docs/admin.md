@@ -1479,6 +1479,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Component | `kind` (run.sh step) | GKE (playbook) |
 |---|---|---|
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
+| agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |

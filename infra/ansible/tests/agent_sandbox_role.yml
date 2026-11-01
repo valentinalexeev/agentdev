@@ -1,0 +1,35 @@
+# The role agent_sandbox (#106, was 02-agent-sandbox.sh): kind.yml --tags sandbox runs only that role, and the API key
+# is read from the environment and only handled under no_log. Run: ansible-playbook infra/ansible/tests/agent_sandbox_role.yml
+- name: Role agent_sandbox (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List the tasks of the sandbox tag
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --tags, sandbox, --list-tasks]
+      register: sandbox_tasks
+      changed_when: false
+
+    - name: Only the agent_sandbox role runs under the tag
+      ansible.builtin.assert:
+        that:
+          - "'agent_sandbox' in sandbox_tasks.stdout or 'Agent-sandbox' in sandbox_tasks.stdout"
+          - "'Kind cluster with gVisor' not in sandbox_tasks.stdout"
+        quiet: true
+
+    - name: Read the role tasks
+      ansible.builtin.set_fact:
+        sandbox_role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_sandbox/tasks/main.yml') | from_yaml }}"
+        sandbox_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_sandbox/defaults/main.yml') }}"
+
+    - name: Every task that touches the API key has no_log, and the key comes from the environment
+      ansible.builtin.assert:
+        that:
+          - sandbox_role | selectattr('name', 'search', 'API key Secret') | map(attribute='no_log') | list == [true]
+          - "\"lookup('env', 'ANTHROPIC_API_KEY')\" in sandbox_defaults"
+        quiet: true
+
+    - name: The wrapper never passes the key on the command line
+      ansible.builtin.assert:
+        that: "'ANTHROPIC_API_KEY=' not in lookup('ansible.builtin.file', playbook_dir ~ '/../../../02-agent-sandbox.sh')"
+        quiet: true

@@ -88,6 +88,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | run.sh step | `kind.yml` tag | Role |
 |---|---|---|
 | 01 | `cluster` | `kind_cluster` |
+| 02 | `sandbox` | `agent_sandbox` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -96,6 +97,15 @@ The role takes `kind_cluster_name`, `kind_cluster_engine`, `kind_cluster_gvisor_
 (the wrapper passes the values of `config.env`). It is idempotent: a second run reuses the cluster and the installed
 gVisor. The role always downloads the `.tar.bz2` archive of gVisor and checks its sha512 (the old step used
 `.tar.zstd` when `zstd` was installed).
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags sandbox    # agent-sandbox, agent image, template, warm pool
+```
+The role `agent_sandbox` uses `kubernetes.core` like `deploy.yml` (server-side apply of the pinned release manifest,
+cached in `~/.cache/agentdev`), so GKE can include it with its own `agent_sandbox_context` and
+`agent_sandbox_load_image: false`. It takes `agent_sandbox_version`, `agent_sandbox_ns`, `agent_sandbox_image` and
+`agent_sandbox_engine`. `ANTHROPIC_API_KEY` is read from the environment, never from `-e`, and the Secret task has
+`no_log`. A second run changes nothing (the image is rebuilt from cache and `kind load` sees it is present).
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
