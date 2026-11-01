@@ -14,6 +14,7 @@
 #   `agentdev-admins-sso` only when the directory no longer lists them. the mapping logs each change as the event
 #   custom_agentdev_admin_sync (person, add/remove, directory group).
 # - No entry in any blueprint sets `users:`.
+# Only e-mail addresses of AGENTDEV_SSO_ALLOWED_DOMAINS sign in (policy agentdev-sso-allowed-domains).
 # The values that go into expressions are checked against strict patterns before they reach the Secret
 # (09-authentik.sh, infra/ansible/roles/authentik_sso): no quotes, backslashes or new lines.
 version: 1
@@ -43,6 +44,7 @@ entries:
     name: agentdev SSO authentication
     title: Welcome to agentdev
     designation: authentication
+    policy_engine_mode: all          # every binding must pass (SSO flow and company domain)
     authentication: require_unauthenticated
 - model: authentik_stages_user_write.userwritestage
   id: auth-write
@@ -64,6 +66,65 @@ entries:
     order: 0
     policy: !Find [authentik_policies_expression.expressionpolicy, [name, default-source-authentication-if-sso]]
     target: !KeyOf auth-flow
+
+# Company domain (review #134): only e-mail addresses of AGENTDEV_SSO_ALLOWED_DOMAINS (comma-separated) may sign in
+# or be enrolled; Google's `hd` claim, when sent, must match too. Bound to both flows of this source, so the plan is
+# refused before any user, connection or group change. No domain configured: nobody gets in (fail closed).
+- model: authentik_policies_expression.expressionpolicy
+  id: domain-policy
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-sso-allowed-domains}
+  attrs:
+    execution_logging: true
+    expression: !Format
+    - |
+      allowed = [d for d in "%s".split(",") if d]
+      prompt = context.get("prompt_data") or {}
+      email = str(prompt.get("email") or "").strip().lower()
+      domain = email.rsplit("@", 1)[1] if email.count("@") == 1 else ""
+      hd = (context.get("oauth_userinfo") or {}).get("hd")
+      if domain in allowed and (hd is None or hd in allowed):
+          return True
+      ak_message("Sign-in is limited to the company domain.")
+      return False
+    - !Env AGENTDEV_SSO_ALLOWED_DOMAINS
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 10, policy: !KeyOf domain-policy, target: !KeyOf auth-flow}
+# New users: an own enrollment flow (the default one is shared with other sources), same stages plus the domain policy
+- model: authentik_flows.flow
+  id: enroll-flow
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {slug: agentdev-sso-enrollment}
+  attrs:
+    name: agentdev SSO enrollment
+    title: Welcome to agentdev
+    designation: enrollment
+    policy_engine_mode: all          # every binding must pass (SSO flow and company domain)
+    authentication: require_unauthenticated
+- model: authentik_stages_user_write.userwritestage
+  id: enroll-write
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-sso-enrollment-write}
+  attrs: {user_creation_mode: always_create}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 0, stage: !KeyOf enroll-write, target: !KeyOf enroll-flow}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 10
+    stage: !Find [authentik_stages_user_login.userloginstage, [name, default-source-enrollment-login]]
+    target: !KeyOf enroll-flow
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 0
+    policy: !Find [authentik_policies_expression.expressionpolicy, [name, default-source-enrollment-if-sso]]
+    target: !KeyOf enroll-flow
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 10, policy: !KeyOf domain-policy, target: !KeyOf enroll-flow}
 
 # ---- Google Workspace (SAML) ----
 # Google sends groups only through SAML ("Group membership" in the SAML app), and custom attributes only through SAML
@@ -109,7 +170,8 @@ entries:
       login = login.strip().lower() if isinstance(login, str) else ""
       if not regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$"):
           login = ""
-      return {"attributes": {"forge_login": login}}
+      # e-mail = Name ID (primary e-mail in the Workspace app); the domain policy checks it
+      return {"email": str(name_id.text or "").strip().lower(), "attributes": {"forge_login": login}}
     - !Env AGENTDEV_SSO_ADMIN_GROUP
     - !Env AGENTDEV_SSO_FORGE_ATTR
 - model: authentik_sources_saml.samlsourcepropertymapping
@@ -137,7 +199,7 @@ entries:
     group_matching_mode: name_link     # safe: only agentdev-admins-sso can reach the matcher
     pre_authentication_flow: !Find [authentik_flows.flow, [slug, default-source-pre-authentication]]
     authentication_flow: !KeyOf auth-flow
-    enrollment_flow: !Find [authentik_flows.flow, [slug, default-source-enrollment]]
+    enrollment_flow: !KeyOf enroll-flow
     user_property_mappings: [!KeyOf saml-user]
     group_property_mappings: [!KeyOf saml-group]
 
@@ -171,7 +233,10 @@ entries:
       login = login.strip().lower() if isinstance(login, str) else ""
       if not regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$"):
           login = ""
-      return {"attributes": {"forge_login": login}}
+      out = {"attributes": {"forge_login": login}}
+      if not properties.get("username"):
+          out["username"] = info.get("email")    # the enrollment flow has no username prompt
+      return out
     - !Env AGENTDEV_SSO_ADMIN_GROUP
     - !Env AGENTDEV_SSO_FORGE_ATTR
 - model: authentik_sources_oauth.oauthsourcepropertymapping
@@ -197,6 +262,6 @@ entries:
     user_matching_mode: identifier
     group_matching_mode: name_link
     authentication_flow: !KeyOf auth-flow
-    enrollment_flow: !Find [authentik_flows.flow, [slug, default-source-enrollment]]
+    enrollment_flow: !KeyOf enroll-flow
     user_property_mappings: [!KeyOf oidc-user]
     group_property_mappings: [!KeyOf oidc-group]

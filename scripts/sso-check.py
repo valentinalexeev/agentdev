@@ -27,6 +27,7 @@ import urllib.request
 from http.cookiejar import CookieJar
 
 TEST_USER = "sso-check-alice"
+FOREIGN_USER = "sso-check-mallory"
 
 
 def free_port():
@@ -57,10 +58,18 @@ class Browser:
             body = data.encode()
             h.setdefault("Content-Type", "application/json")
         r = urllib.request.Request(url, data=body, headers=h, method="POST" if body is not None else "GET")
-        try:
-            resp = self.op.open(r, timeout=30)
-        except urllib.error.HTTPError as e:
-            resp = e
+        for attempt in range(4):
+            try:
+                resp = self.op.open(r, timeout=30)
+                break
+            except urllib.error.HTTPError as e:
+                resp = e
+                break
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                # kubectl port-forward drops a connection now and then: retry, then give up
+                if attempt == 3:
+                    raise
+                time.sleep(2)
         return resp.status, resp.headers, resp.read().decode("utf-8", "replace")
 
 
@@ -106,12 +115,12 @@ def run_flow(b, base, flow_url):
     raise RuntimeError("flow did not finish")
 
 
-def sign_in(base, idp, claims):
+def sign_in(base, idp, claims, user=TEST_USER):
     b = Browser()
     url, st, body = follow(b, f"{base}/source/oauth/login/agentdev-sso/", base)
     if not url.startswith(idp):
         raise RuntimeError(f"source did not redirect to the stand-in (got {urllib.parse.urlparse(url).netloc})")
-    st, hd, _ = b.req(url, data={"username": TEST_USER, "claims": json.dumps(claims)})
+    st, hd, _ = b.req(url, data={"username": user, "claims": json.dumps(claims)})
     loc = hd.get("Location", "")
     if "code=" not in loc:
         raise RuntimeError("stand-in gave no code")
@@ -154,6 +163,22 @@ print("RESULT=" + json.dumps({
 }))
 """
 
+REAPPLY = """
+import json
+from authentik.blueprints.models import BlueprintInstance
+from authentik.blueprints.v1.importer import Importer
+ok = []
+for bi in BlueprintInstance.objects.filter(path__startswith="mounted/cm-authentik-blueprints/"):
+    ok.append(Importer.from_string(bi.retrieve(), bi.context).apply())
+print("RESULT=" + json.dumps(ok))
+"""
+
+EXISTS = """
+import json
+from authentik.core.models import User
+print("RESULT=" + json.dumps(User.objects.filter(username=%(user)r).exists()))
+"""
+
 HAND_ADD = """
 import json
 from authentik.core.models import Group, User
@@ -164,7 +189,7 @@ print("RESULT=true")
 CLEANUP = """
 import json
 from authentik.core.models import User
-n = User.objects.filter(username=%(user)r).delete()[0]
+n = User.objects.filter(username__in=[%(user)r, %(foreign)r]).delete()[0]
 print("RESULT=" + json.dumps(n))
 """
 
@@ -175,6 +200,7 @@ def main():
     ap.add_argument("--namespace", required=True)
     ap.add_argument("--admin-group", required=True)
     ap.add_argument("--forge-attr", required=True)
+    ap.add_argument("--domain", required=True, help="an allowed company domain")
     a = ap.parse_args()
     ctx, ns = a.context, a.namespace
     ak_port = free_port()
@@ -201,8 +227,8 @@ def main():
                 time.sleep(2)
         since = ak_shell(ctx, ns, "import json\nfrom django.utils import timezone\n"
                          "print('RESULT=' + json.dumps(timezone.now().isoformat()))")
-        ak_shell(ctx, ns, CLEANUP % {"user": TEST_USER})
-        claims = {"preferred_username": TEST_USER, "email": f"{TEST_USER}@example.com", "name": "SSO check",
+        ak_shell(ctx, ns, CLEANUP % {"user": TEST_USER, "foreign": FOREIGN_USER})
+        claims = {"preferred_username": TEST_USER, "email": f"{TEST_USER}@{a.domain}", "name": "SSO check",
                   "groups": ["engineering", a.admin_group], a.forge_attr: " Alice-1 "}
 
         print("1. sign-in as a member of the directory group")
@@ -216,8 +242,13 @@ def main():
               "forge_login from the custom attribute, normalised")
         check(s["groups_from_source"] == ["agentdev-admins-sso"], "no other directory group reached authentik")
 
-        print("2. a member added by hand is kept")
+        print("2. a member added by hand is kept when the blueprints are re-applied")
         ak_shell(ctx, ns, HAND_ADD % {"user": TEST_USER})
+        applied = ak_shell(ctx, ns, REAPPLY)
+        s = ak_shell(ctx, ns, STATE % {"user": TEST_USER, "since": since})
+        check(len(applied) >= 2 and all(applied), f"all agentdev blueprints re-applied ({len(applied)})")
+        check(s["in_admins_direct"], "hand-added member still in agentdev-admins after the re-apply")
+        check(s["akadmin_admin"], "akadmin still in agentdev-admins after the re-apply")
 
         print("3. sign-in after leaving the directory group, with a bad custom attribute")
         claims.update({"groups": ["engineering"], a.forge_attr: "bad login!"})
@@ -228,12 +259,24 @@ def main():
         check(s["akadmin_admin"], "akadmin still in agentdev-admins")
         check(s["forge_login"] == "" and "forge_login" not in s["claims"], "bad attribute clears forge_login")
 
-        print("4. audit")
+        print("4. company domain")
+        for label, extra in [("foreign e-mail domain", {"email": f"{FOREIGN_USER}@evil.example"}),
+                             ("foreign Google hd claim", {"email": f"{FOREIGN_USER}@{a.domain}", "hd": "evil.example"})]:
+            refused = False
+            try:
+                sign_in(base, idp, {"preferred_username": FOREIGN_USER, "groups": [a.admin_group],
+                                    a.forge_attr: "mallory", **extra}, user=FOREIGN_USER)
+            except RuntimeError:
+                refused = True
+            check(refused and not ak_shell(ctx, ns, EXISTS % {"user": FOREIGN_USER}),
+                  f"{label}: sign-in refused, no user created")
+
+        print("5. audit")
         check(s["events"] == ["add", "remove"], f"one audit event per change: {s['events']}")
     finally:
         try:
             if os.environ.get("SSO_KEEP") != "1":
-                ak_shell(ctx, ns, CLEANUP % {"user": TEST_USER})
+                ak_shell(ctx, ns, CLEANUP % {"user": TEST_USER, "foreign": FOREIGN_USER})
         except Exception as exc:  # noqa: BLE001
             print(f"  ! cleanup failed: {exc}")
         for p in pfs:

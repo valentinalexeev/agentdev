@@ -422,6 +422,8 @@ The synchronization obeys these rules (#103):
 - It never changes the members of `agentdev-admins`. Members that you add to `agentdev-admins` (for example
   `akadmin`) stay.
 - Other Workspace groups do not go to authentik.
+- Only e-mail addresses of the company domains (`allowed_domains`) can sign in. authentik refuses other addresses
+  before it creates a user. If Google sends the claim `hd`, it must also be a company domain.
 - authentik records each change as the event `custom_agentdev_admin_sync` (**Events > Logs**). The event has the user
   name, `add` or `remove`, and the Workspace group.
 
@@ -454,14 +456,18 @@ You must be a Google Workspace super administrator.
 1. Put the certificate from step 7 into Secret Manager:
    `gcloud secrets create authentik-sso-idp-cert --data-file=google.pem --project <project>`
 2. In `instance.yml` of the deployment repository, add `authentik.sso` (see `infra/ansible/example.vars.yml`):
-   `kind: saml`, `admin_group`, `forge_attribute` and `saml_sso_url`.
+   `kind: saml`, `admin_group`, `allowed_domains`, `forge_attribute` and `saml_sso_url`.
 3. Open a pull request in the deployment repository. After the merge, the playbook writes the Secret `authentik-sso`
    and restarts authentik.
 4. Sign in to the agentdev UI with **Google Workspace**.
 5. In authentik, go to **Directory > Users**, open your user, and make sure that `forge_login` is correct.
 
-The playbook makes sure that `admin_group` and `forge_attribute` contain only safe characters. These values go into
+The playbook makes sure that `admin_group`, `allowed_domains` and `forge_attribute` contain only safe characters.
+Without `allowed_domains`, the playbook stops. These values go into
 the property mapping expressions.
+
+NOTE: A person has one forge login at this time. Use the GitHub login in `githubLogin`. Logins for each forge
+(for example GitHub and Gitea) are a proposal on #122 that waits for a decision.
 
 NOTE: If the custom attribute is empty or is not a valid forge login, `forge_login` is empty. The person can read,
 but cannot change agents.
@@ -482,6 +488,10 @@ any user name and any claims. The same blueprint configures it as an OIDC source
 3. Open authentik, and click **Company SSO (local stand-in)**.
 4. Type a user name. In **claims**, type for example
    `{"groups": ["agentdev-admins@example.com"], "githubLogin": "alice"}`.
+
+The step also re-applies all agentdev blueprints and makes sure that a member added by hand stays in
+`agentdev-admins`. It also makes sure that a sign-in from another domain is refused. On kind, the company domain
+is `example.com` (`SSO_ALLOWED_DOMAINS`).
 
 To skip the stand-in, set `SSO_STANDIN=0`. To skip only the test, set `SSO_CHECK=0`.
 

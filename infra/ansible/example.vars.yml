@@ -23,7 +23,8 @@ agents:
 #   sso:
 #     kind: saml                                   # Google Workspace SAML app (oidc: another OIDC provider)
 #     admin_group: agentdev-admins@example.com     # the Workspace group (its e-mail address)
-#     forge_attribute: githubLogin                 # SAML app attribute with the custom schema field
+#     allowed_domains: [example.com]               # only these e-mail domains sign in (required)
+#     forge_attribute: githubLogin                 # SAML app attribute with the GitHub login (one per forge, #122)
 #     saml_sso_url: https://accounts.google.com/o/saml2/idp?idpid=C0abc123
 # Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
 # defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
