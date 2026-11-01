@@ -25,6 +25,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   the optional `security-siem`, the keys of #71); then `manifests/api.yaml.tmpl`. All secret tasks have `no_log`.
   Secret lookup is one task file per source so the kind path can reuse the role (#106). The API restarts on every
   Secret change; an optional secret without an enabled version counts as absent. authentik on GKE: #114.
+- Forge sidecar: GitHub App driver (#2, step 2), `FORGE_KIND=github`. Inputs `GITHUB_APP_ID`,
+  `GITHUB_APP_PRIVATE_KEY`, optional `GITHUB_INSTALLATION_ID` and `GITHUB_API_URL` (GHES), forge container only.
+  The sidecar signs the App JWT (RS256, standard library), mints installation tokens narrowed to the agent's repos
+  and to contents/issues/pull requests write and metadata/checks/statuses read, caches them in memory and renews
+  them 10 minutes before expiry. git gets the token through the credential helper. Every comment, PR body and
+  review reply gets a fixed signature line with the agent's name. `GET /identity` gives the loop the commit author
+  (`<agent> (agentdev)` with the App bot's noreply address). Allowed calls add review threads (`.../replies`) and
+  the check runs and status of a commit; merging, labels, issue edits and GraphQL are refused.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed

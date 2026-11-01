@@ -29,6 +29,8 @@ type rule struct {
 	method string
 	path   *regexp.Regexp
 	check  func(s *server, body []byte) error // optional body policy
+	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
+	rewrite func(s *server, body []byte) ([]byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -84,6 +86,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }
 
@@ -156,6 +159,14 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if match.rewrite != nil {
+		if body, err = match.rewrite(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	drv := s.driver()
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
@@ -214,4 +225,24 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	s.logf("pushed %s to %s", tip[:12], branch)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": tip})
+}
+
+// GET /identity: the forge kind and the commit author the loop uses (#2). On GitHub the author is the agent's name
+// with the App bot's noreply address, so GitHub links the commit to the App; on Gitea it is the agent's own user.
+func (s *server) identity(w http.ResponseWriter, r *http.Request) {
+	out := map[string]string{"forge": s.driver().kind(), "agent": s.c.AgentName,
+		"name": s.c.ForgeUser, "email": s.c.ForgeUser + "@agents.local"}
+	if d, ok := s.driver().(*githubDriver); ok {
+		login, id, err := d.identity(r.Context())
+		if err != nil {
+			s.logf("identity: %v", err)
+			fail(w, errors.New("forge identity unavailable"))
+			return
+		}
+		out["name"] = s.c.AgentName + " (agentdev)"
+		out["email"] = fmt.Sprintf("%d+%s@users.noreply.github.com", id, login)
+		out["login"] = login
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
