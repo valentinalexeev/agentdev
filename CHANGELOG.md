@@ -11,6 +11,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
   App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
   backup, upgrade, security checklist). Docs only.
+- Approval decisions in the web UI (#67, absorbed #80): `POST /api/approvals/{name}/decision`
+  (`approve`, `approve-job`, `deny`, with the `contentHash` the person saw). Human OIDC sessions only: agent
+  sessions and platform accounts are refused; role is the admin group or forge write access. First decision wins,
+  a repeat of the same decision is idempotent. The status records `decidedBy` and `decidedVia: ui`; the audit is in
+  Postgres. UI: **Details** dialog with Approve once, Approve for the job and Deny, and a confirmation. Same on kind
+  and GKE. Docs: `docs/user-guide.md`, `docs/admin.md`, `docs/security-model.md`. New risks R90, R91.
 - Risk id check (#126): `scripts/check-risk-ids.sh` fails when `docs/security.md` defines a risk id twice or a file
   refers to an id the register does not define. Numbering rule added to `docs/security.md`. Stale references to the
   MCP risks fixed (now R51, R52, in `config.env`, `instance.yml.example` and an older changelog entry).

@@ -2,7 +2,8 @@ package main
 
 // Approvals (#67, docs/security-model.md "Approvals and permission notifications"). Forge-first: a request is an
 // Approval object (created by the operator from the forge sidecar's request line), the decision is a forge comment
-// `/approve <id>`, `/approve-job <id>` or `/deny <id>` on the job's issue or PR. Deciding in the UI is #80.
+// `/approve <id>`, `/approve-job <id>` or `/deny <id>` on the job's issue or PR, or a human session in the web UI
+// (POST /api/approvals/{name}/decision, decide below; #80 absorbed into #67).
 //
 // The decider (run) polls the pending Approvals and the comments of their issue or PR and applies the decision rules:
 //
@@ -655,8 +656,9 @@ func callerOwns(a approval, agent, sec string) bool {
 // approvalReader serves GET /api/approvals and GET /api/approvals/{name}: requests of the repositories where the
 // caller has write access (checked on the forge), or all for the admin group.
 type approvalReader struct {
-	store approvalStore
-	w     *writer
+	store  approvalStore
+	w      *writer
+	agents agentLister // agent names that never decide in the UI; nil in tests that only read
 }
 
 func (ar *approvalReader) visible(ctx context.Context, id *identity) func(repo, forge string) bool {
@@ -732,4 +734,162 @@ func (ar *approvalReader) get(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, http.StatusOK, a)
+}
+
+// ---- UI decisions (#67, absorbed #80) ----
+
+// approvalDenyLogins: platform accounts that never decide (APPROVAL_DENY_ACCOUNTS, lower case), for the UI as for the
+// forge. Set once by main before serving.
+var approvalDenyLogins = map[string]bool{}
+
+// decideBody is POST /api/approvals/{name}/decision. ContentHash is the hash the person saw in the UI: the decision
+// covers that content only (the same binding as a forge decision, rule 4).
+type decideBody struct {
+	Decision    string `json:"decision"` // approve | approve-job | deny
+	ContentHash string `json:"contentHash"`
+}
+
+// decide serves POST /api/approvals/{name}/decision. Only a human session decides: the caller is an OIDC user of the
+// web UI (auth), never an agent. A session whose forge login or user name is an agent, the requester or a platform
+// account is refused. Role: the admin group, or write access to the repository on the forge (as for a forge comment).
+// The status is written with a compare-and-set on resourceVersion; the first decision wins. The same decision again
+// is idempotent (200, nothing changes); a different one after the first is 409. Every outcome is audited (Postgres).
+func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
+	id := r.Context().Value(ctxIdentity{}).(*identity)
+	name := r.PathValue("name")
+	e := auditEntry{Who: ar.w.who(id), Action: "approval-decision"}
+	fail := func(code int, result, msg string) {
+		e.Result, e.Reason = result, msg
+		audit(e)
+		writeJSON(rw, code, map[string]string{"error": msg})
+	}
+	if len(name) > 100 || !agentNameRe.MatchString(name) {
+		fail(http.StatusBadRequest, "invalid", "bad name")
+		return
+	}
+	var body decideBody
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		fail(http.StatusBadRequest, "invalid", "body: {\"decision\": \"approve|approve-job|deny\", \"contentHash\": \"...\"}")
+		return
+	}
+	st := map[string]any{"state": "allowed", "scope": "once"}
+	switch body.Decision {
+	case "approve":
+	case "approve-job":
+		st["scope"] = "job"
+	case "deny":
+		st = map[string]any{"state": "denied"}
+	default:
+		fail(http.StatusBadRequest, "invalid", "decision: approve, approve-job or deny")
+		return
+	}
+	u, err := ar.store.GetApproval(r.Context(), name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			fail(http.StatusNotFound, "invalid", "not found")
+		} else {
+			fail(http.StatusBadGateway, "error", "cannot read approval")
+		}
+		return
+	}
+	a := fromApprovalObject(u)
+	e.Agent, e.Request = a.Agent, map[string]any{"approval": a.ID, "repo": a.Repo, "job": a.Job, "tool": a.Tool,
+		"contentHash": a.ContentHash, "decision": body.Decision, "via": "ui"}
+	// agents first: refused whatever their forge access (an agent account has write access to its repository)
+	if who, ok := ar.agentIdentity(r.Context(), id, a); ok {
+		fail(http.StatusForbidden, "denied", "agents and platform accounts never decide ("+who+")")
+		return
+	}
+	if !ar.visible(r.Context(), id)(a.Repo, a.Forge) {
+		fail(http.StatusNotFound, "denied", "not found") // do not reveal other projects
+		return
+	}
+	if a.Source == "executor" && body.Decision == "approve-job" {
+		st["scope"] = "once" // an executor apply is single-use (#69)
+	}
+	grant, err := ar.w.authorize(r.Context(), id, a.Forge, a.Repo, permWrite, true)
+	if err != nil {
+		he, _ := err.(*httpErr)
+		if he == nil {
+			he = &httpErr{http.StatusServiceUnavailable, "error", err.Error()}
+		}
+		fail(he.code, he.result, he.msg)
+		return
+	}
+	e.Grant = grant
+	if body.ContentHash != a.ContentHash {
+		fail(http.StatusConflict, "denied", "the request changed since you opened it; reload and check it again")
+		return
+	}
+	decider := forgeUserOf(id)
+	if decider == "" {
+		decider = id.Username
+	}
+	for attempt := 0; ; attempt++ {
+		if a.State != "pending" {
+			if a.State == st["state"] && (a.State != "allowed" || a.Scope == st["scope"]) {
+				e.Result, e.Reason = "ok", "already decided the same way: nothing changed"
+				audit(e)
+				writeJSON(rw, http.StatusOK, a)
+				return
+			}
+			fail(http.StatusConflict, "denied", "request is already "+a.State+": a later decision has no effect")
+			return
+		}
+		obj := u.DeepCopy()
+		ns := map[string]any{"contentHash": a.ContentHash, "decidedAt": now().Format(time.RFC3339),
+			"decidedBy": decider, "decidedVia": "ui"}
+		for k, v := range st {
+			ns[k] = v
+		}
+		obj.Object["status"] = ns
+		err := ar.store.UpdateApprovalStatus(r.Context(), obj)
+		if err == nil {
+			e.Action, e.Result = "approval-"+st["state"].(string), "ok"
+			audit(e)
+			u2, gerr := ar.store.GetApproval(r.Context(), name)
+			if gerr != nil {
+				u2 = obj
+			}
+			writeJSON(rw, http.StatusOK, fromApprovalObject(u2))
+			return
+		}
+		if !apierrors.IsConflict(err) {
+			fail(http.StatusBadGateway, "error", "cannot write the decision")
+			return
+		}
+		// someone else wrote first: read again and apply the idempotency rule
+		if u, err = ar.store.GetApproval(r.Context(), name); err != nil {
+			fail(http.StatusBadGateway, "error", "cannot read approval")
+			return
+		}
+		a = fromApprovalObject(u)
+		if attempt > 0 && a.State == "pending" {
+			// still pending after a second conflict: nothing was written, the caller retries
+			fail(http.StatusConflict, "denied", "the request changed meanwhile; reload and decide again")
+			return
+		}
+	}
+}
+
+// agentIdentity tells whether the session belongs to an agent or a platform account: its forge login or user name is
+// the name of an agent, a platform account (APPROVAL_DENY_ACCOUNTS) or the requester. An agent has no web session by
+// design (its tokens are forge tokens, not OIDC tokens of the UI client); this is the second line.
+func (ar *approvalReader) agentIdentity(ctx context.Context, id *identity, a approval) (string, bool) {
+	names := map[string]bool{strings.ToLower(a.Agent): true}
+	if ar.agents != nil {
+		list, err := ar.agents.List(ctx)
+		if err != nil {
+			return "cannot list agents", true // fail closed
+		}
+		for _, ag := range list {
+			names[strings.ToLower(ag.Name)] = true
+		}
+	}
+	for _, n := range []string{forgeUserOf(id), strings.ToLower(id.Username)} {
+		if n != "" && (names[n] || approvalDenyLogins[n]) {
+			return n, true
+		}
+	}
+	return "", false
 }
