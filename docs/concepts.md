@@ -101,12 +101,18 @@ runner can start any program. So the security boundary is the pod, not the list 
   so nothing Claude writes runs there. It also receives the router's wake calls. Even if Claude calls the sidecar
   directly, it gets no more than this policy allows; this closes R4 (pending an e2e pass). Every refusal is also
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
+- **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
+  the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
+  come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
   push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
-- **Known gaps:** egress is open, so anything Claude can read (the repo, its own Claude login) could be sent out. The full list of risks and their status is in [security.md](security.md); the target design
+- **Known gaps:** egress is open, so anything Claude can read (the repo, its proxy key) could be sent out; the key is
+  worthless outside the cluster. The full list of risks and their status is in [security.md](security.md); the target design
   (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI) is in
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
