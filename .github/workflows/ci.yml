@@ -30,6 +30,7 @@ jobs:
       api: ${{ steps.f.outputs.api }}
       operator: ${{ steps.f.outputs.operator }}
       forge: ${{ steps.f.outputs.forge }}
+      credproxy: ${{ steps.f.outputs.credproxy }}
       ui: ${{ steps.f.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +54,7 @@ jobs:
           echo "api=$(has '(^images/api/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "operator=$(has '(^images/operator/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "forge=$(has '(^images/forge/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "credproxy=$(has '(^images/credproxy/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "ui=$(has '(^images/ui/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
 
   lint:
@@ -91,12 +93,14 @@ jobs:
           PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img FORGE_IMAGE=img IMAGE_PULL_POLICY=Never \
             FORGE_URL=http://f FORGE_PUBLIC_URL=http://f FORGE_ADMIN_USER=owner BOTBOARD_URL= POLL_SECONDS=20 IDLE_SECONDS=900 \
             envsubst < manifests/operator.yaml.tmpl | ./kubeconform -strict -summary -
+          AGENTS_NS=coding-agents PLATFORM_NS=agentdev-platform CLAUDE_PROXY_IMAGE=img IMAGE_PULL_POLICY=Never CLAUDE_BUDGET_TOKENS=0 \
+            CLAUDE_SECRET_SOURCES="$(scripts/claude-proxy-sources.sh alice)" envsubst < manifests/claude-proxy.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
       - name: router tests (no dependencies, a few seconds)
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
       - uses: actions/setup-go@v5
-        if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true'
+        if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
         with: {go-version-file: images/api/go.mod, cache-dependency-path: images/api/go.sum}
       - name: API vet and tests (#46)
         if: needs.scope.outputs.api == 'true'
@@ -114,6 +118,10 @@ jobs:
       - name: forge sidecar vet and tests (#64)
         if: needs.scope.outputs.forge == 'true'
         working-directory: images/forge
+        run: go vet ./... && go test ./...
+      - name: Claude credential proxy vet and tests (#66)
+        if: needs.scope.outputs.credproxy == 'true'
+        working-directory: images/credproxy
         run: go vet ./... && go test ./...
       - uses: actions/setup-node@v4
         if: needs.scope.outputs.ui == 'true'
