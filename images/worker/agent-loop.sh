@@ -54,6 +54,35 @@ request_review() {  # (re)request REVIEWER on a PR; also works after a review to
 
 comment() { api POST "/repos/${REPO}/issues/$1/comments" "$(jq -n --arg b "$2" '{body:$b}')" >/dev/null; }
 
+# ---------- forge flavour (#2) ----------
+# Gitea and GitHub differ in a few places the loop sees: how work is assigned, who the PR author is, paging and URLs.
+# The kind and the commit identity come from the sidecar (GET /identity), never from the model; all values are
+# validated before use. Gitea defaults keep the pre-#2 behaviour.
+FORGE_KIND=gitea; MY_LOGIN="${FORGE_USER}"; GIT_NAME="${FORGE_USER}"; GIT_EMAIL="${FORGE_USER}@agents.local"
+forge_identity() {  # sets FORGE_KIND, MY_LOGIN, GIT_NAME, GIT_EMAIL from the sidecar; 1 if it answers nonsense
+  local id k l n e
+  id=$(curl -fsS -m 30 "${FORGE_API}/identity") || return 1
+  k=$(jq -r '.forge // ""' <<<"${id}"); l=$(jq -r '.login // ""' <<<"${id}")
+  n=$(jq -r '.name // ""' <<<"${id}"); e=$(jq -r '.email // ""' <<<"${id}")
+  [[ "${k}" == gitea || "${k}" == github ]] || return 1
+  [[ "${n}" =~ ^[A-Za-z0-9][A-Za-z0-9\ ()._-]{0,79}$ && "${e}" =~ ^[A-Za-z0-9+._-]+(\[bot\])?@[A-Za-z0-9.-]+$ ]] || return 1
+  if [[ "${k}" == github ]]; then
+    [[ "${l}" =~ ^[a-z0-9][a-z0-9-]{0,62}\[bot\]$ ]] || return 1
+    MY_LOGIN=${l}
+  fi
+  FORGE_KIND=${k}; GIT_NAME=${n}; GIT_EMAIL=${e}
+}
+# page=<n> query for list calls
+per_page() { if [[ "${FORGE_KIND}" == github ]]; then echo "per_page=$1"; else echo "limit=$1"; fi; }
+# the open issues handed to this agent: assigned on Gitea, labelled agent:<name> on GitHub (an App cannot be assigned)
+assigned_issues_path() {
+  if [[ "${FORGE_KIND}" == github ]]; then echo "/repos/${REPO}/issues?state=open&labels=agent:${FORGE_USER}&$(per_page 50)"
+  else echo "/repos/${REPO}/issues?state=open&type=issues&assigned_by=${FORGE_USER}&$(per_page 50)"; fi
+}
+# jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
+MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
+pr_url() { if [[ "${FORGE_KIND}" == github ]]; then web_url "pull/$1"; else web_url "pulls/$1"; fi; }
+
 # botboard (#26): a live dashboard of what agents work on. One card per item, upserted by id; best effort:
 # a board that is down or unset never blocks or fails a job. BOTBOARD_URL empty = off.
 PROJECT="${PROJECT:-${REPO#*/}}"
@@ -153,8 +182,8 @@ sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses
     rm -f "${bundle}"; (( rc == 0 )) || exit 1
     # the shared clone never holds a branch, so every branch is free for its own worktree (pre-#20 clones did)
     lgit -C "${WORK}" checkout -q --detach 2>/dev/null || true
-    lgit -C "${WORK}" config user.name  "${FORGE_USER}"
-    lgit -C "${WORK}" config user.email "${FORGE_USER}@agents.local"
+    lgit -C "${WORK}" config user.name  "${GIT_NAME}"
+    lgit -C "${WORK}" config user.email "${GIT_EMAIL}"
     # Build and test leftovers never belong in a PR, even in repos without a .gitignore. info/exclude is shared by
     # all worktrees and never committed; rewritten (not appended) so it stays the same size.
     printf '%s\n' '__pycache__/' '*.pyc' '.pytest_cache/' 'node_modules/' '.venv/' > "${WORK}/.git/info/exclude"
@@ -370,7 +399,8 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message> <base>  -> 0 if 
 
 # ---------- 1. new issues -> PRs ----------
 handle_issues() {
-  local issues; issues=$(api GET "/repos/${REPO}/issues?state=open&type=issues&assigned_by=${FORGE_USER}&limit=50") || return
+  local issues; issues=$(api GET "$(assigned_issues_path)") || return
+  issues=$(jq -c '[.[] | select(.pull_request == null)]' <<<"${issues}") || return   # GitHub lists PRs as issues too
   # Issues already turned into a PR are remembered locally, so a pass costs one API call, not one per issue (#3).
   # Filtered in a single jq call: under gVisor every process start is expensive, so no per-issue jq/subshells.
   local done_list; done_list=$(cd "${STATE}/seen" && ls issue-*.done 2>/dev/null | sed 's/^issue-//; s/\.done$//' | paste -sd, -)
@@ -378,7 +408,7 @@ handle_issues() {
   [[ -z "${todo}" ]] && return
   local base; base=$(default_branch)
   # one PR list for the whole pass: an issue whose branch already has a PR (open or closed) is not new work
-  local branches; branches=$(api GET "/repos/${REPO}/pulls?state=all&limit=50" | jq -r '.[].head.ref') || return
+  local branches; branches=$(api GET "/repos/${REPO}/pulls?state=all&$(per_page 50)" | jq -r '.[].head.ref') || return
   local n title branch
   jq -r '.[] | [.number, .title] | @tsv' <<<"[${todo//$'\n'/,}]" | while IFS=$'\t' read -r n title; do
     branch="agent/${FORGE_USER}/issue-${n}"
@@ -433,7 +463,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
-    board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(web_url "pulls/${pr}")"
+    board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
     echo "${n} ${title}" > "${STATE}/seen/pr-${pr}.board"   # issue number and title for later card updates
     # anything already on the PR at this point is ours; start the feedback cursor after it
     date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
@@ -454,24 +484,70 @@ new_feedback() {  # new_feedback <pr> <since>  -> markdown list of feedback by o
   local pr=$1 since=$2
   {
     api GET "/repos/${REPO}/issues/${pr}/comments?since=${since}" |
-      jq -r --arg me "${FORGE_USER}" --arg s "${since}" \
+      jq -r --arg me "${MY_LOGIN}" --arg s "${since}" \
         '.[] | select(.user.login != $me and .created_at > $s) | "- \(.user.login) commented: \(.body)"'
-    api GET "/repos/${REPO}/pulls/${pr}/reviews" | jq -c --arg me "${FORGE_USER}" --arg s "${since}" \
+    api GET "/repos/${REPO}/pulls/${pr}/reviews" | jq -c --arg me "${MY_LOGIN}" --arg s "${since}" \
       '.[] | select(.user.login != $me and .submitted_at > $s)' | while read -r rv; do
         local id; id=$(jq -r .id <<<"${rv}")
         jq -r '"- \(.user.login) reviewed (\(.state)): \(.body)"' <<<"${rv}"
         api GET "/repos/${REPO}/pulls/${pr}/reviews/${id}/comments" |
-          jq -r '.[] | "  - on `\(.path)` line \(.position // .original_position): \(.body)"'
+          jq -r '.[] | "  - on `\(.path)` line \(.line // .position // .original_line // .original_position): \(.body)"'
       done
   } | sed '/^- [^:]*: *$/d'
 }
 
+# ---------- security advisory threads (GitHub, #110 item 4) ----------
+# Review comments of github-advanced-security[bot] (code scanning) are answered in their own thread with exactly one
+# outcome. The thread ids and paths come from the forge JSON (validated), never from the model. The model proposes an
+# outcome per thread as a "THREAD <id> <fixed|accepted-risk|false-positive>: <text>" line; the loop accepts only ids
+# it asked about and only those three words, and turns "fixed" into "Fixed in <sha>" only when the pushed change
+# really touches the finding's file (else it says so). The loop never resolves a thread: the human reviewer does.
+GHAS_BOT='github-advanced-security[bot]'
+security_threads() {  # security_threads <pr> <since> -> TSV id, path, line, body (first line) of new GHAS threads
+  [[ "${FORGE_KIND}" == github ]] || return 0
+  api GET "/repos/${REPO}/pulls/$1/comments?$(per_page 100)" | jq -r --arg bot "${GHAS_BOT}" --arg s "$2" \
+    '.[] | select(.user.login == $bot and .in_reply_to_id == null and .created_at > $s)
+         | select((.id|tostring|test("^[0-9]{1,15}$")) and (.path|test("^[^\t\n]{1,300}$")))
+         | [.id, .path, (.line // .original_line // 0), (.body | split("\n")[0] | .[0:200])] | @tsv' 2>/dev/null
+}
+# reply_threads <pr> <threads TSV> <claude result> <pushed sha or ""> <changed paths>
+reply_threads() {
+  local pr=$1 threads=$2 result=$3 sha=$4 changed=$5 id path line title outcome text body
+  [[ -n "${threads}" ]] || return 0
+  [[ -z "${sha}" || "${sha}" =~ ^[0-9a-f]{40}$ ]] || sha=""
+  while IFS=$'\t' read -r id path line title; do
+    [[ "${id}" =~ ^[0-9]{1,15}$ ]] || continue
+    # the model's proposal for this exact id; the text is untrusted, the outcome word is checked
+    outcome=$(grep -m1 -E "^THREAD ${id} (fixed|accepted-risk|false-positive):" <<<"${result}" | sed -E 's/^THREAD [0-9]+ ([a-z-]+):.*/\1/')
+    text=$(grep -m1 -E "^THREAD ${id} (fixed|accepted-risk|false-positive):" <<<"${result}" | sed -E 's/^THREAD [0-9]+ [a-z-]+: ?//' | cut -c1-1500)
+    case "${outcome}" in
+      fixed)
+        if [[ -n "${sha}" ]] && grep -qxF -- "${path}" <<<"${changed}"; then body="**Fixed in \`${sha}\`**. ${text}"
+        else body="**Not fixed yet**: the agent proposed a fix, but no pushed change touches \`${path}\`. ${text}"; fi ;;
+      accepted-risk)  body="**Accepted risk** (proposed, the reviewer decides). ${text}" ;;
+      false-positive) body="**False positive** (proposed, the reviewer decides). ${text}" ;;
+      *)              body="**No outcome yet**: the agent did not address this finding in this run." ;;
+    esac
+    api POST "/repos/${REPO}/pulls/${pr}/comments/${id}/replies" "$(jq -cn --arg b "🤖 ${body}" '{body:$b}')" >/dev/null \
+      || log "PR #${pr}: could not reply in thread ${id}"
+  done <<<"${threads}"
+}
+# failed_checks <pr json> -> lines "- check <name>: <conclusion>" for the PR head (GitHub), untrusted context only
+failed_checks() {
+  [[ "${FORGE_KIND}" == github ]] || return 0
+  local sha; sha=$(jq -r '.head.sha // ""' <<<"$1")
+  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
+  api GET "/repos/${REPO}/commits/${sha}/check-runs?$(per_page 50)" 2>/dev/null | jq -r \
+    '.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")
+     | "- check \(.name): \(.conclusion)\(if .output.title then " (\(.output.title))" else "" end)"' 2>/dev/null
+}
+
 handle_feedback() {
-  local prs; prs=$(api GET "/repos/${REPO}/pulls?state=open&limit=50") || return
+  local prs; prs=$(api GET "/repos/${REPO}/pulls?state=open&$(per_page 50)") || return
   # Skip PRs that did not change since we last handled them: one list call instead of ~3 calls per PR (#3).
   # updated_at moves on comments, reviews and pushes, so nothing is missed. Fields come from one jq call and the
   # comparison uses shell builtins: under gVisor each extra process per PR costs ~1 s.
-  jq -r --arg me "${FORGE_USER}" '.[] | select(.user.login == $me) | [.number, .head.ref, .updated_at, .created_at, .title] | @tsv' <<<"${prs}" |
+  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "${MY_PRS}"' | [.number, .head.ref, .updated_at, .created_at, .title] | @tsv' <<<"${prs}" |
   while IFS=$'\t' read -r pr branch upd created title; do
     local since fb last=""
     [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
@@ -498,7 +574,7 @@ handle_feedback() {
 board_finish() {
   [[ -n "${BOTBOARD_URL:-}" ]] || return 0
   local open f pr pull state n title
-  open=" $(jq -r --arg me "${FORGE_USER}" '[.[] | select(.user.login == $me) | .number] | join(" ")' <<<"$1") "
+  open=" $(jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "[${MY_PRS} | .number] | join(\" \")" <<<"$1") "
   for f in "${STATE}"/seen/pr-*.board; do
     [[ -e "${f}" ]] || continue
     pr=${f##*/pr-}; pr=${pr%.board}
@@ -507,43 +583,57 @@ board_finish() {
     state=$(jq -r 'if .merged then "merged" else .state end' <<<"${pull}")
     [[ "${state}" == open ]] && continue
     read -r n title < "${f}"
-    board_card "issue-${n}" "#${n} ${title}" "done" "PR #${pr} ${state}" "$(web_url "pulls/${pr}")" \
+    board_card "issue-${n}" "#${n} ${title}" "done" "PR #${pr} ${state}" "$(pr_url "${pr}")" \
       && touch "${STATE}/seen/pr-${pr}.board-done"   # board down: try again next pass
   done
 }
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0
+  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed=""
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
   [[ -z "${fb}" ]] && return
+  threads=$(security_threads "${pr}" "${since}")
+  checks=$(failed_checks "$(api GET "/repos/${REPO}/pulls/${pr}")")
+  [[ -n "${checks}" ]] && fb+=$'\n'"Failing checks on the head:"$'\n'"${checks}"
+  if [[ -n "${threads}" ]]; then
+    thread_ask="
+Some feedback are code scanning (security) findings. For each, end your reply with one line exactly like
+THREAD <id> <fixed|accepted-risk|false-positive>: <one-sentence reason>
+for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
+  fi
   sync_repo || return 1
   dir=$(worktree "${branch}" "origin/${branch}") || { log "worktree failed"; return 1; }
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
-  [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(web_url "pulls/${pr}")"
+  [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
   result=$(run_claude "${dir}" "You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}").
 Reviewers left this feedback:
 
 $(untrusted "${fb}")
 
 Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
-Do not push. Finish with a short reply to the reviewers.") || claude_rc=$?
+Do not push. Finish with a short reply to the reviewers.${thread_ask}") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
+  before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
   if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
+    after=$(lgit -C "${dir}" rev-parse HEAD 2>/dev/null)
+    [[ "${before}" =~ ^[0-9a-f]{40}$ && "${after}" =~ ^[0-9a-f]{40}$ ]] && changed=$(lgit -C "${dir}" diff --name-only "${before}" "${after}")
+    reply_threads "${pr}" "${threads}" "${result}" "${after}" "${changed}"
     comment "${pr}" "🤖 Pushed an update.
 
 ${result}"
     request_review "${pr}"   # ask the approver to look again
   else
+    reply_threads "${pr}" "${threads}" "${result}" "" ""
     comment "${pr}" "🤖 ${result}"
   fi
   echo "${now}" > "${STATE}/seen/pr-${pr}"
   log "PR #${pr}: replied"
-  [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" review "feedback addressed, PR #${pr} waits for ${REVIEWER}" "$(web_url "pulls/${pr}")"
-  board_note "addressed feedback on PR #${pr}" "$(web_url "pulls/${pr}")"
+  [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" review "feedback addressed, PR #${pr} waits for ${REVIEWER}" "$(pr_url "${pr}")"
+  board_note "addressed feedback on PR #${pr}" "$(pr_url "${pr}")"
   return 0
 }
 
@@ -564,7 +654,10 @@ wait_for_work() {
 # the sidecar starts next to us; wait for it rather than failing the first pass
 for _ in $(seq 60); do curl -fsS -m 2 "${FORGE_API}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 log "starting: repo=${REPO} forge=${FORGE_URL} poll=${POLL_SECONDS}s webhooks=$([[ -n "${ROUTER_URL:-}" ]] && echo "via ${ROUTER_URL}" || echo off) claude=$(claude --version 2>/dev/null)"
-api GET /user >/dev/null || { log "cannot authenticate to forge"; exit 1; }
+forge_identity || { log "the forge sidecar gave no valid identity"; exit 1; }
+if [[ "${FORGE_KIND}" == github ]]; then api GET "/repos/${REPO}" >/dev/null; else api GET /user >/dev/null; fi \
+  || { log "cannot authenticate to forge"; exit 1; }
+log "forge=${FORGE_KIND} author=${GIT_NAME} <${GIT_EMAIL}>"
 
 # Readiness report (#31): with READY_ISSUE set (by scripts/bootstrap-project.sh), check every service this agent
 # needs once and post the result on that issue. Reported once per issue (state on the PVC), not on every restart.
@@ -573,9 +666,11 @@ ready_check() {
   local issue=$1 marker="${STATE}/seen/ready-${REPO//\//_}-${1}" lines=() ok=1 perm claude_out body sum mcp_tools
   [[ "$(cat "${marker}" 2>/dev/null)" == ready* ]] && return
   perm=$(api GET "/repos/${REPO}" | jq -r '.permissions.push // false' 2>/dev/null)
+  # an App installation token gets no per-user permissions block: reading the repo through it is the check
+  [[ "${FORGE_KIND}" == github ]] && api GET "/repos/${REPO}" >/dev/null && perm=true
   if [[ "${perm}" == true ]]; then lines+=("- ✅ forge: ${FORGE_URL}, push access to ${REPO}")
   else lines+=("- ❌ forge: no push access to ${REPO}"); ok=0; fi
-  if api GET "/repos/${REPO}/issues?state=open&type=issues&limit=1" >/dev/null; then lines+=("- ✅ tracker: issues of ${REPO}")
+  if api GET "/repos/${REPO}/issues?state=open&$(per_page 1)" >/dev/null; then lines+=("- ✅ tracker: issues of ${REPO}")
   else lines+=("- ❌ tracker: cannot list issues of ${REPO}"); ok=0; fi
   if claude_out=$(cd /tmp && timeout 120 claude -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
     lines+=("- ✅ claude: $(claude --version 2>/dev/null)")
