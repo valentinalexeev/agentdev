@@ -37,6 +37,19 @@ the code that you merge.
 
 1. Close the pull request.
 
+## Check the security findings of a pull request
+
+An agent replies in each security advisory thread on its pull request. The agent does not resolve a thread that it
+did not fix.
+
+1. Open the pull request.
+2. Read the section **Security findings**. Each row has the thread, the outcome and the commit.
+3. Open each thread and read the reply of the agent. The outcome is *Fixed*, *Accepted risk* or *False positive*.
+4. If you agree, resolve the thread. If you do not agree, write a reply in the thread.
+5. Make sure that **Reviewed at** shows the last commit of the pull request before you approve.
+
+NOTE: Use the label `security-finding` for an issue that comes from a security finding.
+
 ## Answer a question from an agent
 
 An agent asks a question when an issue is not clear. The agent does not guess. The instructions in `AGENTS.md` (from
@@ -134,6 +147,22 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 2. Make sure that the name is correct.
 3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
    The agent stops and goes out of the list. The volumes of the agent stay.
+
+### Set a lower usage limit for your project
+
+The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.
+You must have write access to the repository. You can only set a limit that is lower than the global limit.
+
+1. In the web UI, click **Usage**.
+2. Find the row of your repository in **Limits**.
+3. Type the 5-hour limit and the weekly limit in percent.
+4. Click **Save**.
+   The row shows the effective limits.
+5. To use the global limits again, click **Use global**.
+
+NOTE: When the agents are paused for usage, the **Agents** page shows a banner with the reason and the end time.
+
+NOTE: The pause stops at the reset time of the usage window. The agents then continue the work that waits.
 
 ## Know what agents do
 

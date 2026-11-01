@@ -14,3 +14,17 @@ github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+# Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
+# usage: {five_hour: 80, weekly: 90}
+# Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
+# Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:                         # the API that reads these is not deployed on GKE yet (agentdev #105)
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com

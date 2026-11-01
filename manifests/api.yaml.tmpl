@@ -12,6 +12,10 @@ rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch, patch, create, delete]}   # Agents only: no Secrets, no StatefulSets, no PVCs
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
+# usage limits (#93): thresholds (written by admins and project writers, audited) and the operator's usage state (read)
+- {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -40,6 +44,8 @@ spec:
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
+        - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # same defaults as the operator (#93), shown in the web UI
+        - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
         # every write that needs the forge gives 503 (fail closed).
         - name: FORGE_API_TOKEN
@@ -48,7 +54,7 @@ spec:
         # and retention are set by 10-api.sh as agentdev_owner, the API only inserts, reads and calls the prune function)
         - name: DATABASE_URL
           valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
-        # optional SIEM webhook output (#70): SECURITY_WEBHOOK_URL and SECURITY_WEBHOOK_SECRET, instance config only
+        # optional SIEM outputs, instance config only: webhook (#70), syslog over TLS and OTLP (#71); keys in outputs.go
         envFrom: [{secretRef: {name: agentdev-api-siem, optional: true}}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: http, containerPort: 8080}]
