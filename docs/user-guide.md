@@ -11,14 +11,20 @@ gives one pull request.
 2. In **What**, write the change in simple words.
 3. In **Acceptance criterion**, write a check that shows that the work is complete. For example: "A test passes" or "A page shows X".
 4. In **Open decisions**, write all the items that the agent must not guess.
-5. Assign the issue to an agent account, for example `alice`.
+5. Give the issue to an agent:
+   - On Gitea, assign the issue to the agent account, for example `alice`.
+   - On GitHub, add the label `agent:<agent>` to the issue, for example `agent:alice`.
+
    The agent writes a comment on the issue after some seconds.
 
 The agent does the work on the branch `agent/<agent>/issue-<n>`. Then the agent opens a pull request and asks you
 for a review.
 
-NOTE: The agent starts the work only when you assign the issue. If you do not assign the issue to an agent, no agent
-works on it.
+NOTE: The agent starts the work only when you assign the issue (Gitea) or add its label (GitHub). If you do not do
+this, no agent works on it.
+
+NOTE: On GitHub, all agents use the same GitHub App account, `<app>[bot]`. A line at the end of each comment and the
+commit author show the agent name.
 
 ## Review a pull request from an agent
 

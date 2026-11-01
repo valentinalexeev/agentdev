@@ -21,6 +21,7 @@ import (
 // Defaults is the cluster-wide part of an agent (what 06-agents.sh takes from config.env).
 type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
+	GitHubURL                                                                            string // FORGE_URL of forge: github agents (#2)
 	PollSeconds, IdleSeconds                                                             string
 	// approvals (#67): on/off, the API's internal URL the sidecar asks, and the timeout in minutes
 	Approvals, ApprovalsURL, ApprovalTimeout string
