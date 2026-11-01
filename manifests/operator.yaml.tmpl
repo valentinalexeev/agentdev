@@ -57,6 +57,9 @@ spec:
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
         - {name: SECURITY_RATE_PER_MIN, value: "${SECURITY_RATE_PER_MIN}"}
         - {name: SECURITY_RATE_BURST, value: "${SECURITY_RATE_BURST}"}
+        - {name: APPROVALS, value: "${APPROVALS}"}                                # #67, see config.env
+        - {name: APPROVALS_URL, value: "http://agentdev-api-internal.${PLATFORM_NS}.svc.cluster.local:8081"}
+        - {name: APPROVAL_TIMEOUT_MINUTES, value: "${APPROVAL_TIMEOUT_MINUTES}"}
         - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]

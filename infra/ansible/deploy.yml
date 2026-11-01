@@ -162,6 +162,8 @@
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
             APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
+            APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+            APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
           replace: []
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods

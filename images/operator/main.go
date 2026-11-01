@@ -58,15 +58,18 @@ func main() {
 		os.Exit(1)
 	}
 	r := &AgentReconciler{Client: mgr.GetClient(), D: Defaults{
-		WorkerImage:    env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
-		ForgeImage:     env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
-		PullPolicy:     env("IMAGE_PULL_POLICY", "IfNotPresent"),
-		ForgeURL:       os.Getenv("FORGE_URL"),
-		ForgePublicURL: os.Getenv("FORGE_PUBLIC_URL"),
-		Reviewer:       os.Getenv("REVIEWER"),
-		BotboardURL:    os.Getenv("BOTBOARD_URL"),
-		PollSeconds:    env("POLL_SECONDS", "20"),
-		IdleSeconds:    env("IDLE_SECONDS", "900"),
+		WorkerImage:     env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
+		ForgeImage:      env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
+		PullPolicy:      env("IMAGE_PULL_POLICY", "IfNotPresent"),
+		ForgeURL:        os.Getenv("FORGE_URL"),
+		ForgePublicURL:  os.Getenv("FORGE_PUBLIC_URL"),
+		Reviewer:        os.Getenv("REVIEWER"),
+		BotboardURL:     os.Getenv("BOTBOARD_URL"),
+		PollSeconds:     env("POLL_SECONDS", "20"),
+		IdleSeconds:     env("IDLE_SECONDS", "900"),
+		Approvals:       env("APPROVALS", "false"),
+		ApprovalsURL:    os.Getenv("APPROVALS_URL"),
+		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

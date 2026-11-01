@@ -22,6 +22,8 @@ import (
 type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	PollSeconds, IdleSeconds                                                             string
+	// approvals (#67): on/off, the API's internal URL the sidecar asks, and the timeout in minutes
+	Approvals, ApprovalsURL, ApprovalTimeout string
 }
 
 type AgentReconciler struct {
