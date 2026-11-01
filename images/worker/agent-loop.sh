@@ -185,7 +185,9 @@ start_job() {
   echo "$$" > "${JOBS}/${key}.lock"
   (
     JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
-    trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"' EXIT
+    # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
+    trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
+          [[ "${APPROVALS:-false}" == true ]] && curl -fsS -m 30 -X POST "${FORGE_API}/job-done?job=${key}" >/dev/null 2>&1 || true' EXIT
     set -o pipefail
     if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
       rm -f "${JOBS}/${key}.retry"

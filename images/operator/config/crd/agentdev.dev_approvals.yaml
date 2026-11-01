@@ -79,8 +79,9 @@ spec:
                 format: date-time
                 type: string
               expires:
-                description: After this time the request expires (same effect as a
-                  denial).
+                description: |-
+                  Until this time the agent waits for the answer; after it, the waiting action fails closed. The request itself
+                  stays pending and decidable (a retry of the same request reuses it) until it is decided or becomes void.
                 format: date-time
                 type: string
               forge:
@@ -172,18 +173,24 @@ spec:
                 type: string
               decidedVia:
                 type: string
+              reason:
+                description: Why the request became void.
+                maxLength: 200
+                type: string
               scope:
                 description: 'once | job: for allowed, how far the approval reaches
                   (never beyond the job).'
                 type: string
               state:
-                description: pending (empty) | allowed | denied | expired
+                description: |-
+                  pending (empty) | allowed | denied | void (no longer needed: job ended, superseded by a newer request, issue or
+                  PR closed, agent pod gone). Every state but pending is final; a timeout is not a state (#107, owner).
                 enum:
                 - ""
                 - pending
                 - allowed
                 - denied
-                - expired
+                - void
                 type: string
             type: object
         required:

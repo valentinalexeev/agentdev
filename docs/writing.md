@@ -157,7 +157,6 @@ authentik page. A label is not a word of the text, so a label does not break the
 | deploy | install a component into the cluster |
 | deny | refuse an approval request |
 | edit | change the text of a forge comment after you wrote it |
-| expire | become not valid after a time limit (an approval request with no decision) |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
 | merge | add the changes of a pull request to the main branch |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |

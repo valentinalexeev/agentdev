@@ -13,8 +13,11 @@ package main
 //  5. checked here, not in the pod: the API reads the comment from the forge and checks the commenter's write access
 //  6. atomic: the status is written with the object's resourceVersion; the first valid decision wins
 //
-// No decision before spec.expires: the request expires (a denial). The sidecar reads the decision from the internal
-// listener (INTERNAL_ADDR, reachable from agent pods only). Every decision, refused decision and expiry is audited.
+// Lifecycle (owner on #107): one record per request, ending allowed, denied or void. A timeout is not a state: it
+// only ends the agent's wait, the record stays pending and decidable. A pending record becomes void when its sidecar
+// says so (job ended, superseded: POST /internal/approvals/{agent}/{id}/void), when its issue or PR is closed, or when
+// the pod that asked is gone. A decision comment on a void or decided record is ignored and audited. The sidecar
+// reads the decision from the internal listener (INTERNAL_ADDR, agent pods only).
 
 import (
 	"context"
@@ -57,7 +60,8 @@ type approval struct {
 	ContentHash string    `json:"contentHash"`
 	Created     time.Time `json:"created"`
 	Expires     time.Time `json:"expires"`
-	State       string    `json:"state"` // pending | allowed | denied | expired
+	State       string    `json:"state"` // pending | allowed | denied | void
+	Reason      string    `json:"reason,omitempty"`
 	Scope       string    `json:"scope,omitempty"`
 	DecidedBy   string    `json:"decidedBy,omitempty"`
 	DecidedVia  string    `json:"decidedVia,omitempty"`
@@ -66,6 +70,7 @@ type approval struct {
 	DecidedHash string    `json:"decidedHash,omitempty"`
 
 	rv          string
+	podUID      string
 	requesterID int64
 	secretHash  string
 }
@@ -80,7 +85,8 @@ func fromApprovalObject(u *unstructured.Unstructured) approval {
 		Input: str("spec", "input"), Untrusted: true, ContentHash: str("spec", "contentHash"), Created: tm("spec", "created"),
 		Expires: tm("spec", "expires"), State: str("status", "state"), Scope: str("status", "scope"),
 		DecidedBy: str("status", "decidedBy"), DecidedVia: str("status", "decidedVia"), CommentID: cid,
-		DecidedAt: tm("status", "decidedAt"), DecidedHash: str("status", "contentHash"), rv: u.GetResourceVersion(),
+		DecidedAt: tm("status", "decidedAt"), DecidedHash: str("status", "contentHash"), Reason: str("status", "reason"), rv: u.GetResourceVersion(),
+		podUID:      u.GetLabels()["agentdev/pod-uid"],
 		requesterID: rid, secretHash: str("spec", "secretHash")}
 	if a.State == "" {
 		a.State = "pending"
@@ -132,7 +138,26 @@ type forgeComment struct {
 type commentReader interface {
 	Comments(ctx context.Context, repo string, number int, since time.Time) ([]forgeComment, error)
 	UserID(ctx context.Context, login string) (int64, error)
-	Self(ctx context.Context) (int64, error) // the account of the API's own forge token
+	Self(ctx context.Context) (int64, error)                                 // the account of the API's own forge token
+	IssueState(ctx context.Context, repo string, number int) (string, error) // open | closed (PRs too)
+}
+
+// podChecker tells whether the pod that made a request still exists (its sidecar is the only one that can act).
+type podChecker interface {
+	PodExists(ctx context.Context, uid string) (bool, error)
+}
+
+func (k *kubeAgents) PodExists(ctx context.Context, uid string) (bool, error) {
+	l, err := k.c.CoreV1().Pods(k.ns).List(ctx, metav1.ListOptions{LabelSelector: "app=coding-agent"})
+	if err != nil {
+		return false, err
+	}
+	for _, p := range l.Items {
+		if string(p.UID) == uid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (g *giteaPerms) get(ctx context.Context, path string, out any) error {
@@ -183,6 +208,20 @@ func (g *giteaPerms) Comments(ctx context.Context, repo string, number int, sinc
 	return out, nil
 }
 
+func (g *giteaPerms) IssueState(ctx context.Context, repo string, number int) (string, error) {
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok {
+		return "", fmt.Errorf("bad repo %q", repo)
+	}
+	var is struct {
+		State string `json:"state"`
+	}
+	if err := g.get(ctx, fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d", url.PathEscape(owner), url.PathEscape(name), number), &is); err != nil {
+		return "", err
+	}
+	return is.State, nil
+}
+
 func (g *giteaPerms) Self(ctx context.Context) (int64, error) {
 	var u struct {
 		ID int64 `json:"id"`
@@ -208,7 +247,35 @@ var (
 	secretRe     = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
-var decisionRe = regexp.MustCompile(`(?im)^\s*/(approve|approve-job|deny)\s+([a-f0-9]{16})\b`)
+var decisionRe = regexp.MustCompile(`(?im)^[ \t]*/(approve|approve-job|deny)[ \t]+([a-f0-9]{16})\b`)
+
+// commandLines drops fenced code blocks (``` or ~~~, any length) and quoted lines ("> "), so a command quoted from
+// tool output or an earlier comment never counts: only a line the person wrote themselves.
+func commandLines(body string) string {
+	var out []string
+	fence := ""
+	for _, l := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		t := strings.TrimLeft(l, " \t")
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = t[:3]
+			for len(fence) < len(t) && t[len(fence)] == fence[0] {
+				fence += string(fence[0])
+			}
+			continue
+		}
+		if strings.HasPrefix(t, ">") || strings.HasPrefix(l, "    ") || strings.HasPrefix(l, "\t") {
+			continue // quote or indented code block
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
 
 // decider applies forge decisions to pending Approvals.
 type decider struct {
@@ -216,6 +283,7 @@ type decider struct {
 	agents agentLister
 	forge  commentReader
 	perms  permChecker
+	pods   podChecker // nil: do not void requests of gone pods
 	now    func() time.Time
 	// platform forge accounts that never decide (APPROVAL_DENY_ACCOUNTS: router or App bot, the API's own token user,
 	// any other service account), matched by login, case-insensitive
@@ -282,13 +350,17 @@ func (d *decider) pass(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var pending []*unstructured.Unstructured
+	var pending, closed []*unstructured.Unstructured
 	for _, u := range objs {
-		if fromApprovalObject(u).State == "pending" {
+		a := fromApprovalObject(u)
+		switch {
+		case a.State == "pending":
 			pending = append(pending, u)
+		case !a.DecidedAt.IsZero() && d.now().Sub(a.DecidedAt) < lateWindow:
+			closed = append(closed, u)
 		}
 	}
-	if len(pending) == 0 {
+	if len(pending) == 0 && len(closed) == 0 {
 		return nil
 	}
 	agentIDs, err := d.agentAccounts(ctx)
@@ -301,12 +373,17 @@ func (d *decider) pass(ctx context.Context) error {
 			log.Printf("approval %s: %v", u.GetName(), err)
 		}
 	}
+	for _, u := range closed {
+		if err := d.late(ctx, fromApprovalObject(u)); err != nil {
+			log.Printf("approval %s: %v", u.GetName(), err)
+		}
+	}
 	return nil
 }
 
-// pruneSeen forgets refused comments of requests that expired more than a day ago (they are never read again).
+// pruneSeen forgets refused comments after the late window (their request is no longer read).
 func (d *decider) pruneSeen() {
-	cut := d.now().Add(-24 * time.Hour)
+	cut := d.now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for id, exp := range d.seen {
@@ -319,13 +396,60 @@ func (d *decider) pruneSeen() {
 func (d *decider) refuse(a approval, c forgeComment, reason string) {
 	d.mu.Lock()
 	_, dup := d.seen[c.ID]
-	d.seen[c.ID] = a.Expires
+	d.seen[c.ID] = d.now().Add(lateWindow) // audited once; forgotten after the late window
 	d.mu.Unlock()
 	if dup {
 		return
 	}
 	audit(auditEntry{Who: auditWho{ForgeUser: c.Login}, Action: "approval-decision", Agent: a.Agent, Result: "denied",
 		Reason: reason, Request: approvalAudit(a, c.ID)})
+}
+
+// lateWindow: how long after a request closed (decided or void) later decision comments on it are still audited.
+const lateWindow = 7 * 24 * time.Hour
+
+// commands returns the comments that carry a decision command for request a, in creation order, with the verb.
+func (d *decider) commands(ctx context.Context, a approval) ([]forgeComment, []string, error) {
+	_, num, _ := strings.Cut(a.Job, "-")
+	n, err := strconv.Atoi(num)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bad job %q", a.Job)
+	}
+	comments, err := d.forge.Comments(ctx, a.Repo, n, a.Created)
+	if err != nil {
+		return nil, nil, err
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].Created.Before(comments[j].Created) || (comments[i].Created.Equal(comments[j].Created) && comments[i].ID < comments[j].ID)
+	})
+	var cs []forgeComment
+	var verbs []string
+	for _, c := range comments {
+		for _, m := range decisionRe.FindAllStringSubmatch(commandLines(c.Body), -1) {
+			if m[2] == a.ID {
+				cs, verbs = append(cs, c), append(verbs, strings.ToLower(m[1]))
+				break
+			}
+		}
+	}
+	return cs, verbs, nil
+}
+
+// late audits decision comments written after a request closed: they have no effect.
+func (d *decider) late(ctx context.Context, a approval) error {
+	if a.Forge != "" && a.Forge != "gitea" {
+		return nil
+	}
+	cs, _, err := d.commands(ctx, a)
+	if err != nil {
+		return err
+	}
+	for _, c := range cs {
+		if c.ID != a.CommentID && c.Created.After(a.DecidedAt.Add(-time.Second)) {
+			d.refuse(a, c, "request is "+a.State+": a later decision has no effect")
+		}
+	}
+	return nil
 }
 
 func approvalAudit(a approval, commentID int64) map[string]any {
@@ -336,38 +460,32 @@ func approvalAudit(a approval, commentID int64) map[string]any {
 	return m
 }
 
-// decide checks one pending Approval: expiry first, then the comments in creation order; the first valid decision wins.
+// decide checks one pending Approval: void conditions first (pod gone, issue or PR closed), then the decision
+// comments in creation order; the first valid decision wins. There is no expiry (owner on #107).
 func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agentIDs map[int64]string) error {
 	a := fromApprovalObject(u)
-	if !a.Expires.IsZero() && !d.now().Before(a.Expires) {
-		return d.write(ctx, u, a, map[string]any{"state": "expired"}, forgeComment{}, "approval-expire")
-	}
 	kind, num, ok := strings.Cut(a.Job, "-")
 	n, err := strconv.Atoi(num)
 	if !ok || err != nil || (kind != "issue" && kind != "pr") {
 		return fmt.Errorf("bad job %q", a.Job)
 	}
-	if a.Forge != "" && a.Forge != "gitea" {
-		return nil // GitHub decisions are not supported yet (fail closed: the request expires); see #87
+	if d.pods != nil && a.podUID != "" && a.Source != "executor" {
+		if alive, err := d.pods.PodExists(ctx, a.podUID); err == nil && !alive {
+			return d.void(ctx, u, a, "the agent pod that asked is gone")
+		}
 	}
-	comments, err := d.forge.Comments(ctx, a.Repo, n, a.Created)
+	if a.Forge != "" && a.Forge != "gitea" {
+		return nil // GitHub decisions are not supported yet: the request stays pending until void; see #87
+	}
+	if st, err := d.forge.IssueState(ctx, a.Repo, n); err == nil && st == "closed" {
+		return d.void(ctx, u, a, "the "+map[string]string{"issue": "issue", "pr": "pull request"}[kind]+" is closed")
+	}
+	cs, verbs, err := d.commands(ctx, a)
 	if err != nil {
 		return err
 	}
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].Created.Before(comments[j].Created) || (comments[i].Created.Equal(comments[j].Created) && comments[i].ID < comments[j].ID)
-	})
-	for _, c := range comments {
-		var verb string
-		for _, m := range decisionRe.FindAllStringSubmatch(c.Body, -1) {
-			if m[2] == a.ID {
-				verb = strings.ToLower(m[1])
-				break
-			}
-		}
-		if verb == "" {
-			continue
-		}
+	for i, c := range cs {
+		verb := verbs[i]
 		switch {
 		case c.UserID == a.requesterID || a.requesterID <= 0 || agentIDs[c.UserID] != "" || c.Bot ||
 			d.denyLogins[strings.ToLower(c.Login)]:
@@ -403,6 +521,11 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 	return nil
 }
 
+// void closes a pending request as no longer needed.
+func (d *decider) void(ctx context.Context, u *unstructured.Unstructured, a approval, reason string) error {
+	return d.write(ctx, u, a, map[string]any{"state": "void", "reason": reason}, forgeComment{}, "approval-void")
+}
+
 // write sets the status with a compare-and-set on resourceVersion and audits the result.
 func (d *decider) write(ctx context.Context, u *unstructured.Unstructured, a approval, st map[string]any, c forgeComment, action string) error {
 	st["contentHash"] = a.ContentHash
@@ -413,6 +536,9 @@ func (d *decider) write(ctx context.Context, u *unstructured.Unstructured, a app
 	obj := u.DeepCopy()
 	obj.Object["status"] = st
 	e := auditEntry{Who: auditWho{ForgeUser: c.Login}, Action: action, Agent: a.Agent, Request: approvalAudit(a, c.ID)}
+	if r, ok := st["reason"].(string); ok {
+		e.Reason = r
+	}
 	if c.ID != 0 {
 		e.Grant = "repo-write"
 	}
@@ -455,16 +581,71 @@ func internalDecision(store approvalStore) http.Handler {
 		}
 		a := fromApprovalObject(u)
 		// bound to the caller: only the sidecar that made the request knows the secret behind spec.secretHash
-		sec := r.Header.Get("X-Approval-Secret")
-		sum := sha256.Sum256([]byte(sec))
-		if a.Agent != agent || !secretRe.MatchString(a.secretHash) || len(sec) != 64 ||
-			subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(a.secretHash)) != 1 {
+		if !callerOwns(a, agent, r.Header.Get("X-Approval-Secret")) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"state": a.State, "scope": a.Scope, "decidedBy": a.DecidedBy,
 			"contentHash": a.DecidedHash})
 	})
+}
+
+// internalVoid: POST /internal/approvals/{agent}/{id}/void {"reason"}, for the sidecar that made the request (same
+// secret as internalDecision): the job ended or a newer request superseded it. Only a pending request changes.
+func internalVoid(store approvalStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agent, id := r.PathValue("agent"), r.PathValue("id")
+		if !agentNameRe.MatchString(agent) || !approvalIDRe.MatchString(id) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
+			return
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+		reason := "superseded"
+		switch body.Reason {
+		case "the job ended", "superseded by a newer request":
+			reason = body.Reason
+		}
+		u, err := store.GetApproval(r.Context(), agent+"-"+id)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		a := fromApprovalObject(u)
+		if !callerOwns(a, agent, r.Header.Get("X-Approval-Secret")) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
+		if a.State != "pending" {
+			writeJSON(w, http.StatusOK, map[string]string{"state": a.State})
+			return
+		}
+		obj := u.DeepCopy()
+		obj.Object["status"] = map[string]any{"state": "void", "reason": reason, "contentHash": a.ContentHash,
+			"decidedAt": time.Now().UTC().Format(time.RFC3339)}
+		e := auditEntry{Action: "approval-void", Agent: a.Agent, Reason: reason, Request: approvalAudit(a, 0)}
+		if err := store.UpdateApprovalStatus(r.Context(), obj); err != nil {
+			e.Result = "error"
+			if apierrors.IsConflict(err) {
+				e.Result, e.Reason = "denied", "a decision was first"
+			}
+			audit(e)
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "changed meanwhile"})
+			return
+		}
+		e.Result = "ok"
+		audit(e)
+		writeJSON(w, http.StatusOK, map[string]string{"state": "void"})
+	})
+}
+
+// callerOwns: the caller is the sidecar that made the request (it knows the secret behind spec.secretHash).
+func callerOwns(a approval, agent, sec string) bool {
+	sum := sha256.Sum256([]byte(sec))
+	return a.Agent == agent && secretRe.MatchString(a.secretHash) && len(sec) == 64 &&
+		subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(a.secretHash)) == 1
 }
 
 // approvalReader serves GET /api/approvals and GET /api/approvals/{name}: requests of the repositories where the
@@ -480,12 +661,13 @@ func (ar *approvalReader) visible(ctx context.Context, id *identity) func(repo, 
 	}
 	cache := map[string]bool{}
 	return func(repo, forge string) bool {
-		if v, ok := cache[repo]; ok {
+		key := forge + "\x00" + repo // the same owner/name on two forges are two projects
+		if v, ok := cache[key]; ok {
 			return v
 		}
 		p, err := ar.w.repoPerm(ctx, id, forge, repo)
-		cache[repo] = err == nil && p >= permWrite
-		return cache[repo]
+		cache[key] = err == nil && p >= permWrite
+		return cache[key]
 	}
 }
 
@@ -494,9 +676,9 @@ func (ar *approvalReader) list(rw http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	state, agent, repo := q.Get("state"), q.Get("agent"), q.Get("project")
 	switch state {
-	case "", "all", "pending", "allowed", "denied", "expired", "decided":
+	case "", "all", "pending", "allowed", "denied", "void", "decided":
 	default:
-		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": "state: pending, decided, allowed, denied, expired or all"})
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": "state: pending, decided, allowed, denied, void or all"})
 		return
 	}
 	objs, err := ar.store.ListApprovals(r.Context())

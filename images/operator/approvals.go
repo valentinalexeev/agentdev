@@ -97,7 +97,9 @@ func approvalFromLine(line string, pod *corev1.Pod, container, ns string) (*v1.A
 	}
 	return &v1.Approval{
 		ObjectMeta: metav1.ObjectMeta{Name: agent + "-" + r.ID, Namespace: ns,
-			Labels: map[string]string{"agent": agent, "agentdev/job": r.Job, "agentdev/source": r.Source}},
+			// pod-uid: the API voids a pending request whose pod is gone (its sidecar can no longer act on it)
+			Labels: map[string]string{"agent": agent, "agentdev/job": r.Job, "agentdev/source": r.Source,
+				"agentdev/pod-uid": string(pod.UID)}},
 		Spec: v1.ApprovalSpec{ID: r.ID, Agent: agent, Repo: r.Repo, Forge: r.Forge, Job: r.Job, Source: r.Source,
 			Tool: r.Tool, Input: r.Input, ContentHash: r.ContentHash, RequesterID: r.RequesterID, SecretHash: r.SecretHash, Created: metav1.NewTime(t),
 			Expires: metav1.NewTime(t.Add(timeout))},

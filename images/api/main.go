@@ -82,6 +82,7 @@ func main() {
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
 		dc := newDecider(agents, agents, gp, gp)
+		dc.pods = agents
 		for _, l := range strings.Split(os.Getenv("APPROVAL_DENY_ACCOUNTS"), ",") {
 			if l = strings.ToLower(strings.TrimSpace(l)); l != "" {
 				dc.denyLogins[l] = true
@@ -90,6 +91,7 @@ func main() {
 		go dc.run(ctx, time.Duration(envInt("APPROVAL_POLL_SECONDS", 15))*time.Second)
 		imux := http.NewServeMux()
 		imux.Handle("GET /internal/approvals/{agent}/{id}", internalDecision(agents))
+		imux.Handle("POST /internal/approvals/{agent}/{id}/void", internalVoid(agents))
 		isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 		go func() { log.Fatal(isrv.ListenAndServe()) }()

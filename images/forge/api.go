@@ -123,7 +123,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
 	if s.appr != nil {
-		mux.HandleFunc("/mcp", s.appr.mcp) // Claude's permission prompt tool (approvals.go)
+		mux.HandleFunc("/mcp", s.appr.mcp)               // Claude's permission prompt tool (approvals.go)
+		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
 	}
 	return s.localOnly(mux)
 }

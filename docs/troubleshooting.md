@@ -57,9 +57,10 @@
 | Symptom | Cause | Action |
 |---|---|---|
 | The agent waits, and a `/approve` comment has no effect | The comment is edited, the id is wrong, or the commenter does not have write access | Write a new comment with the correct id. Make sure that you have write access to the repository. |
-| Each request expires | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
+| No request gets a decision | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
+| A request shows "void" | The job ended, the issue or pull request closed, a new commit replaced the old commit, or the agent pod stopped | No action. If the agent needs the action again, it makes a new request. |
 | No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
-| A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision. The agent sends the same commit again in the next pass. |
+| A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
 
 ## Report a problem that continues
 

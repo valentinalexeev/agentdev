@@ -48,16 +48,18 @@ type ApprovalSpec struct {
 	SecretHash string `json:"secretHash"`
 	// When the sidecar asked (container runtime timestamp of the line).
 	Created metav1.Time `json:"created"`
-	// After this time the request expires (same effect as a denial).
+	// Until this time the agent waits for the answer; after it, the waiting action fails closed. The request itself
+	// stays pending and decidable (a retry of the same request reuses it) until it is decided or becomes void.
 	Expires metav1.Time `json:"expires"`
 }
 
 // ApprovalStatus is written by agentdev-api only, with a compare-and-set on resourceVersion: the first valid decision
 // wins.
 type ApprovalStatus struct {
-	// pending (empty) | allowed | denied | expired
+	// pending (empty) | allowed | denied | void (no longer needed: job ended, superseded by a newer request, issue or
+	// PR closed, agent pod gone). Every state but pending is final; a timeout is not a state (#107, owner).
 	// +optional
-	// +kubebuilder:validation:Enum="";pending;allowed;denied;expired
+	// +kubebuilder:validation:Enum="";pending;allowed;denied;void
 	State string `json:"state,omitempty"`
 	// once | job: for allowed, how far the approval reaches (never beyond the job).
 	// +optional
@@ -75,6 +77,10 @@ type ApprovalStatus struct {
 	// The content hash the decision covers (copied from spec when deciding).
 	// +optional
 	ContentHash string `json:"contentHash,omitempty"`
+	// Why the request became void.
+	// +optional
+	// +kubebuilder:validation:MaxLength=200
+	Reason string `json:"reason,omitempty"`
 }
 
 // +kubebuilder:object:root=true

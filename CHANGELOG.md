@@ -28,7 +28,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   compare-and-set. Decision rules: comments from the requesting agent (by forge account id), other agents, the API's token user,
   `APPROVAL_DENY_ACCOUNTS` and bots ignored; job checked to be the agent's own; `/approve-job` covers the same input
   only; request text redacted; decisions readable only by the requesting sidecar (per-request secret); edited comments ignored, live write-access check,
-  content hash, first decision wins, timeout (30 min) = denied. Every decision is audited. Read-only
+  content hash, first decision wins. Lifecycle: one record per request (deduplicated by
+  fingerprint), ending allowed, denied or void; a timeout only ends the agent's wait and the record stays decidable;
+  void when the job ends, a newer request supersedes it, the issue or PR closes, or the pod is gone; the forge
+  comment is edited on each change; decisions on closed records are audited and ignored; commands inside code
+  fences or quotes do not count. Every decision is audited. Read-only
   `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
   UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
   `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80.

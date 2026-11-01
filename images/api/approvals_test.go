@@ -33,10 +33,22 @@ func approvalObj(agent, id, repo string, created time.Time) *unstructured.Unstru
 }
 
 type fakeComments struct {
-	list []forgeComment
-	ids  map[string]int64
-	err  error
+	list   []forgeComment
+	ids    map[string]int64
+	err    error
+	closed bool
 }
+
+func (f *fakeComments) IssueState(context.Context, string, int) (string, error) {
+	if f.closed {
+		return "closed", nil
+	}
+	return "open", nil
+}
+
+type fakePods map[string]bool
+
+func (p fakePods) PodExists(_ context.Context, uid string) (bool, error) { return p[uid], nil }
 
 func (f *fakeComments) Comments(context.Context, string, int, time.Time) ([]forgeComment, error) {
 	return f.list, f.err
@@ -105,6 +117,8 @@ func TestDeciderRules(t *testing.T) {
 		{"older than request", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(-time.Minute)}, "pending", "", true},
 		{"edited", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute), Updated: t0.Add(2 * time.Minute)}, "pending", "", true},
 		{"other id", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "/approve fedcba9876543210", Created: t0.Add(time.Minute)}, "pending", "", false},
+		{"inside a code fence", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "plan:\n```\n/approve " + aid + "\n```", Created: t0.Add(time.Minute)}, "pending", "", false},
+		{"quoted line", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "> /approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", false},
 		{"mid-line mention", forgeComment{ID: 1, UserID: 10, Login: "wendy", Body: "do not /approve " + aid, Created: t0.Add(time.Minute)}, "pending", "", false},
 	}
 	for _, c := range cases {
@@ -155,15 +169,19 @@ func TestDeciderFirstWinsAndExpiry(t *testing.T) {
 		t.Fatalf("decided request changed: %+v", a)
 	}
 
-	k2, buf2 := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
-	d2 := newDecider(k2, agentsFixed{{Name: "carol"}}, &fakeComments{ids: map[string]int64{"carol": 99}}, permMap{})
-	d2.now = func() time.Time { return t0.Add(31 * time.Minute) }
+	// no expiry: a pending request long after its wait time stays pending and decidable (owner on #107)
+	k2, _ := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
+	fc2 := &fakeComments{ids: map[string]int64{"carol": 99}}
+	d2 := newDecider(k2, agentsFixed{{Name: "carol"}}, fc2, permMap{"wendy": permWrite})
+	d2.now = func() time.Time { return t0.Add(3 * time.Hour) }
 	_ = d2.pass(context.Background())
-	if a := status(t, k2, "carol-"+aid); a.State != "expired" {
-		t.Fatalf("not expired: %+v", a)
+	if a := status(t, k2, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("timed out request changed: %+v", a)
 	}
-	if !strings.Contains(buf2.String(), `"action":"approval-expire"`) {
-		t.Fatalf("no expiry audit: %s", buf2)
+	fc2.list = []forgeComment{{ID: 5, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(2 * time.Hour)}}
+	_ = d2.pass(context.Background())
+	if a := status(t, k2, "carol-"+aid); a.State != "allowed" {
+		t.Fatalf("late decision on the open request: %+v", a)
 	}
 	_ = buf
 }
@@ -182,7 +200,7 @@ func TestDeciderFailsClosed(t *testing.T) {
 		t.Fatalf("want wendy's decision, not the requester's: %+v", a)
 	}
 	// seen is pruned after the request expired
-	d.now = func() time.Time { return t0.Add(48 * time.Hour) }
+	d.now = func() time.Time { return t0.Add(lateWindow + time.Hour) }
 	d.pruneSeen()
 	if len(d.seen) != 0 {
 		t.Fatalf("seen not pruned: %v", d.seen)
@@ -284,5 +302,77 @@ func TestApprovalReadAPI(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("%s get: %d", tok, w.Code)
 		}
+	}
+}
+
+func TestDeciderVoid(t *testing.T) {
+	// the issue or PR is closed
+	k, buf := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
+	fc := &fakeComments{ids: map[string]int64{"carol": 99}, closed: true,
+		list: []forgeComment{{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute)}}}
+	d := newDecider(k, agentsFixed{{Name: "carol"}}, fc, permMap{"wendy": permWrite})
+	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "void" || !strings.Contains(a.Reason, "closed") {
+		t.Fatalf("closed issue: %+v", a)
+	}
+	if !strings.Contains(buf.String(), `"action":"approval-void"`) {
+		t.Fatalf("void not audited: %s", buf)
+	}
+	// a decision after the void is ignored and audited
+	fc.list = append(fc.list, forgeComment{ID: 2, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(10 * time.Minute)})
+	d.now = func() time.Time { return t0.Add(11 * time.Minute) }
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "void" {
+		t.Fatalf("void changed: %+v", a)
+	}
+	if !strings.Contains(buf.String(), "a later decision has no effect") {
+		t.Fatalf("late decision not audited: %s", buf)
+	}
+
+	// the pod that asked is gone
+	obj := approvalObj("carol", "fedcba9876543210", "owner/x", t0)
+	obj.SetLabels(map[string]string{"agentdev/pod-uid": "uid-1"})
+	k2, _ := approvalEnv(t, obj)
+	d2 := newDecider(k2, agentsFixed{{Name: "carol"}}, &fakeComments{ids: map[string]int64{"carol": 99}}, permMap{})
+	d2.pods = fakePods{"uid-2": true}
+	_ = d2.pass(context.Background())
+	if a := status(t, k2, "carol-fedcba9876543210"); a.State != "void" {
+		t.Fatalf("gone pod: %+v", a)
+	}
+}
+
+func TestInternalVoid(t *testing.T) {
+	k, buf := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
+	mux := http.NewServeMux()
+	mux.Handle("POST /internal/approvals/{agent}/{id}/void", internalVoid(k))
+	post := func(secret string) int {
+		req := httptest.NewRequest("POST", "/internal/approvals/carol/"+aid+"/void", strings.NewReader(`{"reason":"the job ended"}`))
+		req.Header.Set("X-Approval-Secret", secret)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(strings.Repeat("6", 64)); code != 404 {
+		t.Fatalf("wrong secret: %d", code)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("voided by another pod: %+v", a)
+	}
+	if code := post(testSecret); code != 200 {
+		t.Fatalf("void: %d", code)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "void" || a.Reason != "the job ended" {
+		t.Fatalf("not void: %+v", a)
+	}
+	if !strings.Contains(buf.String(), `"action":"approval-void"`) {
+		t.Fatalf("not audited: %s", buf)
+	}
+}
+
+func TestCommandLines(t *testing.T) {
+	body := "ok\n```\n/approve x\n```\n~~~~\n/deny y\n~~~~\n> /approve z\n    /approve w\n/approve-job v"
+	if got := commandLines(body); got != "ok\n/approve-job v" {
+		t.Fatalf("got %q", got)
 	}
 }

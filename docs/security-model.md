@@ -133,8 +133,10 @@ the permission prompt if they were running Claude Code interactively.
   workflows where branch rules require it) needs a user with `admin`.
 - `agentdev-admins` (platform operators) see every project's requests and can **deny** any of them as an emergency
   stop; they approve only in projects where they have write access.
-- If nobody decides before the timeout, the request **expires**, which has the same effect as a denial. History
-  shows it as *expired*.
+- **Lifecycle** (owner on #107): one record per request, ending **approved**, **denied** or **void**. A timeout is not
+  an outcome: it only ends the agent's wait (the action fails closed); the record stays open and decidable. It
+  becomes void when it is no longer needed: the job ends, a newer request supersedes it, the issue or PR closes, or
+  the pod that asked is gone.
 
 ### Forge as an approval surface
 
@@ -192,7 +194,7 @@ sequenceDiagram
 
 ### API (agentdev-api)
 
-- `GET /api/approvals?project=&state=pending|decided|expired|all&agent=&from=&to=` (projects where the caller has
+- `GET /api/approvals?project=&state=pending|decided|void|all&agent=&from=&to=` (projects where the caller has
   write access, or all for `agentdev-admins`), `GET /api/approvals/{id}` (one request with its full context), `GET
   /api/approvals/stream` SSE for live updates.
 - `POST /api/approvals/{id}/decision` with `allow_once | allow_job | deny` and a note. Allowed for users with write
@@ -202,7 +204,7 @@ sequenceDiagram
   compromised agent cannot send its request to a different project.
 - Storage: a `Approval` custom resource per request (`agentdev.dev/v1alpha1`, namespace of the agent) for the live
   workflow, so the operator, API and sidecar share it without a new database. The API writes the history row first,
-  then the operator removes the `Approval` 7 days after it was decided or expired. **History** (every request and
+  then the operator removes the `Approval` 7 days after it was decided or void. **History** (every request and
   its outcome) is in the `approvals` table of the platform Postgres, next to `security_events` (#70). Retention:
   outcome records 1 year by default; the bulky context (transcript excerpt, diff) 90 days.
 - Request content shown to the approver is the exact tool input (command line, file path, host), rendered as text, never
@@ -226,7 +228,7 @@ sequenceDiagram
   - **Pending:** each request with the agent, the issue or PR it works on, the reason Claude gave, and the three
     buttons.
   - **History:** every request that was raised, with its outcome (**approved once**, **approved for the job**,
-    **denied**, or **expired** after the timeout), who decided, where (UI or forge), when, and the note. Filters by
+    **denied**, or **void** when no longer needed), who decided, where (UI or forge), when, and the note. Filters by
     agent, outcome and date; export as CSV.
 - **Request detail** (from either tab): the full context stored with the request (see API above), with links that open
   the issue or PR, the branch and the commit on the forge, and the agent's transcript excerpt. After a decision, it
@@ -270,7 +272,7 @@ sequenceDiagram
   pushes. A push waits up to 14 minutes (the loop's request timeout); if still pending, the push is refused with
   `push-approval-pending` and the next push of the same commit reuses the same request.
 - **Approval resource** (`agentdev.dev/v1alpha1`, short name `apv`, namespace of the agents). The operator creates it
-  from the sidecar's line; its spec is immutable (CEL). The status (`pending | allowed | denied | expired`, scope,
+  from the sidecar's line; its spec is immutable (CEL). The status (`pending | allowed | denied | void`, reason for void, scope,
   decided by, comment id, decided content hash) is written by agentdev-api only, through the `approvals/status`
   subresource. Agents have no RBAC on Approvals. Objects are deleted 90 days after creation
   (`APPROVAL_RETENTION_DAYS`); the audit log keeps the decisions.
@@ -298,12 +300,30 @@ sequenceDiagram
 - **Reading the decision.** Each request has a 32-byte secret only the sidecar holds; the Approval stores its SHA-256
   (`spec.secretHash`). The internal endpoint answers only a caller that sends the secret, so another agent pod cannot
   read the decision even if it learns the id.
-- **Fail closed.** API unreachable, no job, a job that is not the agent's, unknown answer, hash mismatch or timeout:
-  denied. GitHub-forge requests are not decided yet (they expire, #87).
-- **Audit.** Every decision (`approval-allowed`, `approval-denied`), expiry (`approval-expire`) and refused decision
+- **Lifecycle and deduplication** (owner on #107). A request has a fingerprint: job + tool + exact input for a Claude
+  prompt, job + branch + protected paths for a push. The sidecar keeps one record per fingerprint; asking again
+  reuses it, with no new log line, Approval or comment. Timeline:
+  1. Claude asks, or a push hits a protected path: one Approval, one forge comment "waiting for approval".
+  2. The agent waits (Claude prompt: `APPROVAL_TIMEOUT_MINUTES`, default 30; push: at most 14 min, the loop's request
+     limit). With no decision the action fails closed; the comment is edited once to "still open". The record stays
+     `pending` and decidable; there is no expiry.
+  3. A later ask with the same fingerprint (in the same pod) uses the decision of that record: allowed (once: used
+     up), denied (denied again at once, nothing new is filed), or still pending (waits again).
+  4. The record becomes `void` (its comment edited to "void: <reason>", decision commands removed) when: the job ends
+     (the loop calls the sidecar's `POST /job-done`); a newer push of the same branch and paths supersedes it (a new
+     commit); the issue or PR is closed (API, each pass); the pod that asked is gone (API, by the `agentdev/pod-uid`
+     label), since only that sidecar holds the request's secret.
+  5. A decision comment on a decided or void record has no effect and is audited (`approval-decision`, denied, for 7
+     days after it closed). Void transitions are audited as `approval-void` with the reason.
+- **Fail closed.** API unreachable, no job, a job that is not the agent's, unknown answer, hash mismatch or no
+  decision in the waiting time: the action is refused. GitHub-forge requests are not decided yet (#87): they stay
+  pending until void.
+- **Command parsing.** Only a line the person wrote counts: lines inside fenced code blocks (```` ``` ```` or `~~~`),
+  indented code and quoted lines (`>`) are ignored, so a command quoted from tool or plan output never decides.
+- **Audit.** Every decision (`approval-allowed`, `approval-denied`), void (`approval-void`) and refused decision
   attempt (`approval-decision`, result `denied`) is an `AGENTDEV_AUDIT` line with the request id, repo, job, tool,
   content hash and comment id.
-- **API.** `GET /api/approvals?state=pending|decided|allowed|denied|expired|all&agent=&project=` and
+- **API.** `GET /api/approvals?state=pending|decided|allowed|denied|void|all&agent=&project=` and
   `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
   The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
   sidecar that made the request (per-request secret, see above) with state, scope, decider and decided hash only.

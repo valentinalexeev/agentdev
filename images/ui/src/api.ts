@@ -113,7 +113,7 @@ export function maxConcurrentError(n: number): string {
 }
 
 // Approval requests (#67): read-only here; decisions are forge comments (/approve <id>), UI decisions are #80.
-export type ApprovalState = 'pending' | 'allowed' | 'denied' | 'expired'
+export type ApprovalState = 'pending' | 'allowed' | 'denied' | 'void'
 
 export interface Approval {
   name: string
@@ -133,6 +133,7 @@ export interface Approval {
   decidedBy?: string
   decidedVia?: string
   decidedAt?: string
+  reason?: string // why it became void
 }
 
 export async function listApprovals(token: string, state: 'pending' | 'decided' | 'all'): Promise<Approval[]> {

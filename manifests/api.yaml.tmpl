@@ -14,6 +14,7 @@ rules:
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
 - {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch]}         # approvals (#67): read
 - {apiGroups: [agentdev.dev], resources: [approvals/status], verbs: [update]}            # the decision, nothing else
+- {apiGroups: [""], resources: [pods], verbs: [list]}                                    # void requests of gone agent pods (#67)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

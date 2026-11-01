@@ -155,12 +155,19 @@ prompt injection from the issue.
 NOTE: You must have write access to the repository. A decision from a person without write access, or from an agent,
 has no effect.
 
+NOTE: Write the command at the start of a line, outside a code block and outside a quote.
+
 NOTE: Do not edit the comment with the decision. The system ignores an edited comment. Write a new comment.
 
-NOTE: If nobody answers in 30 minutes, the system denies the request.
+NOTE: The agent waits 30 minutes for your answer. Then the agent continues without the action. The request stays
+open, and the comment shows "still open". If the agent asks for the same action again, the agent uses your decision.
+The agent does not make a second request for the same action.
 
-NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, each request expires and the agent
-cannot do the action (issue #87).
+NOTE: A request becomes void when the agent does not need it. For example, the job ends, the issue closes, or a new
+commit replaces the old commit. The comment then shows "void". A decision on a void request has no effect.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision. The
+request stays open until it becomes void, and the agent cannot do the action (issue #87).
 
 NOTE: The system removes known types of passwords and tokens from the request text. Do not trust that it removes
 all secrets.

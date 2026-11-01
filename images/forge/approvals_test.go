@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,8 @@ type fakeAPI struct {
 	scope    string
 	hash     string // "" = echo the request's hash from the last line
 	comments []string
+	edits    []string
+	voids    []string
 }
 
 func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
@@ -43,6 +46,16 @@ func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
 			_, _ = io.WriteString(w, `{"head":{"ref":"agent/alice/x"}}`)
 			return
 		}
+		if strings.HasSuffix(r.URL.Path, "/void") {
+			b, _ := io.ReadAll(r.Body)
+			fa.voids = append(fa.voids, r.URL.Path+" "+string(b))
+			return
+		}
+		if r.Method == "PATCH" {
+			b, _ := io.ReadAll(r.Body)
+			fa.edits = append(fa.edits, r.URL.Path+" "+string(b))
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/internal/approvals/") {
 			if r.Header.Get("X-Approval-Secret") == "" {
 				w.WriteHeader(403)
@@ -58,6 +71,7 @@ func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
 		b, _ := io.ReadAll(r.Body)
 		fa.comments = append(fa.comments, r.URL.Path+" "+string(b))
 		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":`+strconv.Itoa(700+len(fa.comments))+`}`)
 	}))
 	t.Cleanup(srv.Close)
 	s := newServer(&Config{ForgeURL: srv.URL, ForgeUser: "alice", AgentName: "alice", Token: "t", Repos: []string{"o/r"}, ForgeKind: "gitea"})
@@ -159,21 +173,78 @@ func TestApprovalPushHeld(t *testing.T) {
 	s, fa, lines := approvalSetup(t)
 	s.appr.pushHold = 20 * time.Millisecond
 	ctx := context.WithValue(context.Background(), ctxJob{}, "pr-9")
-	err := s.git.approve(ctx, "agent/alice/x", "abc", []string{".github/workflows/a.yml"})
+	paths := []string{".github/workflows/a.yml"}
+	err := s.git.approve(ctx, "agent/alice/x", "abc", paths)
 	if err == nil || !strings.Contains(err.Error(), "waits for approval") {
 		t.Fatalf("pending push: %v", err)
 	}
 	first := lastRequest(t, lines).ID
+	// timeout: same commit again reuses the open record (no new line, no new comment); the comment says "still open"
+	_ = s.git.approve(ctx, "agent/alice/x", "abc", paths)
+	if lastRequest(t, lines).ID != first || len(fa.comments) != 1 {
+		t.Fatalf("a retry after the wait opened a new request: %d comments", len(fa.comments))
+	}
+	if len(fa.edits) != 1 || !strings.Contains(fa.edits[0], "still open") {
+		t.Fatalf("comment not updated once: %v", fa.edits)
+	}
+	// a new commit on the same branch and paths supersedes the old request: void, then a new one
+	_ = s.git.approve(ctx, "agent/alice/x", "def", paths)
+	if lastRequest(t, lines).ID == first || len(fa.voids) != 1 || !strings.Contains(fa.voids[0], first) ||
+		!strings.Contains(fa.voids[0], "superseded") {
+		t.Fatalf("supersede: voids=%v", fa.voids)
+	}
+	second := lastRequest(t, lines).ID
 	fa.state = "allowed"
-	if err := s.git.approve(ctx, "agent/alice/x", "abc", []string{".github/workflows/a.yml"}); err != nil {
+	if err := s.git.approve(ctx, "agent/alice/x", "def", paths); err != nil {
 		t.Fatalf("allowed push: %v", err)
 	}
-	if lastRequest(t, lines).ID != first {
-		t.Fatal("a second push of the same commit opened a new request")
+	if lastRequest(t, lines).ID != second {
+		t.Fatal("allowed push opened a new request")
 	}
 	fa.state = "denied"
-	if err := s.git.approve(ctx, "agent/alice/x", "def", []string{".github/workflows/a.yml"}); err == nil || !isPolicy(err) {
+	if err := s.git.approve(ctx, "agent/alice/x", "ghi", paths); err == nil || !isPolicy(err) {
 		t.Fatalf("denied push: %v", err)
+	}
+}
+
+func TestApprovalPromptDedupAndJobDone(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	s.appr.timeout = 20 * time.Millisecond
+	h := s.routes()
+	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "deny" {
+		t.Fatalf("timeout allowed: %v", out)
+	}
+	first := lastRequest(t, lines).ID
+	// the same prompt again: same record, no new comment
+	_ = mcpCall(t, h, "issue-3", "Bash")
+	if lastRequest(t, lines).ID != first || len(fa.comments) != 1 {
+		t.Fatalf("duplicate request: %d comments", len(fa.comments))
+	}
+	// a decision on the open record applies the next time it asks
+	fa.state = "allowed"
+	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
+		t.Fatalf("decision on open record not used: %v", out)
+	}
+	// another input is another request
+	fa.state = "pending"
+	_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"make"}`)
+	if lastRequest(t, lines).ID == first || len(fa.comments) != 2 {
+		t.Fatalf("other input did not open a request: %d", len(fa.comments))
+	}
+	// the job ends: the open record becomes void and its comment says so
+	req := httptest.NewRequest("POST", "/job-done?job=issue-3", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 204 || len(fa.voids) != 1 || !strings.Contains(fa.voids[0], "the job ended") {
+		t.Fatalf("job-done: %d %v", rec.Code, fa.voids)
+	}
+	last := fa.edits[len(fa.edits)-1]
+	if !strings.Contains(last, "void") || !strings.Contains(last, "has no effect") || strings.Contains(last, "/approve ") {
+		t.Fatalf("void comment: %s", last)
+	}
+	if len(s.appr.reqs) != 0 {
+		t.Fatalf("records left: %v", s.appr.reqs)
 	}
 }
 

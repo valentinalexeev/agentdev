@@ -579,11 +579,12 @@ Approvals let agents ask a project member for permission on the forge, instead o
 [security-model.md](security-model.md#approvals-and-permission-notifications).
 
 CAUTION: Make sure that the API has a forge token (refer to *Give the API access to the forge*). Without the token,
-the API cannot make a decision, and each request expires.
+the API cannot make a decision, and each request stays open until it becomes void.
 
 1. On kind, set `APPROVALS=true` in `.env`. On GKE, set `approvals.enabled: true` in `ansible/instance.yml`.
-2. Optional: set the time limit. Use `APPROVAL_TIMEOUT_MINUTES` on kind or `approvals.timeout_minutes` on GKE.
-   The default is 30 minutes.
+2. Optional: set the time that the agent waits for a decision. Use `APPROVAL_TIMEOUT_MINUTES` on kind or
+   `approvals.timeout_minutes` on GKE. The default is 30 minutes. After this time, the agent continues without the
+   action, but the request stays open.
 3. On kind, run `./run.sh 10` and then `./run.sh 12`. On GKE, run the playbook.
    The operator starts the agent pods again with the new setting.
 
@@ -592,7 +593,7 @@ NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the
 NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
 example the account of the router or of a GitHub App), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
 
-NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, each request expires (issue #87).
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision (issue #87).
 
 NOTE: Approval objects stay in the cluster for 90 days (`APPROVAL_RETENTION_DAYS`). Use
 `kubectl -n coding-agents get approvals` to see them.

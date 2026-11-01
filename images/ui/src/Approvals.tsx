@@ -32,7 +32,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
       <p className="muted">
         Requests from agents for a tool or a protected change. A person with write access to the repository decides
         with a comment on the issue or PR: <code>/approve ID</code>, <code>/approve-job ID</code> or <code>/deny ID</code>.
-        No decision before the time limit: denied.
+        One request is open until it is approved, denied or void (no longer needed).
       </p>
       <nav>
         <button className={`tab ${tab === 'pending' ? 'on' : ''}`} onClick={() => setTab('pending')}>Pending</button>
@@ -45,7 +45,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
         <table>
           <thead><tr>
             <th>Created</th><th>Agent</th><th>Issue / PR</th><th>Request</th><th>ID</th>
-            <th>{tab === 'pending' ? 'Expires' : 'Decision'}</th>
+            <th>{tab === 'pending' ? 'Agent waits until' : 'Outcome'}</th>
           </tr></thead>
           <tbody>
             {items.map((a) => (
@@ -62,7 +62,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
                 <td className="nowrap">
                   {tab === 'pending'
                     ? new Date(a.expires).toLocaleString()
-                    : <>{a.state}{a.scope ? ` (${a.scope})` : ''}{a.decidedBy ? ` by ${a.decidedBy}` : ''}</>}
+                    : <>{a.state}{a.scope ? ` (${a.scope})` : ''}{a.decidedBy ? ` by ${a.decidedBy}` : ''}{a.reason ? `: ${a.reason}` : ''}</>}
                 </td>
               </tr>
             ))}
