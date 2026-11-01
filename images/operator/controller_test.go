@@ -262,7 +262,7 @@ func TestGitHubAgentCredentials(t *testing.T) {
 	reconcile(t, r, "gina")
 	s := getSTS(t, c, "gina")
 	ag, fg := container(s, "agent"), container(s, "forge")
-	for _, k := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID", "FORGE_TOKEN"} {
+	for _, k := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY_FILE", "GITHUB_INSTALLATION_ID", "FORGE_TOKEN"} {
 		if hasEnv(ag, k) {
 			t.Errorf("agent container has %s", k)
 		}
@@ -272,7 +272,9 @@ func TestGitHubAgentCredentials(t *testing.T) {
 	}
 	for _, e := range fg.Env {
 		switch e.Name {
-		case "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_INSTALLATION_ID":
+		case "GITHUB_APP_PRIVATE_KEY":
+			t.Error("the private key must be a file, not an environment variable")
+		case "GITHUB_APP_ID", "GITHUB_INSTALLATION_ID":
 			if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil || e.ValueFrom.SecretKeyRef.Name != "agent-gina" {
 				t.Errorf("%s not from agent-gina", e.Name)
 			}
@@ -286,7 +288,23 @@ func TestGitHubAgentCredentials(t *testing.T) {
 			}
 		}
 	}
-	if !hasEnv(fg, "GITHUB_APP_PRIVATE_KEY") || s.Annotations["agentdev/forge"] != "github" {
+	if !hasEnv(fg, "GITHUB_APP_PRIVATE_KEY_FILE") || s.Annotations["agentdev/forge"] != "github" {
 		t.Errorf("forge env or annotation missing: %v", s.Annotations)
+	}
+	mounted := func(c *corev1.Container) bool {
+		for _, m := range c.VolumeMounts {
+			if m.Name == "github-app" {
+				return m.ReadOnly
+			}
+		}
+		return false
+	}
+	if !mounted(fg) || mounted(ag) {
+		t.Error("the App key volume must be mounted read-only in the forge container only")
+	}
+	for _, v := range s.Spec.Template.Spec.Volumes {
+		if v.Name == "github-app" && (v.Secret == nil || v.Secret.SecretName != "agent-gina" || len(v.Secret.Items) != 1) {
+			t.Errorf("key volume: %+v", v)
+		}
 	}
 }

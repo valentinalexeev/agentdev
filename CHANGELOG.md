@@ -53,7 +53,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 - GitHub routing and deployment (#2, step 4). The router routes GitHub events by the label `agent:<name>` and the
   branch `agent/<name>/...` (also on check runs), never by login (all agents share the App bot). The operator gives a
   `forge: github` agent `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and optional `GITHUB_INSTALLATION_ID` from its own
-  Secret `agent-<name>` (forge container only, no `FORGE_TOKEN`) and `FORGE_URL` from the new operator setting
+  Secret `agent-<name>` (forge container only, no `FORGE_TOKEN`; the key as a read-only file, `GITHUB_APP_PRIVATE_KEY_FILE`) and `FORGE_URL` from the new operator setting
   `GITHUB_URL` (default `https://github.com`). GKE: `instance.yml` gets `github_app.app_id` (and optional
   `installation_id`), the key comes from the Secret Manager secret `github-app-private-key`; the playbook checks the
   ids and agent names. kind: `FORGE_KIND=github` in `config.env`, `./run.sh 06` reads `.secrets/github-app/`.

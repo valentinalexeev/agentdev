@@ -956,9 +956,10 @@ On kind:
 GitHub does not let you assign an issue to an App. Thus, you give work to an agent with a label.
 
 1. In each repository of the agents, make one label for each agent: `agent:<name>`, for example `agent:alice`.
-2. Give the triage permission (or more) only to the persons who can give work to agents.
+2. Give the write permission (or more) to the persons who can give work to agents.
 
-NOTE: Each person who can add labels can give work to an agent.
+NOTE: The agent does the work only when the person who added the label last has the write, maintain or admin
+permission. The agent examines this before each start. Else it does not do the work and it sends a security event.
 
 ### Reference: agents on GitHub
 
