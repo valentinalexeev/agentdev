@@ -14,6 +14,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Forge sidecar: forge drivers (#2, step 1). The API location, the per-request credential, the git credential and
+  the REST allow-list are now one `driver` per `FORGE_KIND`; only `gitea` exists so far and behaves as before. An
+  unknown `FORGE_KIND` stops the sidecar at start. Prepares the GitHub App driver.
 - GKE: the Ansible role `api` deploys the management API (#104) when `instance.yml` sets `api.oidc_issuer` (new
   optional instance vars `api.{oidc_issuer, oidc_discovery_url, oidc_audience, forge_url, db_retention_days}`). Same
   steps as `./run.sh 10`: roles `agentdev_owner`/`agentdev_api`, `schema.sql`, retention and `grants.sql`; Secrets
