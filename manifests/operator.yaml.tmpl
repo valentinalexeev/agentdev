@@ -18,6 +18,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-security-positions], verbs: [get, update]}
+# subscription usage limits (#93): state and pauses (written), thresholds set through the API (read only)
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get, update]}
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -55,6 +58,8 @@ spec:
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
         - {name: SECURITY_RATE_PER_MIN, value: "${SECURITY_RATE_PER_MIN}"}
         - {name: SECURITY_RATE_BURST, value: "${SECURITY_RATE_BURST}"}
+        - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
+        - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

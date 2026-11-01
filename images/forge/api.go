@@ -19,6 +19,8 @@ type server struct {
 	git    *gitRepo
 	client *http.Client
 	rules  []rule
+
+	usageGate usageGate // POST /usage rate limit (usage.go)
 }
 
 // rule is one allowed Gitea REST call. The path pattern's first group is the repo (owner/name), checked against REPO.
@@ -96,6 +98,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /sync", s.sync)
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
+	mux.HandleFunc("POST /usage", s.usage)
 	return s.localOnly(mux)
 }
 
