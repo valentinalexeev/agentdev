@@ -3,7 +3,8 @@
 # blueprint at the first start, with the password from Secret Manager platform-authentik-admin (state: created, so a
 # password changed in the UI is kept). Here akadmin is added to agentdev-admins with the authentik REST API in-process
 # (same call as 09-authentik.sh): add_user only adds, a second run is a no-op, and no member is ever removed. No token
-# is created or printed.
+# is created or printed. When akadmin was renamed or deleted, the task only warns: it never recreates akadmin and
+# never fails the deploy, as long as another active superuser exists (otherwise it fails: nobody could log in).
 - name: Add akadmin to agentdev-admins (add only)
   ansible.builtin.command:
     argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, deploy/authentik-worker, --,
@@ -17,8 +18,10 @@
           if g: break
           time.sleep(5)
       else: sys.exit("group agentdev-admins missing: blueprint not applied")
-      admin = User.objects.get(username="akadmin")
-      if g.users.filter(pk=admin.pk).exists():
+      admin = User.objects.filter(username="akadmin").first()
+      if admin is None:
+          print("BREAKGLASS=missing")
+      elif g.users.filter(pk=admin.pk).exists():
           print("BREAKGLASS=present")
       else:
           c = APIClient(); c.force_authenticate(admin)
@@ -32,3 +35,10 @@
     authentik_breakglass.rc != 0
     or 'BREAKGLASS=' not in authentik_breakglass.stdout
     or 'SUPERUSERS=0' in authentik_breakglass.stdout
+
+- name: Warn when the break-glass admin akadmin is missing
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: authentik user akadmin not found (renamed or deleted), so no break-glass admin was added to
+      agentdev-admins. Nothing was recreated. Restore one as in docs/admin.md, "Keep a break-glass admin".
+  when: "'BREAKGLASS=missing' in authentik_breakglass.stdout"

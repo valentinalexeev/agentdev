@@ -11,6 +11,8 @@
     definition:
       spec: {template: {metadata: {annotations: {agentdev/sso-hash: "{{ (authentik_sso_env | to_json | hash('sha256'))[:16] }}"}}}}
   loop: [authentik-server, authentik-worker]
-  # authentik from another source (authentik.enabled false): nothing to restart here
-  failed_when: false
+  # authentik from another source (authentik.enabled false): the Deployments may not exist here, stay tolerant.
+  # When this playbook deployed authentik, a failed restart is a real error.
+  failed_when: authentik_enabled | bool and authentik_sso_restart is failed
+  register: authentik_sso_restart
   no_log: true
