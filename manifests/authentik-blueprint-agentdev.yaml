@@ -7,7 +7,7 @@ metadata: {name: agentdev OIDC application}
 entries:
 # forge login claim (#88): the API maps a person to the forge user only through forge_login, never through the
 # username (users can choose it). Source: the user attribute forge_login, set by the company SSO source property
-# mapping or by an administrator (users cannot edit attributes). No attribute: no claim, the API gives read-only.
+# mapping or by an administrator (users cannot edit it only while no flow/prompt writes attributes.forge_login, admin.md). No attribute: no claim, the API gives read-only.
 - model: authentik_providers_oauth2.scopemapping
   id: forge-login
   identifiers: {name: "agentdev: forge login"}

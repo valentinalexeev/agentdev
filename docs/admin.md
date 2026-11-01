@@ -298,7 +298,7 @@ password that you set in the UI is final.
 
 The API finds the forge user of a person from the token claim `forge_login` (#88). It does not use the authentik
 username, because a user can choose a username. The claim comes from the authentik user attribute `forge_login`.
-Users cannot change their attributes. The blueprint adds the scope `forge`, which sends this claim to the API.
+Users cannot change this attribute in the default setup, but only by configuration (see the WARNING below). The blueprint adds the scope `forge`, which sends this claim to the API.
 
 The intended setup: authentik keeps no users and passwords of its own. It signs people in through the same company
 single sign-on as the forge (for example Google Workspace). The source property mapping of that identity provider
@@ -316,6 +316,10 @@ To set the forge login from the company identity provider (kind and GKE):
    return {"attributes": {"forge_login": email.split("@")[0].lower()}}
    ```
 
+   NOTE: Use the email local part only with one verified company domain. With two domains, `a.b@x` and `a.b@y` get
+   the same forge login. A reassigned mailbox also gives its forge login to the new owner. Otherwise, map from a
+   unique, stable claim of the identity provider.
+
 4. Go to **Directory > Federation and Social login**, open your source, and add the property mapping.
 5. Make sure that the forge uses the same rule for its logins.
 
@@ -332,6 +336,11 @@ WARNING: Do not let users edit `forge_login`. Only the identity provider or the 
 a wrong `forge_login` can act as that forge user.
 
 - Do not add an enrollment flow. The blueprint has none.
+- No flow, stage or prompt may write `attributes.forge_login`. authentik writes every prompt whose field key is
+  `attributes.<name>` to the user. The default user settings flow (`default-user-settings-flow`) already writes
+  `attributes.settings.locale` this way. A prompt with the field key `attributes.forge_login` in the user settings
+  flow, an enrollment flow or a source flow lets users choose their forge user. Check this in
+  **Flows and Stages > Prompts** (search `forge_login`) after setup and after each authentik upgrade.
 - Use the forge login in lower case.
 
 NOTE: If the token has no `forge_login`, or the value has upper case letters or characters other than `a-z`, `0-9`,
