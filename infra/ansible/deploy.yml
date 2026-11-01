@@ -57,12 +57,12 @@
     - name: "Approvals need agentdev-api (#67, #115): deployed only when api.oidc_issuer is set"
       ansible.builtin.assert:
         that: >-
-          not (approvals.enabled | default(false) | bool)
+          not (approvals.enabled | default(true) | bool)
           or ((api.oidc_issuer | default('')) | length > 0)
         fail_msg: >-
-          approvals.enabled: true needs the management API. The operator sends every request to
+          approvals are on by default on GKE and need the management API. The operator sends every request to
           agentdev-api-internal, which this playbook deploys only when api.oidc_issuer is set; without it every
-          prompt and protected push would be refused. Set api.oidc_issuer, or approvals.enabled: false
+          prompt and protected push would be refused. Set api.oidc_issuer, or opt out with approvals.enabled: false
           (docs/admin.md, Turn on approvals).
         quiet: true
 
@@ -320,7 +320,7 @@
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
             APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
-            APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+            APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
             APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
             EXEC_NS: "{{ exec_ns }}"
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"

@@ -38,6 +38,8 @@ github_app:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
+# Approvals (agentdev #67) are on by default and need api.oidc_issuer. To turn them off:
+# approvals: {enabled: false}
 # Public HTTPS entry point (agentdev #120): from `terraform output ingress` after terraform public_hosts is set.
 # DNS: an A record for each name -> `terraform output webhook_ip`. github_app.public_url = https://<webhook_host>.
 # ingress:

@@ -370,7 +370,7 @@ sequenceDiagram
   S-->>C: allow / deny (only if the decided hash is the hash the sidecar computed)
 ```
 
-- **Switch.** `APPROVALS=true` (instance config, default off). Off: Claude runs with `--permission-mode dontAsk` and
+- **Switch.** `APPROVALS=true` (instance config; default on for GKE, `approvals.enabled`, which needs the API; default off on kind, which has no API by default). Off: Claude runs with `--permission-mode dontAsk` and
   protected pushes are refused, as before. On: Claude runs with `--permission-prompt-tool mcp__agentdev__approve`
   for tools outside the allow-list; the `--disallowedTools` list stays a hard deny and is never asked about.
 - **Sources.** Claude permission prompts (sidecar `POST /mcp`, a minimal MCP server on localhost) and protected-path
