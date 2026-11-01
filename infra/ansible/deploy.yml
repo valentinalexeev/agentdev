@@ -25,6 +25,10 @@
           - image_tag is defined and image_tag | length > 0
           - reviewer is defined and reviewer | length > 0
           - agents is defined and agents | length > 0
+          # GitHub App (#2): App id (not secret) in instance.yml, validated; the private key in Secret Manager
+          - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
+          - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
+          - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
@@ -107,7 +111,11 @@
       ansible.builtin.shell: |
         set -euo pipefail
         p={{ gcp_project }}
+        {% if forge_kind == 'github' %}
+        echo -   # GitHub: no per-agent forge token, the sidecar mints App installation tokens (#2)
+        {% else %}
         printf '%s\n' "$(gcloud secrets versions access latest --secret agent-{{ item.name }}-forge-token --project $p)"
+        {% endif %}
         printf '%s\n' "$(gcloud secrets versions access latest --secret agent-{{ item.name }}-wake-token --project $p)"
         if gcloud secrets describe agent-{{ item.name }}-claude --project $p >/dev/null 2>&1; then
           gcloud secrets versions access latest --secret agent-{{ item.name }}-claude --project $p
@@ -117,6 +125,13 @@
       register: agent_secrets
       changed_when: false
       no_log: true
+
+    - name: GitHub App private key (#2), only for the agents' forge sidecars
+      ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_github_app_private_key }} --project {{ gcp_project }}
+      register: github_app_key
+      changed_when: false
+      no_log: true
+      when: forge_kind == 'github'
 
     - name: "Agent and SecurityEvent CRDs (#47, #70)"
       kubernetes.core.k8s:
@@ -178,10 +193,13 @@
           apiVersion: v1
           kind: Secret
           metadata: {name: "agent-{{ item.name }}", namespace: "{{ agents_ns }}"}
-          stringData:
-            FORGE_TOKEN: "{{ agent_secrets.results[idx].stdout_lines[0] }}"
-            WAKE_TOKEN: "{{ agent_secrets.results[idx].stdout_lines[1] }}"
-            REGISTER_TOKEN: "{{ register_token }}"
+          # one Secret per agent in both cases, so the operator's binding agent-<name> (R21) holds
+          stringData: >-
+            {{ {'WAKE_TOKEN': agent_secrets.results[idx].stdout_lines[1], 'REGISTER_TOKEN': register_token}
+               | combine({'GITHUB_APP_ID': github_app.app_id | string, 'GITHUB_APP_PRIVATE_KEY': github_app_key.stdout,
+                          'GITHUB_INSTALLATION_ID': github_app.installation_id | default('') | string}
+                         if forge_kind == 'github' else
+                         {'FORGE_TOKEN': agent_secrets.results[idx].stdout_lines[0]}) }}
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true
