@@ -1,0 +1,10 @@
+# kind.yml (#106) passes `ansible-playbook --syntax-check`. CI runs every tests/*.yml, so this covers kind.yml too.
+# Run: ansible-playbook infra/ansible/tests/kind_syntax.yml
+- name: Syntax of kind.yml (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Syntax check
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --syntax-check]
+      changed_when: false

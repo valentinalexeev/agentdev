@@ -6,13 +6,8 @@
   register: kind_cluster_version
   changed_when: false
 
-- name: "Kind is new enough (v0.24 or later, NetworkPolicy enforcement for #65)"
-  vars:
-    kind_cluster_v: "{{ kind_cluster_version.stdout | regex_search('v([0-9]+)\\.([0-9]+)', '\\1', '\\2') | map('int') | list }}"
-  ansible.builtin.assert:
-    that: kind_cluster_v[0] > kind_cluster_min_version[0] or kind_cluster_v[1] >= kind_cluster_min_version[1]
-    fail_msg: "kind v0.24 or later is needed (got {{ kind_cluster_version.stdout }}): brew upgrade kind"
-    quiet: true
+- name: Kind version gate
+  ansible.builtin.include_tasks: version.yml
 
 - name: The container engine runs
   ansible.builtin.command: "{{ kind_cluster_engine }} info --format '{{ '{{' }}.ID{{ '}}' }}'"

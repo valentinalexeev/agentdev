@@ -88,6 +88,14 @@
 | No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
 | A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
 
+## kind cluster (run.sh step 01)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 01 stops with `kind v0.24 or later is needed`. | The installed `kind` is too old, or `kind version` shows no version. | 1. Install a new `kind`: `brew upgrade kind`. 2. Do run.sh step 01 again. |
+| Step 01 stops with `ansible-playbook: command not found`. | ansible-core is not installed. | 1. Install it: `pipx install ansible-core` (2.17 or later). 2. Do run.sh step 01 again. |
+| `kind create cluster` stops with `port is already allocated` or `address already in use`. | A different program or a different `kind` cluster uses port 8080 or 3000 of the computer. `manifests/kind-config.yaml` (`extraPortMappings`) needs these ports. | 1. Stop the other program, or delete the other cluster: `kind delete cluster --name <name>`. 2. Or remove `extraPortMappings` from a copy of the configuration and set `kind_cluster_config` to the copy. Then use `kubectl port-forward` for the web pages. |
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.

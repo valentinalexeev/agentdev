@@ -13,7 +13,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   result as before (kind cluster, gVisor checked by sha512, RuntimeClass `gvisor`, smoke test), and a second run
   changes nothing. **BREAKING for kind only:** step 01 needs `ansible-playbook` (ansible-core 2.17 or later). Each
   wrapper is removed one MINOR release after its step moved. GKE does not change. Docs: `docs/install.md`,
-  `docs/admin.md` (Upgrade the local installation), `infra/ansible/README.md`. CI: ansible-lint covers `kind.yml`.
+  `docs/admin.md` (Upgrade the local installation), `docs/troubleshooting.md` (kind), `infra/ansible/README.md`.
+  The role always downloads the gVisor `.tar.bz2` archive (the old step used `.tar.zstd` when `zstd` was installed);
+  the sha512 check does not change. CI: ansible-lint covers `kind.yml`, `tests/kind_syntax.yml` runs its
+  `--syntax-check` and `tests/kind_version.yml` checks the kind version gate. The kind e2e (two runs on a fresh kind
+  cluster, `changed=0` on the second) is run by hand for each port and reported in the pull request; a CI job for it
+  is a follow-up (it needs a workflow change by the owner).
   To apply: install ansible-core, then run `./run.sh 01` as before.
 
 ### Added

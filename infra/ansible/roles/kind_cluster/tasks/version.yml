@@ -1,0 +1,11 @@
+---
+# The kind version gate. In its own file so tests/kind_version.yml can check it without a cluster.
+- name: "Kind is new enough (v0.24 or later, NetworkPolicy enforcement for #65)"
+  vars:
+    kind_cluster_v: "{{ kind_cluster_version.stdout | regex_search('v[0-9]+(\\.[0-9]+)*') | default('', true) }}"
+  ansible.builtin.assert:
+    that:
+      - kind_cluster_v | length > 0
+      - kind_cluster_v[1:] is version(kind_cluster_min_version, '>=')
+    fail_msg: "kind v0.24 or later is needed (got {{ kind_cluster_version.stdout }}): brew upgrade kind"
+    quiet: true
