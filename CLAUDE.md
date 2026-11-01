@@ -71,8 +71,9 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - **Check the identity before every `gh` or `git` write** ([#108](https://github.com/valentinalexeev/agentdev/issues/108)).
   The default `gh` login and git config on the owner's machine are the owner's. Every shell first runs
   `source ~/.config/github-bot/env.sh && [ "$(gh api user -q .login)" = valentinalexeev-bot ] || exit 1`, and
-  every clone sets `git config user.name valentinalexeev-bot` and the bot's noreply e-mail. Agents work in their
-  own clone, never in the owner's checkout.
+  every clone sets `git config user.name valentinalexeev-bot` and
+  `git config user.email valentinalexeev-bot@users.noreply.github.com`. Agents work in their own clone, never in
+  the owner's checkout.
 - **If the bot token fails** (401): tell the owner and stop the affected work; do not fall back to the owner
   account, do not merge anything.
 
@@ -109,17 +110,20 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   `main`. Merging B moves A's head, so A needs a fresh approval and green CI on its new head before its own merge.
   Only stacks created through GitHub's stacks API merge as one unit; a PR merely based on another branch does not.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
-  result in the PR. Every finding, nits included, is fixed in the same PR. A review counts only for the head it
-  names; a push after it needs a new review.
-- **Security advisories get an outcome in their own thread** ([owner](https://github.com/valentinalexeev/agentdev/pull/102)).
-  Each `github-advanced-security[bot]` comment, and each security finding on a code line, gets a reply in that
-  thread (`gh api repos/valentinalexeev/agentdev/pulls/NN/comments/ID/replies`) with one outcome:
+  result in the PR. Every finding, nits included, is fixed in the same PR or, for a security advisory, gets a
+  recorded outcome (below). A review counts only for the head it names; a push after it needs a new review.
+- **Security advisories get an outcome in their own thread** (owner, recorded in
+  [#110](https://github.com/valentinalexeev/agentdev/issues/110)). Each `github-advanced-security[bot]` line
+  comment, and each security finding on a code line, gets a reply in that thread:
+  `gh api -X POST repos/valentinalexeev/agentdev/pulls/{pr}/comments/{comment_id}/replies -f body='...'`
+  (list the ids with `gh api repos/valentinalexeev/agentdev/pulls/{pr}/comments`). An advisory posted as a
+  top-level PR comment (no thread) gets a quote-reply with `gh pr comment {pr}`. The reply has one outcome:
   **Fixed in `<sha>`** (what changed, file:line, the covering test), **Accepted risk** (why, and the R-number in
   `docs/security.md` or a follow-up issue), or **False positive** (the concrete reason). The independent reviewer
-  replies in the same thread with **Verified: fixed / not fixed / outcome disagreed** and one line why. A thread
-  without an author outcome and a reviewer verification blocks the review OK and the merge. The review summary
-  lists every thread id with its outcome.
-- **kind and GKE stay at parity** ([owner](https://github.com/valentinalexeev/agentdev/pull/95)): a feature that
+  replies in the same thread with **Verified: fixed / not fixed / outcome disagreed** and one line why, then the
+  thread is resolved. A thread without an author outcome and a reviewer verification blocks the review OK and
+  the merge. The review summary lists every thread id with its outcome.
+- **kind and GKE stay at parity** ([owner](https://github.com/valentinalexeev/agentdev/pull/95#issuecomment-6555379750)): a feature that
   is deployed on kind is also deployable through `infra/ansible` / `infra/terraform`, with templates, instance
   examples and docs in sync, in the same PR; if not, the PR links a follow-up issue.
 - **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
