@@ -130,6 +130,10 @@ func main() {
 	_ = os.Unsetenv("GITHUB_APP_PRIVATE_KEY")
 	s := newServer(c)
 	s.drv, s.rules, s.git.drv = drv, drv.rules(), drv
+	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
+		s.enableApprovals(apiURL, timeout)
+		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
+	}
 	if err := s.git.init(); err != nil {
 		log.Fatalf("forge: mirror: %v", err)
 	}

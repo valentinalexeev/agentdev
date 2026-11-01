@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type gitRepo struct {
 	c   *Config
 	drv driver     // remote URL and credential (driver.go); nil means Gitea
 	mu  sync.Mutex // git refuses concurrent ref updates
+	// approve, when set (APPROVALS=true, #67), is asked instead of refusing a push to protected paths; nil = refuse.
+	// It is called without mu held (it may wait for a person) and returns nil when the push is allowed.
+	approve func(ctx context.Context, branch, tip string, paths []string) error
 }
 
 // policyError is a refusal by the push policy (HTTP 403), as opposed to a git or forge failure (HTTP 502). Rule and
@@ -156,6 +160,20 @@ func protectedHit(paths, protected []string) string {
 	return ""
 }
 
+// protectedHits returns every distinct changed path under a protected prefix, sorted (the approval request text).
+func protectedHits(paths, protected []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range paths {
+		if h := protectedHit([]string{p}, protected); h != "" && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func lines(s string) []string {
 	var out []string
 	for _, l := range strings.Split(s, "\n") {
@@ -242,7 +260,15 @@ func (g *gitRepo) Push(ctx context.Context, branch string, bundle io.Reader) (st
 	if err != nil {
 		return "", err
 	}
-	if hit := protectedHit(append(lines(changed), lines(net)...), g.c.Protected); hit != "" {
+	all := append(lines(changed), lines(net)...)
+	if hit := protectedHit(all, g.c.Protected); hit != "" && g.approve != nil {
+		g.mu.Unlock() // a person may take minutes: syncs and other pushes go on meanwhile
+		err := g.approve(ctx, branch, tip, protectedHits(all, g.c.Protected))
+		g.mu.Lock()
+		if err != nil {
+			return "", err
+		}
+	} else if hit != "" {
 		return "", refuseAs("push-protected-path", "high", "push refused: %s is a protected path (%s); a person has to make this change",
 			hit, strings.Join(g.c.Protected, ", "))
 	}

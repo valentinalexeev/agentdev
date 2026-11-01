@@ -121,6 +121,34 @@ export function maxConcurrentError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 8 ? '' : 'max. concurrent: 1 to 8'
 }
 
+// Approval requests (#67): read-only here; decisions are forge comments (/approve <id>), UI decisions are #80.
+export type ApprovalState = 'pending' | 'allowed' | 'denied' | 'void'
+
+export interface Approval {
+  name: string
+  id: string
+  agent: string
+  repo: string
+  forge: string
+  job: string
+  source: 'claude' | 'push'
+  tool: string
+  input: string // written by the agent: untrusted, shown as text only
+  untrusted: boolean
+  created: string
+  expires: string
+  state: ApprovalState
+  scope?: 'once' | 'job'
+  decidedBy?: string
+  decidedVia?: string
+  decidedAt?: string
+  reason?: string // why it became void
+}
+
+export async function listApprovals(token: string, state: 'pending' | 'decided' | 'all'): Promise<Approval[]> {
+  return (await (await call(token, 'GET', `/api/approvals?state=${state}`)).json()).approvals
+}
+
 // Subscription usage limits (#93). Thresholds in percent; 0 or absent in a project: the global value applies.
 export interface Thresholds { fiveHour?: number; weekly?: number }
 export interface UsageWindow { utilization: number; resetsAt: number }

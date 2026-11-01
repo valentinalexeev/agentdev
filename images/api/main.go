@@ -78,6 +78,23 @@ func main() {
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
 	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp, usage: agents}
+	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
+		gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
+		dc := newDecider(agents, agents, gp, gp)
+		dc.pods = agents
+		for _, l := range strings.Split(os.Getenv("APPROVAL_DENY_ACCOUNTS"), ",") {
+			if l = strings.ToLower(strings.TrimSpace(l)); l != "" {
+				dc.denyLogins[l] = true
+			}
+		}
+		go dc.run(ctx, time.Duration(envInt("APPROVAL_POLL_SECONDS", 15))*time.Second)
+		imux := http.NewServeMux()
+		imux.Handle("GET /internal/approvals/{agent}/{id}", internalDecision(agents))
+		imux.Handle("POST /internal/approvals/{agent}/{id}/void", internalVoid(agents))
+		isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+		go func() { log.Fatal(isrv.ListenAndServe()) }()
+	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
@@ -196,6 +213,11 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
 		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
 		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
+		if as, ok := wr.store.(approvalStore); ok { // approvals, read-only (#67, approvals.go); decisions on the forge
+			ar := &approvalReader{store: as, w: wr}
+			mux.Handle("GET /api/approvals", auth(verify, http.HandlerFunc(ar.list)))
+			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
+		}
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
 		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)

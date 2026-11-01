@@ -33,6 +33,21 @@
 | The agent does not start new work. The log shows `subscription usage limit: new runs paused`. | The subscription is at the usage limit, or Claude refused a run because of its rate limit. | 1. On the **Usage** page, find the reason and the end time. 2. Wait for the end time. Or an administrator increases the global usage limit. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
+## Executors
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The pull request shows no `agentdev/trusted-plan` status. | The pull request does not change a file below `spec.path`. Or the executor is paused or `invalid`. | 1. Run `kubectl -n agentdev-executors get executors`. 2. Read the condition `Ready` of the executor. |
+| The executor shows the phase `error`. | The forge token is not valid, or the forge cannot be reached. | 1. Read the message of the condition `Ready`. 2. Replace `FORGE_TOKEN` in `exec-<name>-forge`. |
+| The run shows `no plan hash from the helper container`. | The plan command did not write `$(PLAN_FILE)`. | 1. Correct `spec.plan.command`. |
+| The apply Job fails in the container `verify`. | The plan file is not the approved file. | Do not apply. Examine the namespace for changes, and make a new pull request. |
+| The executor shows the phase `invalid` with the reason `DuplicateEnvironment`. | An other `Executor` has the same `spec.environment`. Only the oldest one runs. | 1. Delete the duplicate `Executor`, or give it its own environment. |
+| A pull request gets no plan, and its branch is in a fork. | Pull requests from forks are not planned by default. | 1. Push the branch to the repository, or set `spec.allowForkPRs: true` (read admin.md first). |
+| The checkout of a merge or apply run takes long. | The commit is more than 200 commits deep on the branch. The checkout then fetches the full history of the branch. | No action. The checkout fetches only the protected branch, never a commit by id. |
+| The run shows `executor spec changed since the merge plan` or the apply run shows `executor spec changed since the approval`. | The `Executor` was changed (image, commands, credentials, repository, branch or path) after the plan. | 1. Make sure that the change was intended. 2. Merge a new commit to plan again. |
+| The run shows `approval decided more than 30m0s ago, apply not started` or `approval decided after its deadline`. | The operator was not running after the decision, or the decision came after `spec.approvalHours`. | 1. Merge a new commit to plan again. |
+| The run shows `approval does not match the merge plan`. | The approval request was changed or replaced. | This is a security event (`executor.refused`, high). Examine who can write approvals. |
+
 ## Interactive sessions
 
 | Symptom | Cause | Procedure |
@@ -57,6 +72,16 @@
 | The authentik login page shows again after each login. | The port-forward uses http. The session cookies are only for https. | 1. Start the port-forward to port `443`. 2. Use https://localhost:9443/. |
 | The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
 | In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
+
+## Approvals
+
+| Symptom | Cause | Action |
+|---|---|---|
+| The agent waits, and a `/approve` comment has no effect | The comment is edited, the id is wrong, or the commenter does not have write access | Write a new comment with the correct id. Make sure that you have write access to the repository. |
+| No request gets a decision | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
+| A request shows "void" | The job ended, the issue or pull request closed, a new commit replaced the old commit, or the agent pod stopped | No action. If the agent needs the action again, it makes a new request. |
+| No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
+| A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
 
 ## Report a problem that continues
 

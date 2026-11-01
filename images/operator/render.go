@@ -13,6 +13,11 @@ import (
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
 
+// approvals is "true" only with an API URL to ask (#67); anything else is off.
+func (d Defaults) approvals() string {
+	return strconv.FormatBool(d.Approvals == "true" && d.ApprovalsURL != "")
+}
+
 // render fills the StatefulSet from the Agent. It is the only definition of an agent's pod (the shell template it
 // replaced is gone since #57); changes here reach every agent on the next reconcile.
 func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
@@ -118,7 +123,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		Env: append(append(append([]corev1.EnvVar{}, common...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
+			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
@@ -142,6 +147,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
+			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more

@@ -32,6 +32,37 @@
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
+    # Executor names and environments become parts of shell commands and object names below: check them before any
+    # task uses them, with the same rules as the operator's validExecutor and the CRD (#69, review of #116).
+    - name: Executors are valid (names, environments, image by digest, one executor per environment)
+      ansible.builtin.assert:
+        that:
+          - item.name is defined and item.name is string and item.name is match('^[a-z0-9-]{1,40}$')
+          - item.environment is defined and item.environment is string and item.environment is match('^[a-z0-9]([-a-z0-9]{0,28}[a-z0-9])?$')
+          - item.repo is defined and item.repo is match('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') and '..' not in item.repo
+          - item.image is defined and item.image is match('^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$')
+          - item.plan is defined and item.plan is sequence and item.plan is not string and item.plan | length > 0
+          - item.apply is defined and item.apply is sequence and item.apply is not string and item.apply | length > 0
+          - "'..' not in (item.path | default(''))"
+          - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
+          - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
+          - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+        fail_msg: >-
+          executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
+          plan/apply argv lists, no '..', one executor per environment)
+        quiet: true
+      loop: "{{ executors }}"
+      loop_control: {label: "{{ item.name | default('?') }}"}
+
+    - name: "Approvals need agentdev-api, which this playbook does not deploy yet (#67): kind only for now"
+      ansible.builtin.assert:
+        that: not (approvals.enabled | default(false) | bool)
+        fail_msg: >-
+          approvals.enabled: true is not supported on GKE yet. The operator would send every request to
+          agentdev-api-internal, which is not deployed here, so every prompt and protected push would be refused.
+          Set approvals.enabled: false (docs/admin.md, Turn on approvals).
+        quiet: true
+
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
       changed_when: false
@@ -133,7 +164,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent and SecurityEvent CRDs (#47, #70)"
+    - name: "Agent, SecurityEvent, Approval, Executor and ExecutorRun CRDs (#47, #70, #67, #69)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -141,7 +172,8 @@
         wait: true
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
-      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml]
+      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -193,10 +225,88 @@
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
+            APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
+            APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+            APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
+            EXEC_NS: "{{ exec_ns }}"
+            EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
+            EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
+            EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
+
+    # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
+    # (exec-<name>-forge-token), optional plan/apply env Secrets (exec-<name>-plan-env, exec-<name>-apply-env: KEY=VALUE
+    # lines), and on GKE two Kubernetes service accounts bound by Workload Identity to the read-only and the write
+    # Google service account. The Google accounts and their IAM roles are the deployment's (terraform), never agentdev's.
+    - name: Read executor secrets (forge token required; plan and apply env optional)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        s="exec-{{ item.0.name }}-{{ 'forge-token' if item.1 == 'forge' else item.1 + '-env' }}"
+        if [ "{{ item.1 }}" = forge ] || gcloud secrets describe "$s" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets versions access latest --secret "$s" --project {{ gcp_project }}
+        fi
+      args: {executable: /bin/bash}
+      loop: "{{ executors | product(['forge', 'plan', 'apply']) | list }}"
+      loop_control: {label: "exec-{{ item.0.name }}-{{ item.1 }}"}
+      register: exec_secrets
+      changed_when: false
+      no_log: true
+
+    - name: Executor Secrets exec-<name>-forge (FORGE_TOKEN), -plan and -apply (KEY=VALUE lines)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: "exec-{{ item.item.0.name }}-{{ item.item.1 }}", namespace: "{{ exec_ns }}"}
+          stringData: >-
+            {{ {'FORGE_TOKEN': item.stdout | trim} if item.item.1 == 'forge'
+               else dict(item.stdout.splitlines() | select('search', '=') | map('split', '=', 1)) }}
+      loop: "{{ exec_secrets.results | default([]) }}"
+      loop_control: {label: "exec-{{ item.item.0.name }}-{{ item.item.1 }}"}
+      no_log: true
+
+    - name: Executor service accounts (GKE Workload Identity, read-only for plan, write for apply)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: "exec-{{ item.0.name }}-{{ item.1 }}"
+            namespace: "{{ exec_ns }}"
+            annotations: "{{ {'iam.gke.io/gcp-service-account': item.0[item.1 + '_gsa']} if item.0[item.1 + '_gsa'] | default('') else {} }}"
+          automountServiceAccountToken: false
+      loop: "{{ executors | product(['plan', 'apply']) | list }}"
+      loop_control: {label: "exec-{{ item.0.name }}-{{ item.1 }}"}
+
+    - name: Executors (#69)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: agentdev.dev/v1alpha1
+          kind: Executor
+          metadata: {name: "{{ item.name }}", namespace: "{{ exec_ns }}"}
+          spec:
+            environment: "{{ item.environment }}"
+            repo: "{{ item.repo }}"
+            forge: "{{ forge_kind }}"
+            branch: "{{ item.branch | default('main') }}"
+            path: "{{ item.path | default('') }}"
+            image: "{{ item.image }}"
+            plan: {command: "{{ item.plan }}"}
+            apply: {command: "{{ item.apply }}"}
+            planCredentials: {secretName: "exec-{{ item.name }}-plan", serviceAccountName: "exec-{{ item.name }}-plan"}
+            applyCredentials: {secretName: "exec-{{ item.name }}-apply", serviceAccountName: "exec-{{ item.name }}-apply"}
+            forgeSecret: "exec-{{ item.name }}-forge"
+            approvalHours: "{{ item.approval_hours | default(24) | int }}"
+            allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
+      loop: "{{ executors }}"
+      loop_control: {label: "{{ item.name }}"}
+      when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods
       kubernetes.core.k8s:

@@ -18,6 +18,20 @@ github_app:
   # installation_id: 51234567                    # optional; looked up from the agent's repo when omitted
 # Agents on GitHub get work by the label agent:<name> on an issue (an App cannot be assigned). Agent names:
 # lowercase letters, digits, - . All repos of one agent must belong to one owner (one App installation).
+# Deterministic executors (#69), optional: an AI agent designs the change, a person merges and /approve-s, the
+# executor applies it. Secret Manager: exec-<name>-forge-token (own forge account), optional exec-<name>-plan-env and
+# exec-<name>-apply-env (KEY=VALUE lines). The two Google service accounts are yours (terraform/main.tf).
+# executors:
+#   - name: tf-prod
+#     environment: prod
+#     repo: my-org/platform
+#     path: infra
+#     image: hashicorp/terraform@sha256:<digest>
+#     plan: [terraform, plan, -input=false, -out=$(PLAN_FILE)]
+#     apply: [terraform, apply, -input=false, $(PLAN_FILE)]
+#     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
+#     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
+#     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
 # Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
 # api:

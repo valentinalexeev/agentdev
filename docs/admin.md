@@ -497,11 +497,32 @@ To skip the stand-in, set `SSO_STANDIN=0`. To skip only the test, set `SSO_CHECK
 
 WARNING: Do not use the stand-in outside kind. Anyone who can open it can sign in as any person.
 
+### Give a person admin rights for agents
+
+The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+
+IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
+set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
+and never removes a member. Step 09 checks this each run: it adds a test user, re-applies the blueprints, and fails
+if a member is gone. Add and remove members by hand in authentik only.
+
+1. Log in to authentik as an administrator.
+2. Go to **Directory > Groups** and open `agentdev-admins`.
+3. Add the user on the **Users** tab.
+4. Tell the user to log in to agentdev again. The API reads the groups from the token, and an old token does not
+   have the new group.
+
+CAUTION: Give this group to platform operators only. A member can add an agent to each repository of the forge.
+
 ### Reference: authentik
 
 - The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
 - The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
 - The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
+- The blueprint `manifests/authentik-blueprint-agentdev.yaml` makes the OIDC application and the group
+  `agentdev-admins`, without members. On `kind`, `09-authentik.sh` adds `akadmin` to the group through the authentik
+  API (add only, never remove).
 - The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
   to authentik.
 
@@ -517,7 +538,8 @@ Do this task after run.sh step 09.
 1. Set `API_OIDC_ISSUER` in `config.env` to the URL that you use to log in to authentik.
    On `kind`, with the 9443 port-forward, this URL is `https://localhost:9443/application/o/agentdev/`.
 2. Run run.sh step 10: `./run.sh 10`
-   The script builds the API and deploys it in `agentdev-platform`.
+   The script builds the API and deploys it in `agentdev-platform`. On `kind`, it also gives the API access to the
+   forge. Refer to "Give the API access to the forge".
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
@@ -595,6 +617,14 @@ WARNING: Do not use a token with write access. The API only reads the permission
 Gitea tells the permission of another user only to a site admin or to an admin of the repository. With any other
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
+
+On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
+`read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
+works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+`./run.sh 10` again.
+
+On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.
@@ -894,6 +924,33 @@ number to see the events of that agent.
 NOTE: You can also use `kubectl -n coding-agents get securityevents` or `GET /api/security-events` (refer to
 *Management API*).
 
+### Turn on approvals
+
+Approvals let agents ask a project member for permission on the forge, instead of a refusal. Design and rules:
+[security-model.md](security-model.md#approvals-and-permission-notifications).
+
+CAUTION: Make sure that the API has a forge token (refer to *Give the API access to the forge*). Without the token,
+the API cannot make a decision, and each request stays open until it becomes void.
+
+IMPORTANT: At this time, approvals operate only on kind. The GKE playbook does not deploy agentdev-api, which
+decides the requests, so the playbook stops with an error if `approvals.enabled` is `true`.
+
+1. Set `APPROVALS=true` in `.env`.
+2. Optional: set the time that the agent waits for a decision with `APPROVAL_TIMEOUT_MINUTES`. The default is 30
+   minutes. After this time, the agent continues without the action, but the request stays open.
+3. Run `./run.sh 10` and then `./run.sh 12`.
+   The operator starts the agent pods again with the new setting.
+
+NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).
+
+NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
+example the account of the router or of a GitHub App), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
+
+NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision (issue #87).
+
+NOTE: Approval objects stay in the cluster for 90 days (`APPROVAL_RETENTION_DAYS`). Use
+`kubectl -n coding-agents get approvals` to see them.
+
 ### Resume an agent that the operator paused
 
 The operator pauses an agent when a high severity event occurs. The operator also pauses an agent when one job has
@@ -1053,6 +1110,110 @@ Ansible role `api` installs the API when `instance.yml` sets `api.oidc_issuer` (
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
+
+## Deterministic executors
+
+An executor applies a change that a person approved (#69). An AI agent designs the change with read-only
+credentials. The executor has the write credentials. No AI runs in the executor. The image and the commands come
+from the `Executor` object, never from the repository. Only cluster admins can write `Executor` objects.
+
+The flow for each pull request:
+
+1. The executor plans the head commit of the pull request. It uses the read-only credentials. It sets the commit
+   status `agentdev/trusted-plan` and writes the plan output in a comment.
+2. After the merge, the executor plans the merge commit again. It takes the commit from the protected branch only.
+   The operator calculates the SHA-256 of the plan file and writes an approval request on the pull request.
+3. A person with write access replies `/approve <id>`.
+4. The executor applies the plan file with the write credentials. Before the apply, the operator image checks that the
+   plan file has the approved SHA-256. Each approval is for one apply only.
+
+### Set up an executor
+
+Before you do this task, make sure that you have:
+
+- An own forge account for the executor, with write access to the repository. Do not use an agent account.
+- An image of the tool, with a digest (`name@sha256:...`).
+- The read-only credentials and the write credentials of the environment.
+
+1. Make the Secrets in the namespace `agentdev-executors`:
+
+   ```bash
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-forge --from-literal=FORGE_TOKEN=<token>
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-plan --from-env-file=plan.env
+   kubectl -n agentdev-executors create secret generic exec-tf-prod-apply --from-env-file=apply.env
+   ```
+
+   On GKE, use Workload Identity instead of keys. Make two service accounts, `exec-tf-prod-plan` and
+   `exec-tf-prod-apply`, and set the `serviceAccountName` fields below.
+
+2. Apply the Executor object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Executor
+   metadata: {name: tf-prod}
+   spec:
+     environment: prod
+     repo: owner/platform
+     path: infra
+     image: hashicorp/terraform@sha256:<digest>
+     plan: {command: [terraform, plan, -input=false, -out=$(PLAN_FILE)]}
+     apply: {command: [terraform, apply, -input=false, $(PLAN_FILE)]}
+     planCredentials: {secretName: exec-tf-prod-plan}
+     applyCredentials: {secretName: exec-tf-prod-apply}
+     forgeSecret: exec-tf-prod-forge
+   EOF
+   ```
+
+3. In the forge, add the branch protection rule for the branch: require the status check `agentdev/trusted-plan`
+   and require that the branch is up to date.
+4. Add the forge account of the executor to `APPROVAL_DENY_ACCOUNTS` of the API. The executor writes tool output in
+   comments. This step makes sure that no comment of the executor can decide an approval.
+5. Show the executors: `kubectl -n agentdev-executors get executors`
+   The column PHASE shows `ready`.
+
+NOTE: With Ansible, put the executors in `executors:` of the instance file
+(`examples/deployment/gcp-gke/ansible/instance.yml.example`). The playbook makes the Secrets, the service accounts
+and the Executor objects.
+
+### Find the runs of an executor
+
+1. Run `kubectl -n agentdev-executors get executorruns`.
+   The output shows the stage (`pr`, `merge` or `apply`), the pull request, the commit and the phase.
+2. To read the output of a run, run `kubectl -n agentdev-executors logs job/<run name> -c tool`.
+
+### Stop an executor
+
+1. Run `kubectl -n agentdev-executors patch executor tf-prod --type merge -p '{"spec":{"paused":true}}'`.
+   The executor starts no new runs. A run that started continues to the end.
+
+### Reference: executors
+
+| Setting | Default | Where |
+|---|---|---|
+| `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `config.env`; Ansible `exec_ns` |
+| `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `config.env`; Ansible `executor_poll_seconds` |
+| `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `config.env`; Ansible `executor_retention_days` |
+| `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
+| `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
+| `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
+
+- Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
+  `executor.apply` or `executor.refused`.
+- The executor plans only pull requests that change a file below `spec.path`. It plans only merges after the
+  `Executor` object was made, and not older than 24 hours.
+- One executor per environment. If two `Executor` objects have the same `spec.environment`, the oldest one runs.
+  The other ones show the phase `invalid` with the reason `DuplicateEnvironment`, and an `executor.refused` event is
+  recorded. The Ansible playbook stops before it changes anything if two executors have the same environment.
+- By default the executor plans only pull requests from branches of the same repository. A pull request from a fork
+  runs the code of its author with the plan credentials. Set `spec.allowForkPRs: true` only if the plan credentials
+  can read nothing secret (risk R81; egress limits are #65).
+- The approval covers the image digest, the apply command and a SHA-256 of the `Executor` spec (also the
+  credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
+  is closed with `executor spec changed`. Merge a new commit to plan again.
+- The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
+- Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
 ## Subscription usage limits
 
