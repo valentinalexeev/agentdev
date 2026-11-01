@@ -40,10 +40,10 @@ func fromSecurityEventObject(u *unstructured.Unstructured) (securityEvent, bool)
 	return e, true
 }
 
-// sink stores one event and, if it is new, sends it to the outputs.
+// sink stores one event and, if it is new, sends it to the outputs (webhook, syslog, OTLP: outputs.go).
 type sink struct {
 	store eventStore
-	out   *webhook // nil: no webhook configured
+	outs  []*webhook // the configured outputs, each with its own fair queue
 }
 
 func (s *sink) add(ctx context.Context, e securityEvent) {
@@ -52,8 +52,10 @@ func (s *sink) add(ctx context.Context, e securityEvent) {
 		log.Printf("store security event %s: %v", e.Hash, err)
 		return
 	}
-	if isNew && s.out != nil {
-		s.out.Enqueue(e)
+	if isNew {
+		for _, o := range s.outs {
+			o.Enqueue(e)
+		}
 	}
 }
 
@@ -72,9 +74,10 @@ func watchSecurityEvents(ctx context.Context, d dynamic.Interface, ns string, s 
 	f.Start(ctx.Done())
 }
 
-// webhook posts each new event as JSON to URL, signed with HMAC-SHA256 over "<timestamp>.<body>" in
-// X-Agentdev-Signature: sha256=<hex> (timestamp in X-Agentdev-Timestamp, Unix seconds) so the receiver can check
-// origin and reject replays. Failed deliveries are retried with exponential backoff, up to Attempts.
+// webhook is the queue and retry engine of every output. By default it posts each new event as JSON to URL, signed
+// with HMAC-SHA256 over "<timestamp>.<body>" in X-Agentdev-Signature: sha256=<hex> (timestamp in
+// X-Agentdev-Timestamp, Unix seconds) so the receiver can check origin and reject replays. Failed deliveries are
+// retried with exponential backoff, up to Attempts.
 //
 // Fair queueing: each agent has its own bounded queue (PerAgent events); the workers take one event per agent in
 // turn. A flooding agent fills and overflows only its own queue, so it cannot push other agents' events out. Drops
@@ -85,11 +88,18 @@ type webhook struct {
 	Secret   []byte
 	Client   *http.Client
 	Attempts int
-	Backoff  time.Duration // first retry delay; doubles each time, at most 5 minutes
-	Now      func() time.Time
-	Sleep    func(context.Context, time.Duration) bool
-	PerAgent int // queue size per agent
-	Workers  int // parallel deliveries
+	Backoff  time.Duration // first retry delay; doubles each time, at most MaxBackoff
+	// MaxBackoff caps the retry delay; 0 means 5 minutes
+	MaxBackoff time.Duration
+	Now        func() time.Time
+	Sleep      func(context.Context, time.Duration) bool
+	PerAgent   int // queue size per agent
+	Workers    int // parallel deliveries
+	// Name is used in log lines. Encode and Send replace the webhook's JSON body and signed POST, so syslog and OTLP
+	// (outputs.go) reuse the same queues and retries. nil: the webhook behaviour.
+	Name   string
+	Encode func(securityEvent) ([]byte, error)
+	Send   func(context.Context, []byte) error
 
 	mu      sync.Mutex
 	queues  map[string][]securityEvent
@@ -130,7 +140,7 @@ func (w *webhook) Enqueue(e securityEvent) {
 		w.dropped[e.Agent]++
 		n := w.dropped[e.Agent]
 		w.mu.Unlock()
-		log.Printf("webhook queue of agent %s full, event %d not sent (still stored; %d dropped for this agent)", e.Agent, e.ID, n)
+		log.Printf("%s queue of agent %s full, event %d not sent (still stored; %d dropped for this agent)", w.name(), e.Agent, e.ID, n)
 		return
 	}
 	if len(q) == 0 {
@@ -192,7 +202,7 @@ func (w *webhook) Run(ctx context.Context) {
 			for {
 				if e, ok := w.next(); ok {
 					if err := w.deliver(ctx, e); err != nil {
-						log.Printf("webhook: event %d not delivered: %v", e.ID, err)
+						log.Printf("%s: event %d not delivered: %v", w.name(), e.ID, err)
 					}
 					continue
 				}
@@ -219,8 +229,22 @@ func sign(secret []byte, ts string, body []byte) string {
 	return "sha256=" + hex.EncodeToString(m.Sum(nil))
 }
 
+func (w *webhook) name() string {
+	if w.Name == "" {
+		return "webhook"
+	}
+	return w.Name
+}
+
 func (w *webhook) deliver(ctx context.Context, e securityEvent) error {
-	body, err := json.Marshal(e)
+	encode, send := w.Encode, w.Send
+	if encode == nil {
+		encode = func(e securityEvent) ([]byte, error) { return json.Marshal(e) }
+	}
+	if send == nil {
+		send = w.post
+	}
+	body, err := encode(e)
 	if err != nil {
 		return err
 	}
@@ -231,11 +255,15 @@ func (w *webhook) deliver(ctx context.Context, e securityEvent) error {
 			if !w.Sleep(ctx, delay) {
 				return ctx.Err()
 			}
-			if delay *= 2; delay > 5*time.Minute {
-				delay = 5 * time.Minute
+			maxB := w.MaxBackoff
+			if maxB == 0 {
+				maxB = 5 * time.Minute
+			}
+			if delay *= 2; delay > maxB {
+				delay = maxB
 			}
 		}
-		if last = w.post(ctx, body); last == nil {
+		if last = send(ctx, body); last == nil {
 			return nil
 		}
 	}

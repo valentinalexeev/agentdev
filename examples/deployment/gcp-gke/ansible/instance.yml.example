@@ -5,8 +5,24 @@ image_tag: "0.1.0"                # same release as terraform/main.tf ref=v0.1.0
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+# project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
+mcp_projects: []
+# trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R46)
+mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.local:8080]
 # GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
 github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+# Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
+# Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:                         # the API that reads these is not deployed on GKE yet (agentdev #105)
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com
