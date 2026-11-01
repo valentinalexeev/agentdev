@@ -1,0 +1,142 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: executorruns.agentdev.dev
+spec:
+  group: agentdev.dev
+  names:
+    kind: ExecutorRun
+    listKind: ExecutorRunList
+    plural: executorruns
+    shortNames:
+    - exr
+    singular: executorrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.executor
+      name: Executor
+      type: string
+    - jsonPath: .spec.stage
+      name: Stage
+      type: string
+    - jsonPath: .spec.pr
+      name: PR
+      type: integer
+    - jsonPath: .spec.commit
+      name: Commit
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ExecutorRunSpec is one action on one commit. Created by the
+              operator only; immutable.
+            properties:
+              action:
+                description: plan | apply
+                enum:
+                - plan
+                - apply
+                type: string
+              approval:
+                description: 'apply: the Approval that allowed it.'
+                maxLength: 63
+                type: string
+              commit:
+                description: Commit, 40 hex characters (from the forge API, checked
+                  by the operator).
+                pattern: ^[0-9a-f]{40}$
+                type: string
+              executor:
+                description: Executor name.
+                maxLength: 40
+                type: string
+              planHash:
+                description: 'apply: SHA-256 of the approved plan file; the Job refuses
+                  to apply any other file.'
+                pattern: ^([0-9a-f]{64})?$
+                type: string
+              pr:
+                description: Pull request number the results are posted to.
+                format: int64
+                minimum: 1
+                type: integer
+              stage:
+                description: |-
+                  pr: plan of a pull request head (unreviewed code, result informative only). merge: plan of a merge commit of
+                  the protected branch (the only plan that can be applied). apply: apply of an approved merge plan.
+                enum:
+                - pr
+                - merge
+                - apply
+                type: string
+            required:
+            - action
+            - commit
+            - executor
+            - pr
+            - stage
+            type: object
+          status:
+            description: ExecutorRunStatus is written by the operator only.
+            properties:
+              approval:
+                description: 'merge plan: name of the Approval requested for the apply.'
+                type: string
+              finishedAt:
+                format: date-time
+                type: string
+              message:
+                type: string
+              phase:
+                description: Pending | Running | Succeeded | Failed
+                type: string
+              planHash:
+                description: 'plan: SHA-256 of the plan file, computed by the operator''s
+                  own image in the Job (not by the tool).'
+                type: string
+              reported:
+                description: The result is posted to the forge.
+                type: boolean
+              startedAt:
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: ExecutorRun spec is immutable
+          rule: self.spec == oldSelf.spec
+    served: true
+    storage: true
+    subresources:
+      status: {}
