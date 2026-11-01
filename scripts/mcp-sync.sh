@@ -15,6 +15,11 @@
 #   - one virtual server per project (project-<project>) with exactly those tools
 #   - one API token per agent, scoped to that virtual server (server_id), stored as Secret agent-<agent>-mcp
 #     {CF_URL, CF_TOKEN}. The agent's pod reads it (optional secretRef); a token never leaves the cluster.
+# CF_ADMIN_FILE overrides the admin password file (the GKE playbook, #51, reads it from Secret Manager).
+# MCP_ALLOWED_HOSTS (config.env; the GKE playbook passes mcp_allowed_hosts) lists the trusted MCP server hosts
+# (host or host:port). A server URL on any other host stops the sync before anything is registered: tool metadata and
+# tool outputs of a server reach the model (prompt injection, docs/security.md R46).
+# Never prints a token: the GKE playbook (#51) runs this script; errors name the step, not the response.
 # Separation is enforced by ContextForge: an agent's token is refused on any other server (verified in the ADR spike).
 source "$(dirname "$0")/../lib.sh"
 # shellcheck disable=SC1091
@@ -29,6 +34,16 @@ if ! k -n "${PLATFORM_NS}" get svc contextforge >/dev/null 2>&1; then
   [[ ${has_mcp} == 0 ]] && { ok "no mcp.servers in ${spec}: nothing to do"; exit 0; }
   die "${spec} has mcp: but ContextForge is not deployed: run ./run.sh 08 first"
 fi
+# allow-list check, before any change in ContextForge
+if [[ ${has_mcp} == 1 ]]; then
+  allowed=" $(tr '[:upper:]' '[:lower:]' <<<"${MCP_ALLOWED_HOSTS:-}" | tr -s ' \t,' ' ') "
+  while IFS=$'\t' read -r name url; do
+    [[ "${name}" =~ ^[a-z0-9-]+$ ]] || die "spec: mcp server name '${name}' must be a-z0-9-"
+    [[ "${url}" =~ ^https?://([^/?#@]+)(/[^[:space:]]*)?$ ]] || die "spec: ${name}: url must be http(s)://host[:port]/path without credentials"
+    hp=$(tr '[:upper:]' '[:lower:]' <<<"${BASH_REMATCH[1]}"); h=${hp%%:*}
+    [[ "${allowed}" == *" ${hp} "* || "${allowed}" == *" ${h} "* ]] || die "spec: ${name}: host ${hp} is not in MCP_ALLOWED_HOSTS (mcp_allowed_hosts on GKE); add it only if you trust that server"
+  done < <(yq -r '.mcp.servers[] | [.name, .url] | @tsv' "${spec}")
+fi
 CF_IN_CLUSTER="http://contextforge.${PLATFORM_NS}.svc.cluster.local:4444"
 
 # reach the admin API through a short-lived port-forward (no public endpoint)
@@ -41,7 +56,7 @@ B="http://127.0.0.1:${port}"
 healthy=0; for _ in $(seq 1 30); do curl -fs "${B}/health" >/dev/null 2>&1 && { healthy=1; break; }; sleep 1; done
 [[ ${healthy} == 1 ]] || die "ContextForge is not healthy (kubectl -n ${PLATFORM_NS} logs deploy/contextforge)"
 # secrets go through stdin, never argv (visible in ps)
-T=$(jq -n --arg e "${CF_ADMIN_EMAIL}" --rawfile p "${SPIKE_DIR}/.secrets/platform/cf-admin" '{email:$e, password:("Aa1!" + ($p|rtrimstr("\n")))}' \
+T=$(jq -n --arg e "${CF_ADMIN_EMAIL}" --rawfile p "${CF_ADMIN_FILE:-${SPIKE_DIR}/.secrets/platform/cf-admin}" '{email:$e, password:("Aa1!" + ($p|rtrimstr("\n")))}' \
     | curl -fsS -X POST "${B}/auth/login" -H 'Content-Type: application/json' --data @- | jq -r .access_token)
 [[ -n "${T}" && "${T}" != null ]] || die "ContextForge admin login failed"
 hdr=$(mktemp); chmod 600 "${hdr}"; printf 'Authorization: Bearer %s\n' "${T}" >"${hdr}"
@@ -106,12 +121,14 @@ for a in $(yq -r '.agents[].name' "${spec}"); do
   tok=$(jq -r '.access_token // .token // empty' <<<"${resp}"); tid=$(jq -r '.token.id // .id // empty' <<<"${resp}")
   [[ -n "${tok}" && "${tok}" != null ]] || die "could not mint a token for ${a}"
   [[ -n "${ann}" ]] && revoke "${s}"   # the token it replaces (other server, or close to expiry)
+  # never echo ${tok} or ${T}: the GKE playbook (#51) logs this script's stdout
   printf 'CF_URL=%s\nCF_TOKEN=%s\n' "${CF_IN_CLUSTER}/servers/${sid}/mcp" "${tok}" \
     | k -n "${AGENTS_NS}" create secret generic "${s}" --from-env-file=/dev/stdin --dry-run=client -o yaml \
     | k label --local -f - "agentdev/mcp-project=${project}" -o yaml \
     | k annotate --local -f - "agentdev/mcp-server=${sid}" "agentdev/mcp-token-id=${tid}" \
         "agentdev/mcp-renew-after=$(( $(date +%s) + 335*86400 ))" -o yaml \
-    | k apply --server-side --force-conflicts --field-manager=mcp-sync -f - >/dev/null   # client-side apply would copy the token into an annotation
+    | k apply --server-side --force-conflicts --field-manager=mcp-sync -f - >/dev/null 2>&1 \
+    || die "could not store Secret ${s} (output hidden: it can contain the token)"   # client-side apply would copy the token into an annotation
   ok "${a}: token scoped to project-${project}, Secret ${s}"
 done
 record "MCP for project ${project}: server project-${project}, $(jq length <<<"${tools}") tools"

@@ -5,6 +5,10 @@ image_tag: "0.1.0"                # same release as terraform/main.tf ref=v0.1.0
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+# project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
+mcp_projects: []
+# trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R46)
+mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.local:8080]
 # GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
 github_app:
   name: my-agentdev                              # unique on GitHub

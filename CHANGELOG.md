@@ -18,6 +18,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   event)`) in the table, the API, the webhook body, syslog and OTLP; computed at insert under a per-agent advisory
   lock. A SIEM detects gaps and edits (`docs/admin.md`, "Do a check of the hash chain"). Schema stays
   `agentdev.security/v1` (fields added); `schema.sql` adds the columns.
+- GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
+  `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
+  `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
+  `CF_ADMIN_FILE` of `mcp-sync.sh` can be overridden. `docs/admin.md` shows how to check that Dataplane V2 enforces
+  the platform NetworkPolicies.
+- MCP server allow-list (GHAS on #99): `scripts/mcp-sync.sh` registers only servers whose host is in
+  `MCP_ALLOWED_HOSTS` (`config.env`, kind) or `mcp_allowed_hosts` (GKE `instance.yml`). **Breaking for specs with
+  `mcp:`**: the list is empty by default, so add your trusted hosts. Risk entries R46 (MCP prompt injection) and R47
+  (token leaks in logs) in `docs/security.md`; the secret and sync tasks of the platform role have `no_log`.
+- Audit trail in Postgres (#91): every `AGENTDEV_AUDIT` line of the write API is also stored in the append-only
+  `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
+  API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
+  `GET /api/audit` (filters `agent`, `result`, `since`, `limit`, `cursor`), readable only by `agentdev-admins`.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
@@ -65,7 +78,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   a job and the event just recorded; operator RBAC on ConfigMaps narrowed to `agentdev-security-positions` for
   get/update. Postgres: new owner role `agentdev_owner`; the API login `agentdev_api` gets INSERT/SELECT and the
   SECURITY DEFINER `security_events_prune()` only; the retention lives in `security_settings` and the API's
-  `SECURITY_RETENTION_DAYS` env is gone. **BREAKING** for deployments: re-run `./run.sh 10` (moves ownership, grants);
+  `SECURITY_RETENTION_DAYS` env is gone. **BREAKING** for deployments: re-run `./run.sh 06 10 12` (10 moves
+  ownership and grants, 12 installs the `SecurityEvent` CRD, 06 loads the forge image);
   the API no longer creates its schema unless `DATABASE_MIGRATE=true`.
 - The sidecar picks the default branch for the protected-path check itself and checks merge commits too, so a
   missing or wrong `base` cannot let a workflow change through (review of #68).

@@ -93,7 +93,8 @@ func envInt(k string, def int) int {
 // openStore connects to Postgres and runs the migrations, or falls back to memory when no database is configured.
 func openStore(ctx context.Context, cfg config) (eventStore, error) {
 	if cfg.DatabaseURL == "" {
-		log.Printf("DATABASE_URL not set: security events are kept in memory only (lost on restart)")
+		log.Printf("DATABASE_URL not set: security events and the audit trail are kept in memory only (lost on restart)")
+		auditDB = &memAudit{}
 		return newMemStore(), nil
 	}
 	pg, err := newPgStore(ctx, cfg.DatabaseURL, cfg.DBMigrate)
@@ -105,11 +106,15 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 			if _, err := pg.Prune(ctx); err != nil {
 				log.Printf("prune security_events: %v", err)
 			}
+			if _, err := pg.PruneAudit(ctx); err != nil {
+				log.Printf("prune api_audit: %v", err)
+			}
 			if !sleepCtx(ctx, 24*time.Hour) {
 				return
 			}
 		}
 	}()
+	auditDB = pg
 	return pg, nil
 }
 
@@ -174,6 +179,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
+		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
 		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
 	}
 	return mux

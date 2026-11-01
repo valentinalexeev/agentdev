@@ -68,6 +68,12 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   PR of that change**, naming the change. Permission is per change: an earlier "yes" on another ticket is not
   permission. When the bot cannot do something itself (e.g. its token lacks `workflow` scope for `.github/workflows/`),
   it posts the exact diff on the ticket, asks, and waits; the owner applies it or grants permission there.
+- **Check the identity before every `gh` or `git` write** ([#108](https://github.com/valentinalexeev/agentdev/issues/108)).
+  The default `gh` login and git config on the owner's machine are the owner's. Every shell first runs
+  `source ~/.config/github-bot/env.sh && [ "$(gh api user -q .login)" = valentinalexeev-bot ] || exit 1`, and
+  every clone sets `git config user.name valentinalexeev-bot` and
+  `git config user.email valentinalexeev-bot@users.noreply.github.com`. Agents work in their own clone, never in
+  the owner's checkout.
 - **If the bot token fails** (401): tell the owner and stop the affected work; do not fall back to the owner
   account, do not merge anything.
 
@@ -104,7 +110,22 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   `main`. Merging B moves A's head, so A needs a fresh approval and green CI on its new head before its own merge.
   Only stacks created through GitHub's stacks API merge as one unit; a PR merely based on another branch does not.
 - Before proposing a merge: CI green, and an independent review pass (a separate agent or reviewer) with its
-  result in the PR. Blocking findings are fixed first.
+  result in the PR. Every finding, nits included, is fixed in the same PR or, for a security advisory, gets a
+  recorded outcome (below). A review counts only for the head it names; a push after it needs a new review.
+- **Security advisories get an outcome in their own thread** (owner, recorded in
+  [#110](https://github.com/valentinalexeev/agentdev/issues/110)). Each `github-advanced-security[bot]` line
+  comment, and each security finding on a code line, gets a reply in that thread:
+  `gh api -X POST repos/valentinalexeev/agentdev/pulls/{pr}/comments/{comment_id}/replies -f body='...'`
+  (list the ids with `gh api repos/valentinalexeev/agentdev/pulls/{pr}/comments`). An advisory posted as a
+  top-level PR comment (no thread) gets a quote-reply with `gh pr comment {pr}`. The reply has one outcome:
+  **Fixed in `<sha>`** (what changed, file:line, the covering test), **Accepted risk** (why, and the R-number in
+  `docs/security.md` or a follow-up issue), or **False positive** (the concrete reason). The independent reviewer
+  replies in the same thread with **Verified: fixed / not fixed / outcome disagreed** and one line why, then the
+  thread is resolved. A thread without an author outcome and a reviewer verification blocks the review OK and
+  the merge. The review summary lists every thread id with its outcome.
+- **kind and GKE stay at parity** ([owner](https://github.com/valentinalexeev/agentdev/pull/95#issuecomment-6555379750)): a feature that
+  is deployed on kind is also deployable through `infra/ansible` / `infra/terraform`, with templates, instance
+  examples and docs in sync, in the same PR; if not, the PR links a follow-up issue.
 - **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
   adds or changes behaviour updates `docs/` (concepts, user guide, admin, troubleshooting as relevant), `README.md`
   and `CHANGELOG.md` in the same PR. `docs/` is published to the wiki on merge.
@@ -113,6 +134,13 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
   (state `APPROVED`, `commit_id` equal to the PR head) right before merging, then merges with that head `sha` pinned.
   Method: merge commit; the branch is kept unless the owner says otherwise.
+- **A review names the head it checked** ([#110](https://github.com/valentinalexeev/agentdev/issues/110)): the
+  independent reviewer ends the result with `Reviewer: OK at <sha>` (full head sha) or `Reviewer: changes needed at
+  <sha>`. A push after it makes the review stale, and the next head needs a new review line.
+- **Read the current approval state at each check** (#110): for every open PR, read the reviews and the head now
+  (`gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`, `gh pr view NN --json headRefOid`). An `APPROVED`
+  review on the current head means the PR waits for merge, even if the approval is older than the last check. Do
+  not filter on reviews that are new since the last check.
 - After a merge: check other open PRs for conflicts with `main`; merge `main` into them if the conflict is two
   independent additions; ask the owner if it is a semantic conflict.
 
@@ -141,6 +169,39 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   names and verbs. Rules and word list: [`docs/writing.md`](docs/writing.md). Add a new technical word to that list
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
+
+- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** line in `CHANGELOG.md` lists
+  every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
+  one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
+
+## Reviewer checklist
+
+The independent reviewer checks these items on every PR, and lists the result per item in the review:
+
+1. **Identity:** commits, pushes and comments are by `valentinalexeev-bot`, never by the owner.
+2. **Security advisories:** every GHAS thread has an author outcome and a reviewer verification (§4).
+3. **Parity:** kind and GKE (`infra/ansible`, `infra/terraform`) change together, or a follow-up issue is linked.
+4. **Untrusted output:** nothing the model can print (logs, stdout, files in the worktree) reaches a control
+   decision (limits, pause, reset, credentials). Telemetry comes through a channel the model cannot write.
+5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
+   shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
+6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+
+## Coordination and resource limits
+
+Applies when one coordinator session runs several worker agents (#110).
+
+- **At most 3 active implementation tasks** at the same time. Further work waits in the queue.
+- **Workers stop near the limits.** Near the Claude usage limit (5-hour or weekly), or with less than 10 GB free
+  disk, a worker commits and pushes its work in progress, writes its state on the PR or issue, and stops.
+- **The coordinator watches the disk.** Below 20 GB free it prunes the build cache (`docker builder prune -f`,
+  old kind images) before it starts new work.
+- **Commit and push work in progress often**, at least after each meaningful step, so a vanished worker loses
+  little. A WIP commit uses a normal Conventional Commits message.
+- **At each check the coordinator** resumes workers that vanished (from their clone and branch), and stops workers
+  that finished and reported.
+- **Questions from workers:** when a worker raises a question for the owner, the coordinator puts it on the issue
+  in the §3 *Questions* form and adds `needs-decision`. The worker does not wait silently in chat.
 
 ## Bootstrapping on GCP
 
