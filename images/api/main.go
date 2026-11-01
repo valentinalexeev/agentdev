@@ -155,6 +155,9 @@ type agent struct {
 	Paused        bool     `json:"paused"`
 	// SecurityEvents in the last 7 days (#70)
 	SecurityEvents int `json:"securityEvents"`
+	// Claude tokens in the last 24 h and the agent's limit (0 = none), from the credential proxy (#66, budget.go)
+	BudgetUsed  *int64 `json:"budgetUsed,omitempty"`
+	BudgetLimit *int64 `json:"budgetLimit,omitempty"`
 }
 
 func routes(verify verifier, agents agentLister, events eventStore, wr *writer) http.Handler {
@@ -180,6 +183,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 				list[i].SecurityEvents = counts[list[i].Name]
 			}
 		}
+		addBudgets(r.Context(), list) // #66
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
 	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has
