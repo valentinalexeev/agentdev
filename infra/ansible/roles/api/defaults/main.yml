@@ -16,6 +16,10 @@ api_secret_source: gcp
 # Secret Manager names. The DB password uses the platform prefix and the kind file name (.secrets/platform/pg-agentdev-api).
 api_sm_db_password: "{{ platform_sm_prefix }}pg-agentdev-api"
 api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner (README.md)
+# GitHub (#87): with forge_kind github the API uses the agents' GitHub App (github_app.app_id and the Secret Manager
+# secret sm_github_app_private_key) for permission checks and approval decisions, with read-only installation tokens.
+api_github: "{{ (forge_kind | default('gitea')) == 'github' }}"
+api_github_url: "{{ github_url | default('https://github.com') }}"
 api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
 # The Postgres pod of the platform role and its superuser
 api_db_pod: platform-db-0

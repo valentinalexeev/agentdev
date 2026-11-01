@@ -35,6 +35,7 @@
         OIDC_DISCOVERY_URL: "{{ api_oidc_discovery_url }}"
         OIDC_AUDIENCE: "{{ api_oidc_audience }}"
         FORGE_URL: "{{ api_forge_url }}"
+        GITHUB_URL: "{{ api_github_url }}"
       replace: []
   register: api_applied
 
