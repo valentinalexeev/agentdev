@@ -221,7 +221,7 @@
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
     # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
     # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl); same
-    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The API itself is not deployed here yet (#105).
+    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The role api reads it (#104).
     - name: Read the SIEM output secrets (optional)
       ansible.builtin.shell: |
         if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then

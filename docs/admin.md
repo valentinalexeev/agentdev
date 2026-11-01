@@ -772,9 +772,8 @@ SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All 
 | `SECURITY_OTLP_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 | `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 
-NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. At this
-time, the Ansible playbook does not install the API on GKE (issue #105). The playbook writes the Secret, but no
-API reads it yet.
+NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. The
+Ansible role `api` installs the API when `instance.yml` sets `api.oidc_issuer` (#104). The API reads the Secret.
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
