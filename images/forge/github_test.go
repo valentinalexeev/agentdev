@@ -468,6 +468,12 @@ func TestGitHubNoDecisionCommands(t *testing.T) {
 		{"POST", "/api/v1/repos/octo-org/repo/pulls/14/comments/1900000001/replies", `{"body":"/approve-job 1a2b3c"}`},
 		{"POST", "/api/v1/repos/octo-org/repo/pulls", `{"title":"/approve 1a2b3c","head":"agent/alice/issue-12","base":"main","body":"x"}`},
 		{"POST", "/api/v1/repos/octo-org/repo/pulls", `{"title":"t","head":"agent/alice/issue-12","base":"main","body":"/APPROVE 1a2b3c"}`},
+		// review of #116: case-folded duplicate keys; Go struct decoding saw "x", GitHub would have read "body"
+		{"POST", "/api/v1/repos/octo-org/repo/issues/12/comments", `{"body":"/approve 1a2b3c","Body":"x"}`},
+		{"POST", "/api/v1/repos/octo-org/repo/issues/12/comments", `{"Body":"x","body":"/approve 1a2b3c"}`},
+		{"POST", "/api/v1/repos/octo-org/repo/issues/12/comments", `{"body":"ok","BODY":"ok too"}`},
+		// any string value at any depth
+		{"POST", "/api/v1/repos/octo-org/repo/pulls", `{"title":"t","head":"agent/alice/issue-12","base":"main","body":"x","extra":{"n":["/deny 1a2b3c"]}}`},
 	}
 	for _, c := range bad {
 		if rec := call(t, h, c.m, c.p, c.b); rec.Code != http.StatusForbidden {
