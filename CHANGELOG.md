@@ -16,6 +16,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   the forge driver (GitHub API and installation token; job check by the label `agent:<name>`). Deploy: new optional
   Secret `agentdev-api-github` (kind: `./run.sh 10` with `FORGE_KIND=github`; GKE: the `api` role with
   `forge_kind: github`). README no longer lists "Gitea only" in the MVP limits. New risk R93.
+- Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
+  register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
+  App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
+  backup, upgrade, security checklist). Docs only.
 - GKE parity with run.sh (#121): the playbook fills every value of `manifests/api.yaml.tmpl` (`APPROVALS`,
   `APPROVAL_DENY_ACCOUNTS` from the new `api.approval_deny_accounts`, `USAGE_FIVE_HOUR`, `USAGE_WEEKLY`; before,
   they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web
