@@ -90,6 +90,7 @@ jobs:
           ./kubeconform -strict -summary -ignore-missing-schemas images/operator/config/crd/
           PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img FORGE_IMAGE=img IMAGE_PULL_POLICY=Never \
             FORGE_URL=http://f FORGE_PUBLIC_URL=http://f FORGE_ADMIN_USER=owner BOTBOARD_URL= POLL_SECONDS=20 IDLE_SECONDS=900 \
+            EXEC_NS=agentdev-executors EXECUTOR_POLL_SECONDS=60 EXECUTOR_RETENTION_DAYS=30 \
             envsubst < manifests/operator.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
       - name: router tests (no dependencies, a few seconds)

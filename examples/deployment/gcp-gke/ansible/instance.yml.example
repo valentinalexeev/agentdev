@@ -14,3 +14,16 @@ github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # HTTPS address of the webhook router of this deployment
+# Deterministic executors (#69), optional: an AI agent designs the change, a person merges and /approve-s, the
+# executor applies it. Secret Manager: exec-<name>-forge-token (own forge account), optional exec-<name>-plan-env and
+# exec-<name>-apply-env (KEY=VALUE lines). The two Google service accounts are yours (terraform/main.tf).
+# executors:
+#   - name: tf-prod
+#     environment: prod
+#     repo: my-org/platform
+#     path: infra
+#     image: hashicorp/terraform@sha256:<digest>
+#     plan: [terraform, plan, -input=false, -out=$(PLAN_FILE)]
+#     apply: [terraform, apply, -input=false, $(PLAN_FILE)]
+#     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
+#     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
