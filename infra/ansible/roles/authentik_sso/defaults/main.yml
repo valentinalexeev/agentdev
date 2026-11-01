@@ -1,0 +1,10 @@
+---
+# Company SSO for authentik (#122): values for manifests/authentik-blueprint-sso.yaml. Instance values go into
+# instance.yml under authentik.sso (example.vars.yml); the role is skipped without them.
+authentik_sso_cfg: "{{ (authentik | default({})).sso | default({}) }}"
+authentik_sso_kind: "{{ authentik_sso_cfg.kind | default('saml') }}"   # saml (Google Workspace) or oidc
+# Secret Manager names (filled by the owner, README.md)
+authentik_sso_sm_idp_cert: authentik-sso-idp-cert                 # saml: the Google IdP certificate (PEM)
+authentik_sso_sm_oidc_client_secret: authentik-sso-oidc-client-secret   # oidc only
+# Kubernetes Secret read by the authentik pods (manifests/authentik-values.yaml envFrom)
+authentik_sso_secret: authentik-sso

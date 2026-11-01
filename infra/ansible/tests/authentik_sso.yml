@@ -1,0 +1,57 @@
+# Parity check (#122): the playbook's SSO settings use the keys of manifests/authentik-blueprint-sso.yaml and of
+# 09-authentik.sh (kind), and unsafe values are refused before they reach a blueprint expression.
+# Run: ansible-playbook infra/ansible/tests/authentik_sso.yml
+- name: Company SSO settings (#122)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    authentik_sso_kind: saml
+    authentik_sso_sm_idp_cert: authentik-sso-idp-cert
+    authentik_sso_sm_oidc_client_secret: authentik-sso-oidc-client-secret
+    authentik_sso_idp_cert: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    authentik_sso_cfg:
+      admin_group: agentdev-admins@example.com
+      allowed_domains: [example.com, example.org]
+      saml_sso_url: https://accounts.google.com/o/saml2/idp?idpid=C0abc
+    blueprint: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../manifests/authentik-blueprint-sso.yaml') }}"
+    kind_script: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../09-authentik.sh') }}"
+  tasks:
+    - name: Build the SAML settings
+      ansible.builtin.include_tasks: ../roles/authentik_sso/tasks/env.yml
+    - name: Every key is used by the blueprint, and the defaults apply
+      ansible.builtin.assert:
+        that:
+          - authentik_sso_env | dict2items | map(attribute='key') | reject('in', blueprint) | list == []
+          - authentik_sso_env.AGENTDEV_SSO_SAML == 'true'
+          - authentik_sso_env.AGENTDEV_SSO_ALLOWED_DOMAINS == 'example.com,example.org'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR == 'forgeLogin'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITHUB == 'githubLogin'
+          - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITEA == 'giteaLogin'
+          - "'AGENTDEV_SSO_OIDC' not in authentik_sso_env"
+    - name: The kind script writes the OIDC keys of the blueprint
+      ansible.builtin.assert:
+        that: "item in kind_script"
+      loop: [AGENTDEV_SSO_OIDC=true, AGENTDEV_SSO_ADMIN_GROUP, AGENTDEV_SSO_ALLOWED_DOMAINS, AGENTDEV_SSO_FORGE_ATTR, AGENTDEV_SSO_FORGE_ATTR_GITHUB,
+             AGENTDEV_SSO_FORGE_ATTR_GITEA, AGENTDEV_SSO_OIDC_CLIENT_ID,
+             AGENTDEV_SSO_OIDC_CLIENT_SECRET, AGENTDEV_SSO_OIDC_AUTHORIZE_URL, AGENTDEV_SSO_OIDC_TOKEN_URL,
+             AGENTDEV_SSO_OIDC_USERINFO_URL]
+    - name: No blueprint sets group members (#103)
+      ansible.builtin.assert:
+        that: blueprint is not search('(?m)^\s*users:')
+    - name: A quote in the admin group is refused
+      block:
+        - name: Try it
+          ansible.builtin.include_tasks: ../roles/authentik_sso/tasks/env.yml
+          vars:
+            authentik_sso_cfg: {admin_group: 'x"; import os', allowed_domains: [example.com], saml_sso_url: https://a/}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: unsafe admin_group accepted
+      rescue:
+        - name: Refused as expected
+          ansible.builtin.assert:
+            that: ansible_failed_task.name == 'Check the SSO settings'
+    - name: Unsafe or missing allowed_domains are refused (each case)
+      ansible.builtin.include_tasks: includes/authentik_sso_refused.yml
+      loop: [[], ['ex",ample.com'], ['Example.com']]
+      loop_control: {loop_var: bad_domains}

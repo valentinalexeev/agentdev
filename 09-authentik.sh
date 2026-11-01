@@ -100,3 +100,64 @@ ok "akadmin in agentdev-admins; members survive a blueprint re-apply"
 record "authentik ${AUTHENTIK_VERSION} up in ${PLATFORM_NS}"
 echo "  UI: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/authentik-server 9443:443  ->  https://localhost:9443/ (https: session cookies)"
 echo "      login akadmin, password: .secrets/platform/authentik-admin"
+
+# ---- company SSO (#122) ----
+# kind: a local OIDC stand-in plays Google Workspace (manifests/kind/sso-standin.yaml); the same blueprint and property
+# mappings as GKE (manifests/authentik-blueprint-sso.yaml) turn it into the source `agentdev-sso`. SSO_STANDIN=0 skips.
+if [[ "${SSO_STANDIN:-1}" == 1 ]]; then
+  log "Company SSO stand-in (#122)"
+  k apply --server-side --force-conflicts --field-manager=agentdev -f "${SPIKE_DIR}/manifests/kind/sso-standin.yaml" >/dev/null
+  k -n "${PLATFORM_NS}" rollout status deploy/sso-standin --timeout=180s >/dev/null
+  # same patterns as the playbook (infra/ansible/roles/authentik_sso): these values go into blueprint expressions
+  admin_group="${SSO_ADMIN_GROUP:-agentdev-admins@example.com}"; forge_attr="${SSO_FORGE_ATTR:-forgeLogin}"
+  forge_attr_github="${SSO_FORGE_ATTR_GITHUB:-githubLogin}"; forge_attr_gitea="${SSO_FORGE_ATTR_GITEA:-giteaLogin}"
+  [[ "${admin_group}" =~ ^[A-Za-z0-9._@+-]{1,128}$ ]] || die "SSO_ADMIN_GROUP: letters, digits and ._@+- only"
+  domains="${SSO_ALLOWED_DOMAINS:-example.com}"
+  [[ "${domains}" =~ ^[a-z0-9]([a-z0-9.-]{0,252})(,[a-z0-9]([a-z0-9.-]{0,252}))*$ ]] || die "SSO_ALLOWED_DOMAINS: comma-separated lower-case domains"
+  for a in "${forge_attr}" "${forge_attr_github}" "${forge_attr_gitea}"; do
+    [[ "${a}" =~ ^[A-Za-z][A-Za-z0-9_.]{0,63}$ ]] || die "SSO_FORGE_ATTR*: an attribute name"
+  done
+  inner="http://sso-standin.${PLATFORM_NS}.svc.cluster.local:8080/default"
+  { printf 'AGENTDEV_SSO_OIDC=true\nAGENTDEV_SSO_NAME=Company SSO (local stand-in)\n'
+    printf 'AGENTDEV_SSO_ADMIN_GROUP=%s\nAGENTDEV_SSO_FORGE_ATTR=%s\nAGENTDEV_SSO_ALLOWED_DOMAINS=%s\n' "${admin_group}" "${forge_attr}" "${domains}"
+    printf 'AGENTDEV_SSO_FORGE_ATTR_GITHUB=%s\nAGENTDEV_SSO_FORGE_ATTR_GITEA=%s\n' "${forge_attr_github}" "${forge_attr_gitea}"
+    printf 'AGENTDEV_SSO_OIDC_CLIENT_ID=authentik\nAGENTDEV_SSO_OIDC_CLIENT_SECRET=%s\n' "$(sec sso-standin-client-secret)"
+    printf 'AGENTDEV_SSO_OIDC_AUTHORIZE_URL=http://localhost:18080/default/authorize\n'   # the browser, port-forward
+    printf 'AGENTDEV_SSO_OIDC_TOKEN_URL=%s/token\nAGENTDEV_SSO_OIDC_USERINFO_URL=%s/userinfo\n' "${inner}" "${inner}"
+  } | k -n "${PLATFORM_NS}" create secret generic authentik-sso --from-env-file=/dev/stdin --dry-run=client -o yaml \
+    | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+  # envFrom is read at pod start: restart when the Secret changed (hash only, never the values)
+  h=$(k -n "${PLATFORM_NS}" get secret authentik-sso -o jsonpath='{.data}' | openssl dgst -sha256 -r | cut -c1-16)
+  for d in authentik-server authentik-worker; do
+    [[ "$(k -n "${PLATFORM_NS}" get deploy "${d}" -o jsonpath='{.spec.template.metadata.annotations.agentdev/sso-hash}')" == "${h}" ]] \
+      || k -n "${PLATFORM_NS}" patch deploy "${d}" --type merge \
+           -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"agentdev/sso-hash\":\"${h}\"}}}}}" >/dev/null
+  done
+  for d in authentik-server authentik-worker; do k -n "${PLATFORM_NS}" rollout status "deploy/${d}" --timeout=600s >/dev/null; done
+  # the worker re-applies a blueprint only when its file changes, not when its env does: apply the SSO one now
+  wp=$(k -n "${PLATFORM_NS}" get pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=worker \
+       --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+  # a changed ConfigMap reaches the mounted file after up to a minute: wait for the repo version
+  want=$(openssl dgst -sha256 -r "${SPIKE_DIR}/manifests/authentik-blueprint-sso.yaml" | cut -d' ' -f1)
+  for _ in $(seq 1 60); do
+    have=$(k -n "${PLATFORM_NS}" exec "${wp}" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null \
+           | openssl dgst -sha256 -r | cut -d' ' -f1)
+    [[ "${have}" == "${want}" ]] && break; sleep 3
+  done
+  [[ "${have}" == "${want}" ]] || die "the SSO blueprint did not reach the authentik worker"
+  k -n "${PLATFORM_NS}" exec -i "${wp}" -- ak shell 2>/dev/null <<'PY' | grep -q '^SSO_APPLIED=True$' || die "SSO blueprint did not apply (authentik admin: System > Blueprints)"
+from authentik.blueprints.models import BlueprintInstance
+from authentik.blueprints.v1.importer import Importer
+bi = BlueprintInstance.objects.get(path="mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml")
+print("SSO_APPLIED=" + str(Importer.from_string(bi.retrieve(), bi.context).apply()))
+PY
+  ok "stand-in up, source agentdev-sso configured by the blueprint"
+  # sign-in checks: add, keep a hand-added member, remove only on leaving the directory group, audit (#122)
+  if [[ "${SSO_CHECK:-1}" == 1 ]]; then
+    need python3
+    python3 "${SPIKE_DIR}/scripts/sso-check.py" --context "kind-${CLUSTER_NAME}" --namespace "${PLATFORM_NS}" \
+      --admin-group "${admin_group}" --forge-attr "${forge_attr}" --forge-attr-github "${forge_attr_github}" --forge-attr-gitea "${forge_attr_gitea}" --domain "${domains%%,*}" || die "SSO check failed"
+    ok "SSO check passed"
+    record "authentik SSO stand-in: group sync and forge_login checked"
+  fi
+fi

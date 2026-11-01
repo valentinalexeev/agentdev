@@ -1,0 +1,43 @@
+# Local OIDC stand-in for the company SSO (#122), kind only (09-authentik.sh). It plays Google Workspace: a test login
+# form that takes any user and any claims (groups, the custom attribute). authentik reaches it in the cluster; the
+# browser through `kubectl port-forward svc/sso-standin 18080:8080` (the authorize URL is http://localhost:18080).
+# Never deploy this outside kind: anyone who reaches it can sign in as anybody.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sso-standin, namespace: agentdev-platform, labels: {app: sso-standin}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sso-standin}}
+  template:
+    metadata: {labels: {app: sso-standin}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: oidc
+        image: ghcr.io/navikt/mock-oauth2-server:2.1.10
+        env:
+        - {name: SERVER_PORT, value: "8080"}
+        - {name: JSON_CONFIG, value: '{"interactiveLogin":true}'}
+        ports: [{containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /default/.well-known/openid-configuration, port: 8080}, periodSeconds: 5}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 384Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sso-standin, namespace: agentdev-platform}
+spec:
+  selector: {app: sso-standin}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# default-deny-ingress in the platform namespace: only the authentik server (token and userinfo calls) gets in
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: sso-standin-from-authentik, namespace: agentdev-platform}
+spec:
+  podSelector: {matchLabels: {app: sso-standin}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app.kubernetes.io/name: authentik, app.kubernetes.io/component: server}}}]
+    ports: [{port: 8080, protocol: TCP}]
