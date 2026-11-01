@@ -134,7 +134,7 @@ func TestFromSecurityEventObject(t *testing.T) {
 func TestSinkSendsOnlyNew(t *testing.T) {
 	m := newMemStore()
 	wh := newWebhook("http://unused", []byte("k"))
-	s := &sink{store: m, out: wh}
+	s := &sink{store: m, outs: []*webhook{wh}}
 	e := ev("alice", "high", "h1", time.Now())
 	s.add(context.Background(), e)
 	s.add(context.Background(), e) // informer resync or API restart
