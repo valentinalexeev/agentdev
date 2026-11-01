@@ -74,9 +74,10 @@ func watchSecurityEvents(ctx context.Context, d dynamic.Interface, ns string, s 
 	f.Start(ctx.Done())
 }
 
-// webhook is the queue and retry engine of every output; by default it posts each new event as JSON to URL, signed with HMAC-SHA256 over "<timestamp>.<body>" in
-// X-Agentdev-Signature: sha256=<hex> (timestamp in X-Agentdev-Timestamp, Unix seconds) so the receiver can check
-// origin and reject replays. Failed deliveries are retried with exponential backoff, up to Attempts.
+// webhook is the queue and retry engine of every output. By default it posts each new event as JSON to URL, signed
+// with HMAC-SHA256 over "<timestamp>.<body>" in X-Agentdev-Signature: sha256=<hex> (timestamp in
+// X-Agentdev-Timestamp, Unix seconds) so the receiver can check origin and reject replays. Failed deliveries are
+// retried with exponential backoff, up to Attempts.
 //
 // Fair queueing: each agent has its own bounded queue (PerAgent events); the workers take one event per agent in
 // turn. A flooding agent fills and overflows only its own queue, so it cannot push other agents' events out. Drops
@@ -87,11 +88,13 @@ type webhook struct {
 	Secret   []byte
 	Client   *http.Client
 	Attempts int
-	Backoff  time.Duration // first retry delay; doubles each time, at most 5 minutes
-	Now      func() time.Time
-	Sleep    func(context.Context, time.Duration) bool
-	PerAgent int // queue size per agent
-	Workers  int // parallel deliveries
+	Backoff  time.Duration // first retry delay; doubles each time, at most MaxBackoff
+	// MaxBackoff caps the retry delay; 0 means 5 minutes
+	MaxBackoff time.Duration
+	Now        func() time.Time
+	Sleep      func(context.Context, time.Duration) bool
+	PerAgent   int // queue size per agent
+	Workers    int // parallel deliveries
 	// Name is used in log lines. Encode and Send replace the webhook's JSON body and signed POST, so syslog and OTLP
 	// (outputs.go) reuse the same queues and retries. nil: the webhook behaviour.
 	Name   string
@@ -252,8 +255,12 @@ func (w *webhook) deliver(ctx context.Context, e securityEvent) error {
 			if !w.Sleep(ctx, delay) {
 				return ctx.Err()
 			}
-			if delay *= 2; delay > 5*time.Minute {
-				delay = 5 * time.Minute
+			maxB := w.MaxBackoff
+			if maxB == 0 {
+				maxB = 5 * time.Minute
+			}
+			if delay *= 2; delay > maxB {
+				delay = maxB
 			}
 		}
 		if last = send(ctx, body); last == nil {

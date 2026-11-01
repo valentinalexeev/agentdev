@@ -90,7 +90,15 @@ func (s *syslogTLS) Send(ctx context.Context, msg []byte) error {
 		}
 		s.conn = c
 	}
-	_ = s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	// the write honours ctx too: the deadline is the earlier of ctx's and 10 s
+	dl := time.Now().Add(10 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(dl) {
+		dl = d
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_ = s.conn.SetWriteDeadline(dl)
 	if _, err := fmt.Fprintf(s.conn, "%d %s", len(msg), msg); err != nil {
 		s.conn.Close()
 		s.conn = nil
@@ -187,8 +195,8 @@ func parseHeaders(s string) (map[string]string, error) {
 			return nil, errors.New("headers must be key=value pairs separated by commas")
 		}
 		dv, err := url.QueryUnescape(strings.TrimSpace(v))
-		if err != nil {
-			return nil, err
+		if err != nil { // the error text would contain a part of the value (an API key): name the key only
+			return nil, fmt.Errorf("header %q: bad percent-encoding in the value", strings.TrimSpace(k))
 		}
 		out[strings.TrimSpace(k)] = dv
 	}
@@ -233,10 +241,15 @@ func tlsFromEnv(getenv0 func(string) string, prefix string) (*tls.Config, error)
 //	SECURITY_SYSLOG_ADDR (host:port, usually 6514)         syslog over TLS; optional SECURITY_SYSLOG_CA,
 //	                                                       _SERVER_NAME, _CLIENT_CERT, _CLIENT_KEY (PEM)
 //	SECURITY_OTLP_URL (https://.../v1/logs)                OTLP/HTTP JSON; optional SECURITY_OTLP_HEADERS (k=v,...),
-//	                                                       SECURITY_OTLP_CA, _CLIENT_CERT, _CLIENT_KEY
+//	                                                       SECURITY_OTLP_CA, _SERVER_NAME, _CLIENT_CERT, _CLIENT_KEY
+//
+// PEM values may be on one line with a literal \n for each line break (env files).
 func outputsFromEnv(getenv func(string) string) ([]*webhook, error) {
 	var outs []*webhook
 	if u := getenv("SECURITY_WEBHOOK_URL"); u != "" {
+		if pu, err := url.Parse(u); err != nil || pu.Scheme != "https" || pu.Host == "" {
+			return nil, errors.New("SECURITY_WEBHOOK_URL must be an https:// URL")
+		}
 		sec := getenv("SECURITY_WEBHOOK_SECRET")
 		if sec == "" {
 			return nil, errors.New("SECURITY_WEBHOOK_URL is set but SECURITY_WEBHOOK_SECRET is empty: refusing to send unsigned events")
@@ -254,7 +267,11 @@ func outputsFromEnv(getenv func(string) string) ([]*webhook, error) {
 		host, _ := os.Hostname()
 		s := &syslogTLS{Addr: addr, TLS: tc}
 		o := newWebhook("", nil)
-		o.Name, o.Workers, o.Send = "syslog", 1, s.Send // one connection, events in order
+		// One connection and one worker, so the collector gets each agent's events in chain order. While the collector
+		// is down this worker blocks every agent: the backoff is capped at 30 s and the attempts at 4, so one event
+		// holds the queue for at most about 1 minute; the per-agent queues absorb the rest and drops are logged.
+		o.Name, o.Workers, o.Send = "syslog", 1, s.Send
+		o.Attempts, o.MaxBackoff = 4, 30*time.Second
 		o.Encode = func(e securityEvent) ([]byte, error) { return syslogMessage(host, e) }
 		outs = append(outs, o)
 	}
@@ -271,8 +288,9 @@ func outputsFromEnv(getenv func(string) string) ([]*webhook, error) {
 		if err != nil {
 			return nil, err
 		}
-		oh := &otlpHTTP{URL: u, Headers: hdr,
-			Client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}}}
+		tr := http.DefaultTransport.(*http.Transport).Clone() // keeps proxy from env, idle timeouts, HTTP/2
+		tr.TLSClientConfig = tc
+		oh := &otlpHTTP{URL: u, Headers: hdr, Client: &http.Client{Timeout: 10 * time.Second, Transport: tr}}
 		o := newWebhook("", nil)
 		o.Name, o.Send, o.Encode = "otlp", oh.Send, otlpBody
 		outs = append(outs, o)

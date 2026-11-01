@@ -296,13 +296,15 @@ each has its own queues.
 - *Syslog over TLS:* RFC 5424 messages in octet-counted frames (RFC 5425), one TLS connection, facility 13 (log
   audit), severity low = notice (5), medium = warning (4), high = critical (2). Structured data `agentdev@32473`
   (the RFC 5612 example enterprise number until the project has its own) carries the main fields; MSG is the full
-  event as JSON. One worker, so the collector gets each agent's events in chain order.
+  event as JSON. One worker, so the collector gets each agent's events in chain order; while the collector is down
+  that worker blocks all agents, so syslog retries 4 times with at most 30 s between tries (about 1 minute per event)
+  and the per-agent queues take the rest (drops are logged).
 - *OTLP logs:* OTLP/HTTP with the JSON encoding to `/v1/logs`; one log record per event, `severityNumber` 10/13/17,
   body is the event as JSON, attributes follow the ECS mapping below (`event.id`, `rule.name`, `user.name`) plus
   `agentdev.*` (`agentdev.chain`, `agentdev.prev`, `agentdev.untrusted`). Optional headers carry an API key.
 - TLS: version 1.2 or later, certificates always verified (system roots or a configured CA), optional client
-  certificate (mTLS). The API refuses to start with `http://` OTLP, a webhook without a secret, or half a client
-  certificate.
+  certificate (mTLS). The API refuses to start with an `http://` webhook or OTLP URL, a webhook without a secret, or
+  half a client certificate.
 
 **Hash chain (#71).** Each row carries `prev` and `chain`: `chain = sha256(prev + "\n" + canonical)` with `prev` the
 `chain` of the same agent's previous row (`""` for the first). `canonical` is the compact JSON of the fields in this
@@ -311,7 +313,9 @@ severity, action, pod, container, hash`. The API computes it at insert time in o
 advisory lock, so the chain follows the id order. A SIEM keeps the last `chain` per agent: an event whose `prev`
 differs shows a gap (a lost or dropped delivery, or a deleted row), an event whose `chain` does not recompute shows
 an edit. The chain is tamper evidence, not tamper proof: someone with write access to the database can recompute
-the whole chain, so the SIEM's copy is the reference. Rows from before #71 have empty `prev` and `chain`. Pruning
+the whole chain, so the SIEM's copy is the reference. The chain also cannot show a removed *tail*: deleting the
+newest event(s) of an agent leaves a valid chain, and only a SIEM that already received them notices. Exporting each
+event at once (webhook, syslog, OTLP) keeps that window short. `verifyChain` in `chain.go` is the reference check. Rows from before #71 have empty `prev` and `chain`. Pruning
 removes the oldest rows, so the first kept row of an agent then has a `prev` that no stored row has; that is
 expected.
 

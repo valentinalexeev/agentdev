@@ -585,10 +585,17 @@ WARNING: Do not put the keys or the certificates in git. Keep them only in the i
 3. If a private CA signed the certificate of the server, add the CA certificate (PEM) to the same file:
    `SECURITY_SYSLOG_CA=-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----`
    Write the PEM on one line. Write `\n` for each line break.
-4. If the server requires a client certificate, add `SECURITY_SYSLOG_CLIENT_CERT` and `SECURITY_SYSLOG_CLIENT_KEY`
+4. If the name in the certificate is not the name in the address, add `SECURITY_SYSLOG_SERVER_NAME` to the same
+   file.
+5. If the server requires a client certificate, add `SECURITY_SYSLOG_CLIENT_CERT` and `SECURITY_SYSLOG_CLIENT_KEY`
    (PEM) to the same file.
-5. Run run.sh step 10: `./run.sh 10`
+6. Run run.sh step 10: `./run.sh 10`
    The API starts again. The API log shows no `security outputs` error.
+
+NOTE: When the syslog server is not available, the API stops all syslog messages. The API tries each message 4 times.
+The time between the tries is a maximum of 30 seconds. Then the API writes `syslog: event <id> not delivered` in its
+log. When the queue of an agent is full, the API writes `syslog queue of agent <name> full` in its log. The events
+stay in the Postgres table.
 
 NOTE: Each message has facility 13 (log audit). The severity is 5 (notice) for `low`, 4 (warning) for `medium`
 and 2 (critical) for `high`. The structured data `agentdev@32473` has the fields. The message text is the event in
@@ -607,10 +614,16 @@ WARNING: Do not put the API key of the collector in git. Keep it only in the ins
 2. If the collector requires an API key, add the headers to the same file:
    `SECURITY_OTLP_HEADERS=Authorization=Bearer%20<key>`
 3. If a private CA signed the certificate of the collector, add `SECURITY_OTLP_CA` (PEM) to the same file.
+   If the name in the certificate is not the name in the URL, add `SECURITY_OTLP_SERVER_NAME` to the same file.
 4. Run run.sh step 10: `./run.sh 10`
    The API starts again. The API log shows no `security outputs` error.
 
-NOTE: The API accepts only an `https://` URL. You can use the webhook, syslog and OTLP at the same time.
+NOTE: The API accepts only an `https://` URL for the webhook and for OTLP. You can use the webhook, syslog and OTLP
+at the same time.
+
+NOTE: On GCP (Ansible), do not use the file `.secrets/platform/siem-webhook`. Write the addresses in `instance.yml`
+under `security.siem`. Write the secret values in the Secret Manager secret `security-siem`. Refer to
+`infra/ansible/README.md`.
 
 ### Do a check of the hash chain
 
@@ -624,6 +637,9 @@ Each event has the fields `prev` and `chain`. Use them on the SIEM to find event
 4. Compare the result with `chain`.
    If the values are not equal, somebody changed the event.
 5. Keep the new `chain` value.
+
+NOTE: The chain cannot show that somebody deleted the newest events of an agent. Only the copy on the SIEM shows
+this.
 
 NOTE: The events from before issue #71 have an empty `prev` and `chain`. After the API deletes old events, the
 first event of an agent can have a `prev` that you do not have. This is correct.

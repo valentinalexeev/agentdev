@@ -53,7 +53,8 @@ func link(prev string, e *securityEvent) {
 	e.Chain = chainHash(prev, *e)
 }
 
-// verifyChain checks events of one agent in id order (oldest first), starting after the chain value start ("" for
+// verifyChain is the reference implementation of the check a SIEM does (docs/admin.md, "Do a check of the hash
+// chain"); the API itself does not call it. It checks events of one agent in id order (oldest first), starting after the chain value start ("" for
 // the first event ever). It returns the index of the first bad event and why, or -1.
 func verifyChain(start string, events []securityEvent) (int, error) {
 	prev := start

@@ -208,6 +208,39 @@
       when: agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0
       no_log: true
 
+    # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
+    # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
+    # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl).
+    - name: Read the SIEM output secrets (optional)
+      ansible.builtin.shell: |
+        if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets versions access latest --secret {{ sm_security_siem }} --project {{ gcp_project }}
+        fi
+      register: siem_secret
+      changed_when: false
+      no_log: true
+
+    - name: SIEM outputs Secret agentdev-api-siem
+      vars:
+        siem: "{{ security.siem | default({}) }}"
+        siem_env:
+          SECURITY_WEBHOOK_URL: "{{ siem.webhook_url | default('') }}"
+          SECURITY_SYSLOG_ADDR: "{{ siem.syslog_addr | default('') }}"
+          SECURITY_SYSLOG_SERVER_NAME: "{{ siem.syslog_server_name | default('') }}"
+          SECURITY_OTLP_URL: "{{ siem.otlp_url | default('') }}"
+          SECURITY_OTLP_SERVER_NAME: "{{ siem.otlp_server_name | default('') }}"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: agentdev-api-siem, namespace: "{{ platform_ns }}"}
+          stringData: >-
+            {{ siem_env | dict2items | rejectattr('value', 'equalto', '') | items2dict
+               | combine(dict(siem_secret.stdout_lines | select('search', '=') | map('split', '=', 1))) }}
+      when: (security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0
+      no_log: true
+
     - name: Wait for the router and agents
       kubernetes.core.k8s_info:
         <<: *k8s

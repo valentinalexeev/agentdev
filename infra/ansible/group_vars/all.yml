@@ -27,13 +27,15 @@ botboard_url: ""                    # agents report work to botboard (#26), e.g.
 sm_claude_shared: claude-shared
 sm_router_register_token: router-register-token
 sm_forge_webhook_secret: github-app-webhook-secret
+sm_security_siem: security-siem          # optional: SIEM output secrets as KEY=VALUE lines (#70, #71)
 
 # Required from the deployment (no defaults on purpose):
 #   gcp_project, gcp_zone, image_tag, reviewer,
 #   agents: [{name, user, repos}]   per agent, Secret Manager holds agent-<name>-forge-token
 #                                   and optionally agent-<name>-claude
 # security events (#70): auto-pause and SecurityEvent retention (operator). Webhook output settings
-# (security.siem.*: webhook, syslog over TLS, OTLP; secrets in Secret Manager) apply where the API runs.
+# (security.siem.{webhook_url, syslog_addr, syslog_server_name, otlp_url, otlp_server_name} in instance.yml,
+# secret values in the Secret Manager secret sm_security_siem) fill the Secret agentdev-api-siem (#71).
 security:
   pause_after: 5                    # more than N events in one job pause the agent
   retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history

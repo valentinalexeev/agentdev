@@ -16,8 +16,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -243,6 +245,7 @@ func TestOutputsConfigRefusesInsecure(t *testing.T) {
 		"bad CA":           {"SECURITY_SYSLOG_ADDR": "c:6514", "SECURITY_SYSLOG_CA": "nope"},
 		"half mTLS":        {"SECURITY_OTLP_URL": "https://c/v1/logs", "SECURITY_OTLP_CLIENT_CERT": "x"},
 		"bad headers":      {"SECURITY_OTLP_URL": "https://c/v1/logs", "SECURITY_OTLP_HEADERS": "novalue"},
+		"plain webhook":    {"SECURITY_WEBHOOK_URL": "http://x", "SECURITY_WEBHOOK_SECRET": "s"},
 	} {
 		if _, err := outputsFromEnv(func(k string) string { return env[k] }); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -262,5 +265,82 @@ func TestSinkFansOut(t *testing.T) {
 	eb, okb := b.next()
 	if !oka || !okb || ea.Chain == "" || ea.Chain != eb.Chain {
 		t.Fatal("not sent to every output with its chain")
+	}
+}
+
+func TestHeaderErrorHidesValue(t *testing.T) {
+	_, err := parseHeaders("Authorization=Bearer%zzsecretkey")
+	if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "zz") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestSyslogRetriesAreCapped(t *testing.T) {
+	env := map[string]string{"SECURITY_SYSLOG_ADDR": "127.0.0.1:1"}
+	outs, err := outputsFromEnv(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delays []time.Duration
+	outs[0].Sleep = func(_ context.Context, d time.Duration) bool { delays = append(delays, d); return true }
+	outs[0].Backoff = 20 * time.Second
+	if err := outs[0].deliver(context.Background(), ev("a", "low", "h", time.Now())); err == nil {
+		t.Fatal("delivered to a closed port")
+	}
+	if len(delays) != 3 || delays[2] != 30*time.Second {
+		t.Fatalf("delays %v", delays)
+	}
+}
+
+// TestPgChain checks the chain through the Postgres store: advisory lock, last-chain read, duplicate rollback, and
+// the microsecond round trip of timestamptz, after a simulated restart (a second store on the same database).
+func TestPgChain(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	s1, err := newPgStore(ctx, url, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := "chain-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	t0 := time.Now().UTC() // nanoseconds: the store must truncate before hashing
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ { // concurrent inserts of one agent stay one chain
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			e := ev(agent, "low", agent+"-"+strconv.Itoa(i), t0.Add(time.Duration(i)*time.Nanosecond*1001))
+			if ok, err := s1.Insert(ctx, &e); !ok || err != nil {
+				t.Error(ok, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	dup := ev(agent, "low", agent+"-0", t0)
+	if ok, err := s1.Insert(ctx, &dup); ok || err != nil {
+		t.Fatal("duplicate", ok, err)
+	}
+	s2, err := newPgStore(ctx, url, false) // restart
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := ev(agent, "high", agent+"-after", t0.Add(time.Second))
+	if ok, err := s2.Insert(ctx, &e); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	rows, err := s2.List(ctx, eventFilter{Agent: agent, Limit: 100})
+	if err != nil || len(rows) != 11 {
+		t.Fatal(len(rows), err)
+	}
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 { // List is newest first
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	if i, err := verifyChain("", rows); i != -1 {
+		t.Fatal("stored chain does not verify:", err)
+	}
+	if rows[10].Prev != rows[9].Chain {
+		t.Fatal("restart broke the chain")
 	}
 }
