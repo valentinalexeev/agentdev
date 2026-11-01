@@ -134,6 +134,13 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
   (state `APPROVED`, `commit_id` equal to the PR head) right before merging, then merges with that head `sha` pinned.
   Method: merge commit; the branch is kept unless the owner says otherwise.
+- **A review names the head it checked** ([#110](https://github.com/valentinalexeev/agentdev/issues/110)): the
+  independent reviewer ends the result with `Reviewer: OK at <sha>` (full head sha) or `Reviewer: changes needed at
+  <sha>`. A push after it makes the review stale, and the next head needs a new review line.
+- **Read the current approval state at each check** (#110): for every open PR, read the reviews and the head now
+  (`gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`, `gh pr view NN --json headRefOid`). An `APPROVED`
+  review on the current head means the PR waits for merge, even if the approval is older than the last check. Do
+  not filter on reviews that are new since the last check.
 - After a merge: check other open PRs for conflicts with `main`; merge `main` into them if the conflict is two
   independent additions; ask the owner if it is a semantic conflict.
 
@@ -162,6 +169,39 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   names and verbs. Rules and word list: [`docs/writing.md`](docs/writing.md). Add a new technical word to that list
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
+
+- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** line in `CHANGELOG.md` lists
+  every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
+  one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
+
+## Reviewer checklist
+
+The independent reviewer checks these items on every PR, and lists the result per item in the review:
+
+1. **Identity:** commits, pushes and comments are by `valentinalexeev-bot`, never by the owner.
+2. **Security advisories:** every GHAS thread has an author outcome and a reviewer verification (§4).
+3. **Parity:** kind and GKE (`infra/ansible`, `infra/terraform`) change together, or a follow-up issue is linked.
+4. **Untrusted output:** nothing the model can print (logs, stdout, files in the worktree) reaches a control
+   decision (limits, pause, reset, credentials). Telemetry comes through a channel the model cannot write.
+5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
+   shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
+6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+
+## Coordination and resource limits
+
+Applies when one coordinator session runs several worker agents (#110).
+
+- **At most 3 active implementation tasks** at the same time. Further work waits in the queue.
+- **Workers stop near the limits.** Near the Claude usage limit (5-hour or weekly), or with less than 10 GB free
+  disk, a worker commits and pushes its work in progress, writes its state on the PR or issue, and stops.
+- **The coordinator watches the disk.** Below 20 GB free it prunes the build cache (`docker builder prune -f`,
+  old kind images) before it starts new work.
+- **Commit and push work in progress often**, at least after each meaningful step, so a vanished worker loses
+  little. A WIP commit uses a normal Conventional Commits message.
+- **At each check the coordinator** resumes workers that vanished (from their clone and branch), and stops workers
+  that finished and reported.
+- **Questions from workers:** when a worker raises a question for the owner, the coordinator puts it on the issue
+  in the §3 *Questions* form and adds `needs-decision`. The worker does not wait silently in chat.
 
 ## Bootstrapping on GCP
 
