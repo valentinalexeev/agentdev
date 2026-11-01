@@ -14,7 +14,7 @@
 # Usage:
 #   scripts/e2e-gke-security.sh [--kind] [--context CTX] [--agent NAME] [--host UI_HOST] [--webhook-host HOST]
 #                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]] [--only LIST]
-#   --only LIST   comma list of sections: pods,creds,egress,claude,usage,approvals,executors,https,api,sso,github
+#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github
 # Environment (optional):
 #   E2E_READER_TOKEN  OIDC access token of a person WITHOUT write access to the agent's repo (API permission check)
 #   AGENTS_NS, PLATFORM_NS, EXEC_NS  namespaces (defaults as in config.env)
@@ -119,6 +119,30 @@ if section creds; then
   [ "${n:-0}" = 0 ]; check $? "no process visible to the agent container holds a forge token"
   kexec agent sh -c 'ls /var/run/secrets/kubernetes.io/serviceaccount/token' >/dev/null 2>&1
   [ $? != 0 ]; check $? "no service account token file in the agent container"
+fi
+
+# ---------------------------------------------------------------- loop git (R7)
+# The loop's git (lgit in the deployed agent-loop) must not run a hook or a config-defined program written by Claude.
+# The check uses a throwaway repo under /tmp in the agent container (never the agent's worktree) and removes it.
+if section git; then
+  # shellcheck disable=SC2016  # expanded in the container
+  R7='set -u; d=$(mktemp -d /tmp/e2e-r7.XXXXXX) || exit 3; trap "rm -rf \"$d\"" EXIT
+    eval "$(grep -m1 "^lgit()" /usr/local/bin/agent-loop)"; command -v lgit >/dev/null 2>&1 || { echo nolgit; exit 0; }
+    cd "$d" && git init -q . && git config user.email e2e@x && git config user.name e2e || exit 3
+    mkdir -p .git/hooks; printf "#!/bin/sh\ntouch %s/hook-ran\n" "$d" > .git/hooks/pre-commit; chmod +x .git/hooks/pre-commit
+    printf "#!/bin/sh\ntouch %s/fsmonitor-ran\n" "$d" > fsm.sh; chmod +x fsm.sh
+    git config core.fsmonitor "$d/fsm.sh"; git config core.hooksPath .git/hooks
+    echo x > f; lgit add f >/dev/null 2>&1; lgit status >/dev/null 2>&1; lgit commit -qm e2e >/dev/null 2>&1
+    lgit log -1 >/dev/null 2>&1 || { echo nocommit; exit 0; }
+    r=""; [ -e hook-ran ] && r="$r hook"; [ -e fsmonitor-ran ] && r="$r fsmonitor"; echo "ran:${r:- none}"'
+  out=$(kexec agent sh -c "$R7" 2>/dev/null | tail -1)
+  case "$out" in
+    "ran: none") pass "the loop's git ignores a hook and core.fsmonitor written into the repo (R7)" ;;
+    nolgit) fail "no lgit in /usr/local/bin/agent-loop: cannot show that the loop's git ignores hooks (R7)" ;;
+    ran:*) fail "the loop's git ran repo-controlled code:${out#ran:} (R7)" ;;
+    *) fail "R7 check did not run (output: ${out:-none})" ;;
+  esac
+  manual "R7 in the real loop: in a job, have Claude write a hook and a filter driver into .git; check that the job log shows SecurityEvents git-hook-present / git-config-key and that the hook did not run"
 fi
 
 # ---------------------------------------------------------------- egress (R10, phase 2)

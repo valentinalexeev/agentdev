@@ -51,6 +51,7 @@ issue in agentdev. A `FAIL` blocks the release, unless the owner records an acce
 |---|---|---|
 | `pods` | agent pod 2/2 ready; router, egress proxy and Claude proxy available; gVisor | |
 | `creds` | no forge or Claude credential in the agent container (environment, Secret references, Secret volumes, other processes); no service account token; no shared process namespace | R4, R11 |
+| `git` | in a throwaway repo under `/tmp` in the agent container, the loop's own `lgit` (from the deployed `agent-loop`) does not run a hook or a `core.fsmonitor` program written into the repo. MANUAL: in a real job, a hook or filter driver that Claude writes into `.git` is removed and reported as a `SecurityEvent` | R7 |
 | `egress` | from both containers: the metadata server is blocked (direct and through the proxy); direct egress is blocked; a host off the list is refused; an allowed host operates; GitHub only from the sidecar; the refusal is a `SecurityEvent`; `FQDNNetworkPolicy` exists | R10, R63 |
 | `claude` | `api.anthropic.com` refused from both containers; the agent uses `claude-proxy`; only `claude-proxy` uses the Claude Secrets | R11, R64 |
 | `usage` | the sidecar refuses `POST /usage` (410); the agent cannot change its Agent object | R47 |
@@ -65,3 +66,7 @@ issue in agentdev. A `FAIL` blocks the release, unless the owner records an acce
 
 `scripts/e2e-gke-security.sh --kind` does the same checks on the local kind cluster. It skips the checks that are
 only for GKE (gVisor, `FQDNNetworkPolicy`). On kind, the public HTTPS checks are not applicable.
+
+On a kind cluster with `CLAUDE_PROXY` off, the `pods` and `claude` sections give a `FAIL` for `claude-proxy`
+(R11, R64). This result is correct: without the proxy, the agents hold the Claude credential. The script is not
+broken. Turn `CLAUDE_PROXY` on to make these checks pass.
