@@ -3,6 +3,7 @@ import type { UserManager, User } from './auth'
 import {
   listAgents, listSecurityEvents, patchAgent, createAgent, deleteAgent, Unauthorized,
   nameError, repoError, maxConcurrentError, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
+  getUsage, setGlobalLimits, setProjectLimits, pctError, type Usage, type UsageWindow,
 } from './api'
 
 export function App({ um }: { um: UserManager }) {
@@ -70,8 +71,9 @@ function Pages({ token, onExpired }: { token: string; onExpired: () => void }) {
       <nav>
         <button className={`tab ${page === 'agents' ? 'on' : ''}`} onClick={() => go('agents')}>Agents</button>
         <button className={`tab ${page === 'security' ? 'on' : ''}`} onClick={() => go('security')}>Security</button>
+        <button className={`tab ${page === 'usage' ? 'on' : ''}`} onClick={() => go('usage')}>Usage</button>
       </nav>
-      {page === 'security'
+      {page === 'usage' ? <UsagePage token={token} onExpired={onExpired} /> : page === 'security'
         ? <Security key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
         : <Overview token={token} onExpired={onExpired} />}
     </>
@@ -282,6 +284,77 @@ function Security({ token, onExpired, initialAgent }: { token: string; onExpired
       )}
       {next && <p><button onClick={more}>Load more</button></p>}
     </>
+  )
+}
+
+// Subscription usage (#93): windows per Claude subscription, pauses, and the limits. The API decides who may change a
+// limit (global: agentdev admins; project: write access, only lower than global) and the UI shows its answer.
+function UsagePage({ token, onExpired }: { token: string; onExpired: () => void }) {
+  const [u, setU] = useState<Usage | null>(null)
+  const [loadedAt, setLoadedAt] = useState(0) // windows past their reset are shown as -
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const fail = useCallback((e: Error) => (e instanceof Unauthorized ? onExpired() : setError(e.message)), [onExpired])
+  const load = useCallback(() => { getUsage(token).then((r) => { setU(r); setLoadedAt(Date.now()); setError('') }).catch(fail) }, [token, fail])
+  useEffect(() => { getUsage(token).then((r) => { setU(r); setLoadedAt(Date.now()); setError('') }).catch(fail) }, [token, fail])
+  const save = (p: Promise<void>) => { setBusy(true); p.then(load).catch(fail).finally(() => setBusy(false)) }
+  const pct = (w?: UsageWindow) => (w && w.resetsAt * 1000 > loadedAt ? `${Math.round(w.utilization * 100)} %` : '–')
+  const at = (s?: number) => (s ? new Date(s * 1000).toLocaleString() : '')
+  if (!u) return error ? <p className="error">{error}</p> : <p>Loading usage…</p>
+  return (
+    <>
+      <h1>Subscription usage</h1>
+      <p className="muted">When a window passes its limit, agents on that subscription start no new runs until the window resets.
+        Runs in progress finish.</p>
+      {error && <p className="error">{error}</p>}
+      <h2>Subscriptions</h2>
+      {!u.state || Object.keys(u.state).length === 0 ? <p>No runs reported yet.</p> : (
+        <table>
+          <thead><tr><th>Claude Secret</th><th>5-hour</th><th>Resets</th><th>Weekly</th><th>Resets</th><th>Tokens (5h)</th><th>Runs</th></tr></thead>
+          <tbody>{Object.entries(u.state).map(([k, s]) => (
+            <tr key={k}><td>{k}</td><td>{pct(s.fiveHour)}</td><td className="nowrap">{at(s.fiveHour?.resetsAt)}</td>
+              <td>{pct(s.weekly)}</td><td className="nowrap">{at(s.weekly?.resetsAt)}</td>
+              <td>{(s.inputTokens + s.outputTokens).toLocaleString()}</td><td>{s.runs}</td></tr>))}</tbody>
+        </table>)}
+      <h2>Paused agents</h2>
+      {!u.pauses || Object.keys(u.pauses).length === 0 ? <p>No agent is paused for usage.</p> : (
+        <table>
+          <thead><tr><th>Agent</th><th>Reason</th><th>Until</th></tr></thead>
+          <tbody>{Object.entries(u.pauses).map(([a, p]) => (
+            <tr key={a}><td>{a}</td><td>{p.reason}</td><td className="nowrap">{at(p.until)}</td></tr>))}</tbody>
+        </table>)}
+      <h2>Limits</h2>
+      <LimitsRow key={`g${u.global.fiveHour}/${u.global.weekly}`} label="Global (administrators)" busy={busy} five={u.global.fiveHour} week={u.global.weekly}
+        onSave={(f, w) => save(setGlobalLimits(token, { fiveHour: f, weekly: w }))} />
+      {Object.keys(u.effective).sort().map((repo) => (
+        <LimitsRow key={`${repo}${JSON.stringify(u.projects?.[repo] ?? {})}${u.global.fiveHour}/${u.global.weekly}`} label={repo} busy={busy} clearable
+          five={u.projects?.[repo]?.fiveHour ?? u.effective[repo].fiveHour}
+          week={u.projects?.[repo]?.weekly ?? u.effective[repo].weekly}
+          note={`effective ${u.effective[repo].fiveHour} % / ${u.effective[repo].weekly} %`}
+          onSave={(f, w) => save(setProjectLimits(token, repo, { fiveHour: f, weekly: w }))}
+          onClear={() => save(setProjectLimits(token, repo, { fiveHour: null, weekly: null }))} />
+      ))}
+    </>
+  )
+}
+
+function LimitsRow({ label, five, week, note, busy, clearable, onSave, onClear }: {
+  label: string; five: number; week: number; note?: string; busy: boolean; clearable?: boolean
+  onSave: (fiveHour: number, weekly: number) => void; onClear?: () => void
+}) {
+  const [f, setF] = useState(five)
+  const [w, setW] = useState(week)
+  const err = pctError(f) || pctError(w)
+  return (
+    <div className="filters">
+      <strong>{label}</strong>
+      <label>5-hour % <input type="number" min={1} max={100} value={f} onChange={(e) => setF(Number(e.target.value))} /></label>
+      <label>Weekly % <input type="number" min={1} max={100} value={w} onChange={(e) => setW(Number(e.target.value))} /></label>
+      <button disabled={busy || !!err} onClick={() => onSave(f, w)}>Save</button>
+      {clearable && <button disabled={busy} onClick={onClear}>Use global</button>}
+      {note && <span className="muted">{note}</span>}
+      {err && <span className="error">{err}</span>}
+    </div>
   )
 }
 
