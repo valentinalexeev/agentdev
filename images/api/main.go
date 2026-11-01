@@ -97,6 +97,7 @@ func main() {
 		for _, l := range strings.Split(os.Getenv("APPROVAL_DENY_ACCOUNTS"), ",") {
 			if l = strings.ToLower(strings.TrimSpace(l)); l != "" {
 				dc.denyLogins[l] = true
+				approvalDenyLogins[l] = true // the UI refuses the same accounts
 			}
 		}
 		go dc.run(ctx, time.Duration(envInt("APPROVAL_POLL_SECONDS", 15))*time.Second)
@@ -225,10 +226,11 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
 		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
 		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
-		if as, ok := wr.store.(approvalStore); ok { // approvals, read-only (#67, approvals.go); decisions on the forge
-			ar := &approvalReader{store: as, w: wr}
+		if as, ok := wr.store.(approvalStore); ok { // approvals (#67, approvals.go): forge comments or the UI
+			ar := &approvalReader{store: as, w: wr, agents: agents}
 			mux.Handle("GET /api/approvals", auth(verify, http.HandlerFunc(ar.list)))
 			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
+			mux.Handle("POST /api/approvals/{name}/decision", auditAuth("approval-decision", auth(verify, http.HandlerFunc(ar.decide))))
 		}
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go

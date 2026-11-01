@@ -192,6 +192,21 @@ prompt injection from the issue.
    - `/deny <id>`: the agent cannot do this action.
    The agent continues, usually in less than one minute.
 
+To make the decision in the web UI:
+
+1. Open the web UI and click **Approvals**.
+2. On the **Pending** tab, click **Details** on the request.
+3. Read the request text.
+4. Click **Approve once**, **Approve for the job** or **Deny**.
+5. Read the confirmation and click the button again. To stop, click **Cancel**.
+   The request goes to the **History** tab with your name and "ui".
+
+NOTE: If the request changed after you opened it, the web UI shows an error. Close the dialog and do the steps
+again.
+
+NOTE: The first decision is final. If a person made a decision before you, on the forge or in the web UI, your
+decision has no effect. The same decision again shows no error.
+
 NOTE: You must have write access to the repository. A decision from a person without write access, or from an agent,
 has no effect.
 
@@ -213,7 +228,7 @@ NOTE: The system removes known types of passwords and tokens from the request te
 all secrets.
 
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
-requests that have no decision. You cannot make a decision in the web UI at this time.
+requests that have no decision.
 
 ### Set a lower usage limit for your project
 

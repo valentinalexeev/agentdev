@@ -341,13 +341,31 @@ sequenceDiagram
 - Admins get an "all projects" view of both tabs.
 - Agent overview shows "waiting for approval" as a state.
 - The same request also appears on the forge (see *Forge as an approval surface*).
-- Decided on #67 (owner, 2026-10-31): the first version decides on the forge only; the UI shows Pending and History
-  read-only. Deciding in the UI is #80.
+- Decided on #67 (owner, 2026-10-31): the first version decides on the forge only. #80 was then absorbed into #67:
+  the UI decides too (see *Deciding in the web UI* below).
+
+### Deciding in the web UI (#67, was #80)
+
+`POST /api/approvals/{name}/decision` with `{"decision": "approve" | "approve-job" | "deny", "contentHash"}`.
+
+- **Human session only.** The endpoint takes an OIDC bearer token of the UI client, like every `/api` write. Agents
+  hold forge tokens and the per-request approval secret, never a UI session: both are refused (401). A session whose
+  forge login or user name is an agent, the requester or an `APPROVAL_DENY_ACCOUNTS` account is refused (403).
+- **Role.** The admin group, or write access to the repository on the forge (the same rule as a forge comment). A
+  person who cannot see the request gets 404. GitHub repositories: admin group only (#87).
+- **Bound to the content.** The body carries the content hash shown in the UI; a different hash is refused (409).
+- **First decision wins.** The status is written with a compare-and-set (resourceVersion). The same decision again
+  is idempotent (200, nothing changes); a different decision after the first is refused (409). The forge decider and
+  the UI share this rule, so a forge comment after a UI decision is audited as late.
+- **Record.** `status.decidedBy` is the forge login (or user name for an admin without one), `status.decidedVia` is
+  `ui`. The audit entry (`approval-allowed`, `approval-denied`, or `approval-decision` with result `denied`) has the
+  session's subject, user name, forge login and groups, and the grant; it is stored in Postgres (`api_audit`).
+- The forge sidecar keeps refusing any agent comment that carries a decision command (`checkNoDecision`).
 
 ### What is implemented (#67, forge-first)
 
-The design above is the target. The first version (#67) implements this part of it; the rest is #80 (UI decisions,
-SSE stream, decision note) or later (egress requests, GitHub forges, transcript excerpt and diff in the context,
+The design above is the target. The first version (#67) implements this part of it, plus UI decisions (above); the rest is
+later (SSE stream, decision note, egress requests, GitHub forges, transcript excerpt and diff in the context,
 Postgres history table).
 
 ```mermaid
@@ -637,7 +655,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
   ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
 - Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
 - Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
-  egress allow-list for executor Jobs (#135), deciding in the UI (#80), reopening the issue on a failed apply.
+  egress allow-list for executor Jobs (#135), reopening the issue on a failed apply.
 
 ### Resources
 

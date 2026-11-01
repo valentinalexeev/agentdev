@@ -429,7 +429,7 @@ function CreateForm({ busy, onCreate, onCancel }: { busy: boolean; onCreate: (a:
 }
 
 // Modal uses the native <dialog>: focus stays inside, Escape closes it.
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const d = ref.current

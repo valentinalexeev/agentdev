@@ -1,5 +1,7 @@
 {#- Renders a manifests/*.tmpl file (envsubst-style ${VAR}) with `values`, then applies literal `replace` pairs.
-    The same templates feed the kind scripts (envsubst) and this playbook, so both environments stay in step. -#}
+    The same templates feed the kind scripts (envsubst) and this playbook, so both environments stay in step.
+    A ${VAR} that is still in the text after this is a value the playbook does not set (kind/GKE drift, #121): the
+    render fails with the names only (never the values), instead of applying the literal text to the cluster. -#}
 {%- set out = namespace(text=lookup('ansible.builtin.file', src)) -%}
 {%- for k, v in values.items() -%}
 {%-   set out.text = out.text | replace('${' ~ k ~ '}', v | string) -%}
@@ -7,4 +9,9 @@
 {%- for pair in replace -%}
 {%-   set out.text = out.text | replace(pair[0], pair[1]) -%}
 {%- endfor -%}
+{%- set missing = lookup('ansible.builtin.file', src) | regex_findall('\$\{[A-Za-z_][A-Za-z0-9_]*\}') | unique
+                  | reject('in', values.keys() | map('regex_replace', '^(.*)$', '${\\1}') | list) | list -%}
+{%- if missing -%}
+{{ undefined_render_value | mandatory(src | basename ~ ': no value for ' ~ (missing | join(' ')) ~ ' (templates/render.j2)') }}
+{%- endif -%}
 {{ out.text }}

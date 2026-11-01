@@ -479,6 +479,11 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `api.oidc_audience` | `agentdev` | `agentdev` |
 | `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
 | `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
+| `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
+| `approvals.enabled` | `true` | `APPROVALS` (`false`) |
+| `usage.five_hour`, `usage.weekly` | `80`, `90` | `USAGE_FIVE_HOUR`, `USAGE_WEEKLY` |
+
+- The API and the operator get the same `approvals.enabled` and `usage` values.
 
 - The playbook makes the database password one time in Secret Manager `platform-pg-agentdev-api`.
 - The database login `agentdev_api` can only add and read rows. The role `agentdev_owner` owns the tables.
@@ -866,7 +871,12 @@ default. To turn on approvals on kind, do the steps that follow.
 3. Run `./run.sh 10` and then `./run.sh 12`.
    The operator starts the agent pods again with the new setting.
 
-NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).
+NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`). The
+API also keeps them in Postgres. To see them, open `GET /api/audit` (admin group). A decision in the web UI has
+`"via": "ui"` and the user name of the person.
+
+NOTE: Members of `agentdev-admins` can make a decision in the web UI for all projects. Other people must have write
+access to the repository. Agents cannot make a decision in the web UI. The same procedure applies to kind and GKE.
 
 NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
 example the account of the router), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
@@ -1451,6 +1461,9 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 1. Read `CHANGELOG.md`.
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
+4. Make sure that the dry run of the pull request has no error. If the dry run shows `no value for ${...}`, the new
+   release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
+   are the same version.
 
 ### Upgrade the local installation
 
@@ -1473,6 +1486,28 @@ NOTE: Step 06 runs step 12 only when the operator is not installed. On an existi
 step 06 to update the CRDs.
 
 ## Remove agentdev
+
+### Reference: run.sh steps and the GKE playbook
+
+The playbook `infra/ansible/deploy.yml` does the run.sh steps on GKE. It uses the same manifests. You do not need
+a run.sh step or a manual `kubectl` command on GKE.
+
+| Component | `kind` (run.sh step) | GKE (playbook) |
+|---|---|---|
+| Webhook router | 06 | `deploy.yml` |
+| Egress proxy | 06 | `deploy.yml` |
+| Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
+| Operator and CRDs | 12 | `deploy.yml` |
+| Platform namespace | 08 | role `platform` |
+| API | 10 | role `api` (`api.oidc_issuer`) |
+| Web UI | 11 | role `api` (`api.ui`) |
+| Public entry point | port-forward | role `ingress` (`ingress.host`) |
+
+- The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
+  them is not ready, the playbook stops with an error.
+- The playbook fills the manifest values of each component. If a manifest has a value that the playbook does not
+  fill, the playbook stops before it changes the cluster. The error shows the name of the value, for example
+  `${OIDC_ISSUER}`.
 
 ### Remove the local installation
 

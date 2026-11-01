@@ -16,6 +16,18 @@ While the version is `0.x`, breaking changes bump MINOR.
   the forge driver (GitHub API and installation token; job check by the label `agent:<name>`). Deploy: new optional
   Secret `agentdev-api-github` (kind: `./run.sh 10` with `FORGE_KIND=github`; GKE: the `api` role with
   `forge_kind: github`). README no longer lists "Gitea only" in the MVP limits. New risk R93.
+- GKE parity with run.sh (#121): the playbook fills every value of `manifests/api.yaml.tmpl` (`APPROVALS`,
+  `APPROVAL_DENY_ACCOUNTS` from the new `api.approval_deny_accounts`, `USAGE_FIVE_HOUR`, `USAGE_WEEKLY`; before,
+  they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web
+  UI like `rollout status` in run.sh, and `templates/render.j2` now stops on a placeholder that the playbook does
+  not fill. New test `tests/render_values.yml`. Docs: `docs/admin.md` "Reference: run.sh steps and the GKE playbook",
+  upgrade step. New risk R92. To apply: run the playbook `deploy.yml`.
+- Approval decisions in the web UI (#67, absorbed #80): `POST /api/approvals/{name}/decision`
+  (`approve`, `approve-job`, `deny`, with the `contentHash` the person saw). Human OIDC sessions only: agent
+  sessions and platform accounts are refused; role is the admin group or forge write access. First decision wins,
+  a repeat of the same decision is idempotent. The status records `decidedBy` and `decidedVia: ui`; the audit is in
+  Postgres. UI: **Details** dialog with Approve once, Approve for the job and Deny, and a confirmation. Same on kind
+  and GKE. Docs: `docs/user-guide.md`, `docs/admin.md`, `docs/security-model.md`. New risks R90, R91.
 - Risk id check (#126): `scripts/check-risk-ids.sh` fails when `docs/security.md` defines a risk id twice or a file
   refers to an id the register does not define. Numbering rule added to `docs/security.md`. Stale references to the
   MCP risks fixed (now R51, R52, in `config.env`, `instance.yml.example` and an older changelog entry).

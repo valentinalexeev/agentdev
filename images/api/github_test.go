@@ -329,3 +329,35 @@ func TestGitHubApprovalClosedIssueVoids(t *testing.T) {
 		t.Fatalf("closed issue on GitHub: state %s, want void", a.State)
 	}
 }
+
+// The web UI decide path (#67, #138) uses the same GitHub check: write decides, read does not see it, GitHub down is
+// 503 and the admin group still decides.
+func TestGitHubUIDecision(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	f := newGHFake(t)
+	ag := agentObj("carol", "owner/x", false)
+	_ = unstructured.SetNestedField(ag.Object, "github", "spec", "forge")
+	k, _ := approvalEnv(t, ag, ghApprovalObj(t0))
+	old := auditDB
+	auditDB = &memAudit{}
+	t.Cleanup(func() { auditDB = old })
+	wr := &writer{store: k, perms: forgePerms{gitea: newGiteaPerms("", ""), github: f.forge(t)}, adminGroup: "agentdev-admins"}
+	h := routes(idVerify, k, nil, wr)
+	if w := postDecision(h, "reader", "", body("approve")); w.Code != http.StatusNotFound {
+		t.Fatalf("GitHub read user: %d %s", w.Code, w.Body)
+	}
+	f.setDown(true)
+	if w := postDecision(h, "writer", "", body("approve")); w.Code == http.StatusOK {
+		t.Fatalf("GitHub down: decided (%d)", w.Code)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("GitHub down: %+v", a)
+	}
+	f.setDown(false)
+	if w := postDecision(h, "writer", "", body("approve")); w.Code != http.StatusOK {
+		t.Fatalf("GitHub write user: %d %s", w.Code, w.Body)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.DecidedBy != "wendy" {
+		t.Fatalf("UI decision on GitHub: %+v", a)
+	}
+}
