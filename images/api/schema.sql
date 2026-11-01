@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS security_events (
 	stored_at  timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE security_events ADD COLUMN IF NOT EXISTS untrusted boolean NOT NULL DEFAULT false;
+-- per-agent hash chain (#71): prev = chain of the agent's previous row, chain = sha256(prev || '\n' || canonical row)
+ALTER TABLE security_events ADD COLUMN IF NOT EXISTS prev  text NOT NULL DEFAULT '';
+ALTER TABLE security_events ADD COLUMN IF NOT EXISTS chain text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS security_events_agent_id ON security_events (agent, id DESC);
 CREATE INDEX IF NOT EXISTS security_events_time ON security_events (time);
 
@@ -50,3 +53,40 @@ SET search_path = pg_catalog, public AS $$
 	SELECT count(*) FROM d
 $$;
 REVOKE ALL ON FUNCTION security_events_prune() FROM PUBLIC;
+
+-- api_audit (#91): one row per AGENTDEV_AUDIT line of the write API (write.go). Same rules as security_events:
+-- append-only, the API login has INSERT and SELECT only, rows go only after the retention in security_settings.
+CREATE TABLE IF NOT EXISTS api_audit (
+	id         bigserial PRIMARY KEY,
+	time       timestamptz NOT NULL,
+	action     text        NOT NULL,
+	agent      text        NOT NULL DEFAULT '',
+	result     text        NOT NULL,
+	username   text        NOT NULL DEFAULT '',
+	entry      jsonb       NOT NULL,
+	stored_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS api_audit_agent_id ON api_audit (agent, id DESC);
+CREATE INDEX IF NOT EXISTS api_audit_time ON api_audit (time);
+
+CREATE OR REPLACE FUNCTION api_audit_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' THEN
+		RAISE EXCEPTION 'api_audit is append-only';
+	END IF;
+	IF OLD.time > now() - (SELECT retention_days FROM security_settings) * interval '1 day' THEN
+		RAISE EXCEPTION 'api_audit: row is inside the retention period';
+	END IF;
+	RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS api_audit_append_only ON api_audit;
+CREATE TRIGGER api_audit_append_only BEFORE UPDATE OR DELETE ON api_audit
+	FOR EACH ROW EXECUTE FUNCTION api_audit_append_only();
+
+CREATE OR REPLACE FUNCTION api_audit_prune() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, public AS $$
+	WITH d AS (DELETE FROM public.api_audit
+		WHERE time < now() - (SELECT retention_days FROM public.security_settings) * interval '1 day' RETURNING 1)
+	SELECT count(*) FROM d
+$$;
+REVOKE ALL ON FUNCTION api_audit_prune() FROM PUBLIC;

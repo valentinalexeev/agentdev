@@ -23,10 +23,9 @@ type config struct {
 	ForgeURL  string // forge API for the live permission check of writes (#57)
 	AdminGrp  string // OIDC group that may create, delete and always pause agents
 	// security events (#70)
-	DatabaseURL   string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
-	DBMigrate     bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
-	WebhookURL    string // SIEM webhook output; empty: off. Instance config, never in git
-	WebhookSecret string // HMAC-SHA256 key for the webhook signature (Secret, never in git)
+	DatabaseURL string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
+	DBMigrate   bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
+	// SIEM outputs are read by outputsFromEnv (outputs.go) from the Secret agentdev-api-siem
 }
 
 func env(k, def string) string {
@@ -46,10 +45,8 @@ func main() {
 		ForgeURL:  os.Getenv("FORGE_URL"),
 		AdminGrp:  env("ADMIN_GROUP", "agentdev-admins"),
 
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		DBMigrate:     os.Getenv("DATABASE_MIGRATE") == "true",
-		WebhookURL:    os.Getenv("SECURITY_WEBHOOK_URL"),
-		WebhookSecret: os.Getenv("SECURITY_WEBHOOK_SECRET"),
+		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DBMigrate:   os.Getenv("DATABASE_MIGRATE") == "true",
 	}
 	if cfg.Issuer == "" || cfg.Audience == "" {
 		log.Fatal("OIDC_ISSUER and OIDC_AUDIENCE are required")
@@ -67,13 +64,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("security events: %v", err)
 	}
-	s := &sink{store: store}
-	if cfg.WebhookURL != "" {
-		if cfg.WebhookSecret == "" {
-			log.Fatal("SECURITY_WEBHOOK_URL is set but SECURITY_WEBHOOK_SECRET is empty: refusing to send unsigned events")
-		}
-		s.out = newWebhook(cfg.WebhookURL, []byte(cfg.WebhookSecret))
-		go s.out.Run(ctx)
+	// SIEM outputs (#70 webhook, #71 syslog over TLS and OTLP): outputs.go
+	outs, err := outputsFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("security outputs: %v", err)
+	}
+	s := &sink{store: store, outs: outs}
+	for _, o := range outs {
+		go o.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
@@ -95,7 +93,8 @@ func envInt(k string, def int) int {
 // openStore connects to Postgres and runs the migrations, or falls back to memory when no database is configured.
 func openStore(ctx context.Context, cfg config) (eventStore, error) {
 	if cfg.DatabaseURL == "" {
-		log.Printf("DATABASE_URL not set: security events are kept in memory only (lost on restart)")
+		log.Printf("DATABASE_URL not set: security events and the audit trail are kept in memory only (lost on restart)")
+		auditDB = &memAudit{}
 		return newMemStore(), nil
 	}
 	pg, err := newPgStore(ctx, cfg.DatabaseURL, cfg.DBMigrate)
@@ -107,11 +106,15 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 			if _, err := pg.Prune(ctx); err != nil {
 				log.Printf("prune security_events: %v", err)
 			}
+			if _, err := pg.PruneAudit(ctx); err != nil {
+				log.Printf("prune api_audit: %v", err)
+			}
 			if !sleepCtx(ctx, 24*time.Hour) {
 				return
 			}
 		}
 	}()
+	auditDB = pg
 	return pg, nil
 }
 
@@ -176,6 +179,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
+		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
 		mux.Handle("DELETE /api/agents/{name}", auditAuth("delete", auth(verify, http.HandlerFunc(wr.delete))))
 	}
 	return mux

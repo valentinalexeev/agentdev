@@ -171,8 +171,8 @@ cluster.
 
 ## MCP tools
 
-MCP tools give the agents of a project more tools through ContextForge. On GKE, the playbook does not deploy
-ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
+MCP tools give the agents of a project more tools through ContextForge. On `kind`, run.sh step 08 deploys
+ContextForge. On GKE, the Ansible playbook deploys it.
 
 ### Deploy the platform namespace
 
@@ -182,6 +182,30 @@ ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
+
+### Deploy the platform namespace on GKE
+
+The playbook deploys Postgres and ContextForge in `agentdev-platform` on each run. It makes the passwords and keys
+on the first run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+
+1. In the deployment repository, put the project specifications in a directory, for example `projects/`.
+2. In `ansible/instance.yml`, list the specifications:
+
+   ```yaml
+   mcp_projects:
+     - "{{ lookup('env', 'PWD') }}/projects/web.yaml"
+   ```
+
+   Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
+   List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
+3. Run the playbook (refer to `infra/ansible/README.md`).
+   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
+
+CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
+the connection from ContextForge.
+
+NOTE: The dry run (`--check`) does not run the sync.
 
 ### Add MCP servers to a project
 
@@ -193,9 +217,17 @@ NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated pa
        - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
    ```
 
-2. Run the sync: `scripts/mcp-sync.sh <spec>`
+2. Add the host of each server to the allow-list. Use `host` or `host:port`.
+   - On kind: `MCP_ALLOWED_HOSTS` in `config.env` (separate the hosts with spaces).
+   - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
+
+   CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
+   A bad server can put instructions in them (prompt injection). Refer to R46 in `docs/security.md`.
+
+   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
+3. Run the sync: `scripts/mcp-sync.sh <spec>`
    The bootstrap also runs this script.
-3. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
+4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
@@ -208,6 +240,7 @@ agents. The bootstrap tells you the cause.
 
 You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
 
+- It stops if a server host is not in the allow-list.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.
@@ -218,7 +251,20 @@ When you remove an agent from `agents:` (or remove `mcp:`), the next sync delete
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
 Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
-applies the NetworkPolicies. Local `kind` (kindnet) does not.
+applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
+(kindnet) does not.
+
+To make sure that GKE applies the NetworkPolicies, do these steps:
+
+NOTE: The test pod gets the image `curlimages/curl` from Docker Hub. The cluster must have access to the internet.
+
+1. Start a test pod in the namespace `default`:
+   `kubectl run np-test --rm -it --restart=Never --image=curlimages/curl -- curl -m 5 http://contextforge.agentdev-platform:4444/health`
+2. Make sure that the command stops with a timeout.
+   If you get a response, the cluster does not apply NetworkPolicies.
+3. Make sure that agent pods cannot connect to Postgres:
+   `kubectl -n coding-agents exec agent-<name>-0 -c agent -- bash -c 'timeout 3 bash -c "</dev/tcp/platform-db.agentdev-platform/5432" && echo open || echo closed'`
+4. Make sure that the command shows `closed`.
 
 ## Identity (authentik)
 
@@ -323,6 +369,7 @@ NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` mus
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
+| `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
 | `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). Every signed-in user sees every event for now; restriction to projects with write access is #57 |
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
@@ -401,11 +448,20 @@ The owner decided this rule on #57. The API checks the permission on the forge a
 
 The API writes one line for each change request, also for a refused request. The line starts with `AGENTDEV_AUDIT`.
 
-1. Run `kubectl -n agentdev-platform logs deploy/agentdev-api | grep AGENTDEV_AUDIT`
-   Each line has `time`, `who` (`sub`, `username`, `forgeUser`, `groups`), `action`, `agent`, `result` (`ok`,
-   `denied`, `invalid`, `error`), `reason`, `request`, `before`, `after` and `grant`.
+The API also keeps each line in the table `api_audit` of the platform Postgres (#91). The API cannot change or
+delete these rows. The rows stay for `SECURITY_DB_RETENTION_DAYS` (default 365 days).
 
-NOTE: The log of the pod is lost when the pod stops. A permanent store for the audit is #82.
+1. Get a token of a user in `agentdev-admins`.
+2. Run `curl -H "Authorization: Bearer <token>" https://<api host>/api/audit?limit=50`
+   The answer has `entries`. Each entry has `id` and `entry`, the JSON of one audit line.
+3. To see the next page, add the value of `next_cursor` as `cursor=<value>` to the URL.
+
+Each line has `time`, `who` (`sub`, `username`, `forgeUser`, `groups`), `action`, `agent`, `result` (`ok`,
+`denied`, `invalid`, `error`, `unauthenticated`), `reason`, `request`, `before`, `after` and `grant`.
+
+NOTE: You can also read the lines in the log of the pod:
+`kubectl -n agentdev-platform logs deploy/agentdev-api | grep AGENTDEV_AUDIT`. The log of the pod is lost when the
+pod stops.
 
 ## Agents as resources (operator)
 
@@ -594,6 +650,80 @@ container. Claude can write such an event, so do not trust its text.
 NOTE: A SIEM can also read `GET /api/security-events` with the `cursor` parameter, or read the cluster logs with the
 filter `AGENTDEV_SECURITY_EVENT`.
 
+### Send the security events to a syslog server
+
+The API can send each new event to a syslog server over TLS (RFC 5424 and RFC 5425). The API always does a check of
+the certificate of the server.
+
+WARNING: Do not put the keys or the certificates in git. Keep them only in the instance secrets.
+
+1. Get the address of the syslog server, for example `siem.example.com:6514`.
+2. Add the address to the file `.secrets/platform/siem-webhook`:
+   ```
+   SECURITY_SYSLOG_ADDR=siem.example.com:6514
+   ```
+3. If a private CA signed the certificate of the server, add the CA certificate (PEM) to the same file:
+   `SECURITY_SYSLOG_CA=-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----`
+   Write the PEM on one line. Write `\n` for each line break.
+4. If the name in the certificate is not the name in the address, add `SECURITY_SYSLOG_SERVER_NAME` to the same
+   file.
+5. If the server requires a client certificate, add `SECURITY_SYSLOG_CLIENT_CERT` and `SECURITY_SYSLOG_CLIENT_KEY`
+   (PEM) to the same file.
+6. Run run.sh step 10: `./run.sh 10`
+   The API starts again. The API log shows no `security outputs` error.
+
+NOTE: When the syslog server is not available, the API stops all syslog messages. The API tries each message 4 times.
+The time between the tries is a maximum of 30 seconds. Then the API writes `syslog: event <id> not delivered` in its
+log. When the queue of an agent is full, the API writes `syslog queue of agent <name> full` in its log. The events
+stay in the Postgres table.
+
+NOTE: Each message has facility 13 (log audit). The severity is 5 (notice) for `low`, 4 (warning) for `medium`
+and 2 (critical) for `high`. The structured data `agentdev@32473` has the fields. The message text is the event in
+JSON.
+
+### Send the security events to an OpenTelemetry collector
+
+The API can send each new event as an OTLP log record over HTTPS.
+
+WARNING: Do not put the API key of the collector in git. Keep it only in the instance secrets.
+
+1. Add the URL of the collector to the file `.secrets/platform/siem-webhook`:
+   ```
+   SECURITY_OTLP_URL=https://collector.example.com:4318/v1/logs
+   ```
+2. If the collector requires an API key, add the headers to the same file:
+   `SECURITY_OTLP_HEADERS=Authorization=Bearer%20<key>`
+3. If a private CA signed the certificate of the collector, add `SECURITY_OTLP_CA` (PEM) to the same file.
+   If the name in the certificate is not the name in the URL, add `SECURITY_OTLP_SERVER_NAME` to the same file.
+4. Run run.sh step 10: `./run.sh 10`
+   The API starts again. The API log shows no `security outputs` error.
+
+NOTE: The API accepts only an `https://` URL for the webhook and for OTLP. You can use the webhook, syslog and OTLP
+at the same time.
+
+NOTE: On GCP (Ansible), do not use the file `.secrets/platform/siem-webhook`. Write the addresses in `instance.yml`
+under `security.siem`. Write the secret values in the Secret Manager secret `security-siem`. Refer to
+`infra/ansible/README.md`.
+
+### Do a check of the hash chain
+
+Each event has the fields `prev` and `chain`. Use them on the SIEM to find events that are missing or changed.
+
+1. For each agent, keep the `chain` value of the last event that you received.
+2. When a new event of that agent arrives, compare its `prev` with the kept value.
+   If the values are not equal, an event is missing. Use `GET /api/security-events` to find it.
+3. Calculate SHA-256 over `prev`, a newline and the canonical JSON of the event (see `docs/security-model.md`,
+   "Hash chain").
+4. Compare the result with `chain`.
+   If the values are not equal, somebody changed the event.
+5. Keep the new `chain` value.
+
+NOTE: The chain cannot show that somebody deleted the newest events of an agent. Only the copy on the SIEM shows
+this.
+
+NOTE: The events from before issue #71 have an empty `prev` and `chain`. After the API deletes old events, the
+first event of an agent can have a `prev` that you do not have. This is correct.
+
 ### Reference: settings
 
 | Setting | Default | Where |
@@ -604,6 +734,26 @@ filter `AGENTDEV_SECURITY_EVENT`.
 | `SECURITY_RATE_PER_MIN` (events per minute per container) | 10 | `config.env`; Ansible `security.rate_per_min` |
 | `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `config.env`; Ansible `security.rate_burst` |
 | `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env`; `./run.sh 10` writes it to the database |
+
+SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All keys are optional.
+
+| Key | Secret | kind (`./run.sh 10`) | GKE (Ansible) |
+|---|---|---|---|
+| `SECURITY_WEBHOOK_URL` | no | `.secrets/platform/siem-webhook` | `security.siem.webhook_url` |
+| `SECURITY_WEBHOOK_SECRET` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_SYSLOG_ADDR` | no | `.secrets/platform/siem-webhook` | `security.siem.syslog_addr` |
+| `SECURITY_SYSLOG_SERVER_NAME` | no | `.secrets/platform/siem-webhook` | `security.siem.syslog_server_name` |
+| `SECURITY_SYSLOG_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_URL` | no | `.secrets/platform/siem-webhook` | `security.siem.otlp_url` |
+| `SECURITY_OTLP_SERVER_NAME` | no | `.secrets/platform/siem-webhook` | `security.siem.otlp_server_name` |
+| `SECURITY_OTLP_HEADERS` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+| `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
+
+NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. At this
+time, the Ansible playbook does not install the API on GKE (issue #105). The playbook writes the Secret, but no
+API reads it yet.
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
@@ -744,6 +894,26 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 1. Read `CHANGELOG.md`.
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
+
+### Upgrade the local installation
+
+Do this task after you pull a new `main` into an existing `kind` cluster.
+
+1. Read the **BREAKING** entries in `CHANGELOG.md` to find the run.sh steps.
+
+CAUTION: Do not run only step 10. The API needs the CRDs from step 12, and the agent pods need the forge image from
+step 06. If you remove Docker images (for example with `docker image prune`), run step 06 again.
+
+2. Run these steps in this sequence: `./run.sh 06 10 12`
+   - Step 06 builds the worker, forge and router images and loads them into `kind`.
+   - Step 10 builds the API and applies the database grants.
+   - Step 12 builds the operator and applies the CRDs, for example `SecurityEvent`.
+3. Make sure that the agent pods show `2/2 Running`:
+   `kubectl --context kind-agentdev -n coding-agents get pods`
+   The agent pods start with the new worker and forge images.
+
+NOTE: Step 06 runs step 12 only when the operator is not installed. On an existing cluster, step 12 must come after
+step 06 to update the CRDs.
 
 ## Remove agentdev
 
