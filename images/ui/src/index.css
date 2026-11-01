@@ -67,3 +67,7 @@ pre.untrusted { margin: .25rem 0 0; padding: .25rem .4rem; max-height: 8rem; ove
 /* usage limits (#93) */
 .banner { background: #fff4d6; border: 1px solid #e0b84d; padding: .5rem .75rem; border-radius: 4px; }
 .phase.usage-paused { background: #fff4d6; color: #7a5a00; }
+.warning { color: #8a5a00; }
+dialog dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+dialog dd { margin: 0; overflow-wrap: anywhere; }
+dialog pre.untrusted { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
