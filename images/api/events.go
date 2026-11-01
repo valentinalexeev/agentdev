@@ -41,6 +41,9 @@ type securityEvent struct {
 	Pod       string    `json:"pod,omitempty"`
 	Container string    `json:"container,omitempty"`
 	Hash      string    `json:"hash"`
+	// per-agent hash chain (#71, chain.go): prev is the chain value of the agent's previous event ("" for the first)
+	Prev  string `json:"prev"`
+	Chain string `json:"chain"`
 }
 
 type eventFilter struct {
@@ -52,7 +55,8 @@ type eventFilter struct {
 
 // eventStore is the security_events table (pgStore) or an in-memory copy (tests, no database configured).
 type eventStore interface {
-	// Insert appends e; false when an event with the same hash is already stored. Sets e.ID.
+	// Insert appends e and links it into the agent's hash chain; false when an event with the same hash is already
+	// stored. Sets e.ID, e.Prev and e.Chain.
 	Insert(ctx context.Context, e *securityEvent) (bool, error)
 	// List returns matching events, newest first.
 	List(ctx context.Context, f eventFilter) ([]securityEvent, error)
@@ -115,18 +119,39 @@ func newPgStore(ctx context.Context, url string, migrate bool) (*pgStore, error)
 	return &pgStore{db: db}, nil
 }
 
+// Insert reads the agent's last chain value and inserts the linked row in one transaction. A transaction-scoped
+// advisory lock per agent serialises inserts of the same agent, also across API replicas.
 func (s *pgStore) Insert(ctx context.Context, e *securityEvent) (bool, error) {
-	err := s.db.QueryRow(ctx, `INSERT INTO security_events (schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (hash) DO NOTHING RETURNING id`,
-		e.Schema, e.Time, e.Agent, e.Job, e.Source, e.Untrusted, e.Rule, e.Severity, e.Action, e.Pod, e.Container, e.Hash).Scan(&e.ID)
+	e.Time = e.Time.Truncate(time.Microsecond) // timestamptz precision: the chain must cover the stored value
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('security_events:' || $1))`, e.Agent); err != nil {
+		return false, err
+	}
+	var prev string
+	err = tx.QueryRow(ctx, `SELECT chain FROM security_events WHERE agent = $1 ORDER BY id DESC LIMIT 1`, e.Agent).Scan(&prev)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	link(prev, e)
+	err = tx.QueryRow(ctx, `INSERT INTO security_events (schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash, prev, chain)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (hash) DO NOTHING RETURNING id`,
+		e.Schema, e.Time, e.Agent, e.Job, e.Source, e.Untrusted, e.Rule, e.Severity, e.Action, e.Pod, e.Container, e.Hash,
+		e.Prev, e.Chain).Scan(&e.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, error) {
-	q := `SELECT id, schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash FROM security_events
+	q := `SELECT id, schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash, prev, chain FROM security_events
 		WHERE ($1 = '' OR agent = $1) AND ($2 = '' OR severity = $2) AND time >= $3 AND ($4 = 0 OR id < $4)
 		ORDER BY id DESC LIMIT $5`
 	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit)
@@ -138,7 +163,7 @@ func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, err
 	for rows.Next() {
 		var e securityEvent
 		if err := rows.Scan(&e.ID, &e.Schema, &e.Time, &e.Agent, &e.Job, &e.Source, &e.Untrusted, &e.Rule, &e.Severity, &e.Action,
-			&e.Pod, &e.Container, &e.Hash); err != nil {
+			&e.Pod, &e.Container, &e.Hash, &e.Prev, &e.Chain); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -189,6 +214,15 @@ func (m *memStore) Insert(_ context.Context, e *securityEvent) (bool, error) {
 		return false, nil
 	}
 	m.seen[e.Hash] = true
+	e.Time = e.Time.Truncate(time.Microsecond)
+	prev := ""
+	for i := len(m.rows) - 1; i >= 0; i-- {
+		if m.rows[i].Agent == e.Agent {
+			prev = m.rows[i].Chain
+			break
+		}
+	}
+	link(prev, e)
 	e.ID = int64(len(m.rows) + 1)
 	m.rows = append(m.rows, *e)
 	return true, nil

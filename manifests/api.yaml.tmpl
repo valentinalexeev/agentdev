@@ -54,7 +54,7 @@ spec:
         # and retention are set by 10-api.sh as agentdev_owner, the API only inserts, reads and calls the prune function)
         - name: DATABASE_URL
           valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
-        # optional SIEM webhook output (#70): SECURITY_WEBHOOK_URL and SECURITY_WEBHOOK_SECRET, instance config only
+        # optional SIEM outputs, instance config only: webhook (#70), syslog over TLS and OTLP (#71); keys in outputs.go
         envFrom: [{secretRef: {name: agentdev-api-siem, optional: true}}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: http, containerPort: 8080}]
