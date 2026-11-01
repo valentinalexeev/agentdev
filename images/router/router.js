@@ -55,6 +55,29 @@ function people(p) {
   return out;
 }
 
+// GitHub (#2): all agents act as one App bot, so logins do not say which agent is meant. The agent names come from
+// the labels agent:<name> on the issue or PR and from the PR head branch agent/<name>/...; names are checked.
+const agentName = /^[a-z0-9][a-z0-9-]{0,40}$/;
+function agentsOf(p) {
+  const out = new Set();
+  const item = p.issue || p.pull_request || {};
+  const labels = [...(item.labels || []), ...(p.label ? [p.label] : [])];
+  for (const l of labels) {
+    const m = /^agent:(.+)$/.exec((l && l.name) || '');
+    if (m && agentName.test(m[1])) out.add(m[1]);
+  }
+  const ref = (p.pull_request && p.pull_request.head && p.pull_request.head.ref) || '';
+  const m = /^agent\/([^/]+)\//.exec(ref);
+  if (m && agentName.test(m[1])) out.add(m[1]);
+  // a review thread or a check run on an agent's PR names the branch in pull_requests[] / check_suite
+  for (const pr of (p.check_run && p.check_run.pull_requests) || (p.check_suite && p.check_suite.pull_requests) || []) {
+    const r = /^agent\/([^/]+)\//.exec((pr.head && pr.head.ref) || '');
+    if (r && agentName.test(r[1])) out.add(r[1]);
+  }
+  return out;
+}
+const routingFacts = (forge, p) => (forge === 'github' ? agentsOf(p) : people(p));
+
 function live() {
   const now = Date.now();
   for (const [k, r] of registry) if (now - r.seen > ttlMs) { registry.delete(k); log(`expired ${k}`); }
@@ -182,7 +205,8 @@ http.createServer((req, res) => {
       stats.delivered++;
       let p; try { p = JSON.parse(body); } catch { return json(res, 400, { error: 'bad json' }); }
       const repo = p.repository && p.repository.full_name;
-      const who = people(p);
+      // the user an agent registered with: its forge login on Gitea, its agent name on GitHub
+      const who = routingFacts(f.forge, p);
       const targets = live().filter((r) => r.forge === f.forge && r.repos.has(repo) && who.has(r.user));
       if (!targets.length) {
         // nobody live: maybe a stopped agent is responsible (#35)

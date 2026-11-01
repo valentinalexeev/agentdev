@@ -14,6 +14,10 @@ github_app:
   name: my-agentdev                              # unique on GitHub
   owner: my-org                                  # omit to own it with your personal account
   public_url: https://agentdev.example.com       # https://<ingress.webhook_host>; webhook URL = <public_url>/hook
+  app_id: 1012345                                # from .secrets/github-app/app-id after `convert` (not secret)
+  # installation_id: 51234567                    # optional; looked up from the agent's repo when omitted
+# Agents on GitHub get work by the label agent:<name> on an issue (an App cannot be assigned). Agent names:
+# lowercase letters, digits, - . All repos of one agent must belong to one owner (one App installation).
 # Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
 # api:
