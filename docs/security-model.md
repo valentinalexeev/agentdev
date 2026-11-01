@@ -152,6 +152,7 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   `curl -m3 http://169.254.169.254/` and `env -u HTTPS_PROXY -u https_proxy curl -m5 https://example.com` fail,
   `curl https://api.anthropic.com` and a `git ls-remote` of the agent's repository work, and a refused host shows up as
   a SecurityEvent. GKE serves metadata to Workload Identity pods through the node, so the first check matters.
+  Scripted in `scripts/e2e-gke-security.sh` ([e2e-security.md](e2e-security.md), #123).
 - Signals: each refused request is one `AGENTDEV_SECURITY_EVENT` line (`rule` `egress-host`, `medium`) in the proxy
   log, with the client pod IP. The operator follows the proxy pod like an agent pod and records the event for the
   agent whose running pod has that IP: `source` `egress`, `untrusted` false (the proxy wrote it). Egress refusals do

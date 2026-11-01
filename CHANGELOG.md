@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- End-to-end security checklist (#123): `scripts/e2e-gke-security.sh` checks a running instance (GKE, or kind
+  with `--kind`) for every "pending GKE e2e" control: no credentials in the agent container, egress default-deny and
+  the metadata server, Claude proxy only, usage reports refused, approvals and executors out of the agent's reach,
+  HTTPS/HSTS, API permission checks, and the #2 GitHub flow (issue, PR with the owner as reviewer, review reply).
+  Read-only or self-cleaning, PASS/FAIL per check, exit 1 on a FAIL. Docs: `docs/e2e-security.md`.
 - GKE parity with run.sh (#121): the playbook fills every value of `manifests/api.yaml.tmpl` (`APPROVALS`,
   `APPROVAL_DENY_ACCOUNTS` from the new `api.approval_deny_accounts`, `USAGE_FIVE_HOUR`, `USAGE_WEEKLY`; before,
   they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web

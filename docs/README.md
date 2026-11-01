@@ -9,6 +9,7 @@ issues assigned to it, opens pull requests and reacts to review feedback. People
 | [User guide](user-guide.md) | people working with agents | writing issues, reviewing agent PRs, asking questions, what to expect |
 | [Install](install.md) | admins | local evaluation on kind, production on GCP/GKE |
 | [Administration](admin.md) | admins | projects, agents, credentials, concurrency, scale to zero, upgrades, removal |
+| [E2E security checklist](e2e-security.md) | owner | scripted security checks on a real GKE instance, before each release |
 | [Troubleshooting](troubleshooting.md) | admins | symptoms, where to look, fixes |
 | [Writing the manuals](writing.md) | contributors | ASD-STE100 rules and the project word list for the manuals |
 | [Decision records](adr/) | maintainers | architecture decisions (ADR) |
