@@ -12,7 +12,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web
   UI like `rollout status` in run.sh, and `templates/render.j2` now stops on a placeholder that the playbook does
   not fill. New test `tests/render_values.yml`. Docs: `docs/admin.md` "Reference: run.sh steps and the GKE playbook",
-  upgrade step. New risk R84. To apply: run the playbook `deploy.yml`.
+  upgrade step. New risk R92. To apply: run the playbook `deploy.yml`.
 - Risk id check (#126): `scripts/check-risk-ids.sh` fails when `docs/security.md` defines a risk id twice or a file
   refers to an id the register does not define. Numbering rule added to `docs/security.md`. Stale references to the
   MCP risks fixed (now R51, R52, in `config.env`, `instance.yml.example` and an older changelog entry).
