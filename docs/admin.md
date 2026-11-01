@@ -1572,6 +1572,15 @@ At the first start, the script makes the chat account `<project>-chat` of the pr
 - Its token has the scope `read:repository, write:issue`.
 - The token is in `.secrets/<project>-chat.token` and in the Secret `chat-<project>`.
 
+The session pod has no Claude credential (#118):
+
+- Claude Code sends the model calls to `claude-proxy` (`ANTHROPIC_BASE_URL`).
+- The session uses the proxy key of one agent of the project (`CHAT_AGENT`). The budget and the usage of the session
+  count for this agent.
+- The NetworkPolicy `agent-egress` applies to the session pod. The pod cannot connect to `api.anthropic.com`. Other
+  hosts are available only through `egress-proxy`.
+- The session needs the credential proxy (`CLAUDE_PROXY=true` on `kind`, `claude_proxy: true` on GKE).
+
 ### Show the sessions that run
 
 1. Run `kubectl -n coding-agents get jobs -l app=agent-chat`.
@@ -1584,8 +1593,8 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 |---|---|---|
 | `IDLE_SECONDS` | 1800 | The session stops after this time with no person connected. |
 | maximum time | 8 h | `activeDeadlineSeconds` in the template. This applies also while a person is connected. |
-| `CLAUDE_SECRET` | `claude-shared` | The Claude credential of the session. The credential is visible in the session pod. |
-| `REMOTE_CONTROL` | false | Also make the session available to the Claude app (#26). This must have a full claude.ai login: run `/login` in the session. API keys and `claude setup-token` tokens do not operate (inference-only). |
+| `CHAT_AGENT` | the first agent in `agents` of the project file | The agent for the Claude budget and usage of the session. The session uses the proxy key of this agent (`agent-<name>-proxy`). |
+| `REMOTE_CONTROL` | false | Not available. The Claude app (#26) must have a full claude.ai login in the session pod, and the session pod has no Claude credential (#118). The script stops when the value is `true`. |
 | `IMAGE_PULL_POLICY` | Never | Use `IfNotPresent` on a cluster that is not `kind`. |
 
 If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`

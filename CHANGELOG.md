@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- Interactive sessions (#118, follow-up of #66, R11): `scripts/agent-chat.sh` no longer mounts a Claude Secret
+  (`CLAUDE_SECRET`, default `claude-shared`) in the session pod. The session calls `claude-proxy`
+  (`ANTHROPIC_BASE_URL`) with the proxy key of one agent of the project (`CHAT_AGENT`, default the first agent in the
+  project file), so the budget and the usage count for that agent. The NetworkPolicies `agent-egress`, `egress-proxy`
+  and `claude-proxy` now also select `app=agent-chat`: the session cannot reach `api.anthropic.com` directly and uses
+  `egress-proxy` for other hosts. Same manifests on `kind` and GKE. **BREAKING:** `CLAUDE_SECRET` is removed;
+  `REMOTE_CONTROL=true` is refused (it needs a claude.ai login in the pod); sessions need `CLAUDE_PROXY=true`.
+  To apply: run `./run.sh 06` (kind) or the playbook (GKE) to update the NetworkPolicies, then start new sessions.
+
 ### Deprecated
 - Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
   step per PR. New playbook `infra/ansible/kind.yml` with the role `kind_cluster`; step 01 (`01-cluster.sh`) is now a
