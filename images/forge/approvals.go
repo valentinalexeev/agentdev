@@ -13,8 +13,8 @@ package main
 // fails closed); the record stays pending and decidable, and the next ask with the same fingerprint uses its decision.
 // A record becomes void when it is no longer needed: the job ends (POST /job-done from the loop), a newer push of the
 // same branch and paths supersedes it, the issue or PR closes, or the pod is gone (the last two found by the API).
-// On a GitHub forge the API does not decide yet (#87) and so does not check the issue/PR state either: a GitHub record
-// becomes void only by job end, supersede or the pod-gone check. A void the sidecar cannot deliver (API unreachable,
+// On GitHub (#87) the calls go through the driver (GitHub API, installation token), the requester is the App bot and
+// the job check uses the label agent:<name>; the API decides and checks the issue/PR state as on Gitea. A void the sidecar cannot deliver (API unreachable,
 // 3 attempts) leaves the record pending until the pod-gone check; a pod that serves several jobs keeps it until restart.
 // The sidecar edits its forge comment on each change of state.
 //

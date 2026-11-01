@@ -540,8 +540,24 @@ On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 NOTE: Without the Secret, each change that needs the forge gives 503.
 
-NOTE: At this time, the API can only ask a Gitea forge (#87). On GKE with GitHub, each change that needs the forge
-gives 503. Members of `agentdev-admins` can still pause agents.
+#### GitHub repositories
+
+For an agent on GitHub, the API asks GitHub for the permission (#87). The API uses the GitHub App of the agents. It
+makes installation tokens that can only read (metadata, issues, pull requests).
+
+- On GKE with `forge_kind: github`, the playbook puts `github_app.app_id` and the Secret Manager secret
+  `github-app-private-key` in the Secret `agentdev-api-github`. You do not do other steps.
+- On `kind` with `FORGE_KIND=github`, `./run.sh 10` puts `.secrets/github-app/app-id` and
+  `.secrets/github-app/private-key.pem` in the Secret `agentdev-api-github`.
+- If you do not use the App, you can put a token in the Secret `agentdev-api-github` with the key
+  `GITHUB_API_TOKEN`. Use a fine-grained token that can only read metadata, issues and pull requests of the agent
+  repositories. Then restart the API.
+
+The API uses the same table for GitHub as for Gitea (refer to "Reference: who can change an agent"). The GitHub
+roles `maintain` and `write` give write access. The roles `triage` and `read` give read access.
+
+NOTE: If the API cannot ask GitHub, each change that needs the forge gives 503. Members of `agentdev-admins` can
+still pause, add and remove agents.
 
 ### Add an agent through the API
 
@@ -578,8 +594,8 @@ The owner decided this rule on #57. The API checks the permission on the forge a
 - The API reads the groups from the `groups` claim of the token (scope `profile`).
 - If the API cannot reach the forge, it refuses the change (503). Only the group `agentdev-admins` can then pause,
   add and remove agents.
-- The permission check of the API is for Gitea only. For an agent on GitHub, only `agentdev-admins` can pause, add
-  and remove the agent.
+- For an agent on GitHub, the API asks GitHub. Refer to "GitHub repositories" in "Give the API access to the
+  forge".
 - The API sends requests without a bearer token back with 401. The API does not use cookies.
 - The Role of the API can read, patch, add and delete Agent objects in the agents namespace only. It cannot read
   Secrets.
@@ -853,9 +869,14 @@ default. To turn on approvals on kind, do the steps that follow.
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`).
 
 NOTE: Agents and the forge account of the API cannot make a decision. To exclude other service accounts (for
-example the account of the router or of a GitHub App), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
+example the account of the router), set `APPROVAL_DENY_ACCOUNTS` to a list of forge logins.
 
-NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision (issue #87).
+NOTE: On GitHub, all agents write as the bot account of the GitHub App (`<app-slug>[bot]`). The API always puts
+this account in the deny list. The API also ignores all comments of bot accounts. You do not add the App bot to
+`APPROVAL_DENY_ACCOUNTS`.
+
+NOTE: On GitHub, the API needs the GitHub credential to make a decision (refer to "GitHub repositories"). Without
+it, a GitHub request stays open until it becomes void.
 
 NOTE: Approval objects stay in the cluster for 90 days (`APPROVAL_RETENTION_DAYS`). Use
 `kubectl -n coding-agents get approvals` to see them.

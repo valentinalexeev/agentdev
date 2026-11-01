@@ -206,8 +206,8 @@ The agent does not make a second request for the same action.
 NOTE: A request becomes void when the agent does not need it. For example, the job ends, the issue closes, or a new
 commit replaces the old commit. The comment then shows "void". A decision on a void request has no effect.
 
-NOTE: At this time, approvals operate only on Gitea. On a GitHub repository, nobody can make a decision. The
-request stays open until it becomes void, and the agent cannot do the action (issue #87).
+NOTE: On GitHub, you need the role `write`, `maintain` or `admin` on the repository to make a decision. Comments
+of bot accounts have no effect.
 
 NOTE: The system removes known types of passwords and tokens from the request text. Do not trust that it removes
 all secrets.

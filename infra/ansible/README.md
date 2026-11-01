@@ -56,7 +56,9 @@ is #114, so any OIDC provider with a public client `agentdev` and a `groups` cla
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
 (`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
-The API checks permissions on Gitea only (#87); with `forge_url` on GitHub only `agentdev-admins` can change agents.
+With `forge_kind: github` the API checks GitHub permissions and decides approvals with the agents' GitHub App
+(#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
+API mints only read-only installation tokens.
 
 ## Public HTTPS entry point (#120)
 The `ingress` role runs last when `instance.yml` sets `ingress.host`. It applies one GKE Gateway
