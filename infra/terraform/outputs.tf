@@ -7,7 +7,8 @@ output "get_credentials" {
 }
 
 output "image_registry" {
-  value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
+  description = "Artifact Registry path; null when create_artifact_registry is false (images then come from GHCR, the Ansible image_registry)."
+  value       = one(google_artifact_registry_repository.images[*].repository_id) == null ? null : "${var.region}-docker.pkg.dev/${var.project_id}/${one(google_artifact_registry_repository.images[*].repository_id)}"
 }
 
 output "webhook_ip" {

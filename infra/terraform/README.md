@@ -10,7 +10,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
 | `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand: router, operator, UI |
 | `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes` |
-| Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions |
+| Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | public entry point: GKE Gateway of the Ansible role `ingress` (#120) |
 | Managed certificate, SSL policy | only with `public_hosts`: Google-managed certificate for those names, TLS 1.2+ `MODERN` (#120) |

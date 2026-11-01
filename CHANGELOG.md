@@ -6,6 +6,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
+  the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
+  the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
+  `image_registry` output is `null` then. Switching an existing deployment to `false` destroys the (unused) repo.
+
 ### Removed
 - Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
   (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under
