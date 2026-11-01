@@ -25,6 +25,7 @@
 | The bootstrap stops with a message about branch protection. | The repository has a rule already. The bootstrap keeps the rule. | 1. Keep the rule, or run the bootstrap again with `REPLACE_BRANCH_PROTECTION=1`. |
 | The agent log shows `push to agent/<name>/... failed: push refused: ... protected path`. | The change touches `.github/workflows/` (or a different `PROTECTED_PATHS` entry). | No procedure. This is the design (#64): a person makes that change. The issue shows "could not produce a change". |
 | The agent log shows `AGENTDEV_SECURITY_EVENT` lines. | A guardrail stopped an action. The JSON gives the rule and the action. | 1. For `high`, read the issue or the review of the job and look for an injection attempt. 2. Also examine `medium` git-config and hook events after a Claude run. |
+| The agent does not start new work. The log shows `subscription usage limit: new runs paused`. | The subscription is at the usage limit, or Claude refused a run because of its rate limit. | 1. On the **Usage** page, find the reason and the end time. 2. Wait for the end time. Or an administrator increases the global usage limit. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
 ## Executors

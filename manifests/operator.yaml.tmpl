@@ -21,6 +21,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 # approvals (#67, #69): create from the forge sidecar's request line and for executor applies, prune; the decision
 # (status) is the API's only
 - {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch, create, delete]}
+# subscription usage limits (#93): state and pauses (written), thresholds set through the API (read only)
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get, update]}
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -103,6 +106,8 @@ spec:
         - {name: EXECUTOR_POLL_SECONDS, value: "${EXECUTOR_POLL_SECONDS}"}
         - {name: EXECUTOR_RETENTION_DAYS, value: "${EXECUTOR_RETENTION_DAYS}"}
         - {name: EXECUTOR_APPLY_START_MINUTES, value: "${EXECUTOR_APPLY_START_MINUTES}"}
+        - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
+        - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

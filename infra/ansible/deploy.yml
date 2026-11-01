@@ -198,6 +198,8 @@
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
             EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
             EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
+            USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+            USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
           replace: []
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager

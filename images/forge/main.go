@@ -4,6 +4,7 @@
 //	/api/v1/...   allow-listed Gitea REST calls for the agent's own repo (issues, comments, PRs, reviews)
 //	POST /sync    fetch the forge into the sidecar's own bare mirror (only the sidecar mounts it); answers a git bundle
 //	POST /push    body = a git bundle; pushed to agent/<FORGE_USER>/* only, protected paths refused, size-limited
+//	POST /usage   the loop's usage report after a Claude run, printed as the AGENTDEV_USAGE line (#93)
 //	POST /idle    ask the router to stop this agent (scale to zero), with the wake token held here
 //
 // and it receives the router's wake calls on the pod port (webhook listener, formerly webhook-listener.js).

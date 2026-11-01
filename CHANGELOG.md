@@ -65,6 +65,29 @@ While the version is `0.x`, breaking changes bump MINOR.
   UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
   `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80. Kind only for now: the GKE
   playbook does not deploy agentdev-api and stops if `approvals.enabled` is `true`.
+- Subscription usage limits (#93, incident #92): after each Claude run the worker prints an `AGENTDEV_USAGE {json}`
+  line (tokens, 5-hour and weekly rate-limit windows from the CLI's `rate_limit_event`; the worker now uses
+  `--output-format stream-json`). The operator sums them per Claude credential Secret and, when a window reaches its
+  threshold (defaults 80 % 5-hour, 90 % weekly), pauses **new** runs of every agent on that subscription until the
+  window resets (running jobs finish; automatic resume, also without the operator). A run refused by Claude's rate
+  limit pauses that agent at once and, through the operator, every agent on the same subscription (reset time from
+  the CLI, else 1 h) and keeps the work for a retry instead of a
+  "could not produce a change" comment. Each pause is a `SecurityEvent` (source `operator`, rule
+  `usage-five-hour|usage-weekly|usage-rate-limited`, severity low; one per agent, the action names the
+  subscription). Agents page: banner and a `usage-paused` state while a pause lasts. Default thresholds:
+  `USAGE_FIVE_HOUR`/`USAGE_WEEKLY` (`config.env`, Ansible `usage.five_hour`/`usage.weekly`). Effective limit of an
+  agent: the lowest over all its repositories (API and operator). State in ConfigMap `agentdev-usage` (mounted
+  read-only into agent pods), thresholds in `agentdev-usage-settings`. API: `GET /api/usage`,
+  `PUT /api/usage/global` (agentdev admins), `PUT /api/usage/projects/{owner}/{repo}` (write access; only lower than
+  global, clamped again by the operator); every attempt audited as `set-limits`. Web UI: **Usage** page. RBAC: the
+  operator gets get/update on `agentdev-usage` and get on `agentdev-usage-settings`; the API gets configmap create
+  and get/update on `agentdev-usage-settings`, get on `agentdev-usage`.
+  Security review of #102: usage reports go through the forge sidecar (`POST /usage`, schema/range check, rate limit)
+  and the operator reads usage only from the `forge` container (a usage line from the agent container raises
+  `usage-line-forged`); a report can only raise or extend a pause, never lift or shorten it, and one report pauses
+  for at most 5 h; anomalies raise `usage-anomaly`; reset times never come from model text; values from JSON and files
+  are checked as integers before bash arithmetic; `run_claude` fails closed on output that is not stream-json;
+  `GET /api/usage` shows non-admins only the projects and agents they can write to (risks R46, R47).
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are

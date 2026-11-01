@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func sh(t *testing.T, dir string, args ...string) string {
@@ -528,4 +530,44 @@ func TestSecurityEvents(t *testing.T) {
 			t.Fatalf("got %+v", ev)
 		}
 	})
+}
+
+// review #102: the sidecar is the only usage channel; it checks the schema, the ranges and the rate
+func TestUsageReport(t *testing.T) {
+	var out, ev bytes.Buffer
+	oldU, oldE := usageOut, eventOut
+	usageOut, eventOut = &out, &ev
+	t.Cleanup(func() { usageOut, eventOut = oldU, oldE })
+	s := newServer(&Config{ForgeUser: "alice", AgentName: "alice"})
+	h := s.routes()
+	reset := time.Now().Add(2 * time.Hour).Unix()
+	good := fmt.Sprintf(`{"job":"issue-1","input_tokens":5,"output_tokens":2,"rate_limited":false,"resets_at":0,"five_hour":{"utilization":0.4,"resetsAt":%d},"seven_day":null}`, reset)
+	if rec := call(t, h, "POST", "/usage", good); rec.Code != 204 || !strings.HasPrefix(out.String(), "AGENTDEV_USAGE {") {
+		t.Fatalf("good report: %d %q", rec.Code, out.String())
+	}
+	for name, body := range map[string]string{
+		"unknown field":        `{"job":"issue-1","extra":1}`,
+		"not json":             `AGENTDEV_USAGE {}`,
+		"negative tokens":      `{"input_tokens":-1}`,
+		"reset beyond window":  fmt.Sprintf(`{"five_hour":{"utilization":0.9,"resetsAt":%d}}`, time.Now().Add(100*time.Hour).Unix()),
+		"resets_at far future": `{"rate_limited":true,"resets_at":99999999999}`,
+		"string reset":         `{"resets_at":"a[$(touch /tmp/pwned)]"}`,
+	} {
+		out.Reset()
+		if rec := call(t, h, "POST", "/usage", body); rec.Code != 400 || out.Len() != 0 {
+			t.Fatalf("%s: want 400 and no line, got %d %q", name, rec.Code, out.String())
+		}
+	}
+	if !strings.Contains(ev.String(), "usage-report-invalid") {
+		t.Fatalf("no security event for an invalid report: %s", ev.String())
+	}
+	for i := 0; i < usageMaxPerMinute+3; i++ {
+		call(t, h, "POST", "/usage", good)
+	}
+	if n := strings.Count(out.String(), "AGENTDEV_USAGE"); n != usageMaxPerMinute-1 {
+		t.Fatalf("rate limit: %d lines printed, want %d", n, usageMaxPerMinute-1)
+	}
+	if strings.Count(ev.String(), "usage-report-flood") != 1 {
+		t.Fatalf("one flood event per burst: %s", ev.String())
+	}
 }

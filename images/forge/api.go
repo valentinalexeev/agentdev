@@ -20,6 +20,8 @@ type server struct {
 	client *http.Client
 	rules  []rule
 	appr   *approvals // nil: approvals off (approvals.go, #67)
+
+	usageGate usageGate // POST /usage rate limit (usage.go)
 }
 
 type ctxJob struct{}
@@ -126,6 +128,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("/mcp", s.appr.mcp)               // Claude's permission prompt tool (approvals.go)
 		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
 	}
+	mux.HandleFunc("POST /usage", s.usage)
 	return s.localOnly(mux)
 }
 

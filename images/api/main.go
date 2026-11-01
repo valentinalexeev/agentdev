@@ -76,7 +76,8 @@ func main() {
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
-	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp}
+	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
+	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp, usage: agents}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
 		dc := newDecider(agents, agents, gp, gp)
@@ -98,6 +99,14 @@ func main() {
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// envPct reads a percent 1..100; any other value keeps def.
+func envPct(k string, def int) int {
+	if n := envInt(k, def); validPct(n) {
+		return n
+	}
+	return def
 }
 
 func envInt(k string, def int) int {
@@ -203,6 +212,12 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			mux.Handle("GET /api/approvals", auth(verify, http.HandlerFunc(ar.list)))
 			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
 		}
+	}
+	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
+		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
+		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
+		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
+		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
 	}
 	return mux
 }

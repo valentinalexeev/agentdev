@@ -139,3 +139,36 @@ export interface Approval {
 export async function listApprovals(token: string, state: 'pending' | 'decided' | 'all'): Promise<Approval[]> {
   return (await (await call(token, 'GET', `/api/approvals?state=${state}`)).json()).approvals
 }
+
+// Subscription usage limits (#93). Thresholds in percent; 0 or absent in a project: the global value applies.
+export interface Thresholds { fiveHour?: number; weekly?: number }
+export interface UsageWindow { utilization: number; resetsAt: number }
+export interface SubscriptionState {
+  fiveHour: UsageWindow; weekly: UsageWindow; inputTokens: number; outputTokens: number; runs: number; updated: string
+}
+export interface UsagePause { until: number; reason: string }
+export interface Usage {
+  global: Required<Thresholds>
+  projects?: Record<string, Thresholds>
+  effective: Record<string, Required<Thresholds>>
+  state?: Record<string, SubscriptionState> // by Claude Secret
+  pauses?: Record<string, UsagePause> // by agent
+}
+
+export async function getUsage(token: string): Promise<Usage> {
+  return (await call(token, 'GET', '/api/usage')).json()
+}
+
+export async function setGlobalLimits(token: string, t: Thresholds): Promise<void> {
+  await call(token, 'PUT', '/api/usage/global', t)
+}
+
+// null clears the project's value for that window
+export async function setProjectLimits(token: string, repo: string, t: { fiveHour: number | null; weekly: number | null }): Promise<void> {
+  const [o, r] = repo.split('/')
+  await call(token, 'PUT', `/api/usage/projects/${encodeURIComponent(o)}/${encodeURIComponent(r)}`, t)
+}
+
+export function pctError(n: number): string {
+  return Number.isInteger(n) && n >= 1 && n <= 100 ? '' : 'limit: 1 to 100 %'
+}

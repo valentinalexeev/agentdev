@@ -73,8 +73,11 @@ type Collector struct {
 	Now  func() time.Time
 	// Direct reads the positions ConfigMap without the cache (read-modify-write); the manager's API reader.
 	Direct client.Reader
+	// Usage receives the AGENTDEV_USAGE lines (#93); nil: ignored.
+	Usage *Usage
 
 	mu      sync.Mutex
+	forged  map[string]bool // pod UID/container with a usage line outside the forge container already reported
 	streams map[string]bool // podUID/container being followed
 
 	bmu     sync.Mutex
@@ -378,6 +381,21 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 			}
 			continue
 		}
+		// usage lines (#93): accepted only from the forge sidecar, which prints them from the loop's structured
+		// POST /usage report after checking it (review #102). The agent container's log carries Claude's free
+		// text, so a usage line there is never taken; it is dropped and reported once per pod.
+		if c.Usage != nil && p.Labels["agent"] != "" && isUsageLine(sc.Text()) {
+			if container != forgeContainer {
+				c.forgedUsage(ctx, p, container, sc.Text())
+				continue
+			}
+			if u, at, ok := parseUsage(sc.Text()); ok {
+				if err := c.Usage.Observe(ctx, p, u, at); err != nil {
+					log.FromContext(ctx).Error(err, "record usage")
+				}
+			}
+			continue
+		}
 		spec, ok := parseLine(sc.Text(), p, container)
 		if !ok {
 			continue
@@ -537,4 +555,32 @@ func (c *Collector) prunePositions(ctx context.Context) error {
 		return nil
 	}
 	return c.Update(ctx, &cm)
+}
+
+// forgedUsage reports a usage line printed outside the structured channel (the agent container): one medium event per
+// pod and container, so a model that prints many does not flood the event store.
+func (c *Collector) forgedUsage(ctx context.Context, p *corev1.Pod, container, line string) {
+	c.mu.Lock()
+	if c.forged == nil {
+		c.forged = map[string]bool{}
+	}
+	key := string(p.UID) + "/" + container
+	seen := c.forged[key]
+	c.forged[key] = true
+	c.mu.Unlock()
+	if seen {
+		return
+	}
+	ts, _, _ := strings.Cut(line, " ")
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t = c.Now()
+	}
+	h := sha256.Sum256([]byte(string(p.UID) + "\x00" + container + "\x00usage-forged"))
+	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "usage-line-forged", Severity: "medium",
+		Agent: p.Labels["agent"], Action: "AGENTDEV_USAGE line in the " + container + " container log ignored: usage is accepted only from the forge sidecar",
+		Time: metav1.NewTime(t), Pod: p.Name, Container: container, Hash: hex.EncodeToString(h[:])}
+	if err := c.Record(ctx, p, spec); err != nil {
+		log.FromContext(ctx).Error(err, "record forged usage event")
+	}
 }

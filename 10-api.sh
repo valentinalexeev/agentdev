@@ -52,7 +52,7 @@ log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev APPROVALS="${APPROVALS:-false}" APPROVAL_DENY_ACCOUNTS="${APPROVAL_DENY_ACCOUNTS:-}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
-  envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
+  USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"
 ok "agentdev-api ready"
