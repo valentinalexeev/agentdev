@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
+  still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to
+  `1.0.0-rc.1` until v1.0.0. Deployments pin exact versions, so they are not affected.
+
 ### Removed
 - Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
   (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under

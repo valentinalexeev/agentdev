@@ -6,7 +6,8 @@ name: Images
 #   ghcr.io/<owner>/agentdev-api      management API (#46)
 #   ghcr.io/<owner>/agentdev-operator Agent operator (#47)
 #   ghcr.io/<owner>/agentdev-ui       management UI (#48)
-# Pull requests build all of them (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest.
+# Pull requests build all of them (no push). main pushes :main and :sha-<short>; tags vX.Y.Z push :X.Y.Z, :X.Y and :latest;
+# prerelease tags (vX.Y.Z-rc.N) push only :X.Y.Z-rc.N (never :X.Y or :latest).
 # Multi-arch: linux/amd64 (GKE) and linux/arm64 (kind on Apple Silicon).
 on:
   push:
@@ -53,7 +54,7 @@ jobs:
             type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
           labels: |
             org.opencontainers.image.title=agentdev-${{ matrix.name }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
