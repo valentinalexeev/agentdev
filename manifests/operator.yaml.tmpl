@@ -18,7 +18,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-security-positions], verbs: [get, update]}
-# approvals (#67): create from the forge sidecar's request line, prune; the decision (status) is the API's
+# approvals (#67, #69): create from the forge sidecar's request line and for executor applies, prune; the decision
+# (status) is the API's only
 - {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch, create, delete]}
 # subscription usage limits (#93): state and pauses (written), thresholds set through the API (read only)
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get, update]}
@@ -29,6 +30,41 @@ kind: RoleBinding
 metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+# deterministic executors (#69): own namespace, so their write credentials never sit next to agents. Only cluster
+# admins write Executors and the exec-* Secrets here; agents and the API have no rights in this namespace.
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${EXEC_NS}, labels: {agentdev/role: executors}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator, namespace: ${EXEC_NS}}
+rules:   # same rules as the generated images/operator/config/rbac/role.yaml (executor.go), scoped to this namespace
+- {apiGroups: [agentdev.dev], resources: [executors], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [executors/status], verbs: [get, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [executorruns, executorruns/status], verbs: [get, list, watch, create, update, patch, delete]}
+- {apiGroups: [batch], resources: [jobs], verbs: [get, list, watch, create, delete]}
+- {apiGroups: [""], resources: [persistentvolumeclaims], verbs: [get, list, watch, create, delete]}
+- {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+- {apiGroups: [""], resources: [pods/log], verbs: [get]}
+- {apiGroups: [""], resources: [secrets], verbs: [get]}   # exec-<name>-forge only by name (no list or watch)
+- {apiGroups: [""], resources: [events], verbs: [create, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator, namespace: ${EXEC_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+# executor Jobs take no inbound traffic; outbound stays open (the forge, the cloud APIs and registries they change)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: executors-no-ingress, namespace: ${EXEC_NS}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress: []
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -55,6 +91,7 @@ spec:
         - {name: BOTBOARD_URL, value: "${BOTBOARD_URL}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: IDLE_SECONDS, value: "${IDLE_SECONDS}"}
+        - {name: CLAUDE_PROXY_URL, value: "${CLAUDE_PROXY_URL}"}   # #66; empty = credential in the agent pod (deprecated)
         - {name: SECURITY_PAUSE_AFTER, value: "${SECURITY_PAUSE_AFTER}"}       # > N events in one job pause the agent
         - {name: SECURITY_RETENTION_DAYS, value: "${SECURITY_RETENTION_DAYS}"} # SecurityEvent objects; the API keeps history
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
@@ -64,6 +101,12 @@ spec:
         - {name: APPROVALS_URL, value: "http://agentdev-api-internal.${PLATFORM_NS}.svc.cluster.local:8081"}
         - {name: APPROVAL_TIMEOUT_MINUTES, value: "${APPROVAL_TIMEOUT_MINUTES}"}
         - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
+        # deterministic executors (#69); OPERATOR_IMAGE is also the plan hash/verify helper in executor Jobs
+        - {name: EXEC_NS, value: "${EXEC_NS}"}
+        - {name: OPERATOR_IMAGE, value: "${OPERATOR_IMAGE}"}
+        - {name: EXECUTOR_POLL_SECONDS, value: "${EXECUTOR_POLL_SECONDS}"}
+        - {name: EXECUTOR_RETENTION_DAYS, value: "${EXECUTOR_RETENTION_DAYS}"}
+        - {name: EXECUTOR_APPLY_START_MINUTES, value: "${EXECUTOR_APPLY_START_MINUTES}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

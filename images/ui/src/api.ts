@@ -11,6 +11,15 @@ export interface Agent {
   scaleToZero?: boolean
   paused?: boolean
   securityEvents?: number // last 7 days (#70)
+  budgetUsed?: number // Claude tokens in the last 24 h, counted by the credential proxy (#66)
+  budgetLimit?: number // tokens per 24 h; 0 = no limit
+}
+
+// "12.3k / 100k" or "12.3k" when there is no limit; "" when the proxy reports nothing (#66)
+export function formatBudget(a: Pick<Agent, 'budgetUsed' | 'budgetLimit'>): string {
+  if (a.budgetUsed === undefined) return ''
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`)
+  return a.budgetLimit ? `${k(a.budgetUsed)} / ${k(a.budgetLimit)}` : k(a.budgetUsed)
 }
 
 export type Severity = 'low' | 'medium' | 'high'

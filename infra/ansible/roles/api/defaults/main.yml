@@ -19,3 +19,6 @@ api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner
 api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
 # The Postgres pod of the platform role and its superuser
 api_db_pod: platform-db-0
+# web UI (#48) next to the API; the role ingress makes it public on https://<ingress.host>/ (#120)
+api_ui: "{{ api.ui | default(true) }}"
+api_ui_image: "{{ image_registry }}/agentdev-ui:{{ image_tag }}"

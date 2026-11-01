@@ -11,14 +11,20 @@ gives one pull request.
 2. In **What**, write the change in simple words.
 3. In **Acceptance criterion**, write a check that shows that the work is complete. For example: "A test passes" or "A page shows X".
 4. In **Open decisions**, write all the items that the agent must not guess.
-5. Assign the issue to an agent account, for example `alice`.
+5. Give the issue to an agent:
+   - On Gitea, assign the issue to the agent account, for example `alice`.
+   - On GitHub, add the label `agent:<agent>` to the issue, for example `agent:alice`.
+
    The agent writes a comment on the issue after some seconds.
 
 The agent does the work on the branch `agent/<agent>/issue-<n>`. Then the agent opens a pull request and asks you
 for a review.
 
-NOTE: The agent starts the work only when you assign the issue. If you do not assign the issue to an agent, no agent
-works on it.
+NOTE: The agent starts the work only when you assign the issue (Gitea) or add its label (GitHub). If you do not do
+this, no agent works on it.
+
+NOTE: On GitHub, all agents use the same GitHub App account, `<app>[bot]`. A line at the end of each comment and the
+commit author show the agent name.
 
 ## Review a pull request from an agent
 
@@ -36,6 +42,27 @@ the code that you merge.
 ### Stop the work on a pull request
 
 1. Close the pull request.
+
+## Approve an apply of an executor
+
+Do this task when an executor asks for an approval on a merged pull request (#69). The executor applies a change to
+an environment only after your approval.
+
+1. Read the comment of the executor with the title "trusted plan of the merge commit". It shows the plan output and
+   the SHA-256 of the plan file.
+2. Make sure that the plan does only the change of the pull request.
+3. If the plan is correct, reply `/approve <id>`. Use the id of the approval request.
+   The executor writes "apply started" and then the result.
+4. If the plan is not correct, reply `/deny <id>`.
+
+NOTE: A decision counts only within `spec.approvalHours` (default 24 h) of the request. The apply starts within
+30 minutes of the decision, or not at all.
+
+CAUTION: The approval is for one plan file and one apply only. If the apply fails, the executor does not try again.
+Make a new pull request with the correction.
+
+NOTE: The plan of a pull request before the merge (commit status `agentdev/trusted-plan`) is for the review only. You
+cannot approve it.
 
 ## Check the security findings of a pull request
 
@@ -148,22 +175,6 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
    The agent stops and goes out of the list. The volumes of the agent stay.
 
-### Set a lower usage limit for your project
-
-The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.
-You must have write access to the repository. You can only set a limit that is lower than the global limit.
-
-1. In the web UI, click **Usage**.
-2. Find the row of your repository in **Limits**.
-3. Type the 5-hour limit and the weekly limit in percent.
-4. Click **Save**.
-   The row shows the effective limits.
-5. To use the global limits again, click **Use global**.
-
-NOTE: When the agents are paused for usage, the **Agents** page shows a banner with the reason and the end time.
-
-NOTE: The pause stops at the reset time of the usage window. The agents then continue the work that waits.
-
 ## Answer an approval request from an agent
 
 An agent can ask for permission when it needs a tool that is not on its list, or when it must change a protected
@@ -203,6 +214,22 @@ all secrets.
 
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
 requests that have no decision. You cannot make a decision in the web UI at this time.
+
+### Set a lower usage limit for your project
+
+The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.
+You must have write access to the repository. You can only set a limit that is lower than the global limit.
+
+1. In the web UI, click **Usage**.
+2. Find the row of your repository in **Limits**.
+3. Type the 5-hour limit and the weekly limit in percent.
+4. Click **Save**.
+   The row shows the effective limits.
+5. To use the global limits again, click **Use global**.
+
+NOTE: When the agents are paused for usage, the **Agents** page shows a banner with the reason and the end time.
+
+NOTE: The pause stops at the reset time of the usage window. The agents then continue the work that waits.
 
 ## Know what agents do
 

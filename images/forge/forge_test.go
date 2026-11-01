@@ -571,3 +571,18 @@ func TestUsageReport(t *testing.T) {
 		t.Fatalf("one flood event per burst: %s", ev.String())
 	}
 }
+
+// #66: with the credential proxy on, the sidecar prints no usage line (R47 closed) and reports the attempt.
+func TestUsageReportOffWithProxy(t *testing.T) {
+	var out, ev bytes.Buffer
+	oldU, oldE := usageOut, eventOut
+	usageOut, eventOut = &out, &ev
+	t.Cleanup(func() { usageOut, eventOut = oldU, oldE })
+	h := newServer(&Config{ForgeUser: "alice", AgentName: "alice", NoUsage: true}).routes()
+	if rec := call(t, h, "POST", "/usage", `{"job":"issue-1","rate_limited":true}`); rec.Code != http.StatusGone || out.Len() != 0 {
+		t.Fatalf("report with the proxy on: %d %q", rec.Code, out.String())
+	}
+	if !strings.Contains(ev.String(), "usage-report-refused") {
+		t.Errorf("no event: %q", ev.String())
+	}
+}

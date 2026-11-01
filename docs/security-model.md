@@ -53,6 +53,21 @@ The image is Alpine with git rather than distroless, because the sidecar runs gi
 protected-path check is looked up by the sidecar from the forge, never taken from the caller, and the check fails
 closed (review of #68).
 
+**Forge drivers (#2).** What differs per forge is one driver in the sidecar (`images/forge/driver.go`): API base,
+the credential of one request, the git credential and the allow-list. Gitea uses the agent's own token. GitHub uses
+one GitHub App: the sidecar signs the App JWT with the private key (which it removes from its environment after
+parsing) and mints installation tokens narrowed to the agent's repos and to contents, issues and pull requests write
+(no workflows, no administration). Tokens live in memory for at most an hour. All agents share the App bot account,
+so the sidecar adds a fixed signature line with the agent's name to everything the agent writes, the loop sets the
+commit author from the sidecar's `/identity`, and own work is found by the branch prefix `agent/<name>/`. Work is
+given by the label `agent:<name>` (an App cannot be assigned), and only when the person who added it last has
+write access, checked live before each start; the router routes GitHub events by that label and the
+branch, never by login. Code scanning threads get one in-thread reply per finding; the outcome word comes from a
+fixed set and "Fixed in `<sha>`" is only written when the pushed diff touches the finding's file. The sidecar refuses
+GraphQL, so the agent cannot resolve a thread. The App key reaches the sidecar as a file on a Secret volume mounted
+only into the forge container, never as an environment variable (a process environment stays readable in
+`/proc/<pid>/environ`).
+
 **Security events.** Every guardrail that fires prints one line to the container log (stdout), so a bypass attempt
 is reported, not only blocked (collection, UI and auto-pause: #70):
 
@@ -107,10 +122,48 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 
 ### Phase 3: Claude credential proxy (fixes R11)
 
-- `claude-proxy` service holds the API key or subscription token. Agents call it with a per-agent identity (projected
-  service account token with a custom audience, or a per-agent random key issued by the operator); the proxy swaps
-  in the real credential and enforces a per-agent token budget, visible in the UI.
-- The agent pod no longer mounts `claude-<name>` or `claude-shared`.
+Status: **implemented** in #66 (`images/credproxy`, `manifests/claude-proxy.yaml.tmpl`), pending an e2e pass on a
+cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decisions: [#66](https://github.com/valentinalexeev/agentdev/issues/66#issuecomment-6556289802).
+
+- `claude-proxy` (one Deployment in the agents namespace) is the only pod that mounts `claude-shared` and the
+  `claude-<agent>` Secrets. The agent pod no longer mounts either; the operator sets `ANTHROPIC_BASE_URL` to the
+  proxy and `ANTHROPIC_AUTH_TOKEN` from `agent-<name>-proxy` (`CLAUDE_PROXY_URL` on the operator; empty keeps the old
+  mount as a deprecated rollback).
+- **Agent identity:** `<agent>.<hex HMAC-SHA256(signing key, "agentdev-claude-proxy/v1:" + agent)>`. The signing key
+  (`claude-proxy-signing`) is only in the proxy pod and the deploy. The model can read its agent's key, but the key
+  is worth nothing outside the cluster and cannot name another agent. A projected ServiceAccount token was the
+  alternative; it is no stronger here (also readable by the model) and needs a TokenReview per request.
+- **Forwarding:** only `POST /v1/messages` and `/v1/messages/count_tokens`. The caller's `Authorization`,
+  `x-api-key`, `Cookie` and `Proxy-Authorization` are dropped; the agent's credential is added (`x-api-key` for an API
+  key, `Authorization: Bearer` plus the `oauth-2025-04-20` beta for a subscription token). Streaming responses are
+  passed through unbuffered. Any other path, and a missing or wrong key, is refused with a security event
+  (`proxy-path`, `proxy-key-invalid`).
+- **Usage observed by the proxy:** the `anthropic-ratelimit-unified-5h-*` / `-7d-*` / `-status` / `-reset` headers and
+  `retry-after`, and the token counts of the body (JSON `usage`, or SSE `message_start` / `message_delta`). One
+  `AGENTDEV_USAGE` line per response on the proxy's stdout, with the schema of #93 plus `agent` (from the verified
+  key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47: the operator
+  reads them, see below).
+- **Budget:** tokens per agent in a rolling 24 h window (hourly buckets), `CLAUDE_BUDGET_TOKENS` for all agents (0 =
+  none), a per-agent value in ConfigMap `claude-proxy-budgets`. Checked before a request is forwarded, so a response
+  in flight can go over by itself. When used up: HTTP 429 `rate_limit_error` (Claude Code stops the run cleanly) and
+  one `budget-exhausted` event per exhaustion. Spend is kept on an emptyDir: a new proxy pod starts at zero (a
+  restart can grant at most one more budget). `GET /status` lists spend and limits (no secrets); the API adds them to
+  `GET /api/agents` and the UI shows a column.
+- **Network:** NetworkPolicy `claude-proxy`: ingress on 8080 from agent pods and the API only; egress DNS and 443 to
+  public addresses. `UPSTREAM` must be https. The request's `Accept-Encoding` is dropped so the meter always sees
+  decoded bodies (review #119); the path is compared escaped, and only `?beta=true` is passed as a query.
+- **With #93:** the decision logic (thresholds, `agentdev-usage`, the loop's local pause) stays; only the source
+  moves. With `CLAUDE_PROXY_URL` set, the operator follows the `claude-proxy` pods' logs and takes usage lines from
+  there (agent and subscription from the line, which the proxy took from the verified key and the credential it
+  used); proxy security events are recorded with source `claude-proxy`. Usage lines from agent pods, including the
+  forge sidecar, are ignored and raise `usage-line-forged`; the sidecar refuses `POST /usage` (`USAGE_REPORTS=off`)
+  and the loop posts nothing. The loop still pauses itself locally when a run is rate limited.
+- **Upgrade:** the `claude` volume of an agent may hold a Claude login from before the proxy. With
+  `ANTHROPIC_BASE_URL` set, the loop removes `~/.claude/.credentials.json` and the key fields of `~/.claude.json` on
+  every start.
+- **GKE egress:** when the cluster serves FQDNNetworkPolicy the playbook adds `claude-proxy` with egress to
+  `api.anthropic.com` only (R63).
+- **Not yet (#98):** `api.anthropic.com` is still on the agents' egress allow-list of #98 (R64).
 
 ### Phase 4: approvals (see below)
 
@@ -515,6 +568,22 @@ rights applies it, only after a person approved both the code and the run. No AI
 credentials to infrastructure. Owner decisions on #69 (2026-10-31): the trusted plan is required; an apply needs
 the merge **and** an explicit `/approve`; one executor per environment.
 
+Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on a cluster. As built:
+
+- Executors, their runs, Jobs and `exec-*` Secrets live in their own namespace (`EXEC_NS`, default
+  `agentdev-executors`); the operator refuses to start if it equals the agents namespace.
+- The operator polls the forge (no webhook) with the executor's own forge account and creates `ExecutorRun`s:
+  `pr` (head of an open PR into the branch that changes `spec.path`), `merge` (merge commit, fetched from the
+  protected branch only) and `apply`.
+- MVP storage of the plan: a PersistentVolumeClaim per merge run instead of a bucket. The plan Job runs the tool as an
+  init container and then the operator image (`hash-plan`) prints the SHA-256 of `$(PLAN_FILE)`; the apply Job runs
+  `verify-plan` before the tool and mounts the volume read-only.
+- The apply gate is an `Approval` with `source: executor`, `tool: apply`, `job: pr-<N>` and the input "apply executor
+  ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
+- Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
+- Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
+  egress allow-list for executor Jobs (#65), deciding in the UI (#80), reopening the issue on a failed apply.
+
 ### Resources
 
 - `Executor` (`agentdev.dev/v1alpha1`): one per environment and tool, for example `terraform-prod`. It fixes the image
@@ -548,8 +617,10 @@ the merge **and** an explicit `/approve`; one executor per environment.
 5. After the merge, the operator runs the plan executor again **on the merge commit** of main. Only this plan can be
    applied. If it differs from the plan that was reviewed on the PR, the run stops and the PR shows both plans.
 6. An `Approval` request (#67) "apply plan-<merge commit> to prod" appears, with the plan and its hash. It uses the
-   decision rules of phase 4 and is bound to the executor, the environment and the plan hash. It is single-use and
-   expires (default 24 h). A person with write access replies `/approve <id>`. Agents never approve.
+   decision rules of phase 4 and is bound to the executor, the environment, the plan hash, the image digest, the
+   apply command and a hash of the Executor spec (credentials included). It is single-use; a decision counts only
+   within `spec.approvalHours` (default 24 h), and the apply must start within `EXECUTOR_APPLY_START_MINUTES`
+   (default 30) of it. A changed Executor refuses the apply. Closing the merged PR does not void it. A person with write access replies `/approve <id>`. Agents never approve.
 7. The operator runs the **apply executor** with the merge commit and the stored plan, after it checks that the plan
    hash matches the approved one. Terraform refuses a stale plan; the flow then goes back to step 5.
 8. The executor posts the output to the issue. The run is audited and reported as a security event

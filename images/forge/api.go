@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type rule struct {
 	method string
 	path   *regexp.Regexp
 	check  func(s *server, body []byte) error // optional body policy
+	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
+	rewrite func(s *server, body []byte) ([]byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -42,7 +45,7 @@ func newServer(c *Config) *server {
 			// never follow a redirect: it could carry the Authorization header to another host
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	s.drv = driverOrGitea(c)
-	s.rules = withCommonChecks(s.drv.rules())
+	s.rules = s.drv.rules()
 	return s
 }
 
@@ -59,18 +62,111 @@ func (s *server) logf(format string, a ...any) {
 	log.Printf("%s [%s] forge: %s", time.Now().UTC().Format("15:04:05"), s.c.ForgeUser, fmt.Sprintf(format, a...))
 }
 
-// checkNoDecision refuses a comment that contains an approval decision command (/approve, /approve-job, /deny): agents
-// never decide (docs/security-model.md, decision rule 1). The API ignores such comments from agents anyway; refusing
-// them here makes the attempt a security event.
+// checkNoDecision refuses a write whose JSON carries an approval decision command (/approve, /approve-job, /deny) in
+// any string value, at any depth and under any key: agents never decide (docs/security-model.md, decision rule 1).
+// The API ignores such comments from agents anyway; refusing them here makes the attempt a security event.
+// Keys that differ only in case are refused too: Go folds them into one struct field while a forge may read another
+// (review of #116: {"body":"/approve x","Body":"y"} passed a struct decode but reached GitHub as "body").
 func checkNoDecision(_ *server, body []byte) error {
-	var c struct {
-		Body string `json:"body"`
+	refused := refuseAs("approval-self-decision", "high", "comment refused: agents cannot post approval decisions")
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
 	}
-	_ = json.Unmarshal(body, &c)
-	if decisionCmdRe.MatchString(c.Body) {
-		return refuseAs("approval-self-decision", "high", "comment refused: agents cannot post approval decisions")
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		if decisionCmdRe.Match(body) { // not JSON: look at the raw text
+			return refused
+		}
+		return nil
+	}
+	// exactly one JSON value: trailing data could be read by a forge parser that this check never saw (review of #116)
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return refuseAs("approval-self-decision", "high", "refused: trailing data after the JSON body")
+	}
+	if hasDecision(v) {
+		return refused
+	}
+	if foldedDupKeys(body) {
+		return refuseAs("approval-self-decision", "high", "refused: JSON keys that differ only in case")
 	}
 	return nil
+}
+
+func hasDecision(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return decisionCmdRe.MatchString(x)
+	case map[string]any:
+		for _, e := range x {
+			if hasDecision(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if hasDecision(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// foldedDupKeys reports an object that has two keys equal under case folding, at any depth.
+func foldedDupKeys(body []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	type frame struct {
+		obj    bool
+		keys   map[string]bool
+		expKey bool
+	}
+	var st []*frame
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		top := func() *frame {
+			if len(st) == 0 {
+				return nil
+			}
+			return st[len(st)-1]
+		}
+		switch tk := t.(type) {
+		case json.Delim:
+			switch tk {
+			case '{':
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+				st = append(st, &frame{obj: true, keys: map[string]bool{}, expKey: true})
+			case '[':
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+				st = append(st, &frame{})
+			case '}', ']':
+				st = st[:len(st)-1]
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+			}
+		default:
+			f := top()
+			if f != nil && f.obj && f.expKey {
+				k := strings.ToLower(fmt.Sprint(tk))
+				if f.keys[k] {
+					return true
+				}
+				f.keys[k] = true
+				f.expKey = false
+			} else if f != nil && f.obj {
+				f.expKey = true
+			}
+		}
+	}
 }
 
 // enableApprovals turns protected-path refusals and Claude prompts into approval requests.
@@ -114,6 +210,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
 	}
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }
 
@@ -186,7 +283,41 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// #67: agents never post an approval decision, on any forge driver and on any write that carries text
+	// (issue comments, PR bodies, review replies). Driver rules may add checks but cannot skip this one.
+	if r.Method != http.MethodGet {
+		if err := checkNoDecision(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
+	if match.rewrite != nil {
+		if body, err = match.rewrite(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+		if r.Method != http.MethodGet { // check what is actually sent, after the driver's rewrite
+			if err := checkNoDecision(s, body); err != nil {
+				s.logf("refused %s %s: %v", r.Method, p, err)
+				s.policyEvent(r, err, r.Method+" "+p)
+				fail(w, err)
+				return
+			}
+		}
+	}
 	drv := s.driver()
+	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
+		if err := qc.checkQuery(r.URL.Query()); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
 		s.logf("forge credential: %v", err)
@@ -207,8 +338,17 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if o, ok := drv.(interface{ observe(int) }); ok {
+		o.observe(resp.StatusCode)
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
+	}
+	// rate-limit hints reach the loop, so it can wait instead of retrying at once
+	for _, h := range []string{"Retry-After", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -244,4 +384,24 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	s.logf("pushed %s to %s", tip[:12], branch)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": tip})
+}
+
+// GET /identity: the forge kind and the commit author the loop uses (#2). On GitHub the author is the agent's name
+// with the App bot's noreply address, so GitHub links the commit to the App; on Gitea it is the agent's own user.
+func (s *server) identity(w http.ResponseWriter, r *http.Request) {
+	out := map[string]string{"forge": s.driver().kind(), "agent": s.c.AgentName,
+		"name": s.c.ForgeUser, "email": s.c.ForgeUser + "@agents.local"}
+	if d, ok := s.driver().(*githubDriver); ok {
+		login, id, err := d.identity(r.Context())
+		if err != nil {
+			s.logf("identity: %v", err)
+			fail(w, errors.New("forge identity unavailable"))
+			return
+		}
+		out["name"] = s.c.AgentName + " (agentdev)"
+		out["email"] = fmt.Sprintf("%d+%s@users.noreply.github.com", id, login)
+		out["login"] = login
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }

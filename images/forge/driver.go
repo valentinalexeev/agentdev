@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 )
 
 // driver is what differs between forges (#2). The sidecar's policy (loopback only, repo allow-list, push rules,
@@ -30,13 +29,15 @@ func newDriver(c *Config) (driver, error) {
 	switch c.ForgeKind {
 	case "", "gitea":
 		return &giteaDriver{c: c}, nil
+	case "github":
+		return newGitHubDriver(c)
 	default:
 		return nil, fmt.Errorf("FORGE_KIND %q is not supported", c.ForgeKind)
 	}
 }
 
 func mkRule(m, p string, chk func(*server, []byte) error) rule {
-	return rule{m, regexp.MustCompile("^" + p + "$"), chk}
+	return rule{method: m, path: regexp.MustCompile("^" + p + "$"), check: chk}
 }
 
 // giteaDriver: a Gitea (or Forgejo) with one personal access token per agent (FORGE_TOKEN). Unchanged behaviour of
@@ -72,7 +73,7 @@ func (d *giteaDriver) rules() []rule {
 		r("GET", repoRe+`/issues`, nil),
 		r("GET", repoRe+`/issues/[0-9]+`, nil),
 		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("POST", repoRe+`/issues/[0-9]+/comments`, checkNoDecision), // agents never decide approvals (#67)
 		r("GET", repoRe+`/pulls`, nil),
 		r("POST", repoRe+`/pulls`, checkOwnHead),
 		r("GET", repoRe+`/pulls/[0-9]+`, nil),
@@ -80,29 +81,6 @@ func (d *giteaDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
 		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
 	}
-}
-
-// withCommonChecks adds the policy that holds for every driver: an agent must not post an approval decision
-// command (checkNoDecision, #67) in any issue or PR comment. It wraps each comment-creating POST rule, chaining
-// any driver-specific body check, so a new driver cannot forget it.
-func withCommonChecks(rs []rule) []rule {
-	out := make([]rule, len(rs))
-	for i, r := range rs {
-		if r.method == "POST" && strings.HasSuffix(r.path.String(), `/comments$`) {
-			inner := r.check
-			r.check = func(s *server, body []byte) error {
-				if err := checkNoDecision(s, body); err != nil {
-					return err
-				}
-				if inner != nil {
-					return inner(s, body)
-				}
-				return nil
-			}
-		}
-		out[i] = r
-	}
-	return out
 }
 
 // driverOrGitea is newDriver for code paths that cannot fail (tests building a server by hand); main checks the

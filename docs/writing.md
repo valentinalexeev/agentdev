@@ -130,6 +130,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | Postgres | the PostgreSQL database of the instance |
 | setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
+| Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
+| proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
+| token budget | the number of Claude tokens that one agent can use in 24 hours |
 | specification (spec) | the project file, for example `my-project.yaml` |
 | sync | one run of `scripts/mcp-sync.sh` |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |

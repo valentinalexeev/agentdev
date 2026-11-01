@@ -14,6 +14,11 @@
 
 | Symptom | Cause | Procedure |
 |---|---|---|
+| The agent log shows `claude-proxy: the token budget of agent ... is used`. | The agent used its token budget for 24 hours (#66). | 1. Wait. The agent continues when the 24-hour window has free tokens. 2. Or set a larger budget (admin.md, *Claude proxy and token budget*). |
+| The agent log shows `claude-proxy: missing or wrong agent key`. | The Secret `agent-<name>-proxy` does not agree with the signing key. | 1. Deploy again: `./run.sh 06`, or a pull request in the deployment repository. 2. Start the agent again. |
+| The agent log shows `claude-proxy: no Claude credential for agent`. | The proxy has no `claude-shared` and no `claude-<name>`. | 1. Add the credential (admin.md, *Give an agent its own Claude credential*). 2. Deploy again. |
+| The forge sidecar log shows the security event `usage-report-refused`. | The agent image is older than the proxy. Or a tool in the agent pod sent a usage report. | 1. Update the agent images (`./run.sh 06`, or the playbook). 2. If the images are new, read the job and look for an injection attempt. |
+| The agent log shows `claude-proxy: upstream not reachable`. | The proxy cannot connect to `api.anthropic.com`. | 1. Run `kubectl -n coding-agents logs deploy/claude-proxy`. 2. Examine the NetworkPolicy `claude-proxy` and the DNS of the cluster. |
 | The agent does not write a comment on an assigned issue. | The assignee is not the exact login of the agent. Or the agent does not run. Or the forge token is not valid. | 1. Examine the assignee. 2. Run `kubectl -n coding-agents get pods`. 3. If the log shows `cannot authenticate to forge`, give the agent a new forge token. |
 | The agent writes a comment, but does not open a pull request. | The Claude call failed (credential, quota). Or the agent made no change. | 1. Read the log of the agent. If the agent made no change, the issue shows "could not produce a change". |
 | The bootstrap issue shows `not ready`. | The check in the list failed (permission to send commits to the forge, tracker, Claude). | 1. Correct that item. 2. Start the agent again. The agent writes a new report only when the result changes. |
@@ -27,6 +32,21 @@
 | The agent log shows `AGENTDEV_SECURITY_EVENT` lines. | A guardrail stopped an action. The JSON gives the rule and the action. | 1. For `high`, read the issue or the review of the job and look for an injection attempt. 2. Also examine `medium` git-config and hook events after a Claude run. |
 | The agent does not start new work. The log shows `subscription usage limit: new runs paused`. | The subscription is at the usage limit, or Claude refused a run because of its rate limit. | 1. On the **Usage** page, find the reason and the end time. 2. Wait for the end time. Or an administrator increases the global usage limit. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
+
+## Executors
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The pull request shows no `agentdev/trusted-plan` status. | The pull request does not change a file below `spec.path`. Or the executor is paused or `invalid`. | 1. Run `kubectl -n agentdev-executors get executors`. 2. Read the condition `Ready` of the executor. |
+| The executor shows the phase `error`. | The forge token is not valid, or the forge cannot be reached. | 1. Read the message of the condition `Ready`. 2. Replace `FORGE_TOKEN` in `exec-<name>-forge`. |
+| The run shows `no plan hash from the helper container`. | The plan command did not write `$(PLAN_FILE)`. | 1. Correct `spec.plan.command`. |
+| The apply Job fails in the container `verify`. | The plan file is not the approved file. | Do not apply. Examine the namespace for changes, and make a new pull request. |
+| The executor shows the phase `invalid` with the reason `DuplicateEnvironment`. | An other `Executor` has the same `spec.environment`. Only the oldest one runs. | 1. Delete the duplicate `Executor`, or give it its own environment. |
+| A pull request gets no plan, and its branch is in a fork. | Pull requests from forks are not planned by default. | 1. Push the branch to the repository, or set `spec.allowForkPRs: true` (read admin.md first). |
+| The checkout of a merge or apply run takes long. | The commit is more than 200 commits deep on the branch. The checkout then fetches the full history of the branch. | No action. The checkout fetches only the protected branch, never a commit by id. |
+| The run shows `executor spec changed since the merge plan` or the apply run shows `executor spec changed since the approval`. | The `Executor` was changed (image, commands, credentials, repository, branch or path) after the plan. | 1. Make sure that the change was intended. 2. Merge a new commit to plan again. |
+| The run shows `approval decided more than 30m0s ago, apply not started` or `approval decided after its deadline`. | The operator was not running after the decision, or the decision came after `spec.approvalHours`. | 1. Merge a new commit to plan again. |
+| The run shows `approval does not match the merge plan`. | The approval request was changed or replaced. | This is a security event (`executor.refused`, high). Examine who can write approvals. |
 
 ## Interactive sessions
 

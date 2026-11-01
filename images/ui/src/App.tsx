@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserManager, User } from './auth'
 import {
   listAgents, listSecurityEvents, patchAgent, createAgent, deleteAgent, Unauthorized,
-  nameError, repoError, maxConcurrentError, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
+  nameError, repoError, maxConcurrentError, formatBudget, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
   getUsage, setGlobalLimits, setProjectLimits, pctError, type Usage, type UsageWindow, type UsagePause,
 } from './api'
 import { Approvals } from './Approvals'
@@ -167,7 +167,7 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
         : (
           <table>
             <thead>
-              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Security (7 days)</th><th>Settings</th><th>Actions</th></tr>
+              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Security (7 days)</th><th>Claude tokens (24 h)</th><th>Settings</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {agents.map((a) => (
@@ -183,6 +183,9 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
                     {a.securityEvents
                       ? <a className="badge" href={`#security?agent=${encodeURIComponent(a.name)}`}>{a.securityEvents}</a>
                       : <span className="muted">0</span>}
+                  </td>
+                  <td className={a.budgetLimit && (a.budgetUsed ?? 0) >= a.budgetLimit ? 'error' : undefined}>
+                    {formatBudget(a) || <span className="muted">-</span>}
                   </td>
                   <td>
                     {a.managed === false ? <span className="muted">no Agent object</span> : editing === a.name

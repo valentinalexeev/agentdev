@@ -376,3 +376,19 @@ func TestCommandLines(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// An executor apply approval lives on a merged (closed) pull request: it is not void for that and stays decidable.
+func TestDeciderExecutorOnClosedPR(t *testing.T) {
+	obj := approvalObj("tf-prod", aid, "owner/x", t0)
+	spec := obj.Object["spec"].(map[string]any)
+	spec["source"], spec["job"], spec["tool"] = "executor", "pr-7", "apply"
+	k, _ := approvalEnv(t, obj)
+	fc := &fakeComments{ids: map[string]int64{}, closed: true,
+		list: []forgeComment{{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute)}}}
+	d := newDecider(k, agentsFixed{{Name: "carol"}}, fc, permMap{"wendy": permWrite})
+	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
+	_ = d.pass(context.Background())
+	if a := status(t, k, "tf-prod-"+aid); a.State != "allowed" || a.Scope != "once" {
+		t.Fatalf("executor approval on a closed PR: %+v", a)
+	}
+}

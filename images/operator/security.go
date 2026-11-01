@@ -75,6 +75,8 @@ type Collector struct {
 	Direct client.Reader
 	// Usage receives the AGENTDEV_USAGE lines (#93); nil: ignored.
 	Usage *Usage
+	// ProxyUsage (#66): the Claude credential proxy is on and the only usage source (proxyusage.go).
+	ProxyUsage bool
 
 	mu      sync.Mutex
 	forged  map[string]bool // pod UID/container with a usage line outside the forge container already reported
@@ -278,6 +280,7 @@ func (c *Collector) Start(ctx context.Context) error {
 }
 
 func (c *Collector) scan(ctx context.Context) {
+	c.scanProxy(ctx)
 	var pods corev1.PodList
 	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "coding-agent"}); err != nil {
 		log.FromContext(ctx).Error(err, "list agent pods")
@@ -375,11 +378,17 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		if handled, err := c.recordApproval(ctx, sc.Text(), p, container); handled { // approvals.go (#67)
+			if err != nil {
+				return fmt.Errorf("record approval: %w", err)
+			}
+			continue
+		}
 		// usage lines (#93): accepted only from the forge sidecar, which prints them from the loop's structured
 		// POST /usage report after checking it (review #102). The agent container's log carries Claude's free
 		// text, so a usage line there is never taken; it is dropped and reported once per pod.
 		if c.Usage != nil && p.Labels["agent"] != "" && isUsageLine(sc.Text()) {
-			if container != forgeContainer {
+			if !c.usageFromAgentPod(container) {
 				c.forgedUsage(ctx, p, container, sc.Text())
 				continue
 			}
@@ -387,12 +396,6 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 				if err := c.Usage.Observe(ctx, p, u, at); err != nil {
 					log.FromContext(ctx).Error(err, "record usage")
 				}
-			}
-			continue
-		}
-		if handled, err := c.recordApproval(ctx, sc.Text(), p, container); handled { // approvals.go (#67)
-			if err != nil {
-				return fmt.Errorf("record approval: %w", err)
 			}
 			continue
 		}
@@ -451,7 +454,7 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 		reason, msg = "HighSeverity", fmt.Sprintf("high severity %s/%s: %s", spec.Source, spec.Rule, clip(spec.Action, 200))
 	} else {
 		var list v1.SecurityEventList
-		if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agentdev/pod-uid": string(p.UID)}); err != nil {
+		if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agentdev/pod-uid": string(p.UID), "agent": spec.Agent}); err != nil {
 			return err
 		}
 		n := 1 // the event just recorded
@@ -578,9 +581,16 @@ func (c *Collector) forgedUsage(ctx context.Context, p *corev1.Pod, container, l
 	}
 	h := sha256.Sum256([]byte(string(p.UID) + "\x00" + container + "\x00usage-forged"))
 	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "usage-line-forged", Severity: "medium",
-		Agent: p.Labels["agent"], Action: "AGENTDEV_USAGE line in the " + container + " container log ignored: usage is accepted only from the forge sidecar",
+		Agent: p.Labels["agent"], Action: "AGENTDEV_USAGE line in the " + container + " container log ignored: " + c.usageSourceText(),
 		Time: metav1.NewTime(t), Pod: p.Name, Container: container, Hash: hex.EncodeToString(h[:])}
 	if err := c.Record(ctx, p, spec); err != nil {
 		log.FromContext(ctx).Error(err, "record forged usage event")
 	}
+}
+
+func (c *Collector) usageSourceText() string {
+	if c.ProxyUsage {
+		return "usage is accepted only from the Claude credential proxy"
+	}
+	return "usage is accepted only from the forge sidecar"
 }
