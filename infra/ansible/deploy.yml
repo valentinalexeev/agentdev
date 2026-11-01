@@ -225,6 +225,8 @@
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
+            USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+            USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
           replace: []
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods

@@ -30,6 +30,7 @@
 | All agents cannot connect to the internet after the GKE deploy. The proxy log shows DNS errors. | The policy `egress-proxy-dns` is missing. | 1. Run the playbook again. 2. Run `kubectl -n coding-agents get networkpolicy egress-proxy-dns`. |
 | The playbook stops with `FQDNNetworkPolicy is not available`. | The cluster does not have FQDN network policy. | 1. Apply `infra/terraform`. 2. On a Standard cluster, run `kubectl -n kube-system rollout restart ds anetd`. |
 | `egress-proxy` shows `OOMKilled`. | Squid uses more memory than its limit. | 1. Increase the memory limit in `manifests/egress.yaml.tmpl`. |
+| The agent does not start new work. The log shows `subscription usage limit: new runs paused`. | The subscription is at the usage limit, or Claude refused a run because of its rate limit. | 1. On the **Usage** page, find the reason and the end time. 2. Wait for the end time. Or an administrator increases the global usage limit. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
 ## Interactive sessions

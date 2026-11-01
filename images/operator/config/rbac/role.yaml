@@ -21,6 +21,23 @@ rules:
   - update
 - apiGroups:
   - ""
+  resourceNames:
+  - agentdev-usage
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
+  - agentdev-usage-settings
+  resources:
+  - configmaps
+  verbs:
+  - get
+- apiGroups:
+  - ""
   resources:
   - pods
   verbs:
