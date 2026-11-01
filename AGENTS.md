@@ -25,7 +25,7 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
 2. **Tools on the operator machine:** `gcloud`, `terraform` ≥ 1.9, `ansible` ≥ 2.17, `kubectl`.
 3. **Owner logs in** (interactive; ask them): `gcloud auth login && gcloud auth application-default login`.
    Check: `gcloud auth list` shows an active account.
-4. **Owner runs the bootstrap** (project + billing + state bucket) from a checkout of the pinned agentdev release:
+4. **Owner runs the bootstrap** (project + billing + state bucket; for a project that already exists set `create_project = false` in `bootstrap.tfvars`: then only the state bucket and its APIs) from a checkout of the pinned agentdev release:
    ```bash
    cd agentdev/infra/terraform/bootstrap && terraform init
    terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars    # see bootstrap/example.tfvars
@@ -55,6 +55,8 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
     - The router lists every agent: `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"`.
     - Assign a small test issue to an agent and see it comment and open a PR (polling works even before the
       webhook URL is public).
+    - Security: `scripts/e2e-gke-security.sh --host <ui host> --webhook-host <webhook host>` (the owner runs it;
+      `docs/e2e-security.md`). Every line PASS, no FAIL.
 11. **Report** in the deployment repo's bootstrap issue: what was created, the checks and their results, the
     monthly budget, and what's left (GitHub App and webhook DNS/TLS per #2).
 
