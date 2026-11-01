@@ -44,12 +44,14 @@
           - item.plan is defined and item.plan is sequence and item.plan is not string and item.plan | length > 0
           - item.apply is defined and item.apply is sequence and item.apply is not string and item.apply | length > 0
           - "'..' not in (item.path | default(''))"
+          - (item.egress_hosts | default([])) is sequence and (item.egress_hosts | default([])) is not string
+          - (item.egress_hosts | default([])) | reject('match', '^\\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
           - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
           - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
         fail_msg: >-
           executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
-          plan/apply argv lists, no '..', one executor per environment)
+          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
         quiet: true
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
@@ -337,9 +339,61 @@
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
             EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
             EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
+            EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
+          replace: []
+
+    # Executor egress (#135): default deny for executor Jobs plus the executor proxy (same template as 12-operator.sh).
+    # The operator writes each Executor's credential and hosts into Secret executor-egress-proxy.
+    - name: Executor egress allow-list (#135) - proxy and executor NetworkPolicy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_exec_egress) | from_yaml_all | list }}"
+      vars:
+        vars_exec_egress:
+          src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
+          values:
+            EXEC_NS: "{{ exec_ns }}"
+            FORGE_NS: forge
+            EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
+          replace: []
+
+    # GKE: the executor proxy itself may reach only the hosts of all executors (same mapping as the agents' proxy)
+    - name: Executor egress hosts as FQDNNetworkPolicy matches
+      ansible.builtin.set_fact:
+        exec_egress_fqdn_matches: >-
+          {{ lookup('ansible.builtin.template', 'egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
+             'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
+      vars:
+        executor_egress_all_hosts: >-
+          {{ (executor_egress_hosts + (['github.com'] if forge_kind == 'github' else [])
+              + (executors | map(attribute='egress_hosts', default=[]) | flatten)) | unique | list }}
+
+    - name: "Executor egress proxy FQDNNetworkPolicy (GKE, #135)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: networking.gke.io/v1alpha1
+          kind: FQDNNetworkPolicy
+          metadata: {name: executor-egress-proxy, namespace: "{{ exec_ns }}"}
+          spec:
+            podSelector: {matchLabels: {app: executor-egress-proxy}}
+            egress:
+              - matches: "{{ exec_egress_fqdn_matches }}"
+                ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
+      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length > 0)
+
+    - name: Executor egress proxy may reach any address on 80/443 when the FQDN policy is off (Squid alone enforces the list)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: "{{ 'absent' if egress_fqdn_policy | bool else 'present' }}"
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_exec_web) | from_yaml }}"
+      vars:
+        vars_exec_web:
+          src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
+          values: {EXEC_NS: "{{ exec_ns }}"}
           replace: []
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
@@ -409,6 +463,7 @@
             forgeSecret: "exec-{{ item.name }}-forge"
             approvalHours: "{{ item.approval_hours | default(24) | int }}"
             allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
+            egressHosts: "{{ item.egress_hosts | default([]) }}"
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name }}"}
       when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)
@@ -600,11 +655,11 @@
       no_log: true
 
     # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)
-    - name: Wait for the operator, router, egress proxy and Claude proxy
+    - name: Wait for the operator, router, egress proxies and Claude proxy
       ansible.builtin.command: >-
         kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
       loop: "{{ [{'ns': platform_ns, 'name': 'agentdev-operator'}, {'ns': agents_ns, 'name': 'webhook-router'},
-                 {'ns': agents_ns, 'name': 'egress-proxy'}]
+                 {'ns': agents_ns, 'name': 'egress-proxy'}, {'ns': exec_ns, 'name': 'executor-egress-proxy'}]
                 + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else []) }}"
       loop_control: {label: "{{ item.name }}"}
       changed_when: false

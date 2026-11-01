@@ -1314,8 +1314,12 @@ Before you do this task, make sure that you have:
      planCredentials: {secretName: exec-tf-prod-plan}
      applyCredentials: {secretName: exec-tf-prod-apply}
      forgeSecret: exec-tf-prod-forge
+     egressHosts: [oauth2.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com]
    EOF
    ```
+
+   `egressHosts` is the list of hosts that this executor can connect to, in addition to the default list (see
+   [Add a host for an executor](#add-a-host-for-an-executor)). Write the cloud APIs that the tool uses.
 
 3. In the forge, add the branch protection rule for the branch: require the status check `agentdev/trusted-plan`
    and require that the branch is up to date.
@@ -1327,6 +1331,51 @@ Before you do this task, make sure that you have:
 NOTE: With Ansible, put the executors in `executors:` of the instance file
 (`examples/deployment/gcp-gke/ansible/instance.yml.example`). The playbook makes the Secrets, the service accounts
 and the Executor objects.
+
+### Add a host for an executor
+
+The executor Jobs can connect to the internet only through the executor egress proxy (`executor-egress-proxy` in
+the namespace `agentdev-executors`, #135). A NetworkPolicy (`executor-egress`) stops all other connections. The
+Jobs can always use DNS, the in-cluster forge (`kind`) and the GKE metadata server (Workload Identity). Each executor
+can connect only to these hosts:
+
+- The default list for all executors: `EXECUTOR_EGRESS_HOSTS` (Terraform registry and HashiCorp releases).
+- The git host of the forge (`github.com` on GitHub).
+- The hosts in `spec.egressHosts` of the `Executor`.
+
+The proxy refuses all other requests. Each refused request is a security event with the source `egress`, the rule
+`egress-host` and the name of the executor.
+
+Do this task when a plan or an apply fails because a host is refused.
+
+WARNING: Add only a host that you trust. The plan of a pull request runs code that nobody reviewed. That code can
+send data to each host on the list of the executor.
+
+1. Find the refused host. Open the **Security** page of the web UI, or run:
+   `kubectl -n agentdev-executors logs deploy/executor-egress-proxy | grep AGENTDEV_SECURITY_EVENT`
+   The `action` field shows the method, the host and the port.
+2. Add the host:
+   - On `kind`: add the host to `spec.egressHosts` of the `Executor`, for example
+     `kubectl -n agentdev-executors patch executor tf-prod --type=json -p '[{"op":"add","path":"/spec/egressHosts/-","value":"sts.googleapis.com"}]'`.
+     If the list does not exist, use `--type=merge -p '{"spec":{"egressHosts":["sts.googleapis.com"]}}'`.
+   - On GKE: add the host to `egress_hosts` of the executor in `instance.yml`, then run the playbook (open a pull
+     request in the deployment repository). The playbook also adds the host to the FQDN policy of the proxy.
+   - For a host that all executors need: set `EXECUTOR_EGRESS_HOSTS` in `.env` and run `./run.sh 12` (`kind`), or
+     set `executor_egress_hosts` in `instance.yml` (GKE).
+3. Write a dot before the name to also allow all subdomains: `.googleapis.com`. On GKE, the FQDN policy of the
+   proxy allows only one level of subdomains for a dot entry.
+4. Wait one poll (`EXECUTOR_POLL_SECONDS`) and 15 seconds. The operator writes the new list to the Secret
+   `executor-egress-proxy`, and the proxy loads it. The proxy does not start again. Then start the run again: push a
+   new commit to the pull request.
+
+NOTE: A change of `spec.egressHosts` does not change the spec hash. A pending approval stays valid.
+
+NOTE: The operator does not pause an executor because of egress events.
+
+NOTE: If an executor cannot connect to anything (for example, the proxy is not ready), the run fails and the pull
+request shows the failure. The executor never gets a direct connection. To stop the egress limit for a test only,
+delete the NetworkPolicy `executor-egress` (`kubectl -n agentdev-executors delete networkpolicy executor-egress`).
+The next `./run.sh 12` or playbook run makes it again.
 
 ### Find the runs of an executor
 
@@ -1349,6 +1398,9 @@ and the Executor objects.
 | `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
 | `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
 | `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
+| `EXECUTOR_EGRESS_HOSTS` (hosts that all executors can connect to) | `registry.terraform.io releases.hashicorp.com` | `config.env`; Ansible `executor_egress_hosts` |
+| `spec.egressHosts` (more hosts for one executor, maximum 64) | none | `Executor`; Ansible `egress_hosts` of the executor |
+| Executor egress proxy | `http://executor-egress-proxy.agentdev-executors.svc.cluster.local:3128` | operator env `EXECUTOR_EGRESS_PROXY` |
 
 - Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
   `executor.apply` or `executor.refused`.
@@ -1359,14 +1411,13 @@ and the Executor objects.
   recorded. The Ansible playbook stops before it changes anything if two executors have the same environment.
 - By default the executor plans only pull requests from branches of the same repository. A pull request from a fork
   runs the code of its author with the plan credentials. Set `spec.allowForkPRs: true` only if the plan credentials
-  can read nothing secret (risk R81; egress limits are #65).
+  can read nothing secret (risk R81). The egress allow-list of the executor limits where that code can send data.
 - The approval covers the image digest, the apply command and a SHA-256 of the `Executor` spec (also the
   credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
   is closed with `executor spec changed`. Merge a new commit to plan again.
 - The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
-- The egress allow-list of the agents does not apply to the executors. The executor Jobs do not use the egress proxy,
-  because the tools need the cloud APIs of the environment. An executor Job can connect to all hosts. An allow-list
-  for the executors is planned in #135.
+- The executor Jobs use their own egress proxy and allow-list, not the list of the agents. See
+  [Add a host for an executor](#add-a-host-for-an-executor).
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
 ## Subscription usage limits

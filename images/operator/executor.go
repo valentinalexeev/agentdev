@@ -84,6 +84,8 @@ type ExecConfig struct {
 	Retention   time.Duration // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
 	Storage     string        // plan volume size
 	ApplyStart  time.Duration // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
+	EgressProxy string        // executor egress proxy URL (#135, EXECUTOR_EGRESS_PROXY); empty: Jobs get no proxy env
+	EgressHosts []string      // hosts every executor may reach (EXECUTOR_EGRESS_HOSTS), plus spec.egressHosts
 }
 
 // podLogs returns at most limit bytes of a container's log.
@@ -109,6 +111,9 @@ type ExecutorPoller struct {
 	Now    func() time.Time
 	// Forge builds the forge client of an executor from its token; replaced in tests.
 	Forge func(e *v1.Executor, token string) (forgeAPI, error)
+	// EgressLogs reads the executor egress proxy's log (#135); nil: refusals are not collected.
+	EgressLogs  sinceLogs
+	egressSince map[types.UID]time.Time // proxy pod -> time of the last log line read
 }
 
 func (p *ExecutorPoller) defaultForge(e *v1.Executor, token string) (forgeAPI, error) {
@@ -154,6 +159,11 @@ func (p *ExecutorPoller) PollAll(ctx context.Context) {
 		return
 	}
 	owner := envOwners(list.Items)
+	// before any Job starts: the proxy must know the executor's credential and hosts (#135)
+	if err := p.syncEgress(ctx, list.Items, owner); err != nil {
+		log.FromContext(ctx).Error(err, "sync executor egress proxy")
+	}
+	p.collectEgress(ctx, list.Items)
 	for i := range list.Items {
 		e := &list.Items[i]
 		if o := owner[e.Spec.Environment]; o != e.Name {
@@ -832,13 +842,10 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	if r.Spec.Stage != "pr" {
 		ref = "refs/heads/" + branchOf(e) // merge and apply: only commits on the protected branch
 	}
-	gitBase := strings.TrimRight(p.C.ForgeURL, "/")
+	gitBase := p.gitBase(e)
 	gitUser := "token"
 	if forgeOf(e) == "github" {
-		gitBase, gitUser = strings.TrimRight(p.C.GitHubURL, "/"), "x-access-token"
-		if gitBase == "" {
-			gitBase = "https://github.com"
-		}
+		gitUser = "x-access-token"
 	}
 	env := func(k, v string) corev1.EnvVar { return corev1.EnvVar{Name: k, Value: v} }
 	common := []corev1.EnvVar{env("COMMIT", r.Spec.Commit), env("ENVIRONMENT", e.Spec.Environment), env("PLAN_FILE", planFile),
@@ -857,17 +864,18 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	checkout := corev1.Container{
 		Name: "checkout", Image: p.C.GitImage, ImagePullPolicy: corev1.PullPolicy(p.C.PullPolicy),
 		Command: []string{"/bin/sh", "-c", checkoutScript},
-		Env: []corev1.EnvVar{env("REPO_URL", gitBase+"/"+e.Spec.Repo+".git"), env("REF", ref), env("COMMIT", r.Spec.Commit),
+		Env: append([]corev1.EnvVar{env("REPO_URL", gitBase+"/"+e.Spec.Repo+".git"), env("REF", ref), env("COMMIT", r.Spec.Commit),
 			env("GIT_USER", gitUser), env("HOME", "/tmp"), env("GIT_TERMINAL_PROMPT", "0"), env("GIT_CONFIG_NOSYSTEM", "1"),
 			{Name: "FORGE_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: e.Spec.ForgeSecret}, Key: "FORGE_TOKEN"}}}},
+			p.egressEnv(e)...),
 		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: workDir}, {Name: "tmp", MountPath: "/tmp"}},
 		SecurityContext: restricted(1000, true),
 		Resources:       res("50m", "128Mi", "1", "512Mi"),
 	}
 	tool := corev1.Container{
 		Name: "tool", Image: e.Spec.Image, ImagePullPolicy: corev1.PullIfNotPresent, Command: cmd, WorkingDir: toolDir,
-		Env: common, VolumeMounts: mounts, SecurityContext: restricted(1000, false), Resources: res("100m", "256Mi", "2", "2Gi"),
+		Env: append(common, p.egressEnv(e)...), VolumeMounts: mounts, SecurityContext: restricted(1000, false), Resources: res("100m", "256Mi", "2", "2Gi"),
 	}
 	if creds.SecretName != "" {
 		tool.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: creds.SecretName}}}}
@@ -923,6 +931,17 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 			},
 		},
 	}
+}
+
+// gitBase is the git base URL of the executor's forge.
+func (p *ExecutorPoller) gitBase(e *v1.Executor) string {
+	if forgeOf(e) == "github" {
+		if b := strings.TrimRight(p.C.GitHubURL, "/"); b != "" {
+			return b
+		}
+		return "https://github.com"
+	}
+	return strings.TrimRight(p.C.ForgeURL, "/")
 }
 
 func res(cpuReq, memReq, cpuLim, memLim string) corev1.ResourceRequirements {

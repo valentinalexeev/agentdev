@@ -6,6 +6,21 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- Executor egress allow-list (#135, 1.0.0 gate, R81, new R96). Executor Jobs (#69) could connect to any host. Now
+  their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
+  in-cluster forge and the GKE metadata server for Workload Identity). The proxy (`executor-egress-proxy`, Squid,
+  same image as the agents' proxy) allows each executor only `EXECUTOR_EGRESS_HOSTS` (default
+  `registry.terraform.io releases.hashicorp.com`), its forge's git host and the new field `spec.egressHosts`
+  (Ansible `executors[].egress_hosts`). The operator generates a proxy credential per executor and the Squid rules in
+  Secret `executor-egress-proxy`; the proxy reloads them without a restart. On GKE an FQDNNetworkPolicy limits the
+  proxy to the hosts of all executors; on kind `executor-egress-proxy-web` allows 80/443. Each refused request is a
+  SecurityEvent of the executor (source `egress`, rule `egress-host`). Same templates for kind (`./run.sh 12`) and
+  GKE (`deploy.yml`). Operator RBAC in `EXEC_NS`: create Secrets, get/update `executor-egress-proxy`.
+  **Action needed:** an executor that uses cloud APIs needs them in `spec.egressHosts` / `egress_hosts` (for example
+  `oauth2.googleapis.com`, `storage.googleapis.com`), else its plan fails with refused hosts. Docs: admin.md
+  ("Add a host for an executor"), security-model.md phase 5, security.md R25, R81, R96.
+
 ### Deprecated
 - Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
   step per PR. New playbook `infra/ansible/kind.yml` with the role `kind_cluster`; step 01 (`01-cluster.sh`) is now a
