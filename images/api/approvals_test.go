@@ -33,10 +33,11 @@ func approvalObj(agent, id, repo string, created time.Time) *unstructured.Unstru
 }
 
 type fakeComments struct {
-	list   []forgeComment
-	ids    map[string]int64
-	err    error
-	closed bool
+	list    []forgeComment
+	ids     map[string]int64
+	err     error
+	closed  bool
+	selfErr error
 }
 
 func (f *fakeComments) IssueState(context.Context, string, int) (string, error) {
@@ -53,7 +54,12 @@ func (p fakePods) PodExists(_ context.Context, uid string) (bool, error) { retur
 func (f *fakeComments) Comments(context.Context, string, int, time.Time) ([]forgeComment, error) {
 	return f.list, f.err
 }
-func (f *fakeComments) Self(context.Context) (int64, error) { return 15, nil }
+func (f *fakeComments) Self(context.Context) (int64, error) {
+	if f.selfErr != nil {
+		return 0, f.selfErr
+	}
+	return 15, nil
+}
 
 func (f *fakeComments) UserID(_ context.Context, login string) (int64, error) {
 	if id, ok := f.ids[login]; ok {
@@ -204,6 +210,28 @@ func TestDeciderFailsClosed(t *testing.T) {
 	d.pruneSeen()
 	if len(d.seen) != 0 {
 		t.Fatalf("seen not pruned: %v", d.seen)
+	}
+}
+
+// The API's own Gitea account cannot be resolved: no decision in that pass (it could be the commenter), then it applies.
+func TestDeciderSelfUnknownFailsClosed(t *testing.T) {
+	k, _ := approvalEnv(t, approvalObj("carol", aid, "owner/x", t0))
+	fc := &fakeComments{selfErr: errForgeUnavailable, list: []forgeComment{
+		{ID: 1, UserID: 10, Login: "wendy", Body: "/approve " + aid, Created: t0.Add(time.Minute)}}}
+	d := newDecider(k, agentsFixed{{Name: "carol"}}, fc, permMap{"wendy": permWrite})
+	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
+	if err := d.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("own account unknown: state %s, want pending", a.State)
+	}
+	fc.selfErr = nil
+	if err := d.pass(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.DecidedBy != "wendy" {
+		t.Fatalf("own account known: %+v", a)
 	}
 }
 

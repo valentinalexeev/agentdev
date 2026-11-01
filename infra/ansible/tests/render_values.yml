@@ -34,6 +34,7 @@
             OIDC_DISCOVERY_URL: "{{ api_oidc_discovery_url }}"
             OIDC_AUDIENCE: "{{ api_oidc_audience }}"
             FORGE_URL: "{{ api_forge_url }}"
+            GITHUB_URL: "{{ api_github_url }}"
             APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
             APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"

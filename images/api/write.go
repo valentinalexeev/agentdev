@@ -185,10 +185,6 @@ func (w *writer) authorize(ctx context.Context, id *identity, forge, repo string
 	if adminOK && w.isAdmin(id) {
 		return "admin-group", nil
 	}
-	if forge == "github" {
-		return "", denied("changes to GitHub agents are not supported yet for repository users; ask an agentdev " +
-			"administrator (follow-up: https://github.com/valentinalexeev/agentdev/issues/87)")
-	}
 	p, err := w.repoPerm(ctx, id, forge, repo)
 	if err != nil {
 		log.Printf("forge permission check %s on %s: %v", forgeUserOf(id, forge), repo, err)

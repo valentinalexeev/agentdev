@@ -7,6 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- GitHub permission check and approval decisions in the API (#87). For an agent on GitHub, the API reads the
+  collaborator permission (`GET /repos/{o}/{r}/collaborators/{u}/permission`) with the agents' GitHub App
+  (read-only installation tokens) or a read-only `GITHUB_API_TOKEN`, and applies the same rule table as on Gitea
+  (`maintain` and `write` are write, `triage` and `read` are read). Errors give 503; `agentdev-admins` still works.
+  Approvals on GitHub repositories are now decided: the API reads the comments and the issue state on GitHub; the
+  App bot is always in the deny list and non-`User` authors are refused. The forge sidecar's approval calls now use
+  the forge driver (GitHub API and installation token; job check by the label `agent:<name>`). Deploy: new optional
+  Secret `agentdev-api-github` (kind: `./run.sh 10` with `FORGE_KIND=github`; GKE: the `api` role with
+  `forge_kind: github`). README no longer lists "Gitea only" in the MVP limits. New risk R93.
 - Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
   register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
   App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
