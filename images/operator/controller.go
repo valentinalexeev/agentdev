@@ -23,6 +23,10 @@ type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	GitHubURL                                                                            string // FORGE_URL of forge: github agents (#2)
 	PollSeconds, IdleSeconds                                                             string
+	// ClaudeProxyURL (#66): when set, the agent container gets no Claude credential; it calls this URL as
+	// ANTHROPIC_BASE_URL with its per-agent key (Secret agent-<name>-proxy). Empty: the credential Secret is mounted
+	// as before (deprecated rollback path).
+	ClaudeProxyURL string
 }
 
 type AgentReconciler struct {

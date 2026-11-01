@@ -9,11 +9,12 @@
 source "$(dirname "$0")/lib.sh"
 need envsubst; need jq
 
-log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE} and ${ROUTER_IMAGE}"
+log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE}, ${ROUTER_IMAGE} and ${CLAUDE_PROXY_IMAGE}"
 "${CONTAINER_ENGINE}" build -q -t "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker" >/dev/null
 "${CONTAINER_ENGINE}" build -q -t "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge" >/dev/null
 "${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
-kind load docker-image "${WORKER_IMAGE}" "${FORGE_IMAGE}" "${ROUTER_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
+"${CONTAINER_ENGINE}" build -q -t "${CLAUDE_PROXY_IMAGE}" "${SPIKE_DIR}/images/credproxy" >/dev/null
+kind load docker-image "${WORKER_IMAGE}" "${FORGE_IMAGE}" "${ROUTER_IMAGE}" "${CLAUDE_PROXY_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
 ok "image loaded"
 
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
@@ -51,6 +52,22 @@ k -n "${AGENTS_NS}" rollout restart deploy/webhook-router >/dev/null   # pick up
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
 ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
 
+log "Claude credential proxy (#66)"
+# the only pod with the Claude credentials; each agent gets a key (HMAC of its name) that is worth nothing elsewhere
+PROXY_SIGNING=$(secret_file "${SPIKE_DIR}/.secrets/claude-proxy-signing.key")
+printf '%s' "${PROXY_SIGNING}" | k -n "${AGENTS_NS}" create secret generic claude-proxy-signing --from-file=key=/dev/stdin \
+  --dry-run=client -o yaml | k apply -f - >/dev/null
+proxy_key() { printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "${PROXY_SIGNING}" -r | cut -d' ' -f1; }
+[[ "${CLAUDE_BUDGET_TOKENS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_TOKENS must be a number of tokens (0 = no limit)"
+# shellcheck disable=SC2086 # AGENTS is a space-separated list
+AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
+  CLAUDE_BUDGET_TOKENS="${CLAUDE_BUDGET_TOKENS}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_TOKENS} ${CLAUDE_SECRET_SOURCES}' \
+  < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
+k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
+k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"
+ok "claude-proxy up: http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"
+
 log "Agents"
 # agents are Agent objects (#47, #57): the operator turns them into StatefulSets. Install it when missing; to
 # pick up operator changes run ./run.sh 12 yourself.
@@ -84,6 +101,10 @@ for a in ${AGENTS}; do
     | k -n "${AGENTS_NS}" create secret generic "agent-${a}" --from-env-file=/dev/stdin --dry-run=client -o yaml \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   fi
+  # the agent's key for the Claude credential proxy (#66); the agent container gets this, never the credential
+  printf 'ANTHROPIC_AUTH_TOKEN=%s.%s\n' "${a}" "$(proxy_key "${a}")" \
+    | k -n "${AGENTS_NS}" create secret generic "agent-${a}-proxy" --from-env-file=/dev/stdin --dry-run=client -o yaml \
+    | k apply -f - >/dev/null
   # the agent itself (#47, #57): the operator renders its Service and StatefulSet; an existing one is adopted in place
   jq -n --arg n "${a}" --arg ns "${AGENTS_NS}" --arg repo "${REPO}" --arg claude "${secret}" --arg forge "${FORGE_KIND}" \
       --arg maxc "${MAX_CONCURRENT}" --arg s2z "${SCALE_TO_ZERO}" \

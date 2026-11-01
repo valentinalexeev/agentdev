@@ -115,19 +115,15 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append([]corev1.EnvVar{}, common...),
+		Env: append(append(append([]corev1.EnvVar{}, common...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		),
-		// exactly one Claude credential per agent (#5); MCP token optional (#14)
-		EnvFrom: []corev1.EnvFromSource{
-			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}},
-			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-mcp"}, Optional: ptr.To(true)}},
-		},
+		), r.claudeProxyEnv(n)...),
+		EnvFrom: r.claudeEnvFrom(a),
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
@@ -145,7 +141,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		Env: append(append(append([]corev1.EnvVar{}, common...),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
-			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"),
+			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more
@@ -160,4 +156,35 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// claudeEnvFrom: with the credential proxy (#66) the agent container gets no Claude Secret, only the optional MCP
+// token (#14). Without it, exactly one Claude credential per agent (#5), as before.
+func (r *AgentReconciler) claudeEnvFrom(a *v1.Agent) []corev1.EnvFromSource {
+	mcp := corev1.EnvFromSource{SecretRef: &corev1.SecretEnvSource{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + a.Name + "-mcp"}, Optional: ptr.To(true)}}
+	if r.D.ClaudeProxyURL != "" {
+		return []corev1.EnvFromSource{mcp}
+	}
+	return []corev1.EnvFromSource{
+		{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}}, mcp}
+}
+
+// claudeProxyEnv points Claude Code at the credential proxy (#66) with the agent's key. The key only identifies the
+// agent to the proxy; the model can read it, but it is worth nothing outside the cluster.
+func (r *AgentReconciler) claudeProxyEnv(n string) []corev1.EnvVar {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "ANTHROPIC_BASE_URL", Value: r.D.ClaudeProxyURL},
+		{Name: "ANTHROPIC_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN"}}}}
+}
+
+// usageReports: "off" when the Claude credential proxy reports usage (#66), so the sidecar refuses POST /usage.
+func (r *AgentReconciler) usageReports() string {
+	if r.D.ClaudeProxyURL != "" {
+		return "off"
+	}
+	return "on"
 }

@@ -33,6 +33,7 @@ PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR
   SECURITY_PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}" SECURITY_RETENTION_DAYS="${SECURITY_RETENTION_DAYS:-30}" SECURITY_MAX_PER_AGENT="${SECURITY_MAX_PER_AGENT:-500}" \
   SECURITY_RATE_PER_MIN="${SECURITY_RATE_PER_MIN:-10}" SECURITY_RATE_BURST="${SECURITY_RATE_BURST:-20}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
+  CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-operator --timeout=120s >/dev/null || die "operator did not become ready"
