@@ -22,6 +22,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   To apply: install ansible-core, then run `./run.sh 01` as before.
 
 ### Added
+- Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
+  billing link and makes only the bootstrap APIs and the state bucket. `billing_account_id` is required only when the
+  project is created. The default (`true`) is unchanged.
 - End-to-end security checklist (#123): `scripts/e2e-gke-security.sh` checks a running instance (GKE, or kind
   with `--kind`) for every "pending GKE e2e" control: no credentials in the agent container, egress default-deny and
   the metadata server, Claude proxy only, usage reports refused, approvals and executors out of the agent's reach,

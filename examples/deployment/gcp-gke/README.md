@@ -14,7 +14,7 @@ AGENTS.md / CLAUDE.md            how an agent operates this instance
 
 ## First time
 1. Copy this directory to the new repo; rename `*.example` files and fill them in.
-2. Follow agentdev `AGENTS.md` steps 1 to 3 (logins, **you** run the bootstrap apply: project, billing, state bucket).
+2. Follow agentdev `AGENTS.md` steps 1 to 3 (logins, **you** run the bootstrap apply: project, billing, state bucket; for an existing project set `create_project = false` in `bootstrap.tfvars`).
 3. `cd terraform && terraform init -backend-config="bucket=<project>-tfstate" && terraform plan -var-file=instance.tfvars`
    → you apply once locally (creates the Workload Identity setup the CI needs).
 4. Set repository variables from `terraform output github_actions_auth`: `GCP_WIF_PROVIDER`, `GCP_SERVICE_ACCOUNT`, and `GCP_PROJECT`.
