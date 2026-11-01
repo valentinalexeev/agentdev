@@ -14,6 +14,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Company SSO (#122): sign-in to authentik through Google Workspace (SAML) or another OIDC provider, configured by the
+  new blueprint `manifests/authentik-blueprint-sso.yaml` from the optional Secret `authentik-sso` (GKE: new role
+  `authentik_sso`, `instance.yml` `authentik.sso`, Secret Manager `authentik-sso-idp-cert`; kind: a local OIDC
+  stand-in in `./run.sh 09`). One Workspace group syncs to `agentdev-admins-sso`, a child of `agentdev-admins`: added
+  when the directory lists the person, removed only when it no longer does, each change audited as
+  `custom_agentdev_admin_sync`; members of `agentdev-admins` are never changed (#103). `forge_login` comes from a
+  Workspace custom attribute that only directory admins can edit. The scope `forge` now also sends the `groups` claim
+  with inherited groups. New risks R66 to R70.
 - Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
   `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
   `claude-shared` / `claude-<agent>`; agent pods get `ANTHROPIC_BASE_URL` and a per-agent proxy key

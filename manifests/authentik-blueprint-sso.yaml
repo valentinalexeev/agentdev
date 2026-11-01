@@ -127,8 +127,8 @@ entries:
     name: !Env [AGENTDEV_SSO_NAME, Google Workspace]
     enabled: true
     sso_url: !Env AGENTDEV_SSO_SAML_SSO_URL
-    issuer_override: !Env AGENTDEV_SSO_SAML_ENTITY_ID
-    binding_type: redirect
+    # issuer: authentik's metadata URL (the default), which is the Entity ID set in the Workspace SAML app
+    binding_type: REDIRECT
     name_id_policy: urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress
     verification_kp: !KeyOf saml-idp-cert
     signed_assertion: true

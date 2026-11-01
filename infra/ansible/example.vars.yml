@@ -10,6 +10,15 @@ agents:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
+# Optional company SSO for authentik (#122, docs/admin.md "Sign in with Google Workspace"). The IdP certificate goes
+# into the Secret Manager secret authentik-sso-idp-cert (README.md). Members of admin_group become agentdev admins;
+# nothing else changes the members of agentdev-admins.
+# authentik:
+#   sso:
+#     kind: saml                                   # Google Workspace SAML app (oidc: another OIDC provider)
+#     admin_group: agentdev-admins@example.com     # the Workspace group (its e-mail address)
+#     forge_attribute: githubLogin                 # SAML app attribute with the custom schema field
+#     saml_sso_url: https://accounts.google.com/o/saml2/idp?idpid=C0abc123
 # Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
 # defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
 # security:

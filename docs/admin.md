@@ -351,7 +351,7 @@ Users cannot change this attribute in the default setup, but only by configurati
 
 The intended setup: authentik keeps no users and passwords of its own. It signs people in through the same company
 single sign-on as the forge (for example Google Workspace). The source property mapping of that identity provider
-sets `forge_login`.
+sets `forge_login`. For Google Workspace, the blueprint does this for you (see "Sign in with Google Workspace").
 
 To set the forge login from the company identity provider (kind and GKE):
 
@@ -399,6 +399,93 @@ NOTE: If the token has no `forge_login`, or the value has upper case letters or 
 NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
 `manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
 interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
+
+### Sign in with Google Workspace
+
+authentik signs people in through Google Workspace, the company single sign-on (#122). The blueprint
+`manifests/authentik-blueprint-sso.yaml` makes the source, the admin group and the forge login mapping. You set only
+values in `instance.yml` and one secret in Secret Manager.
+
+The source does these three things at each sign-in:
+
+- It creates the authentik user at the first sign-in.
+- It sets the user attribute `forge_login` from a Workspace custom attribute (#88).
+- It synchronizes one Workspace group with the authentik group `agentdev-admins-sso`.
+
+The group `agentdev-admins-sso` is a child of `agentdev-admins`. Thus, its members are agentdev administrators.
+
+The synchronization obeys these rules (#103):
+
+- It adds a person only when the Workspace group has that person.
+- It removes a person from `agentdev-admins-sso` only when the person is no longer in the Workspace group. This
+  occurs at the next sign-in of that person.
+- It never changes the members of `agentdev-admins`. Members that you add to `agentdev-admins` (for example
+  `akadmin`) stay.
+- Other Workspace groups do not go to authentik.
+- authentik records each change as the event `custom_agentdev_admin_sync` (**Events > Logs**). The event has the user
+  name, `add` or `remove`, and the Workspace group.
+
+NOTE: A person who left the Workspace group keeps the administrator rights until the next sign-in or until the token
+expires. To remove the rights immediately, remove the person from the Workspace group and deactivate the user in
+**Directory > Users**.
+
+#### Prepare Google Workspace
+
+You must be a Google Workspace super administrator.
+
+1. In the Google Admin console, go to **Directory > Users > More options > Manage custom attributes**.
+2. Add a custom attribute category, for example `agentdev`.
+3. Add the field `githubLogin`. Set **Visibility** to **Visible to admin**. Set **Info type** to **Text**.
+   Users cannot edit custom attributes. Only directory administrators can edit them.
+4. For each person, open the user, and set **agentdev > githubLogin** to the forge login of that person.
+5. Make a Workspace group for the agentdev administrators, for example `agentdev-admins@example.com`.
+6. Go to **Apps > Web and mobile apps > Add app > Add custom SAML app**.
+7. Write down the **SSO URL** and download the **Certificate**.
+8. Set **ACS URL** to `https://<authentik host>/source/saml/agentdev-sso/acs/`.
+9. Set **Entity ID** to `https://<authentik host>/source/saml/agentdev-sso/metadata/`.
+10. Set **Name ID format** to **EMAIL** and **Name ID** to **Basic Information > Primary email**.
+11. In **Attribute mapping**, map **agentdev > githubLogin** to the app attribute `githubLogin`.
+12. In **Group membership**, add the administrator group. Set the app attribute to
+    `http://schemas.xmlsoap.org/claims/Group`.
+13. Turn on the app for the people that use agentdev.
+
+#### Configure the source
+
+1. Put the certificate from step 7 into Secret Manager:
+   `gcloud secrets create authentik-sso-idp-cert --data-file=google.pem --project <project>`
+2. In `instance.yml` of the deployment repository, add `authentik.sso` (see `infra/ansible/example.vars.yml`):
+   `kind: saml`, `admin_group`, `forge_attribute` and `saml_sso_url`.
+3. Open a pull request in the deployment repository. After the merge, the playbook writes the Secret `authentik-sso`
+   and restarts authentik.
+4. Sign in to the agentdev UI with **Google Workspace**.
+5. In authentik, go to **Directory > Users**, open your user, and make sure that `forge_login` is correct.
+
+The playbook makes sure that `admin_group` and `forge_attribute` contain only safe characters. These values go into
+the property mapping expressions.
+
+NOTE: If the custom attribute is empty or is not a valid forge login, `forge_login` is empty. The person can read,
+but cannot change agents.
+
+NOTE: The playbook does not deploy authentik yet (#114). Until then, the Secret `authentik-sso` waits in the
+namespace `agentdev-platform`.
+
+#### Test the sign-in on kind
+
+On kind, a local OIDC server is used in place of Google Workspace (`manifests/kind/sso-standin.yaml`). It accepts
+any user name and any claims. The same blueprint configures it as an OIDC source.
+
+1. Run `./run.sh 09`.
+   The step signs in a test user two times and makes sure that the rules above are obeyed. It shows
+   `SSO check passed`.
+2. Optional: to sign in yourself, run
+   `kubectl -n agentdev-platform port-forward svc/sso-standin 18080:8080`.
+3. Open authentik, and click **Company SSO (local stand-in)**.
+4. Type a user name. In **claims**, type for example
+   `{"groups": ["agentdev-admins@example.com"], "githubLogin": "alice"}`.
+
+To skip the stand-in, set `SSO_STANDIN=0`. To skip only the test, set `SSO_CHECK=0`.
+
+WARNING: Do not use the stand-in outside kind. Anyone who can open it can sign in as any person.
 
 ### Reference: authentik
 
