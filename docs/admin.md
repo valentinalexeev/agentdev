@@ -362,7 +362,7 @@ interface: scope name `forge`, the expression from the blueprint, and add it to 
 ## Management API
 
 The agentdev API (`images/api`, Go, #46) shows the agents of the instance. It also pauses, resumes, changes, adds and removes
-agents (#57). On GKE, refer to #51.
+agents (#57). On GKE, the Ansible playbook deploys it when `instance.yml` sets `api.oidc_issuer`.
 
 ### Deploy the API
 
@@ -374,6 +374,46 @@ Do this task after run.sh step 09.
    The script builds the API and deploys it in `agentdev-platform`.
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
+
+### Deploy the API on GKE
+
+The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
+step 10. The playbook does not deploy authentik yet (#114). Thus, you must use an OIDC provider that you have.
+
+WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Manager.
+
+1. In the OIDC provider, make a public client `agentdev` with the authorization code and PKCE.
+2. In the OIDC provider, make the group `agentdev-admins`. Put the groups of the user in the claim `groups`.
+3. Add the API settings to `ansible/instance.yml`:
+
+   ```yaml
+   api:
+     oidc_issuer: https://auth.example.com/application/o/agentdev/
+   ```
+
+4. Optional: give the API access to the forge. Refer to "Give the API access to the forge".
+5. Open a pull request in the deployment repository. Merge it after the dry run.
+   The playbook deploys the API in `agentdev-platform`.
+6. Make sure that the API is ready: `kubectl -n agentdev-platform rollout status deploy/agentdev-api`
+
+NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
+
+### Reference: the API settings on GKE
+
+| `instance.yml` | Default | `kind` (`config.env`) |
+|---|---|---|
+| `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
+| `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
+| `api.oidc_audience` | `agentdev` | `agentdev` |
+| `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
+| `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
+
+- The playbook makes the database password one time in Secret Manager `platform-pg-agentdev-api`.
+- The database login `agentdev_api` can only add and read rows. The role `agentdev_owner` owns the tables.
+- The playbook writes the Secrets `agentdev-api-db`, `agentdev-api-forge` and `agentdev-api-siem`. When a Secret
+  changes, the playbook restarts the API.
+- The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
+  version, the playbook acts as if the secret is not there.
 
 ### Connect to the API
 
@@ -412,11 +452,16 @@ example `agentdev-api`) that is admin of the agent repositories only, or a site 
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.
-2. Put the token in the Secret `agentdev-api-forge`:
+2. Put the token in the Secret `agentdev-api-forge`.
+   On GKE: put the token in Secret Manager `agentdev-api-forge-token`, then run the playbook. Do not do step 3.
+   On `kind`:
    `kubectl -n agentdev-platform create secret generic agentdev-api-forge --from-literal=FORGE_API_TOKEN=<token>`
 3. Restart the API: `kubectl -n agentdev-platform rollout restart deploy/agentdev-api`
 
 NOTE: Without the Secret, each change that needs the forge gives 503.
+
+NOTE: At this time, the API can only ask a Gitea forge (#87). On GKE with GitHub, each change that needs the forge
+gives 503. Members of `agentdev-admins` can still pause agents.
 
 ### Add an agent through the API
 
@@ -766,9 +811,8 @@ SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All 
 | `SECURITY_OTLP_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 | `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 
-NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. At this
-time, the Ansible playbook does not install the API on GKE (issue #105). The playbook writes the Secret, but no
-API reads it yet.
+NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. The
+Ansible role `api` installs the API when `instance.yml` sets `api.oidc_issuer` (#104). The API reads the Secret.
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.

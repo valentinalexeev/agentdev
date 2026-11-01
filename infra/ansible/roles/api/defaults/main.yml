@@ -1,0 +1,21 @@
+---
+# agentdev API on GKE (#104): the same manifests/api.yaml.tmpl, schema.sql and grants.sql as ./run.sh 10.
+# Instance values go into instance.yml under `api` (example.vars.yml). The role is skipped without api.oidc_issuer.
+api_image: "{{ image_registry }}/agentdev-api:{{ image_tag }}"
+# OIDC: issuer = the URL users log in through (it is in the tokens); discovery = where the API fetches the keys.
+api_oidc_issuer: "{{ api.oidc_issuer | default('') }}"
+api_oidc_discovery_url: "{{ api.oidc_discovery_url | default(api_oidc_issuer) }}"
+api_oidc_audience: "{{ api.oidc_audience | default('agentdev') }}"
+# forge for the live permission check of writes; the API speaks the Gitea API only (images/api/forge.go)
+api_forge_url: "{{ api.forge_url | default(forge_url) }}"
+# security_events / api_audit retention in Postgres (SECURITY_DB_RETENTION_DAYS on kind)
+api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
+# Where secrets come from. Only `gcp` (Secret Manager) exists now; a `local` source (.secrets/ on kind) can be
+# added as tasks/secrets_local.yml when run.sh moves to Ansible (#106).
+api_secret_source: gcp
+# Secret Manager names. The DB password uses the platform prefix and the kind file name (.secrets/platform/pg-agentdev-api).
+api_sm_db_password: "{{ platform_sm_prefix }}pg-agentdev-api"
+api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner (README.md)
+api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
+# The Postgres pod of the platform role and its superuser
+api_db_pod: platform-db-0
