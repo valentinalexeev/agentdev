@@ -28,6 +28,15 @@
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
+    - name: "Approvals need agentdev-api, which this playbook does not deploy yet (#67): kind only for now"
+      ansible.builtin.assert:
+        that: not (approvals.enabled | default(false) | bool)
+        fail_msg: >-
+          approvals.enabled: true is not supported on GKE yet. The operator would send every request to
+          agentdev-api-internal, which is not deployed here, so every prompt and protected push would be refused.
+          Set approvals.enabled: false (docs/admin.md, Turn on approvals).
+        quiet: true
+
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
       changed_when: false

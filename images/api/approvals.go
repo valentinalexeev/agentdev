@@ -475,7 +475,9 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		}
 	}
 	if a.Forge != "" && a.Forge != "gitea" {
-		return nil // GitHub decisions are not supported yet: the request stays pending until void; see #87
+		// GitHub decisions are not supported yet (#87). This return also skips the closed issue/PR check below, so a
+		// GitHub record becomes void only by job end, supersede (sidecar) or the pod-gone check above.
+		return nil
 	}
 	if st, err := d.forge.IssueState(ctx, a.Repo, n); err == nil && st == "closed" {
 		return d.void(ctx, u, a, "the "+map[string]string{"issue": "issue", "pr": "pull request"}[kind]+" is closed")

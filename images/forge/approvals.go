@@ -13,6 +13,9 @@ package main
 // fails closed); the record stays pending and decidable, and the next ask with the same fingerprint uses its decision.
 // A record becomes void when it is no longer needed: the job ends (POST /job-done from the loop), a newer push of the
 // same branch and paths supersedes it, the issue or PR closes, or the pod is gone (the last two found by the API).
+// On a GitHub forge the API does not decide yet (#87) and so does not check the issue/PR state either: a GitHub record
+// becomes void only by job end, supersede or the pod-gone check. A void the sidecar cannot deliver (API unreachable,
+// 3 attempts) leaves the record pending until the pod-gone check; a pod that serves several jobs keeps it until restart.
 // The sidecar edits its forge comment on each change of state.
 //
 // A request is one line on stdout, `AGENTDEV_APPROVAL_REQUEST {json}`; the operator turns it into an Approval (it
@@ -91,6 +94,8 @@ type approvals struct {
 	mu       sync.Mutex
 	jobTools map[string]bool             // job + tool + exact input: allowed again in this job (allow_job)
 	reqs     map[string]*approvalRequest // fingerprint -> the one record of that request (pending or denied)
+	inflight map[string]chan struct{}    // fingerprint -> closed when the request being created for it is in reqs
+	voidWait time.Duration               // first pause between void attempts (doubles each time)
 	now      func() time.Time
 	selfID   int64 // the agent's forge account id, looked up once
 }
@@ -101,7 +106,8 @@ func newApprovals(s *server, apiURL string, timeout time.Duration) *approvals {
 		hold = timeout
 	}
 	return &approvals{s: s, apiURL: strings.TrimRight(apiURL, "/"), timeout: timeout, pushHold: hold, poll: 10 * time.Second,
-		jobTools: map[string]bool{}, reqs: map[string]*approvalRequest{}, now: time.Now}
+		jobTools: map[string]bool{}, reqs: map[string]*approvalRequest{}, inflight: map[string]chan struct{}{},
+		voidWait: 2 * time.Second, now: time.Now}
 }
 
 // secretRe matches common credential shapes; redact replaces them before the request text leaves the sidecar (forge
@@ -133,12 +139,33 @@ func clipInput(s string) string {
 // request returns the record for fingerprint fp, creating it (log line + forge comment) only if there is none. A
 // push record whose input differs (a new commit on the same branch and paths) is superseded: voided, then replaced.
 func (a *approvals) request(job, source, tool, input, fp string) (*approvalRequest, error) {
+	want := clipInput(a.redact(input))
+	// One creator per fingerprint: a concurrent call with the same fp (parallel protected pushes, a repeated prompt)
+	// waits for the creator, then reuses its record instead of filing a second one (Reviewer on #107).
 	a.mu.Lock()
+	for {
+		ch := a.inflight[fp]
+		if ch == nil {
+			break
+		}
+		a.mu.Unlock()
+		<-ch
+		a.mu.Lock()
+	}
 	r := a.reqs[fp]
-	a.mu.Unlock()
-	if r != nil && r.Input == clipInput(a.redact(input)) {
+	if r != nil && r.Input == want {
+		a.mu.Unlock()
 		return r, nil
 	}
+	ch := make(chan struct{})
+	a.inflight[fp] = ch
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.inflight, fp)
+		a.mu.Unlock()
+		close(ch)
+	}()
 	if r != nil {
 		a.void(r, "superseded by a newer request")
 	}
@@ -363,23 +390,42 @@ func (a *approvals) void(r *approvalRequest, reason string) {
 	}
 	u := fmt.Sprintf("%s/internal/approvals/%s/%s/void", a.apiURL, url.PathEscape(a.s.c.AgentName), url.PathEscape(r.ID))
 	b, _ := json.Marshal(map[string]string{"reason": reason})
+	// Retry: if the API stays unreachable, the record stays pending until the API sees that the pod is gone
+	// (docs/security-model.md, lifecycle).
+	wait := a.voidWait
+	for attempt := 1; ; attempt++ {
+		code, err := a.postVoid(u, string(b), r.secret)
+		if err == nil && code == http.StatusOK {
+			a.setState(r, "void", "void: "+reason)
+			return
+		}
+		if err == nil && code < 500 {
+			return // 409: decided meanwhile; 4xx: nothing a retry fixes
+		}
+		if attempt == 3 {
+			a.s.logf("approval %s: void failed after %d attempts: %v %d (the API voids it when the pod is gone)", r.ID, attempt, err, code)
+			return
+		}
+		time.Sleep(wait)
+		wait *= 2
+	}
+}
+
+func (a *approvals) postVoid(u, body, secret string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(b)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(body))
 	if err != nil {
-		return
+		return 0, err
 	}
-	req.Header.Set("X-Approval-Secret", r.secret)
+	req.Header.Set("X-Approval-Secret", secret)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.s.client.Do(req)
 	if err != nil {
-		a.s.logf("approval %s: void: %v (the API voids it when the pod is gone)", r.ID, err)
-		return
+		return 0, err
 	}
 	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		a.setState(r, "void", "void: "+reason)
-	}
+	return resp.StatusCode, nil
 }
 
 // jobDone voids every open request of job and drops the job's grants (POST /job-done?job=, from the loop).
