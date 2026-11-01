@@ -1,0 +1,19 @@
+# The kind version gate of the role kind_cluster (#106) is a real version comparison, and fails with its own message.
+# Run: ansible-playbook infra/ansible/tests/kind_version.yml
+- name: Kind version gate (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kind_cluster_min_version: "0.24.0"
+    kind_version_pass: ["kind v0.24.0 go1.22 linux/amd64", "kind v0.33.0 go1.24 darwin/arm64", "kind v1.0.0", "kind v1.2"]
+    kind_version_fail: ["kind v0.23.1 go1.22 linux/amd64", "kind v0.9.0", "no version here", ""]
+  tasks:
+    - name: Accept new versions
+      ansible.builtin.include_tasks: ../roles/kind_cluster/tasks/version.yml
+      vars:
+        kind_cluster_version: {stdout: "{{ item }}"}
+      loop: "{{ kind_version_pass }}"
+
+    - name: Refuse old or missing versions with the fail_msg
+      ansible.builtin.include_tasks: tasks/kind_version_refused.yml
+      loop: "{{ kind_version_fail }}"

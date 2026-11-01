@@ -1602,6 +1602,11 @@ step 06. If you remove Docker images (for example with `docker image prune`), ru
    `kubectl --context kind-agentdev -n coding-agents get pods`
    The agent pods start with the new worker and forge images.
 
+NOTE: The run.sh steps are deprecated (#106). A step that moved to the Ansible playbook `infra/ansible/kind.yml`
+shows a `DEPRECATED` message and runs the playbook. You must install `ansible-playbook` (ansible-core 2.17 or later).
+The shell wrapper of a step is removed one MINOR release after the step moved. Then use the playbook command in the
+message.
+
 NOTE: Step 06 runs step 12 only when the operator is not installed. On an existing cluster, step 12 must come after
 step 06 to update the CRDs.
 
@@ -1614,6 +1619,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 
 | Component | `kind` (run.sh step) | GKE (playbook) |
 |---|---|---|
+| Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |

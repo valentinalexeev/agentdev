@@ -1,0 +1,115 @@
+---
+# Same result as the old 01-cluster.sh: a kind cluster (1 control plane + 1 sandbox worker), gVisor in every node,
+# RuntimeClass gvisor (handler runsc) and a smoke test that a pod really runs under gVisor.
+- name: Read the kind version
+  ansible.builtin.command: kind version
+  register: kind_cluster_version
+  changed_when: false
+
+- name: Kind version gate
+  ansible.builtin.include_tasks: version.yml
+
+- name: The container engine runs
+  ansible.builtin.command: "{{ kind_cluster_engine }} info --format '{{ '{{' }}.ID{{ '}}' }}'"
+  changed_when: false
+
+- name: List the kind clusters
+  ansible.builtin.command: kind get clusters
+  register: kind_cluster_list
+  changed_when: false
+
+- name: Create the kind cluster
+  ansible.builtin.command: >-
+    kind create cluster --name {{ kind_cluster_name | quote }} --config {{ kind_cluster_config | quote }} --wait 180s
+  when: kind_cluster_name not in kind_cluster_list.stdout_lines
+  changed_when: true
+
+- name: Find the node containers
+  ansible.builtin.command: >-
+    {{ kind_cluster_engine }} ps --filter label=io.x-k8s.kind.cluster={{ kind_cluster_name | quote }}
+    --format '{{ '{{' }}.Names{{ '}}' }}'
+  register: kind_cluster_nodes
+  changed_when: false
+  failed_when: kind_cluster_nodes.rc != 0 or kind_cluster_nodes.stdout_lines | length == 0
+
+- name: Node architecture (gVisor naming x86_64 or aarch64)
+  ansible.builtin.command: "{{ kind_cluster_engine }} exec {{ kind_cluster_nodes.stdout_lines[0] }} uname -m"
+  register: kind_cluster_arch
+  changed_when: false
+
+- name: Is gVisor already in every node?
+  ansible.builtin.command: "{{ kind_cluster_engine }} exec {{ item }} runsc --version"
+  loop: "{{ kind_cluster_nodes.stdout_lines }}"
+  register: kind_cluster_runsc
+  changed_when: false
+  failed_when: false
+
+- name: Install gVisor into the nodes
+  when: >-
+    kind_cluster_runsc.results | rejectattr('rc', 'equalto', 0) | list | length > 0
+    or kind_cluster_runsc.results | map(attribute='stdout') | reject('search', kind_cluster_gvisor_version | regex_escape) | list | length > 0
+  block:
+    - name: Temporary directory
+      ansible.builtin.tempfile: {state: directory}
+      register: kind_cluster_tmp
+
+    - name: Download and verify gVisor (sha512 from the release)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ kind_cluster_tmp.path | quote }}
+        url=https://storage.googleapis.com/gvisor/releases/release/{{ kind_cluster_gvisor_version }}/{{ kind_cluster_arch.stdout }}
+        curl -fsSL --retry 3 "$url/gvisor.tar.bz2" -o gvisor.tar.bz2
+        curl -fsSL --retry 3 "$url/gvisor.tar.bz2.sha512" -o gvisor.tar.bz2.sha512
+        { sha512sum -c gvisor.tar.bz2.sha512 2>/dev/null || shasum -a 512 -c gvisor.tar.bz2.sha512; } >/dev/null
+        tar --bzip2 -xf gvisor.tar.bz2
+        chmod +x runsc containerd-shim-runsc-v1
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    - name: Copy gVisor into each node and restart containerd (the runtime patch is in kind-config.yaml)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        e={{ kind_cluster_engine | quote }}; n={{ item | quote }}; d={{ kind_cluster_tmp.path | quote }}
+        "$e" cp "$d/runsc" "$n:/usr/local/bin/runsc"
+        "$e" cp "$d/containerd-shim-runsc-v1" "$n:/usr/local/bin/containerd-shim-runsc-v1"
+        if [ -e "$d/gvisor-bin" ]; then "$e" cp "$d/gvisor-bin" "$n:/usr/local/bin/gvisor-bin"; fi
+        "$e" exec "$n" systemctl restart containerd
+      args: {executable: /bin/bash}
+      loop: "{{ kind_cluster_nodes.stdout_lines }}"
+      changed_when: true
+  always:
+    - name: Remove the temporary directory
+      ansible.builtin.file: {path: "{{ kind_cluster_tmp.path }}", state: absent}
+      when: kind_cluster_tmp.path is defined
+
+- name: Nodes are Ready
+  ansible.builtin.command: kubectl --context kind-{{ kind_cluster_name }} wait --for=condition=Ready node --all --timeout=120s
+  changed_when: false
+
+- name: RuntimeClass gvisor (handler runsc on kind, gvisor on GKE)
+  ansible.builtin.command:
+    cmd: kubectl --context kind-{{ kind_cluster_name }} apply -f -
+    stdin: "{{ {'apiVersion': 'node.k8s.io/v1', 'kind': 'RuntimeClass', 'metadata': {'name': 'gvisor'}, 'handler': 'runsc'} | to_json }}"
+  register: kind_cluster_rc
+  changed_when: "'unchanged' not in kind_cluster_rc.stdout"
+
+- name: Smoke test, a pod under gVisor shows the gVisor kernel
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k="kubectl --context kind-{{ kind_cluster_name }}"
+    $k delete pod gvisor-smoke --ignore-not-found >/dev/null
+    $k run gvisor-smoke --image=busybox:1.36 --restart=Never \
+      --overrides='{"spec":{"runtimeClassName":"gvisor"}}' --command -- sleep 60 >/dev/null
+    $k wait --for=condition=Ready pod/gvisor-smoke --timeout=120s >/dev/null
+    boot=$($k exec gvisor-smoke -- dmesg 2>/dev/null | head -1 || true)
+    $k delete pod gvisor-smoke --wait=false >/dev/null
+    echo "$boot"
+    case "$boot" in *gVisor*) ;; *) echo "pod ran, but dmesg does not show gVisor" >&2; exit 1;; esac
+  args: {executable: /bin/bash}
+  register: kind_cluster_smoke
+  changed_when: false
+  when: kind_cluster_smoke_test | bool
+
+- name: Result
+  ansible.builtin.debug:
+    msg: "kind cluster {{ kind_cluster_name }} ready ({{ kind_cluster_arch.stdout }}): {{ kind_cluster_smoke.stdout | default('smoke test skipped') }}"

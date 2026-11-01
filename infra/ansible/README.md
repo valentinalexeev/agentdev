@@ -82,6 +82,24 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 `reviewer`, `agents`) come from the deployment (`example.vars.yml` shows the shape); the playbook stops with a
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
 
+## kind (#106)
+The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
+with a kind e2e that proves parity (two runs on a fresh kind cluster, the second must report `changed=0`; run by
+hand and reported in the pull request until a CI job does it); the old step stays as a wrapper that prints a
+deprecation notice and calls the playbook, for one MINOR release. Ported so far:
+
+| run.sh step | `kind.yml` tag | Role |
+|---|---|---|
+| 01 | `cluster` | `kind_cluster` |
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
+```
+The role takes `kind_cluster_name`, `kind_cluster_engine`, `kind_cluster_gvisor_version` and `kind_cluster_config`
+(the wrapper passes the values of `config.env`). It is idempotent: a second run reuses the cluster and the installed
+gVisor. The role always downloads the `.tar.bz2` archive of gVisor and checks its sha512 (the old step used
+`.tar.zstd` when `zstd` was installed).
+
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
 Day-2 changes (adding agents, rotating credentials) move to the management UI (#12).

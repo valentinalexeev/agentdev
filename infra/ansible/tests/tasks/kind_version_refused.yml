@@ -1,0 +1,19 @@
+---
+# Helper of kind_version.yml: the gate must fail for `item`, with its own fail_msg (not a templating error).
+- name: "Gate refuses {{ item | to_json }}"
+  block:
+    - name: Run the gate
+      ansible.builtin.include_tasks: ../../roles/kind_cluster/tasks/version.yml
+      vars:
+        kind_cluster_version: {stdout: "{{ item }}"}
+    - name: The gate did not fail
+      ansible.builtin.fail:
+        msg: "the gate accepted {{ item | to_json }}"
+      register: kind_version_accepted
+  rescue:
+    - name: The failure is the fail_msg of the gate
+      ansible.builtin.assert:
+        that:
+          - kind_version_accepted is not defined
+          - "'kind v0.24 or later is needed' in ansible_failed_result.msg"
+        quiet: true

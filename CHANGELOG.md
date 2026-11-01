@@ -6,6 +6,21 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Deprecated
+- Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
+  step per PR. New playbook `infra/ansible/kind.yml` with the role `kind_cluster`; step 01 (`01-cluster.sh`) is now a
+  wrapper that prints a deprecation notice and runs `ansible-playbook infra/ansible/kind.yml --tags cluster`. Same
+  result as before (kind cluster, gVisor checked by sha512, RuntimeClass `gvisor`, smoke test), and a second run
+  changes nothing. **BREAKING for kind only:** step 01 needs `ansible-playbook` (ansible-core 2.17 or later). Each
+  wrapper is removed one MINOR release after its step moved. GKE does not change. Docs: `docs/install.md`,
+  `docs/admin.md` (Upgrade the local installation), `docs/troubleshooting.md` (kind), `infra/ansible/README.md`.
+  The role always downloads the gVisor `.tar.bz2` archive (the old step used `.tar.zstd` when `zstd` was installed);
+  the sha512 check does not change. CI: ansible-lint covers `kind.yml`, `tests/kind_syntax.yml` runs its
+  `--syntax-check` and `tests/kind_version.yml` checks the kind version gate. The kind e2e (two runs on a fresh kind
+  cluster, `changed=0` on the second) is run by hand for each port and reported in the pull request; a CI job for it
+  is a follow-up (it needs a workflow change by the owner).
+  To apply: install ansible-core, then run `./run.sh 01` as before.
+
 ### Added
 - GitHub permission check and approval decisions in the API (#87). For an agent on GitHub, the API reads the
   collaborator permission (`GET /repos/{o}/{r}/collaborators/{u}/permission`) with the agents' GitHub App
