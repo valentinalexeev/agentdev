@@ -34,9 +34,15 @@ func credentialHelper(args []string, in io.Reader, out io.Writer) int {
 			h = v
 		}
 	}
-	if proto != scheme || h != host || os.Getenv("FORGE_TOKEN") == "" {
+	// the sidecar's git child gets the driver's credential (FORGE_GIT_*, a short-lived token on GitHub); a helper
+	// started without it falls back to the Gitea token of the sidecar's environment
+	user, pass := os.Getenv("FORGE_GIT_USER"), os.Getenv("FORGE_GIT_PASSWORD")
+	if pass == "" {
+		user, pass = os.Getenv("FORGE_USER"), os.Getenv("FORGE_TOKEN")
+	}
+	if proto != scheme || h != host || pass == "" || strings.ContainsAny(user+pass, "\n\r\x00") {
 		return 0
 	}
-	fmt.Fprintf(out, "username=%s\npassword=%s\n", os.Getenv("FORGE_USER"), os.Getenv("FORGE_TOKEN"))
+	fmt.Fprintf(out, "username=%s\npassword=%s\n", user, pass)
 	return 0
 }

@@ -7,6 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Forge sidecar: forge drivers (#2, step 1). The API location, the per-request credential, the git credential and
+  the REST allow-list are now one `driver` per `FORGE_KIND`; only `gitea` exists so far and behaves as before. An
+  unknown `FORGE_KIND` stops the sidecar at start. Prepares the GitHub App driver.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
