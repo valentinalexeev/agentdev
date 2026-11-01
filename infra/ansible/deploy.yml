@@ -43,7 +43,9 @@
           - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
           - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
-        fail_msg: "executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest, plan/apply argv lists, no '..', one executor per environment)"
+        fail_msg: >-
+          executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
+          plan/apply argv lists, no '..', one executor per environment)
         quiet: true
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
@@ -165,6 +167,11 @@
 
     - name: Postgres + ContextForge, then mcp-sync per project (#51)
       ansible.builtin.include_role: {name: platform}
+
+    # Management API (#46, #104): needs an OIDC provider, so it runs only when instance.yml sets api.oidc_issuer.
+    - name: Management API (database roles, Secrets, Deployment)
+      ansible.builtin.include_role: {name: api}
+      when: (api.oidc_issuer | default('')) | length > 0
 
     - name: Agent operator (#47); it renders every agent's StatefulSet
       kubernetes.core.k8s:
@@ -324,7 +331,7 @@
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
     # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
     # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl); same
-    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The API itself is not deployed here yet (#105).
+    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The role api reads it (#104).
     - name: Read the SIEM output secrets (optional)
       ansible.builtin.shell: |
         if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then

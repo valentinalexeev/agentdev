@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
+  scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
+  The web UI requests the scope `forge`. **Breaking:** set `forge_login` for each person (source property mapping of
+  the company SSO, or the user attributes; `docs/admin.md`, "Map people to forge users"); without it a person is
+  read-only. Risk R42 updated.
+
 ### Added
 - Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
   (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
@@ -20,6 +27,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   refuses the apply), the apply starts within `EXECUTOR_APPLY_START_MINUTES` (30) of the decision, one executor per
   environment (operator and Ansible), fork PRs only with `spec.allowForkPRs`. The API does not void executor
   approvals for their merged (closed) PR.
+- GKE: the Ansible role `api` deploys the management API (#104) when `instance.yml` sets `api.oidc_issuer` (new
+  optional instance vars `api.{oidc_issuer, oidc_discovery_url, oidc_audience, forge_url, db_retention_days}`). Same
+  steps as `./run.sh 10`: roles `agentdev_owner`/`agentdev_api`, `schema.sql`, retention and `grants.sql`; Secrets
+  `agentdev-api-db` (password generated once in Secret Manager `platform-pg-agentdev-api`), `agentdev-api-forge`
+  (from the optional Secret Manager `agentdev-api-forge-token`) and `agentdev-api-siem` (from `security.siem.*` and
+  the optional `security-siem`, the keys of #71); then `manifests/api.yaml.tmpl`. All secret tasks have `no_log`.
+  Secret lookup is one task file per source so the kind path can reuse the role (#106). The API restarts on every
+  Secret change; an optional secret without an enabled version counts as absent. authentik on GKE: #114.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed

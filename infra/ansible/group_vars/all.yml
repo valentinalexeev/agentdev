@@ -35,7 +35,7 @@ sm_security_siem: security-siem          # optional: SIEM output secrets as KEY=
 #                                   and optionally agent-<name>-claude
 # security events (#70): auto-pause and SecurityEvent retention (operator). Webhook output settings
 # (security.siem.{webhook_url, syslog_addr, syslog_server_name, otlp_url, otlp_server_name} in instance.yml,
-# secret values in the Secret Manager secret sm_security_siem) fill the Secret agentdev-api-siem (#71).
+# secret values in the Secret Manager secret sm_security_siem) fill the Secret agentdev-api-siem (roles/api, #71).
 security:
   pause_after: 5                    # more than N events in one job pause the agent
   retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history
@@ -60,3 +60,6 @@ executor_poll_seconds: 60
 executor_retention_days: 30
 executor_apply_start_minutes: 30   # an allowed apply starts at most this long after the decision, else nothing applies
 executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa}]
+# Management API (#104), optional: deployed only when api.oidc_issuer is set. Keys: oidc_issuer (https, required),
+# oidc_discovery_url, oidc_audience (agentdev), forge_url, db_retention_days (365). Defaults: roles/api/defaults.
+api: {}

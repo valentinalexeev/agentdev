@@ -46,7 +46,7 @@ jobs:
           fi
           printf '%s\n' "$files"
           has() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
-          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^infra/ansible/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "image=$(has '(^images/worker/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           # per component: its sources, or a workflow change (which can change how anything is checked)
           echo "router=$(has '(^images/router/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
@@ -90,9 +90,33 @@ jobs:
           ./kubeconform -strict -summary -ignore-missing-schemas images/operator/config/crd/
           PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img FORGE_IMAGE=img IMAGE_PULL_POLICY=Never \
             FORGE_URL=http://f FORGE_PUBLIC_URL=http://f FORGE_ADMIN_USER=owner BOTBOARD_URL= POLL_SECONDS=20 IDLE_SECONDS=900 \
-            EXEC_NS=agentdev-executors EXECUTOR_POLL_SECONDS=60 EXECUTOR_RETENTION_DAYS=30 \
             envsubst < manifests/operator.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
+      # The checks below cover files that #98 (egress, #65) and #115 (Ansible API role, #104) add; each one is skipped
+      # until its file is on the branch, so this workflow can merge first.
+      - name: egress proxy (#65) manifests validate and squid.conf parses with the pinned image
+        if: needs.scope.outputs.shell == 'true'
+        run: |
+          [ -f manifests/egress.yaml.tmpl ] || { echo "no egress manifest yet, skipped"; exit 0; }
+          set -a; . ./config.env; set +a
+          if [ -f manifests/egress-proxy-web.yaml.tmpl ]; then
+            AGENTS_NS=coding-agents envsubst < manifests/egress-proxy-web.yaml.tmpl | ./kubeconform -strict -summary -
+          fi
+          AGENTS_NS=coding-agents PLATFORM_NS=agentdev-platform FORGE_NS=forge BOTBOARD_NS=botboard \
+            envsubst < manifests/egress.yaml.tmpl > egress.yaml
+          ./kubeconform -strict -summary egress.yaml
+          yq 'select(.kind == "ConfigMap") | .data["squid.conf"]' egress.yaml > squid.conf
+          docker run --rm -v "$PWD/squid.conf:/etc/squid/squid.conf:ro" --entrypoint squid "$EGRESS_PROXY_IMAGE" -k parse -f /etc/squid/squid.conf
+      - name: ansible-lint, syntax check and tests (infra/ansible)
+        if: needs.scope.outputs.shell == 'true'
+        working-directory: infra/ansible
+        run: |
+          pip install --quiet ansible-core ansible-lint
+          ansible-galaxy collection install -r requirements.yml
+          ansible-lint
+          printf 'gcp_project: p\ngcp_zone: z\nimage_tag: "0"\nreviewer: r\nagents: [{name: a, user: a, repos: o/r}]\napi: {oidc_issuer: "https://i/"}\n' > /tmp/i.yml
+          ansible-playbook deploy.yml -e @/tmp/i.yml --syntax-check
+          for t in tests/*.yml; do if [ -f "$t" ]; then ansible-playbook "$t"; fi; done
       - name: router tests (no dependencies, a few seconds)
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
