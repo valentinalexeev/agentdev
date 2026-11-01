@@ -33,7 +33,9 @@ log "authentik ${AUTHENTIK_VERSION} (${PLATFORM_NS})"
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
 
 helm repo add authentik https://charts.goauthentik.io >/dev/null 2>&1 || true
-# blueprints: agentdev's own authentik objects (the OIDC application, #46), mounted into the worker by the chart
+# blueprints: agentdev's own authentik objects (the OIDC application #46, the group agentdev-admins #100), mounted
+# into the worker by the chart. They create the group, but never set its members: authentik re-applies blueprints, and
+# a member list in a blueprint would remove each admin that a person added (docs/admin.md, docs/security.md R48)
 bp=(); for f in "${SPIKE_DIR}"/manifests/authentik-blueprint-*.yaml; do bp+=("--from-file=${f}"); done
 k -n "${PLATFORM_NS}" create configmap authentik-blueprints --dry-run=client -o yaml "${bp[@]}" \
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
@@ -42,6 +44,59 @@ helm --kube-context "kind-${CLUSTER_NAME}" upgrade --install authentik authentik
   --namespace "${PLATFORM_NS}" --version "${AUTHENTIK_VERSION}" \
   -f "${SPIKE_DIR}/manifests/authentik-values.yaml" --wait --timeout 15m >/dev/null
 ok "authentik ready"
+
+log "agentdev-admins (#100)"
+# kind only (run.sh is kind-only, helm uses the kind context): add the local owner akadmin to agentdev-admins once,
+# so the e2e has an admin. POST /api/v3/core/groups/{pk}/add_user/ only adds: it never removes a member, and a second
+# run is a no-op. Then a check: a member added by a person (a test user) survives a blueprint re-apply.
+# Runs in the worker pod (it mounts the blueprints) through the authentik REST API in-process, as akadmin: no token
+# is created or printed.
+ak_py=$(cat <<'PY'
+import sys, time
+from rest_framework.test import APIClient
+from authentik.core.models import Group, User
+from authentik.blueprints.models import BlueprintInstance
+from authentik.blueprints.v1.importer import Importer
+for _ in range(60):
+    g = Group.objects.filter(name="agentdev-admins").first()
+    if g: break
+    time.sleep(5)
+else: sys.exit("group agentdev-admins missing: blueprint not applied")
+admin = User.objects.get(username="akadmin")
+c = APIClient(); c.force_authenticate(admin)
+api = "/api/v3/core/groups/%s/" % g.pk
+def call(op, pk):
+    r = c.post(api + op + "/", {"pk": pk}, format="json")
+    if r.status_code != 204: sys.exit("group %s: HTTP %s" % (op, r.status_code))
+def add(pk): call("add_user", pk)
+def members(): g.refresh_from_db(); return set(g.users.values_list("username", flat=True))
+test = None
+try:
+    add(admin.pk)
+    print("akadmin in agentdev-admins")
+    test, _ = User.objects.get_or_create(username="agentdev-09-membership-test", defaults={"name": "09 test", "is_active": False})
+    add(test.pk)
+    # the old kind blueprint (before #103 review) set the members: forget its instance, its file is gone
+    BlueprintInstance.objects.filter(path__endswith="authentik-blueprint-local-admin.yaml").delete()
+    applied = 0
+    for b in BlueprintInstance.objects.filter(path__contains="authentik-blueprint-"):
+        imp = Importer.from_string(b.retrieve(), b.context)
+        ok, logs = imp.validate()
+        if not ok or not imp.apply(): sys.exit("blueprint %s did not apply" % b.path)
+        applied += 1
+    if not applied: sys.exit("no agentdev blueprint found to re-apply")
+    m = members()
+    if not {"akadmin", test.username} <= m: sys.exit("re-apply removed members: %s" % sorted(m))
+    print("check: members kept after re-applying %d blueprint(s)" % applied)
+finally:
+    if test:
+        call("remove_user", test.pk)
+        test.delete()
+PY
+)
+k -n "${PLATFORM_NS}" exec deploy/authentik-worker -- ak shell -c "${ak_py}" 2>&1 | grep -E '^(akadmin|check|group|blueprint|re-apply|no agentdev|Traceback|[A-Za-z.]*Error)' \
+  | sed 's/^/  /'; [[ ${PIPESTATUS[0]} -eq 0 ]] || die "agentdev-admins: setup or membership check failed"
+ok "akadmin in agentdev-admins; members survive a blueprint re-apply"
 record "authentik ${AUTHENTIK_VERSION} up in ${PLATFORM_NS}"
 echo "  UI: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/authentik-server 9443:443  ->  https://localhost:9443/ (https: session cookies)"
 echo "      login akadmin, password: .secrets/platform/authentik-admin"
