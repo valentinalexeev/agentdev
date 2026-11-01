@@ -159,7 +159,7 @@ NOTE: Do not edit the comment with the decision. The system ignores an edited co
 NOTE: If nobody answers in 30 minutes, the system denies the request.
 
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
-pending requests. You cannot make a decision in the web UI at this time.
+requests that have no decision. You cannot make a decision in the web UI at this time.
 
 ## Know what agents do
 
