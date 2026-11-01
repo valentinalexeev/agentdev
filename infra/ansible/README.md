@@ -92,6 +92,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 |---|---|---|
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
+| 03 | `sandbox-test` | `sandbox_test` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -110,6 +111,16 @@ cached in `~/.cache/agentdev`), so GKE can include it with its own `agent_sandbo
 `agent_sandbox_engine`. `ANTHROPIC_API_KEY` is read from the environment, never from `-e`, and the Secret task has
 `no_log`. A second run changes nothing: the image carries a label with a content hash of `images/agent`
 (`agent_sandbox_hash_label`); the build is skipped when the local image has that hash and `kind load` when every node has it.
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags sandbox-test    # warm claim, gVisor, suspend/resume, pool to 0, Claude
+```
+The role `sandbox_test` does the checks of the old step 03 with `kubernetes.core` and `kubectl --context`, so GKE can
+include it with its own `sandbox_test_context`. It takes `sandbox_test_ns`, `sandbox_test_pool`,
+`sandbox_test_claim`, `sandbox_test_runtime_class`, `sandbox_test_timeout` and `sandbox_test_claude`. The claim has a
+fixed name (`agentdev-sandbox-test`, the old step made a new claim each run), so a second run reuses it and changes
+nothing. An `always` block sets the sandbox back to `Running` and the warm pool back to 1, also after a failed check.
+The headless Claude turn runs only when the Secret `claude-agent-keys` exists; the Secret is read under `no_log`.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

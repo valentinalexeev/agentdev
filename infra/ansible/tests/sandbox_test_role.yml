@@ -1,0 +1,44 @@
+# The role sandbox_test (#106, was 03-test-sandbox.sh): kind.yml --tags sandbox-test runs only that role, the claim has
+# a fixed name (a second run reuses it), and the cluster is restored in an always block.
+# Run: ansible-playbook infra/ansible/tests/sandbox_test_role.yml
+- name: Role sandbox_test (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List the tasks of the sandbox-test tag
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --tags, sandbox-test, --list-tasks]
+      register: sandbox_test_tasks
+      changed_when: false
+
+    - name: Only the sandbox_test role runs under the tag
+      ansible.builtin.assert:
+        that:
+          - "'Checks of the warm pool' in sandbox_test_tasks.stdout"
+          - "'Kind cluster with gVisor' not in sandbox_test_tasks.stdout"
+          - "'Agent-sandbox, agent image' not in sandbox_test_tasks.stdout"
+        quiet: true
+
+    - name: Read the role
+      ansible.builtin.set_fact:
+        test_role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/sandbox_test/tasks/main.yml') | from_yaml }}"
+        test_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/sandbox_test/defaults/main.yml') | from_yaml }}"
+
+    - name: Fixed claim name, restore in always, Secret read under no_log
+      ansible.builtin.assert:
+        that:
+          - test_defaults.sandbox_test_claim is not search('[{]')
+          - suspend.always | map(attribute='name') | list == ['Sandbox is Running', 'Warm pool back to 1']
+          - (test_role | selectattr('name', 'search', 'API key Secret') | first).no_log
+        quiet: true
+      vars:
+        suspend: "{{ test_role | selectattr('name', 'search', '^Suspend, resume') | first }}"
+
+    - name: The wrapper prints the deprecation notice and calls kind.yml
+      ansible.builtin.assert:
+        that:
+          - "'deprecated 03 sandbox-test' in wrapper"
+          - "'kind.yml\" --tags sandbox-test' in wrapper"
+        quiet: true
+      vars:
+        wrapper: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../03-test-sandbox.sh') }}"

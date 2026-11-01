@@ -6,8 +6,9 @@
 #   cd infra/ansible
 #   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
+#   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -29,3 +30,11 @@
         agent_sandbox_context: kind-{{ kind_cluster_name }}
         agent_sandbox_cluster_name: "{{ kind_cluster_name }}"
       tags: [sandbox]
+
+    - name: Checks of the warm pool, suspend and resume (was 03-test-sandbox.sh)
+      ansible.builtin.include_role:
+        name: sandbox_test
+        apply: {tags: [sandbox-test]}
+      vars:
+        sandbox_test_context: kind-{{ kind_cluster_name }}
+      tags: [sandbox-test]

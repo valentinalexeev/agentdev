@@ -24,6 +24,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (new role `agent_sandbox`, `kubernetes.core` like `deploy.yml`). Same result (agent-sandbox release, CRDs, agent
   image in kind, optional `claude-agent-keys`, template and warm pool with 1 ready sandbox); a second run changes
   nothing. Needs the `kubernetes` Python package for ansible (`docs/troubleshooting.md`). GKE does not change.
+- Step 03 (#106): `03-test-sandbox.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags
+  sandbox-test` (new role `sandbox_test`). Same checks (warm claim, gVisor, suspend keeps both PVCs, resume keeps the
+  workspace, warm pool to 0, optional headless Claude turn). Changed: the claim has the fixed name
+  `agentdev-sandbox-test` (was `spike-<time>`), so a second run reuses it and changes nothing, and the warm pool and
+  sandbox are restored also after a failed check. GKE does not change.
 
 ### Added
 - End-to-end security checklist (#123): `scripts/e2e-gke-security.sh` checks a running instance (GKE, or kind
