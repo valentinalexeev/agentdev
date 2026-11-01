@@ -138,6 +138,7 @@ func audit(e auditEntry) {
 		b = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
 	}
 	fmt.Fprintf(auditOut, "AGENTDEV_AUDIT %s\n", b)
+	persistAudit(e, b) // #91, audit.go
 }
 
 // writer holds what the write handlers need.

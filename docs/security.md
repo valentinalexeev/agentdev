@@ -58,6 +58,7 @@ planned target, [security-model.md](security-model.md).
 | R35 | GitHub App manifest built by string templating (injection) | review #61 | fixed | Built with `jq --arg`, strict input validation (db8be52) |
 | R42 | API maps the authentik username to the forge login: a chosen or case-variant name ("Adam") could act as another forge user | review #86 | mitigated | Only lowercase names matching `^[a-z0-9][a-z0-9._-]*$` map to a forge user; requires closed enrollment and no username changes in authentik (admin.md, "Keep the usernames safe"). Intended setup: authentik has no own user database and signs people in through the same company SSO as the forge (for example Google Workspace), so one account gives both names. Stable claim: #88 |
 | R43 | API forge token user must be repo or site admin to read permissions | review #86 | accepted | Read-only scopes (`read:repository`, `read:user`); dedicated service account, admin on agent repositories only |
+| R44 | The audit of agent changes is lost with the pod log, or the API rewrites it to hide a change | #91 | mitigated | Every `AGENTDEV_AUDIT` line is also in the append-only `api_audit` table: `agentdev_api` has INSERT/SELECT and EXECUTE on the SECURITY DEFINER `api_audit_prune()` only, a trigger refuses UPDATE/DELETE inside the `security_settings` retention (`TestPgAudit`). `GET /api/audit` is `agentdev-admins` only. Open: a failed insert is only logged (the stdout line stays); audit rows are not forwarded to the SIEM outputs yet; superuser tampering as R37 (#71) |
 
 ## Process
 
