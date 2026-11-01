@@ -20,6 +20,7 @@ type server struct {
 	client *http.Client
 	rules  []rule
 	appr   *approvals // nil: approvals off (approvals.go, #67)
+	drv    driver     // forge-specific API location, auth and allow-list (driver.go)
 
 	usageGate usageGate // POST /usage rate limit (usage.go)
 }
@@ -40,24 +41,8 @@ func newServer(c *Config) *server {
 		client: &http.Client{Timeout: 60 * time.Second,
 			// never follow a redirect: it could carry the Authorization header to another host
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	r := func(m, p string, chk func(*server, []byte) error) rule {
-		return rule{m, regexp.MustCompile("^" + p + "$"), chk}
-	}
-	// exactly the calls agent-loop.sh makes (issues, PRs, comments, reviews, review requests)
-	s.rules = []rule{
-		r("GET", `/user`, nil),
-		r("GET", repoRe, nil),
-		r("GET", repoRe+`/issues`, nil),
-		r("GET", repoRe+`/issues/[0-9]+`, nil),
-		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/issues/[0-9]+/comments`, checkNoDecision),
-		r("GET", repoRe+`/pulls`, nil),
-		r("POST", repoRe+`/pulls`, checkOwnHead),
-		r("GET", repoRe+`/pulls/[0-9]+`, nil),
-		r("GET", repoRe+`/pulls/[0-9]+/reviews`, nil),
-		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
-	}
+	s.drv = driverOrGitea(c)
+	s.rules = s.drv.rules()
 	return s
 }
 
@@ -201,16 +186,19 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u := s.c.ForgeURL + "/api/v1" + p
-	if r.URL.RawQuery != "" {
-		u += "?" + r.URL.RawQuery
+	drv := s.driver()
+	auth, err := drv.authorization(r.Context())
+	if err != nil {
+		s.logf("forge credential: %v", err)
+		fail(w, errors.New("forge credential unavailable"))
+		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, drv.apiURL(p, r.URL.RawQuery), bytes.NewReader(body))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	req.Header.Set("Authorization", "token "+s.c.Token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.client.Do(req)

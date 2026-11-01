@@ -102,7 +102,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("forge: %v", err)
 	}
+	if _, err := newDriver(c); err != nil {
+		log.Fatalf("forge: %v", err)
+	}
 	s := newServer(c)
+	s.git.drv = s.drv
 	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
 		s.enableApprovals(apiURL, timeout)
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)

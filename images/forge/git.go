@@ -24,8 +24,9 @@ import (
 // (plain data) that is fetched into this mirror. So nothing Claude writes (worktrees, .git/config, hooks) is ever
 // read by a git process that holds the token.
 type gitRepo struct {
-	c  *Config
-	mu sync.Mutex // git refuses concurrent ref updates
+	c   *Config
+	drv driver     // remote URL and credential (driver.go); nil means Gitea
+	mu  sync.Mutex // git refuses concurrent ref updates
 	// approve, when set (APPROVALS=true, #67), is asked instead of refusing a push to protected paths; nil = refuse.
 	// It is called without mu held (it may wait for a person) and returns nil when the push is allowed.
 	approve func(ctx context.Context, branch, tip string, paths []string) error
@@ -52,7 +53,14 @@ func forgeOrigin(forgeURL string) (scheme, host string, err error) {
 	return u.Scheme, u.Host, nil
 }
 
-func (g *gitRepo) remoteURL() string { return g.c.ForgeURL + "/" + g.c.Repos[0] + ".git" }
+func (g *gitRepo) driver() driver {
+	if g.drv == nil {
+		g.drv = driverOrGitea(g.c)
+	}
+	return g.drv
+}
+
+func (g *gitRepo) remoteURL() string { return g.driver().remoteURL(g.c.Repos[0]) }
 
 // run runs git with every repo- or user-controlled program turned off: no hooks, no fsmonitor, no global or system
 // config, no prompts, and a credential helper (this binary) that answers only the forge's own origin.
@@ -60,14 +68,19 @@ func (g *gitRepo) run(ctx context.Context, stdin io.Reader, args ...string) (str
 	base := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 		"-c", "credential.helper=", "-c", "credential.helper=" + g.c.Self + " credential",
 		"-c", "credential.useHttpPath=false", "-c", "protocol.ext.allow=never", "-c", "http.followRedirects=false"}
+	user, pass, err := g.driver().gitCredential(ctx)
+	if err != nil {
+		return "", fmt.Errorf("git %s: forge credential: %v", args[0], err)
+	}
 	cmd := exec.CommandContext(ctx, g.c.Git, append(base, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
+	// the credential helper (this binary, credential.go) answers with these; only this git child sees them
+	cmd.Env = append(os.Environ(), "FORGE_GIT_USER="+user, "FORGE_GIT_PASSWORD="+pass, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
 		"GIT_ASKPASS=", "SSH_ASKPASS=", "HOME="+filepath.Dir(g.c.MirrorDir))
 	cmd.Stdin = stdin
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return out.String(), fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(redact(errb.String(), g.c.Token)))
+		return out.String(), fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(redact(redact(errb.String(), g.c.Token), pass)))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
