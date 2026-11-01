@@ -1,0 +1,52 @@
+# Render check (#120): the ingress role's Gateway exposes only /hook on the router and the UI, redirects HTTP,
+# sets HSTS and attaches Cloud Armor only when a policy name is set.
+# Run: ansible-playbook infra/ansible/tests/ingress_render.yml
+- name: Ingress role renders the expected routes (#120)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    api: {oidc_issuer: "https://auth.example.com/"}
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/ingress/defaults/main.yml
+
+    - name: Render with Cloud Armor
+      ansible.builtin.set_fact:
+        with_armor: "{{ lookup('ansible.builtin.template', '../roles/ingress/templates/gateway.yaml.j2') | from_yaml_all | list }}"
+      vars:
+        ingress: {host: agentdev.example.com, webhook_host: hooks.example.com, certificate: c1, security_policy: armor}
+
+    - name: Render without Cloud Armor and without the UI
+      ansible.builtin.set_fact:
+        plain: "{{ lookup('ansible.builtin.template', '../roles/ingress/templates/gateway.yaml.j2') | from_yaml_all | list }}"
+      vars:
+        ingress: {host: agentdev.example.com, certificate: c1, ui: false}
+
+    - name: Check the objects
+      vars:
+        routes: "{{ with_armor | selectattr('kind', 'equalto', 'HTTPRoute') | list }}"
+        rules: "{{ routes | map(attribute='spec.rules') | flatten | selectattr('backendRefs', 'defined') | list }}"
+        backends: "{{ rules | map(attribute='backendRefs') | flatten | map(attribute='name') | list }}"
+        hook: "{{ routes | selectattr('metadata.name', 'equalto', 'agentdev-webhook') | first }}"
+        redirect: "{{ routes | selectattr('metadata.name', 'equalto', 'agentdev-https-redirect') | first }}"
+        plain_hook: "{{ plain | selectattr('metadata.name', 'equalto', 'agentdev-webhook') | first }}"
+        gw: "{{ with_armor | selectattr('kind', 'equalto', 'Gateway') | first }}"
+      ansible.builtin.assert:
+        that:
+          - backends | sort == ['agentdev-ui', 'webhook-router']
+          - hook.spec.hostnames == ['hooks.example.com']
+          - hook.spec.rules[0].matches | length == 1
+          - hook.spec.rules[0].matches[0].path.type == 'PathPrefix'
+          - hook.spec.rules[0].matches[0].path.value == '/hook'
+          - hook.spec.rules[0].filters[0].responseHeaderModifier.set[0].value is match('^max-age=31536000')
+          - redirect.spec.rules[0].filters[0].requestRedirect.scheme == 'https'
+          - redirect.spec.rules[0].backendRefs is not defined
+          - redirect.spec.hostnames | sort == ['agentdev.example.com', 'hooks.example.com']
+          - gw.spec.addresses[0].value == 'agentdev-webhook'
+          - gw.spec.listeners[0].tls.options['networking.gke.io/pre-shared-certs'] == 'c1'
+          - with_armor | selectattr('kind', 'equalto', 'GCPBackendPolicy') | list | length == 2
+          - plain | selectattr('kind', 'equalto', 'GCPBackendPolicy') | list | length == 0
+          - plain | selectattr('kind', 'equalto', 'HTTPRoute') | map(attribute='metadata.name') | sort == ['agentdev-https-redirect', 'agentdev-webhook']
+          - plain_hook.spec.hostnames == ['agentdev.example.com']

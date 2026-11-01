@@ -1,0 +1,38 @@
+---
+# Public HTTPS entry point on GKE (#120): one Gateway (global external Application Load Balancer) on the Terraform
+# static IP, with the Terraform Google-managed certificate and SSL policy. Only two paths are public:
+#   https://<webhook_host>/hook...  -> webhook-router (POST deliveries, HMAC checked by the router)
+#   https://<host>/...              -> agentdev-ui (static app and its /api proxy to the API)
+# The router's /status, /register and /idle and every other Service stay cluster-internal. Port 80 only redirects.
+- name: Check the ingress settings
+  ansible.builtin.assert:
+    that:
+      - ingress_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+      - ingress_webhook_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+      - ingress_certificate | length > 0
+      - ingress_hsts_max_age | string is match('^[0-9]+$')
+    fail_msg: >-
+      ingress.host and ingress.webhook_host must be plain DNS names, ingress.certificate the name from
+      `terraform output ingress` (example.vars.yml)
+    quiet: true
+
+- name: Is the Gateway API served (Terraform gateway_api_config)?
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: gateways.gateway.networking.k8s.io
+  register: ingress_gateway_crd
+
+- name: Stop when the cluster has no Gateway API
+  ansible.builtin.assert:
+    that: ingress_gateway_crd.resources | length > 0
+    fail_msg: "The cluster does not serve the Gateway API: apply infra/terraform (gateway_api_config) first"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Gateway, routes, policies and NetworkPolicy
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml_all | list }}"
+  when: ingress_gateway_crd.resources | length > 0
