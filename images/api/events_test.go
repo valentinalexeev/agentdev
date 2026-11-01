@@ -292,7 +292,10 @@ func TestPgRoleSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Drop the functions too: an earlier test (TestPgStore) can create them as another role, and
+	// CREATE OR REPLACE as agentdev_owner then fails with "must be owner of function".
 	setup := `DROP TABLE IF EXISTS security_events, security_settings CASCADE;
+		DROP FUNCTION IF EXISTS security_events_append_only(), security_events_prune() CASCADE;
 		DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner') THEN CREATE ROLE agentdev_owner NOLOGIN; END IF;
 		IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api') THEN CREATE ROLE agentdev_api NOLOGIN; END IF; END $$;
 		GRANT CREATE, USAGE ON SCHEMA public TO agentdev_owner;
