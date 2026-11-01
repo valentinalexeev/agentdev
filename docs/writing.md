@@ -145,7 +145,7 @@ Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone 
 
 These technical names are also allowed in the manuals with their usual meaning: browser, CORS, image (container
 image), namespace, nginx, OIDC, password, PKCE, port, redirect URI, session, SSH tunnel, tab (browser tab), token,
-user name, authentik blueprint, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
+user name, authentik blueprint, OIDC provider, public client, claim (a field in a token), authorization code, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
 Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terraform, Ansible, playbook, Secret Manager,
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a

@@ -5,9 +5,13 @@ image_tag: "0.1.0"                # image tag of a release: the git tag without 
 reviewer: my-github-login         # whose Approve lets an agent PR merge
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
-# Optional (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the defaults.
-# SIEM addresses only; secret values go into the Secret Manager secret security-siem (README.md). The API that reads
-# them is not deployed by this playbook yet (#105).
+# Optional management API (#104): deployed only with api.oidc_issuer. Forge token: Secret Manager agentdev-api-forge-token.
+# api:
+#   oidc_issuer: https://auth.example.com/application/o/agentdev/
+#   oidc_audience: agentdev
+#   db_retention_days: 365
+# Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
+# defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
 # security:
 #   pause_after: 5
 #   retention_days: 30

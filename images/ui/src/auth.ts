@@ -9,7 +9,7 @@ export function userManager(cfg: Config): UserManager {
     client_id: cfg.oidcClientId,
     redirect_uri: `${window.location.origin}/callback`,
     post_logout_redirect_uri: `${window.location.origin}/`,
-    scope: 'openid profile email',
+    scope: 'openid profile email forge', // forge: forge_login claim for the API (#88)
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: false,
   })

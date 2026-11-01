@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
+  scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
+  The web UI requests the scope `forge`. **Breaking:** set `forge_login` for each person (source property mapping of
+  the company SSO, or the user attributes; `docs/admin.md`, "Map people to forge users"); without it a person is
+  read-only. Risk R42 updated.
+
 ### Added
 - Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
   `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
@@ -17,6 +24,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `POST /usage` and the loop posts nothing (closes R47). The loop removes an old Claude login from the `claude` volume
   at start. On GKE an FQDNNetworkPolicy limits the proxy to `api.anthropic.com` when the cluster serves the type.
   New risks R60 to R65.
+- GKE: the Ansible role `api` deploys the management API (#104) when `instance.yml` sets `api.oidc_issuer` (new
+  optional instance vars `api.{oidc_issuer, oidc_discovery_url, oidc_audience, forge_url, db_retention_days}`). Same
+  steps as `./run.sh 10`: roles `agentdev_owner`/`agentdev_api`, `schema.sql`, retention and `grants.sql`; Secrets
+  `agentdev-api-db` (password generated once in Secret Manager `platform-pg-agentdev-api`), `agentdev-api-forge`
+  (from the optional Secret Manager `agentdev-api-forge-token`) and `agentdev-api-siem` (from `security.siem.*` and
+  the optional `security-siem`, the keys of #71); then `manifests/api.yaml.tmpl`. All secret tasks have `no_log`.
+  Secret lookup is one task file per source so the kind path can reuse the role (#106). The API restarts on every
+  Secret change; an optional secret without an enabled version counts as absent. authentik on GKE: #114.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
