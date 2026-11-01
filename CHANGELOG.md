@@ -7,6 +7,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
+  (on kind, a second blueprint `manifests/kind/authentik-blueprint-local-admin.yaml` adds `akadmin`), and
+  `./run.sh 10` makes the Gitea account `agentdev-api`, admin collaborator of `REPO` and of every Gitea agent
+  repository, with a `read:repository,read:user` token in Secret `agentdev-api-forge` (kept if it still works for
+  `agentdev-api`, never printed). GKE stays a manual step (`docs/admin.md`), as the playbook does not deploy the API
+  yet (#51).
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
