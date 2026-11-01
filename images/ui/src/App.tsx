@@ -4,6 +4,8 @@ import {
   listAgents, listSecurityEvents, patchAgent, createAgent, deleteAgent, Unauthorized,
   nameError, repoError, maxConcurrentError, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
 } from './api'
+import { Approvals } from './Approvals'
+import { usePendingCount } from './pending'
 
 export function App({ um }: { um: UserManager }) {
   const [user, setUser] = useState<User | null | undefined>(undefined)
@@ -65,13 +67,17 @@ function usePage(): [string, URLSearchParams, (p: string) => void] {
 
 function Pages({ token, onExpired }: { token: string; onExpired: () => void }) {
   const [page, params, go] = usePage()
+  const pending = usePendingCount(token)
   return (
     <>
       <nav>
         <button className={`tab ${page === 'agents' ? 'on' : ''}`} onClick={() => go('agents')}>Agents</button>
         <button className={`tab ${page === 'security' ? 'on' : ''}`} onClick={() => go('security')}>Security</button>
+        <button className={`tab ${page === 'approvals' ? 'on' : ''}`} onClick={() => go('approvals')}>
+          Approvals{pending > 0 && <span className="badge" aria-label={`${pending} pending`}>{pending}</span>}
+        </button>
       </nav>
-      {page === 'security'
+      {page === 'approvals' ? <Approvals token={token} onExpired={onExpired} /> : page === 'security'
         ? <Security key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
         : <Overview token={token} onExpired={onExpired} />}
     </>
