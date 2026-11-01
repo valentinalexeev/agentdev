@@ -7,6 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Risk id check (#126): `scripts/check-risk-ids.sh` fails when `docs/security.md` defines a risk id twice or a file
+  refers to an id the register does not define. Numbering rule added to `docs/security.md`. Stale references to the
+  MCP risks fixed (now R51, R52, in `config.env`, `instance.yml.example` and an older changelog entry).
 - GKE public HTTPS entry point (#120): Terraform `public_hosts` makes a Google-managed certificate and a TLS 1.2+
   SSL policy, optional `cloud_armor` a Cloud Armor policy (size limit, per-IP rate limit); the cluster turns on the
   Gateway API. New Ansible role `ingress` (runs when `instance.yml` sets `ingress.host`, values from
@@ -131,7 +134,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   the platform NetworkPolicies.
 - MCP server allow-list (GHAS on #99): `scripts/mcp-sync.sh` registers only servers whose host is in
   `MCP_ALLOWED_HOSTS` (`config.env`, kind) or `mcp_allowed_hosts` (GKE `instance.yml`). **Breaking for specs with
-  `mcp:`**: the list is empty by default, so add your trusted hosts. Risk entries R46 (MCP prompt injection) and R47
+  `mcp:`**: the list is empty by default, so add your trusted hosts. Risk entries R51 (MCP prompt injection) and R52
   (token leaks in logs) in `docs/security.md`; the secret and sync tasks of the platform role have `no_log`.
 - Audit trail in Postgres (#91): every `AGENTDEV_AUDIT` line of the write API is also stored in the append-only
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the

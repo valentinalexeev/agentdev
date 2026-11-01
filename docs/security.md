@@ -6,6 +6,10 @@ or the owner, with its current status. Update this file in the PR that changes a
 Status: **fixed** (code removes the risk), **mitigated** (reduced, residual risk stated), **accepted** (inherent or
 by design, reason stated), **open** (known gap, tracked issue).
 
+IDs are unique and never reused. A new risk takes the next free number on `main`, checked right before the PR
+merges (rebase if another PR took it). `scripts/check-risk-ids.sh` fails on a duplicate ID and on a reference
+to an ID that this file does not define (#126).
+
 The security model these entries refer to is described in [concepts.md](concepts.md#security-model) and, for the
 planned target, [security-model.md](security-model.md).
 
