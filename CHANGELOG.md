@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
+  False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
+  no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
+  at* sections; new label `security-finding`. Applies to new bootstraps; existing repos keep their files.
 - Audit trail in Postgres (#91): every `AGENTDEV_AUDIT` line of the write API is also stored in the append-only
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
