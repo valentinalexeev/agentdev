@@ -588,6 +588,17 @@
       when: (security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0
       no_log: true
 
+    # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)
+    - name: Wait for the operator, router, egress proxy and Claude proxy
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
+      loop: "{{ [{'ns': platform_ns, 'name': 'agentdev-operator'}, {'ns': agents_ns, 'name': 'webhook-router'},
+                 {'ns': agents_ns, 'name': 'egress-proxy'}]
+                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else []) }}"
+      loop_control: {label: "{{ item.name }}"}
+      changed_when: false
+      when: not ansible_check_mode
+
     - name: Wait for the router and agents
       kubernetes.core.k8s_info:
         <<: *k8s
