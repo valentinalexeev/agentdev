@@ -38,3 +38,6 @@ security:
   pause_after: 5                    # more than N events in one job pause the agent
   retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history
   max_per_agent: 500
+# MCP platform (#51): project specs with an `mcp:` section, synced by scripts/mcp-sync.sh after ContextForge is up.
+# Paths on the operator machine (the deployment repo). Images and the Service range: roles/platform/defaults.
+mcp_projects: []

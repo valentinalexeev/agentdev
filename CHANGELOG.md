@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
+  `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
+  `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
+  `CF_ADMIN_FILE` of `mcp-sync.sh` can be overridden. `docs/admin.md` shows how to check that Dataplane V2 enforces
+  the platform NetworkPolicies.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are

@@ -40,6 +40,7 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
+| On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. | The specification path is not correct, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Install `yq`, `jq` and `curl`. 3. Run the playbook again. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
 
 ## authentik, API and web UI

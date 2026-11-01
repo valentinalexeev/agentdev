@@ -171,8 +171,8 @@ cluster.
 
 ## MCP tools
 
-MCP tools give the agents of a project more tools through ContextForge. On GKE, the playbook does not deploy
-ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
+MCP tools give the agents of a project more tools through ContextForge. On `kind`, run.sh step 08 deploys
+ContextForge. On GKE, the Ansible playbook deploys it.
 
 ### Deploy the platform namespace
 
@@ -182,6 +182,29 @@ ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
+
+### Deploy the platform namespace on GKE
+
+The playbook deploys Postgres and ContextForge in `agentdev-platform` on each run. It makes the passwords and keys
+on the first run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+
+1. In the deployment repository, put the project specifications in a directory, for example `projects/`.
+2. In `ansible/instance.yml`, list the specifications:
+
+   ```yaml
+   mcp_projects:
+     - "{{ lookup('env', 'PWD') }}/projects/web.yaml"
+   ```
+
+   Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
+3. Run the playbook (refer to `infra/ansible/README.md`).
+   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
+
+CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
+the connection from ContextForge.
+
+NOTE: The dry run (`--check`) does not run the sync.
 
 ### Add MCP servers to a project
 
@@ -218,7 +241,15 @@ When you remove an agent from `agents:` (or remove `mcp:`), the next sync delete
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
 Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
-applies the NetworkPolicies. Local `kind` (kindnet) does not.
+applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
+(kindnet) does not.
+
+To make sure that GKE applies the NetworkPolicies, do these steps:
+
+1. Start a test pod in the namespace `default`:
+   `kubectl run np-test --rm -it --restart=Never --image=curlimages/curl -- curl -m 5 http://contextforge.agentdev-platform:4444/health`
+2. Make sure that the command stops with a timeout.
+   If you get a response, the cluster does not apply NetworkPolicies.
 
 ## Identity (authentik)
 

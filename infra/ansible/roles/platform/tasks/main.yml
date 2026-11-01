@@ -1,0 +1,102 @@
+---
+# Postgres + ContextForge in {{ platform_ns }} (#14, #51), then scripts/mcp-sync.sh for each project spec.
+# Every task that holds a secret value has no_log.
+- name: Platform secrets exist in Secret Manager (generated once)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    name="{{ platform_sm_prefix }}{{ item }}"
+    if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+      gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+      openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+      echo created
+    fi
+  args: {executable: /bin/bash}
+  loop: "{{ platform_secret_keys }}"
+  register: platform_sm_created
+  changed_when: "'created' in platform_sm_created.stdout"
+
+- name: Read platform secrets
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
+  loop: "{{ platform_secret_keys }}"
+  register: platform_sm
+  changed_when: false
+  # read-only; in --check on a first run the secrets do not exist yet
+  check_mode: false
+  failed_when: platform_sm.rc != 0 and not ansible_check_mode
+  no_log: true
+
+- name: Keep platform secrets in a fact (not logged)
+  ansible.builtin.set_fact:
+    platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
+  no_log: true
+
+- name: Postgres, ContextForge and their NetworkPolicies
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+  vars:
+    platform_render:
+      src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        AGENTS_NS: "{{ agents_ns }}"
+        SERVICE_CIDR: "{{ platform_service_cidr }}"
+        POSTGRES_IMAGE: "{{ platform_postgres_image }}"
+        CONTEXTFORGE_IMAGE: "{{ platform_contextforge_image }}"
+        CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
+        PG_ADMIN_PASSWORD: "{{ platform_secret['pg-admin'] }}"
+        PG_CF_PASSWORD: "{{ platform_secret['pg-contextforge'] }}"
+        PG_AGENTDEV_PASSWORD: "{{ platform_secret['pg-agentdev'] }}"
+        PG_AUTHENTIK_PASSWORD: "{{ platform_secret['pg-authentik'] }}"
+        CF_JWT_SECRET: "{{ platform_secret['jwt'] }}"
+        CF_ENC_SECRET: "{{ platform_secret['enc'] }}"
+        # same rule as 08-mcp.sh: ContextForge wants upper, lower, digit and symbol
+        CF_ADMIN_PASSWORD: "Aa1!{{ platform_secret['cf-admin'] }}"
+        CF_DEFAULT_USER_PASSWORD: "Aa1!{{ platform_secret['cf-default-user'] }}"
+        CF_BASIC_AUTH_PASSWORD: "Aa1!{{ platform_secret['cf-basic-auth'] }}"
+      replace: []
+  no_log: true
+
+- name: Wait for Postgres and ContextForge
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Pod
+    namespace: "{{ platform_ns }}"
+    label_selectors: ["app={{ item }}"]
+    wait: true
+    wait_condition: {type: Ready, status: "True"}
+    wait_timeout: 600
+  loop: [platform-db, contextforge]
+  when: not ansible_check_mode
+
+- name: MCP sync for each project spec
+  when: mcp_projects | length > 0 and not ansible_check_mode
+  block:
+    - name: Admin password file for mcp-sync (0600, removed below)
+      ansible.builtin.tempfile: {state: file, suffix: .cf}
+      register: platform_cf_file
+
+    - name: Write the admin password
+      ansible.builtin.copy:
+        dest: "{{ platform_cf_file.path }}"
+        content: "{{ platform_secret['cf-admin'] }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Run scripts/mcp-sync.sh
+      ansible.builtin.command:
+        argv: ["{{ repo_root }}/scripts/mcp-sync.sh", "{{ item }}"]
+      environment:
+        KUBECTL: "kubectl --context {{ kube_context }}"
+        PLATFORM_NS: "{{ platform_ns }}"
+        AGENTS_NS: "{{ agents_ns }}"
+        CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
+        CF_ADMIN_FILE: "{{ platform_cf_file.path }}"
+      loop: "{{ mcp_projects }}"
+      register: platform_mcp_sync
+      changed_when: "'registered http' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
+  always:
+    - name: Remove the admin password file
+      ansible.builtin.file: {path: "{{ platform_cf_file.path }}", state: absent}
+      when: platform_cf_file.path is defined

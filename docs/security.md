@@ -46,7 +46,7 @@ planned target, [security-model.md](security-model.md).
 
 | ID | Risk | Source | Status | Where / how |
 |----|------|--------|--------|-------------|
-| R30 | Postgres and ContextForge admin reachable from agent pods | review #50 | mitigated | NetworkPolicies (f57e518). **Not enforced on kind** (kindnet); enforced on GKE (#51) |
+| R30 | Postgres and ContextForge admin reachable from agent pods | review #50 | mitigated | NetworkPolicies (f57e518). **Not enforced on kind** (kindnet); enforced on GKE by Dataplane V2 (`datapath_provider = ADVANCED_DATAPATH` in infra/terraform), check in admin.md (#51) |
 | R31 | MCP token scope | review #50 | fixed | Per-agent token scoped to the project's virtual server; revoke and renewal (#50) |
 | R32 | In-cluster OIDC key fetch over plain http | review #53 | open | TLS inside the cluster, #51 |
 | R33 | UI security headers dropped on some routes; no CSP | review #56 | fixed | Shared header snippet, strict CSP, `frame-ancestors 'none'` (4e1f9be) |

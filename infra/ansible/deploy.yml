@@ -118,7 +118,7 @@
       changed_when: false
       no_log: true
 
-    - name: Agent and SecurityEvent CRDs (#47, #70)
+    - name: "Agent and SecurityEvent CRDs (#47, #70)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -132,6 +132,9 @@
       kubernetes.core.k8s:
         <<: *k8s
         definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}"}}
+
+    - name: Postgres + ContextForge, then mcp-sync per project (#51)
+      ansible.builtin.include_role: {name: platform}
 
     - name: Agent operator (#47); it renders every agent's StatefulSet
       kubernetes.core.k8s:

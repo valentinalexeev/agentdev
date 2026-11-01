@@ -15,6 +15,7 @@
 #   - one virtual server per project (project-<project>) with exactly those tools
 #   - one API token per agent, scoped to that virtual server (server_id), stored as Secret agent-<agent>-mcp
 #     {CF_URL, CF_TOKEN}. The agent's pod reads it (optional secretRef); a token never leaves the cluster.
+# CF_ADMIN_FILE overrides the admin password file (the GKE playbook, #51, reads it from Secret Manager).
 # Separation is enforced by ContextForge: an agent's token is refused on any other server (verified in the ADR spike).
 source "$(dirname "$0")/../lib.sh"
 # shellcheck disable=SC1091
@@ -41,7 +42,7 @@ B="http://127.0.0.1:${port}"
 healthy=0; for _ in $(seq 1 30); do curl -fs "${B}/health" >/dev/null 2>&1 && { healthy=1; break; }; sleep 1; done
 [[ ${healthy} == 1 ]] || die "ContextForge is not healthy (kubectl -n ${PLATFORM_NS} logs deploy/contextforge)"
 # secrets go through stdin, never argv (visible in ps)
-T=$(jq -n --arg e "${CF_ADMIN_EMAIL}" --rawfile p "${SPIKE_DIR}/.secrets/platform/cf-admin" '{email:$e, password:("Aa1!" + ($p|rtrimstr("\n")))}' \
+T=$(jq -n --arg e "${CF_ADMIN_EMAIL}" --rawfile p "${CF_ADMIN_FILE:-${SPIKE_DIR}/.secrets/platform/cf-admin}" '{email:$e, password:("Aa1!" + ($p|rtrimstr("\n")))}' \
     | curl -fsS -X POST "${B}/auth/login" -H 'Content-Type: application/json' --data @- | jq -r .access_token)
 [[ -n "${T}" && "${T}" != null ]] || die "ContextForge admin login failed"
 hdr=$(mktemp); chmod 600 "${hdr}"; printf 'Authorization: Bearer %s\n' "${T}" >"${hdr}"
