@@ -37,6 +37,19 @@ the code that you merge.
 
 1. Close the pull request.
 
+## Check the security findings of a pull request
+
+An agent replies in each security advisory thread on its pull request. The agent does not resolve a thread that it
+did not fix.
+
+1. Open the pull request.
+2. Read the section **Security findings**. Each row has the thread, the outcome and the commit.
+3. Open each thread and read the reply of the agent. The outcome is *Fixed*, *Accepted risk* or *False positive*.
+4. If you agree, resolve the thread. If you do not agree, write a reply in the thread.
+5. Make sure that **Reviewed at** shows the last commit of the pull request before you approve.
+
+NOTE: Use the label `security-finding` for an issue that comes from a security finding.
+
 ## Answer a question from an agent
 
 An agent asks a question when an issue is not clear. The agent does not guess. The instructions in `AGENTS.md` (from

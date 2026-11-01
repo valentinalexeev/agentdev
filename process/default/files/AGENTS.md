@@ -18,6 +18,16 @@ This repository is worked on by agentdev coding agents. Each agent has its own f
 - Keep the PR description current: what was done, which checks ran with what result, what is still open.
 - If the request is ambiguous, ask in the issue and add `needs-decision` instead of guessing.
 - Never commit secrets, build output or caches.
+- **Security advisories:** reply in each code-scanning or security advisory thread on your PR with one outcome:
+  *Fixed in `<sha>`* (what changed), *Accepted risk* (why, and where it is tracked) or *False positive* (the concrete
+  reason). List each thread in the PR section *Security findings*. Never resolve a thread you did not fix; the
+  reviewer resolves it after checking.
+- **Reviews count for one commit:** a review names the commit it checked (*Reviewed at `<sha>`*). A push after it
+  needs a new review.
+- **Keep every deployment target in sync:** a change that affects one target (for example a local cluster and a
+  cloud deployment) updates all of them in the same PR, or links a follow-up issue.
+- **Never print secrets.** Never let output of the model (logs, generated text, files it wrote) decide a control
+  action such as limits, pausing or credentials, and never pass it to shell arithmetic or `eval`.
 
 Project-specific instructions (build, test, style) go below this line.
 

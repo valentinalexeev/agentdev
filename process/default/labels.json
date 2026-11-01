@@ -4,5 +4,6 @@
   {"name": "needs-decision", "color": "d93f0b", "description": "Waits for an owner decision (question in a comment)"},
   {"name": "blocked",        "color": "b60205", "description": "Blocked by another issue or external factor"},
   {"name": "bug",            "color": "d73a4a", "description": "Something isn't working"},
+  {"name": "security-finding", "color": "5319e7", "description": "A code-scanning or security advisory finding"},
   {"name": "enhancement",    "color": "a2eeef", "description": "New feature or request"}
 ]

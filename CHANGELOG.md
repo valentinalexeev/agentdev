@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
+  False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
+  no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
+  at* sections; new label `security-finding`. Applies to new bootstraps; existing repos keep their files.
 - SIEM outputs (#71): syslog over TLS (RFC 5424 messages, RFC 5425 octet-counted framing, facility 13, structured
   data `agentdev@32473`) and OTLP logs (OTLP/HTTP JSON to `/v1/logs`, ECS-style attributes, optional headers). Both
   reuse the webhook's per-agent fair queues and retries and can run together with the webhook. TLS 1.2+, certificates
