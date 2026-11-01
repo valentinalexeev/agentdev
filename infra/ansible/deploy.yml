@@ -58,11 +58,11 @@
       ansible.builtin.assert:
         that: >-
           not (approvals.enabled | default(true) | bool)
-          or ((api.oidc_issuer | default('')) | length > 0)
+          or (api_effective_issuer | length > 0)
         fail_msg: >-
           approvals are on by default on GKE and need the management API. The operator sends every request to
-          agentdev-api-internal, which this playbook deploys only when api.oidc_issuer is set; without it every
-          prompt and protected push would be refused. Set api.oidc_issuer, or opt out with approvals.enabled: false
+          agentdev-api-internal, which this playbook deploys only with an OIDC issuer (api.oidc_issuer, or authentik
+          with ingress.auth_host); without it every prompt and protected push would be refused. Set one, or opt out with approvals.enabled: false
           (docs/admin.md, Turn on approvals).
         quiet: true
 
@@ -282,16 +282,21 @@
     - name: Postgres + ContextForge, then mcp-sync per project (#51)
       ansible.builtin.include_role: {name: platform}
 
-    # Company SSO for authentik (#122): only when instance.yml sets authentik.sso. Writes the Secret authentik-sso;
-    # authentik itself is deployed by the playbook later (#114).
+    # authentik (#114): same chart, values and blueprints as ./run.sh 09; before the API, which uses it as the issuer
+    - name: Identity provider authentik (blueprints, break-glass admin)
+      ansible.builtin.include_role: {name: authentik}
+      when: authentik_enabled | bool
+
+    # Company SSO for authentik (#122): only when instance.yml sets authentik.sso. Writes the Secret authentik-sso and
+    # restarts authentik (deployed by the role authentik above).
     - name: Company SSO settings for authentik (Secret authentik-sso)
       ansible.builtin.include_role: {name: authentik_sso}
       when: ((authentik | default({})).sso | default({})) | length > 0
 
-    # Management API (#46, #104): needs an OIDC provider, so it runs only when instance.yml sets api.oidc_issuer.
+    # Management API (#46, #104): needs an OIDC provider: api.oidc_issuer, or authentik on ingress.auth_host (#114).
     - name: Management API (database roles, Secrets, Deployment)
       ansible.builtin.include_role: {name: api}
-      when: (api.oidc_issuer | default('')) | length > 0
+      when: api_effective_issuer | length > 0
 
     # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
     # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host.

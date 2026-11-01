@@ -15,12 +15,16 @@ agents:
 # ingress:
 #   host: agentdev.example.com              # web UI (DNS A record -> terraform output webhook_ip)
 #   webhook_host: hooks.example.com         # optional, default host; GitHub App webhook https://<this>/hook
+#   auth_host: auth.example.com             # authentik login (#114): deploys authentik, the API/UI issuer defaults to it
 #   certificate: agentdev-public-1a2b3c4d   # managed certificate name
 #   security_policy: agentdev-public        # only with Terraform cloud_armor = true
 # Optional company SSO for authentik (#122, docs/admin.md "Sign in with Google Workspace"). The IdP certificate goes
 # into the Secret Manager secret authentik-sso-idp-cert (README.md). Members of admin_group become agentdev admins;
 # nothing else changes the members of agentdev-admins.
 # authentik:
+#   enabled: true                                # default: true when ingress.auth_host is set (#114)
+#   version: "2026.8.5"                          # Helm chart = app version
+#   admin_email: admin@example.com               # e-mail of the break-glass admin akadmin
 #   sso:
 #     kind: saml                                   # Google Workspace SAML app (oidc: another OIDC provider)
 #     admin_group: agentdev-admins@example.com     # the Workspace group (its e-mail address)

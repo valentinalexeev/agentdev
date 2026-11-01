@@ -1,0 +1,113 @@
+---
+# authentik on GKE (#114): the same steps as ./run.sh 09 (database, Secret `authentik`, ConfigMap
+# `authentik-blueprints`, Helm chart with manifests/authentik-values.yaml), with secrets from Secret Manager.
+# Runs after the platform role (Postgres) and before the roles authentik_sso and api. Every task that holds a secret
+# value has no_log. The blueprints create the group agentdev-admins but never set its members (R53): the only member
+# the playbook ever adds is the break-glass admin akadmin, with an add-only call.
+- name: Check the authentik settings
+  ansible.builtin.assert:
+    that:
+      - authentik_version is match('^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,3}$')
+      - authentik_admin_email is match('^[^@\s]+@[^@\s]+$')
+      - authentik_host | length == 0 or authentik_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+    fail_msg: "authentik.version (YYYY.M.P), authentik.admin_email, ingress.auth_host (a plain DNS name): example.vars.yml"
+    quiet: true
+
+- name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    name="{{ platform_sm_prefix }}{{ item }}"
+    p="{{ gcp_project }}"
+    if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
+      gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
+        || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
+      openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project "$p" --data-file=- >/dev/null
+      echo created
+    fi
+  args: {executable: /bin/bash}
+  loop: "{{ authentik_sm_keys }}"
+  register: authentik_sm_created
+  changed_when: "'created' in authentik_sm_created.stdout"
+  no_log: true
+
+- name: Read the authentik secrets
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
+  loop: "{{ authentik_sm_keys }}"
+  register: authentik_sm
+  changed_when: false
+  check_mode: false
+  failed_when: authentik_sm.rc != 0 and not ansible_check_mode
+  no_log: true
+
+- name: Keep them in a fact (not logged)
+  ansible.builtin.set_fact:
+    authentik_secret: "{{ dict(authentik_sm_keys | zip(authentik_sm.results | map(attribute='stdout') | map('trim'))) }}"
+  no_log: true
+
+- name: Check the database password
+  ansible.builtin.assert:
+    that: authentik_secret['pg-authentik'] is match('^[0-9a-f]{32,}$')
+    fail_msg: "Secret Manager {{ platform_sm_prefix }}pg-authentik must hold a hex password"
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+# init.sql only runs on an empty volume: create the role and database here too (same SQL as 09-authentik.sh)
+- name: Database role and database authentik
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ authentik_db_pod }}", --,
+           psql, -U, postgres, -v, ON_ERROR_STOP=1, -q]
+    stdin: |
+      SELECT 'CREATE ROLE authentik LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authentik')\gexec
+      ALTER ROLE authentik PASSWORD '{{ authentik_secret['pg-authentik'] }}';
+      SELECT 'CREATE DATABASE authentik OWNER authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='authentik')\gexec
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Secret authentik (configuration)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: authentik, namespace: "{{ platform_ns }}"}
+      stringData: "{{ authentik_env }}"
+  vars:
+    authentik_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+  register: authentik_config
+  no_log: true
+
+# only manifests/authentik-blueprint-*.yaml, never manifests/kind/ (the kind stand-in)
+- name: ConfigMap authentik-blueprints
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: {name: authentik-blueprints, namespace: "{{ platform_ns }}"}
+      data: "{{ dict(authentik_blueprint_files | map('basename') | zip(query('ansible.builtin.file', *authentik_blueprint_files))) }}"
+  vars:
+    authentik_blueprint_files: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') | sort }}"
+
+- name: Helm chart authentik
+  kubernetes.core.helm:
+    kube_context: "{{ kube_context }}"
+    name: authentik
+    chart_ref: authentik
+    chart_repo_url: "{{ authentik_chart_repo }}"
+    chart_version: "{{ authentik_version }}"
+    release_namespace: "{{ platform_ns }}"
+    values_files: ["{{ repo_root }}/manifests/authentik-values.yaml"]
+    # a changed Secret `authentik` restarts the pods (hash only, never the values)
+    values:
+      global:
+        podAnnotations:
+          agentdev/config-hash: "{{ (authentik_config.result.data | default({}) | to_json | hash('sha256'))[:16] }}"
+    wait: true
+    timeout: 15m0s
+
+- name: Group agentdev-admins and the break-glass admin
+  ansible.builtin.include_tasks: breakglass.yml
+  when: authentik_breakglass_admin_group | bool and not ansible_check_mode

@@ -87,3 +87,15 @@ executors: []   # [{name, environment, repo, path, image (by digest), plan: [arg
 # Management API (#104), optional: deployed only when api.oidc_issuer is set. Keys: oidc_issuer (https, required),
 # oidc_discovery_url, oidc_audience (agentdev), forge_url, db_retention_days (365). Defaults: roles/api/defaults.
 api: {}
+# authentik on GKE (#114): deployed by the role authentik when authentik.enabled is true; the default is on when
+# ingress.auth_host (the public login host) is set. Then api.oidc_issuer and api.oidc_discovery_url default to
+# authentik (an explicit api.oidc_issuer still wins, for another OIDC provider).
+authentik_enabled: "{{ (authentik | default({})).enabled | default(((ingress | default({})).auth_host | default('')) | length > 0) | bool }}"
+authentik_default_issuer: >-
+  {{ ('https://' ~ ingress.auth_host ~ '/application/o/agentdev/') if authentik_enabled | bool and
+     ((ingress | default({})).auth_host | default('')) | length > 0 else '' }}
+authentik_default_discovery_url: >-
+  {{ ('http://authentik-server.' ~ platform_ns ~ '.svc.cluster.local/application/o/agentdev/')
+     if authentik_default_issuer | length > 0 else '' }}
+# the issuer the playbook uses (api role, approvals check, ingress UI route)
+api_effective_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer) }}"

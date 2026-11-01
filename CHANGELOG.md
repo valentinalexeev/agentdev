@@ -26,6 +26,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   nothing. Needs the `kubernetes` Python package for ansible (`docs/troubleshooting.md`). GKE does not change.
 
 ### Added
+- authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
+  blueprints (`manifests/authentik-blueprint-*.yaml` only) as `./run.sh 09`, the database login `pg-authentik` of the
+  platform role, and the new Secret Manager secrets `platform-authentik-secret-key` and `platform-authentik-admin`
+  (generated once). It runs before the API when `ingress.auth_host` is set (or `authentik.enabled: true`). Then
+  `api.oidc_issuer` defaults to `https://<auth_host>/application/o/agentdev/` and the discovery URL to the in-cluster
+  service; an explicit `api.oidc_issuer` still wins. The Gateway gets the route `https://<auth_host>/` to authentik
+  (HSTS, Cloud Armor when set, NetworkPolicy from the load balancer only). The blueprint's UI redirect URI comes from
+  `AGENTDEV_UI_CALLBACK` (`https://<ingress.host>/callback` on GKE; kind keeps the localhost default). Break-glass:
+  the playbook adds `akadmin` to `agentdev-admins` once (add only) and fails without an active superuser. Risks R94,
+  R95. Tests: `tests/authentik_render.yml` (kind/GKE Secret keys, blueprint set, no `users:`, issuer defaults,
+  Gateway route). To apply: add the login host to Terraform `public_hosts` and its DNS record, set
+  `ingress.auth_host` in `instance.yml`, and remove `api.oidc_issuer` if it pointed at the same authentik. Docs:
+  `docs/admin.md` (Deploy authentik on GKE, Keep a break-glass admin), `docs/private-deployment.md`.
 - Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
   billing link and makes only the bootstrap APIs and the state bucket. `billing_account_id` is required only when the
   project is created. The default (`true`) is unchanged.

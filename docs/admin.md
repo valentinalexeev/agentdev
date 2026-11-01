@@ -201,6 +201,9 @@ of the agents. It shows one card for each issue.
 
 ### Open botboard
 
+On GKE, open `https://<auth_host>/` and use the password from
+[Keep a break-glass admin](#keep-a-break-glass-admin). On kind:
+
 1. Start the port-forward: `kubectl -n botboard port-forward svc/botboard 8090:80`
 2. Open http://localhost:8090 in a browser.
 
@@ -319,7 +322,8 @@ NOTE: The test pod gets the image `curlimages/curl` from Docker Hub. The cluster
 ## Identity (authentik)
 
 authentik is the identity provider of the instance. It is in the namespace `agentdev-platform` and uses the
-database `authentik` on the platform Postgres, with no Redis. On GKE, the playbook does not deploy it yet (#51).
+database `authentik` on the platform Postgres, with no Redis. On GKE, the playbook deploys it (#114). Refer to
+[Deploy authentik on GKE](#deploy-authentik-on-gke).
 
 ### Deploy authentik
 
@@ -328,6 +332,42 @@ Do this task after run.sh step 08.
 1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
 2. Run run.sh step 09: `./run.sh 09`
    The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+
+### Deploy authentik on GKE
+
+The playbook deploys authentik with the same Helm chart, values and blueprints as run.sh step 09 (#114). The role
+`authentik` runs after the platform Postgres and before the API.
+
+1. In Terraform `instance.tfvars`, add the login host to `public_hosts`, for example `auth.example.com`.
+   Apply, and make the DNS `A` record to `webhook_ip`.
+2. In `ansible/instance.yml`, set `ingress.auth_host` to the same name. Optional: `authentik.version` and
+   `authentik.admin_email`.
+3. Run the playbook.
+   The playbook does these steps:
+   - It makes the secrets `platform-authentik-secret-key`, `platform-authentik-admin` and `platform-pg-authentik` in
+     Secret Manager on the first run. It never replaces them.
+   - It makes the database `authentik`, the Secret `authentik` and the ConfigMap `authentik-blueprints` (the files
+     `manifests/authentik-blueprint-*.yaml` only, never `manifests/kind/`).
+   - It installs the chart, adds the route `https://<auth_host>/` to the Gateway, and adds `akadmin` to
+     `agentdev-admins` (add only).
+   - `api.oidc_issuer` becomes `https://<auth_host>/application/o/agentdev/`, and the API reads the keys inside the
+     cluster. The UI client accepts `https://<ingress.host>/callback`.
+
+NOTE: An `api.oidc_issuer` in `instance.yml` overrides the authentik issuer. To use another OIDC provider and no
+authentik, set `authentik.enabled: false`.
+
+### Keep a break-glass admin
+
+`akadmin` is the break-glass admin. authentik makes it at the first start with the password from Secret Manager
+`platform-authentik-admin`. A password that you change in the UI stays: authentik uses the first password only once.
+The playbook adds `akadmin` to `agentdev-admins` with an add-only call. It never removes a member, and it fails when
+authentik has no active superuser.
+
+WARNING: Do not delete `akadmin`, do not deactivate it, and do not remove its password login. Keep its password and
+the MFA recovery codes in the password manager of the owner. If the Workspace source fails, this is the only login.
+
+To read the first password on GKE, without showing it on the screen, copy it to the clipboard:
+`gcloud secrets versions access latest --secret platform-authentik-admin --project <project_id> | pbcopy`
 
 ### Log in to authentik for the first time
 
@@ -412,7 +452,7 @@ NOTE: If the token has neither the claim of the agent's forge nor `forge_login`,
 `.`, `_`, `-`, the API finds no forge user. The person can read, but cannot change agents. Members of
 `agentdev-admins` can pause, add and remove agents without a forge user.
 
-NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
+NOTE: With another OIDC provider (`authentik.enabled: false`), apply
 `manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
 interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
@@ -524,7 +564,8 @@ WARNING: Do not use the stand-in outside kind. Anyone who can open it can sign i
 ### Give a person admin rights for agents
 
 The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
-09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On GKE, the playbook does the same
+(#114).
 
 IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
 set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
