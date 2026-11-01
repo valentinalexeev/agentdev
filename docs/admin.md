@@ -725,16 +725,21 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 
 Do this task after you pull a new `main` into an existing `kind` cluster.
 
-1. Read `CHANGELOG.md`. Find the run.sh steps that each **BREAKING** entry names.
+1. Read the **BREAKING** entries in `CHANGELOG.md` to find the run.sh steps.
+
+CAUTION: Do not run only step 10. The API needs the CRDs from step 12, and the agent pods need the forge image from
+step 06. If you remove Docker images (for example with `docker image prune`), run step 06 again.
+
 2. Run these steps in this sequence: `./run.sh 06 10 12`
-   - Step 06 builds the worker and forge images and loads them into `kind`.
+   - Step 06 builds the worker, forge and router images and loads them into `kind`.
    - Step 10 builds the API and applies the database grants.
    - Step 12 builds the operator and applies the CRDs, for example `SecurityEvent`.
 3. Make sure that the agent pods show `2/2 Running`:
    `kubectl --context kind-agentdev -n coding-agents get pods`
+   The agent pods start with the new worker and forge images.
 
-CAUTION: Do not run only step 10. The API needs the CRDs from step 12, and the agent pods need the forge image from
-step 06. If you remove Docker images (for example with `docker image prune`), run step 06 again.
+NOTE: Step 06 runs step 12 only when the operator is not installed. On an existing cluster, step 12 must come after
+step 06 to update the CRDs.
 
 ## Remove agentdev
 
