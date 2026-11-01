@@ -71,6 +71,8 @@ type Collector struct {
 	Now  func() time.Time
 	// Direct reads the positions ConfigMap without the cache (read-modify-write); the manager's API reader.
 	Direct client.Reader
+	// Usage receives the AGENTDEV_USAGE lines (#93); nil: ignored.
+	Usage *Usage
 
 	mu      sync.Mutex
 	streams map[string]bool // podUID/container being followed
@@ -367,6 +369,15 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		// usage lines (#93) come from the agent container only (the loop prints them after each Claude run)
+		if c.Usage != nil && container != forgeContainer {
+			if u, at, ok := parseUsage(sc.Text()); ok {
+				if err := c.Usage.Observe(ctx, p, u, at); err != nil {
+					log.FromContext(ctx).Error(err, "record usage")
+				}
+				continue
+			}
+		}
 		spec, ok := parseLine(sc.Text(), p, container)
 		if !ok {
 			continue

@@ -78,7 +78,13 @@ func main() {
 		log.Error(err, "clientset")
 		os.Exit(1)
 	}
-	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now,
+	// subscription usage limits (#93): fed by the collector, re-evaluated every 30 s (thresholds, window resets)
+	usage := &Usage{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Now: time.Now}
+	if err := mgr.Add(usage); err != nil {
+		log.Error(err, "usage")
+		os.Exit(1)
+	}
+	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
 		C: SecurityConfig{
 			PauseAfter:  envInt("SECURITY_PAUSE_AFTER", 5),
 			Retention:   time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,
