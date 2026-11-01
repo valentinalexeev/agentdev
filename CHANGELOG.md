@@ -37,6 +37,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   passed through to the loop, back-off on token minting); a 401 drops the cached token; review requests only for 1
   to 5 user logins (no teams); `per_page`/`page` 1 to 100; numbers in paths bounded; key preferably from
   `GITHUB_APP_PRIVATE_KEY_FILE` (never in an environment).
+- Agent loop on GitHub (#2, step 3). The loop reads the forge kind and its commit author from the sidecar
+  (`GET /identity`, validated). On GitHub: work is the open issues labelled `agent:<name>` (pull requests dropped),
+  the agent's PRs are those of the App bot on `agent/<name>/*`, links use `/pull/`. Code scanning findings
+  (`github-advanced-security[bot]` review threads) are answered in their thread with one outcome: **Fixed in
+  `<sha>`** only when the pushed change touches the finding's file, else *Not fixed yet*; *Accepted risk* and *False
+  positive* are marked as proposals. The model only proposes the outcome word for thread ids the loop asked about; the
+  loop never resolves a thread. Failing check runs of the PR head are given to the model as feedback. Gitea unchanged. Review of
+  #130: the label alone does not give work. Before each start the loop reads who added `agent:<name>` last
+  (`issues/{n}/events`) and requires write, maintain or admin for that person, checked live
+  (`collaborators/{user}/permission`, both new on the sidecar allow-list); otherwise it skips the issue and raises
+  `label-not-writer` or `label-unverified`.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed

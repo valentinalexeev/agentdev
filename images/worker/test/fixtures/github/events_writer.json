@@ -1,0 +1,4 @@
+[{"id":1,"event":"labeled","actor":{"login":"mallory"},"label":{"name":"agent:alice"},"created_at":"2026-11-01T08:00:00Z"},
+ {"id":2,"event":"unlabeled","actor":{"login":"octo-dev"},"label":{"name":"agent:alice"},"created_at":"2026-11-01T08:30:00Z"},
+ {"id":3,"event":"labeled","actor":{"login":"octo-dev"},"label":{"name":"agent:alice"},"created_at":"2026-11-01T09:00:00Z"},
+ {"id":4,"event":"labeled","actor":{"login":"mallory"},"label":{"name":"bug"},"created_at":"2026-11-01T09:01:00Z"}]

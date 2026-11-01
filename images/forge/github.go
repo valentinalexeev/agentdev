@@ -417,6 +417,8 @@ func (d *githubDriver) rules() []rule {
 		r("GET", repoRe+`/issues`, nil),
 		r("GET", repoRe+`/issues/[0-9]+`, nil),
 		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("GET", repoRe+`/issues/[0-9]+/events`, nil), // who added the agent:<name> label (#130 review)
+		r("GET", repoRe+`/collaborators/[A-Za-z0-9][A-Za-z0-9-]{0,38}/permission`, nil),
 		sign(r("POST", repoRe+`/issues/[0-9]+/comments`, nil)),
 		r("GET", repoRe+`/pulls`, nil),
 		sign(r("POST", repoRe+`/pulls`, checkOwnHeadGitHub)),
