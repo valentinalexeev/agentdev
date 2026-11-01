@@ -29,9 +29,14 @@ type ghFake struct {
 	comments []map[string]any
 	state    string
 	calls    []string
+	selfDown bool // GET /user (the static token's own user) answers 502
+	selfID   int64
 }
 
-const ghInstToken = "ghs_installationtoken0123456789"
+const (
+	ghInstToken   = "ghs_installationtoken0123456789"
+	ghStaticToken = "ghp_statictoken0123456789abcdef"
+)
 
 func newGHFake(t *testing.T) *ghFake {
 	f := &ghFake{state: "open", perms: map[string][2]string{
@@ -65,7 +70,13 @@ func newGHFake(t *testing.T) *ghFake {
 				"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)})
 		case r.URL.Path == "/app" && app:
 			_, _ = w.Write([]byte(`{"slug":"my-agentdev"}`))
-		case auth != "Bearer "+ghInstToken:
+		case r.URL.Path == "/user" && auth == "Bearer "+ghStaticToken:
+			if f.selfDown {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]int64{"id": f.selfID})
+		case auth != "Bearer "+ghInstToken && auth != "Bearer "+ghStaticToken:
 			w.WriteHeader(http.StatusUnauthorized)
 		case strings.HasPrefix(r.URL.Path, "/repos/owner/x/collaborators/") && strings.HasSuffix(r.URL.Path, "/permission"):
 			u := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/owner/x/collaborators/"), "/permission")
@@ -312,6 +323,44 @@ func TestGitHubApprovalFailClosed(t *testing.T) {
 	_ = d.pass(context.Background())
 	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.DecidedBy != "wendy" {
 		t.Fatalf("GitHub up: %+v", a)
+	}
+}
+
+// With a static GITHUB_API_TOKEN its own user never decides; while GitHub does not say who that is, nobody decides.
+func TestGitHubStaticTokenSelfFailsClosed(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	f := newGHFake(t)
+	f.comments = []map[string]any{ghComment(1, "wendy", "User", "/approve "+aid, t0.Add(time.Minute))}
+	f.selfDown = true
+	env := map[string]string{"GITHUB_API_TOKEN": ghStaticToken, "GITHUB_API_URL": "https://unused.invalid"}
+	g, err := githubFromEnv(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.api, g.hc = f.URL, f.Client()
+	k, _ := approvalEnv(t, ghApprovalObj(t0))
+	d := newDecider(k, agentsFixed{{Name: "carol", Forge: "github"}}, &fakeComments{}, forgePerms{github: g})
+	d.github = g
+	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("own user unknown: state %s, want pending", a.State)
+	}
+	// GitHub answers: wendy is the token's own user (id 1001), so her comment is refused
+	f.mu.Lock()
+	f.selfDown, f.selfID = false, 1001
+	f.mu.Unlock()
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("token's own user decided: state %s", a.State)
+	}
+	// another user id: wendy decides
+	f.mu.Lock()
+	f.selfID = 7
+	f.mu.Unlock()
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.DecidedBy != "wendy" {
+		t.Fatalf("own user known: %+v", a)
 	}
 }
 

@@ -356,8 +356,14 @@ func (d *decider) agentAccounts(ctx context.Context) (map[int64]string, error) {
 		}
 		out[id] = a.Name
 	}
-	// the API's own token account never decides either (it can read every repository)
-	if self, err := d.forge.Self(ctx); err == nil && self > 0 {
+	// the API's own token account never decides either (it can read every repository). Unknown (the forge did not
+	// answer): nil, and decide refuses every Gitea decision in this pass (fail closed); GitHub builds its own list.
+	self, err := d.forge.Self(ctx)
+	if err != nil {
+		log.Printf("approvals: the API's own Gitea account: %v (no Gitea decision in this pass)", err)
+		return nil, nil
+	}
+	if self > 0 {
 		out[self] = "agentdev-api"
 	}
 	return out, nil
@@ -513,7 +519,11 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 	// own token user; Gitea agent ids do not apply there (another forge's id space)
 	if a.Forge == "github" {
 		agentIDs = map[int64]string{}
-		if self, err := d.github.Self(ctx); err == nil && self > 0 {
+		self, err := d.github.Self(ctx)
+		if err != nil {
+			return err // without the static token's own user no decision (fail closed); next pass
+		}
+		if self > 0 {
 			agentIDs[self] = "agentdev-api"
 		}
 		bot, err := d.github.AppBot(ctx)
@@ -525,6 +535,8 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 			d.denyLogins[strings.ToLower(bot)] = true
 			d.mu.Unlock()
 		}
+	} else if agentIDs == nil {
+		return fmt.Errorf("the API's own Gitea account is unknown: no decision (fail closed); next pass")
 	}
 	// an executor apply (#69) is requested on the merged, so closed, pull request: closing does not end it (its own
 	// deadline, spec.approvalHours, is enforced by the operator)
