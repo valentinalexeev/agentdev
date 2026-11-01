@@ -29,6 +29,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
+  (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
+  with the executor's own account, plans every PR that changes `spec.path` (commit status `agentdev/trusted-plan`,
+  output as a comment), plans the merge commit again, asks for an `Approval` (#67, `source: executor`) bound to the
+  plan file SHA-256, and after `/approve <id>` runs the apply once with the write credentials. The image is pinned by
+  digest and the commands come from the Executor only; the operator image hashes and verifies the plan file. Every
+  run is a security event (`executor.plan`, `executor.apply`, `executor.refused`). Wired in `config.env`,
+  `12-operator.sh`, the operator manifest (namespace, Role, NetworkPolicy), Ansible (`executors:`, Secrets from
+  Secret Manager, Workload Identity service accounts) and the GKE example. Also installs the `Approval` CRD (#67).
+  Risks R80 to R83. The approval binds image digest, apply argv and an Executor spec hash (a changed Executor
+  refuses the apply), the apply starts within `EXECUTOR_APPLY_START_MINUTES` (30) of the decision, one executor per
+  environment (operator and Ansible), fork PRs only with `spec.allowForkPRs`. The API does not void executor
+  approvals for their merged (closed) PR.
 - Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
   `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
   `claude-shared` / `claude-<agent>`; agent pods get `ANTHROPIC_BASE_URL` and a per-agent proxy key
@@ -112,6 +125,23 @@ While the version is `0.x`, breaking changes bump MINOR.
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
   `GET /api/audit` (filters `agent`, `result`, `since`, `limit`, `cursor`), readable only by `agentdev-admins`.
+- Approvals, decided on the forge (#67, off by default: `APPROVALS=true` / `approvals.enabled`). Claude's tool
+  permission prompts (`--permission-prompt-tool mcp__agentdev__approve`, served by the forge sidecar) and pushes to
+  protected paths become requests: the sidecar comments "waiting for approval `<id>`", a person with write access
+  answers `/approve <id>`, `/approve-job <id>` or `/deny <id>`. New `Approval` CRD (short name `apv`), created by the
+  operator from the sidecar's `AGENTDEV_APPROVAL_REQUEST` line; status written by agentdev-api with a
+  compare-and-set. Decision rules: comments from the requesting agent (by forge account id), other agents, the API's token user,
+  `APPROVAL_DENY_ACCOUNTS` and bots ignored; job checked to be the agent's own; `/approve-job` covers the same input
+  only; request text redacted; decisions readable only by the requesting sidecar (per-request secret); edited comments ignored, live write-access check,
+  content hash, first decision wins. Lifecycle: one record per request (deduplicated by
+  fingerprint), ending allowed, denied or void; a timeout only ends the agent's wait and the record stays decidable;
+  void when the job ends, a newer request supersedes it, the issue or PR closes, or the pod is gone; the forge
+  comment is edited on each change; decisions on closed records are audited and ignored; commands inside code
+  fences or quotes do not count. Every decision is audited. Read-only
+  `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
+  UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
+  `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80. Kind only for now: the GKE
+  playbook does not deploy agentdev-api and stops if `approvals.enabled` is `true`.
 - Subscription usage limits (#93, incident #92): after each Claude run the worker prints an `AGENTDEV_USAGE {json}`
   line (tokens, 5-hour and weekly rate-limit windows from the CLI's `rate_limit_event`; the worker now uses
   `--output-format stream-json`). The operator sums them per Claude credential Secret and, when a window reaches its

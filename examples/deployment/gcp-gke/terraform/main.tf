@@ -62,3 +62,24 @@ variable "cloud_armor" {
   type    = bool
   default = false
 }
+# Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
+# PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's
+# Kubernetes service account in agentdev-executors use each. Grant the roles your tool needs; keep plan read-only.
+#
+# locals { executors = ["tf-prod"] }
+# resource "google_service_account" "exec" {
+#   for_each   = { for p in setproduct(local.executors, ["plan", "apply"]) : "${p[0]}-${p[1]}" => p }
+#   account_id = "exec-${each.key}"
+# }
+# resource "google_service_account_iam_member" "exec_wi" {
+#   for_each           = google_service_account.exec
+#   service_account_id = each.value.name
+#   role               = "roles/iam.workloadIdentityUser"
+#   member             = "serviceAccount:${var.project_id}.svc.id.goog[agentdev-executors/exec-${each.key}]"
+# }
+# resource "google_project_iam_member" "exec_plan_viewer" {
+#   for_each = toset(local.executors)
+#   project  = var.project_id
+#   role     = "roles/viewer"
+#   member   = "serviceAccount:${google_service_account.exec["${each.key}-plan"].email}"
+# }

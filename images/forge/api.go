@@ -20,10 +20,13 @@ type server struct {
 	git    *gitRepo
 	client *http.Client
 	rules  []rule
-	drv    driver // forge-specific API location, auth and allow-list (driver.go)
+	appr   *approvals // nil: approvals off (approvals.go, #67)
+	drv    driver     // forge-specific API location, auth and allow-list (driver.go)
 
 	usageGate usageGate // POST /usage rate limit (usage.go)
 }
+
+type ctxJob struct{}
 
 // rule is one allowed Gitea REST call. The path pattern's first group is the repo (owner/name), checked against REPO.
 type rule struct {
@@ -59,6 +62,122 @@ func (s *server) logf(format string, a ...any) {
 	log.Printf("%s [%s] forge: %s", time.Now().UTC().Format("15:04:05"), s.c.ForgeUser, fmt.Sprintf(format, a...))
 }
 
+// checkNoDecision refuses a write whose JSON carries an approval decision command (/approve, /approve-job, /deny) in
+// any string value, at any depth and under any key: agents never decide (docs/security-model.md, decision rule 1).
+// The API ignores such comments from agents anyway; refusing them here makes the attempt a security event.
+// Keys that differ only in case are refused too: Go folds them into one struct field while a forge may read another
+// (review of #116: {"body":"/approve x","Body":"y"} passed a struct decode but reached GitHub as "body").
+func checkNoDecision(_ *server, body []byte) error {
+	refused := refuseAs("approval-self-decision", "high", "comment refused: agents cannot post approval decisions")
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		if decisionCmdRe.Match(body) { // not JSON: look at the raw text
+			return refused
+		}
+		return nil
+	}
+	// exactly one JSON value: trailing data could be read by a forge parser that this check never saw (review of #116)
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return refuseAs("approval-self-decision", "high", "refused: trailing data after the JSON body")
+	}
+	if hasDecision(v) {
+		return refused
+	}
+	if foldedDupKeys(body) {
+		return refuseAs("approval-self-decision", "high", "refused: JSON keys that differ only in case")
+	}
+	return nil
+}
+
+func hasDecision(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return decisionCmdRe.MatchString(x)
+	case map[string]any:
+		for _, e := range x {
+			if hasDecision(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if hasDecision(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// foldedDupKeys reports an object that has two keys equal under case folding, at any depth.
+func foldedDupKeys(body []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	type frame struct {
+		obj    bool
+		keys   map[string]bool
+		expKey bool
+	}
+	var st []*frame
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		top := func() *frame {
+			if len(st) == 0 {
+				return nil
+			}
+			return st[len(st)-1]
+		}
+		switch tk := t.(type) {
+		case json.Delim:
+			switch tk {
+			case '{':
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+				st = append(st, &frame{obj: true, keys: map[string]bool{}, expKey: true})
+			case '[':
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+				st = append(st, &frame{})
+			case '}', ']':
+				st = st[:len(st)-1]
+				if f := top(); f != nil && f.obj {
+					f.expKey = true
+				}
+			}
+		default:
+			f := top()
+			if f != nil && f.obj && f.expKey {
+				k := strings.ToLower(fmt.Sprint(tk))
+				if f.keys[k] {
+					return true
+				}
+				f.keys[k] = true
+				f.expKey = false
+			} else if f != nil && f.obj {
+				f.expKey = true
+			}
+		}
+	}
+}
+
+// enableApprovals turns protected-path refusals and Claude prompts into approval requests.
+func (s *server) enableApprovals(apiURL string, timeout time.Duration) {
+	s.appr = newApprovals(s, apiURL, timeout)
+	s.git.approve = func(ctx context.Context, branch, tip string, paths []string) error {
+		job, _ := ctx.Value(ctxJob{}).(string)
+		return s.appr.pushApproval(ctx, job, branch, tip, paths)
+	}
+}
+
 // checkOwnHead: a PR may only be opened from the agent's own branch.
 func checkOwnHead(s *server, body []byte) error {
 	var pr struct {
@@ -86,6 +205,10 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /sync", s.sync)
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
+	if s.appr != nil {
+		mux.HandleFunc("/mcp", s.appr.mcp)               // Claude's permission prompt tool (approvals.go)
+		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
+	}
 	mux.HandleFunc("POST /usage", s.usage)
 	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
@@ -160,12 +283,30 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// #67: agents never post an approval decision, on any forge driver and on any write that carries text
+	// (issue comments, PR bodies, review replies). Driver rules may add checks but cannot skip this one.
+	if r.Method != http.MethodGet {
+		if err := checkNoDecision(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	if match.rewrite != nil {
 		if body, err = match.rewrite(s, body); err != nil {
 			s.logf("refused %s %s: %v", r.Method, p, err)
 			s.policyEvent(r, err, r.Method+" "+p)
 			fail(w, err)
 			return
+		}
+		if r.Method != http.MethodGet { // check what is actually sent, after the driver's rewrite
+			if err := checkNoDecision(s, body); err != nil {
+				s.logf("refused %s %s: %v", r.Method, p, err)
+				s.policyEvent(r, err, r.Method+" "+p)
+				fail(w, err)
+				return
+			}
 		}
 	}
 	drv := s.driver()
@@ -233,7 +374,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 // ignored: the sidecar looks up the default branch itself.
 func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	branch := r.URL.Query().Get("branch")
-	tip, err := s.git.Push(r.Context(), branch, r.Body)
+	tip, err := s.git.Push(context.WithValue(r.Context(), ctxJob{}, r.Header.Get("X-Agentdev-Job")), branch, r.Body)
 	if err != nil {
 		s.logf("push to %s: %v", branch, err)
 		s.policyEvent(r, err, "push to "+branch)
