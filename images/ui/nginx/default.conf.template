@@ -8,6 +8,8 @@ map $uri $csp {
 
 server {
   listen 8080;
+  # request size limit (#120): the UI and its API calls send small JSON bodies only
+  client_max_body_size 1m;
   root /usr/share/nginx/html;
 
   # runtime config for the SPA; no secrets (public OIDC client). Values are JSON-escaped by 15-env.envsh.

@@ -714,7 +714,8 @@ CAUTION: This procedure removes the pod of the agent. The volumes stay.
 ## Web UI
 
 The web UI shows the agents of the instance and their status. You sign in to the web UI through authentik. The web
-UI is in the `agentdev-platform` namespace. For GKE, refer to issue #51.
+UI is in the `agentdev-platform` namespace. On GKE, the role `api` deploys the UI, and the public entry point
+makes it available on HTTPS (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 
 ### Deploy the web UI
 
@@ -771,6 +772,96 @@ NOTE: When you close the browser tab, you also sign out.
 - nginx sends `/api` requests to the API. Because of this, the browser connects only to the web UI and to authentik.
 - The address of the web UI must be a strict redirect URI in the authentik blueprint
   (`manifests/authentik-blueprint-agentdev.yaml`). authentik creates its CORS list from these URIs.
+
+## Public HTTPS entry point (GKE)
+
+On GKE, one load balancer gives the instance a public HTTPS address (#120). It sends only two types of request to
+the cluster: GitHub webhooks to the router, and the web UI with its `/api` calls. All other services stay inside
+the cluster. Google makes and renews the TLS certificate.
+
+| Public URL | Service | Notes |
+|---|---|---|
+| `https://<ingress.webhook_host>/hook` | `webhook-router` | GitHub App webhook. The router examines `X-Hub-Signature-256`. |
+| `https://<ingress.host>/` | `agentdev-ui` | The web UI. The UI sends `/api/` to the API inside the cluster. |
+| `http://<host>/...` | none | Redirect (301) to `https://`. |
+
+The router paths `/status`, `/register` and `/idle`, the API Service, ContextForge, Postgres and the agents have no
+public route.
+
+### Make the public entry point
+
+Do this task after the first installation on GKE.
+
+1. Choose one DNS name, or two DNS names (one for the UI, one for the webhook).
+2. In `terraform/instance.tfvars` of the deployment repository, add the names:
+
+   ```hcl
+   public_hosts = ["agentdev.example.com"]
+   ```
+
+3. Optional: to add Cloud Armor, add `cloud_armor = true`.
+   Cloud Armor refuses large requests and limits the requests of each client IP address.
+4. Apply Terraform (the owner does this step).
+   Terraform makes the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+5. Show the values: `terraform output ingress` and `terraform output webhook_ip`.
+6. In your DNS zone, make an `A` record for each name. Use the address from `webhook_ip`.
+7. In `ansible/instance.yml`, add the `ingress` values from step 5:
+
+   ```yaml
+   ingress:
+     host: agentdev.example.com           # the web UI
+     # webhook_host: hooks.example.com    # optional, default: host
+     certificate: agentdev-public-1a2b3c4d
+     # security_policy: agentdev-public   # only with cloud_armor = true
+   ```
+
+8. Run the playbook (the deployment CI or `ansible-playbook`).
+9. Wait until the certificate is active. This can take 60 minutes after the DNS records are correct:
+   `gcloud compute ssl-certificates describe <certificate> --format='value(managed.status)'`
+   The command shows `ACTIVE`.
+10. Make sure that the UI opens: `curl -sI https://agentdev.example.com/`
+    The response is `200` and has the header `strict-transport-security`.
+11. Make sure that an internal path is not public: `curl -s -o /dev/null -w '%{http_code}\n' https://agentdev.example.com/status`
+    The response is `404`.
+
+NOTE: The web UI is routed only when `api.oidc_issuer` is set, because the role `api` deploys the UI. Set
+`ingress.ui: false` to make only the webhook public.
+
+### Use the webhook URL
+
+1. Set `github_app.public_url` in `instance.yml` to `https://<ingress.webhook_host>`.
+2. Register the GitHub App (refer to [GitHub App](#github-app-registration)).
+   The script sets the webhook URL to `https://<ingress.webhook_host>/hook`.
+
+NOTE: If you registered the App before, change the webhook URL on github.com to `https://<host>/hook`. The load
+balancer does not send `/` to the router.
+
+### Open the UI and the router on kind
+
+On `kind`, no load balancer is installed. Use a port-forward. The paths are the same as on GKE.
+
+1. Start the port-forward for the UI:
+   `kubectl -n agentdev-platform port-forward svc/agentdev-ui 8091:8080`
+2. Open `http://localhost:8091/`.
+3. To send a test webhook, start the port-forward for the router:
+   `kubectl -n coding-agents port-forward svc/webhook-router 8080:8080`
+4. Send the request to `http://localhost:8080/hook`.
+
+NOTE: On `kind`, no TLS, HSTS or Cloud Armor applies. Do not make a `kind` cluster public.
+
+### Reference: the public entry point
+
+| Control | Where | Value |
+|---|---|---|
+| TLS | Terraform `google_compute_ssl_policy` | TLS 1.2 or higher, profile `MODERN` |
+| HTTP to HTTPS | `HTTPRoute agentdev-https-redirect` | 301, no backend on port 80 |
+| HSTS | response header on both routes | `max-age=31536000; includeSubDomains` (`ingress.hsts_max_age`) |
+| Request size | router (5 MB for `/hook`), UI nginx (`client_max_body_size 1m`), Cloud Armor (`public_max_request_bytes`) | |
+| Rate limit | Cloud Armor (optional) | `cloud_armor_requests_per_minute` for each client IP, then `429` |
+| Network | NetworkPolicy `agentdev-ui-from-lb` | only the Google load balancer ranges reach the UI pods |
+
+The objects are in `infra/ansible/roles/ingress/templates/gateway.yaml.j2`. Risks: `docs/security.md` R66 to R68.
+Cost: the forwarding rule costs approximately $18 each month; Cloud Armor adds approximately $7 each month.
 
 ## Security events
 
@@ -1039,7 +1130,7 @@ Put it in Secret Manager (GKE) or in a local Secret.
    github_app:
      name: my-agentdev                         # unique on GitHub
      owner: my-org                             # omit to own it with your personal account
-     public_url: https://agentdev.example.com  # HTTPS address of this deployment's webhook router
+     public_url: https://agentdev.example.com  # https://<ingress.webhook_host> of this deployment
    ```
 
 2. Show the manifest: `scripts/github-app.sh render instance.yml`
@@ -1058,7 +1149,7 @@ Put it in Secret Manager (GKE) or in a local Secret.
 
 ### Reference: the GitHub App
 
-- The webhook URL is `<public_url>/`. The router examines `X-Hub-Signature-256`.
+- The webhook URL is `<public_url>/hook`. The router examines `X-Hub-Signature-256`.
 - `convert` compares `state` with the form that it generated.
 - Permissions: write for contents, issues and pull requests; read for metadata, checks and statuses.
 - The App has no `workflows` permission. Thus, agents cannot change `.github/workflows/`.
@@ -1192,7 +1283,8 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
-- For github.com, the router must have a public HTTPS URL (Ingress) and a GitHub App.
+- For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
+  URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The
   login of the App account is the same for all agents. Thus, the router does not use logins on GitHub.
 

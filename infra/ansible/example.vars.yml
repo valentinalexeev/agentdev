@@ -10,6 +10,12 @@ agents:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
+# Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
+# ingress:
+#   host: agentdev.example.com              # web UI (DNS A record -> terraform output webhook_ip)
+#   webhook_host: hooks.example.com         # optional, default host; GitHub App webhook https://<this>/hook
+#   certificate: agentdev-public-1a2b3c4d   # managed certificate name
+#   security_policy: agentdev-public        # only with Terraform cloud_armor = true
 # Optional company SSO for authentik (#122, docs/admin.md "Sign in with Google Workspace"). The IdP certificate goes
 # into the Secret Manager secret authentik-sso-idp-cert (README.md). Members of admin_group become agentdev admins;
 # nothing else changes the members of agentdev-admins.

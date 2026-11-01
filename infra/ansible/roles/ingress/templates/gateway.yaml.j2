@@ -1,0 +1,116 @@
+{# Public HTTPS entry point (#120). Rendered by roles/ingress/tasks/main.yml. Only /hook on the webhook host and the
+   UI on the UI host are routed; every other path and host gets the load balancer's 404. #}
+{% set hsts = 'max-age=' ~ ingress_hsts_max_age ~ '; includeSubDomains' %}
+{% set hosts = [ingress_host, ingress_webhook_host] | unique %}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: {{ ingress_gateway_name }}, namespace: {{ platform_ns }}}
+spec:
+  gatewayClassName: {{ ingress_gateway_class }}
+  addresses: [{type: NamedAddress, value: {{ ingress_static_ip_name }}}]
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      mode: Terminate
+      options: {networking.gke.io/pre-shared-certs: {{ ingress_certificate }}}
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector: {matchExpressions: [{key: kubernetes.io/metadata.name, operator: In, values: [{{ platform_ns }}, {{ agents_ns }}]}]}
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes: {namespaces: {from: Same}}
+---
+# TLS 1.2+ with modern ciphers (Terraform google_compute_ssl_policy)
+apiVersion: networking.gke.io/v1
+kind: GCPGatewayPolicy
+metadata: {name: {{ ingress_gateway_name }}, namespace: {{ platform_ns }}}
+spec:
+  default: {sslPolicy: {{ ingress_ssl_policy }}}
+  targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: {{ ingress_gateway_name }}}
+---
+# port 80: redirect only, no backend
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: agentdev-https-redirect, namespace: {{ platform_ns }}}
+spec:
+  parentRefs: [{name: {{ ingress_gateway_name }}, sectionName: http}]
+  hostnames: {{ hosts | to_json }}
+  rules:
+  - filters: [{type: RequestRedirect, requestRedirect: {scheme: https, statusCode: 301}}]
+---
+# GitHub App webhook: POST https://<webhook_host>/hook (the router checks X-Hub-Signature-256 and reads 5 MB at most)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: agentdev-webhook, namespace: {{ agents_ns }}}
+spec:
+  parentRefs: [{name: {{ ingress_gateway_name }}, namespace: {{ platform_ns }}, sectionName: https}]
+  hostnames: [{{ ingress_webhook_host | to_json }}]
+  rules:
+  - matches: [{path: {type: PathPrefix, value: /hook}}]
+    filters: [{type: ResponseHeaderModifier, responseHeaderModifier: {set: [{name: Strict-Transport-Security, value: {{ hsts | to_json }}}]}}]
+    backendRefs: [{name: webhook-router, port: 8080}]
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata: {name: webhook-router, namespace: {{ agents_ns }}}
+spec:
+  default: {config: {type: HTTP, httpHealthCheck: {requestPath: /healthz, port: 8080}}}
+  targetRef: {group: "", kind: Service, name: webhook-router}
+{% if ingress_security_policy | length > 0 %}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata: {name: webhook-router, namespace: {{ agents_ns }}}
+spec:
+  default: {securityPolicy: {{ ingress_security_policy }}}
+  targetRef: {group: "", kind: Service, name: webhook-router}
+{% endif %}
+{% if ingress_ui | bool %}
+---
+# web UI and its same-origin /api proxy (the API itself has no public route)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: agentdev-ui, namespace: {{ platform_ns }}}
+spec:
+  parentRefs: [{name: {{ ingress_gateway_name }}, sectionName: https}]
+  hostnames: [{{ ingress_host | to_json }}]
+  rules:
+  - matches: [{path: {type: PathPrefix, value: /}}]
+    filters: [{type: ResponseHeaderModifier, responseHeaderModifier: {set: [{name: Strict-Transport-Security, value: {{ hsts | to_json }}}]}}]
+    backendRefs: [{name: agentdev-ui, port: 8080}]
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata: {name: agentdev-ui, namespace: {{ platform_ns }}}
+spec:
+  default: {config: {type: HTTP, httpHealthCheck: {requestPath: /healthz, port: 8080}}}
+  targetRef: {group: "", kind: Service, name: agentdev-ui}
+{% if ingress_security_policy | length > 0 %}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata: {name: agentdev-ui, namespace: {{ platform_ns }}}
+spec:
+  default: {securityPolicy: {{ ingress_security_policy }}}
+  targetRef: {group: "", kind: Service, name: agentdev-ui}
+{% endif %}
+---
+# the platform namespace is deny-by-default: only the load balancer (Google Front Ends and health checks) reaches the
+# UI pods (container-native load balancing sends traffic to the pod IPs)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-ui-from-lb, namespace: {{ platform_ns }}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-ui}}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+{% for cidr in ingress_gfe_ranges %}
+    - ipBlock: {cidr: {{ cidr }}}
+{% endfor %}
+    ports: [{port: 8080}]
+{% endif %}
