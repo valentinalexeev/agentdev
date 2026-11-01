@@ -19,7 +19,10 @@ type server struct {
 	git    *gitRepo
 	client *http.Client
 	rules  []rule
+	appr   *approvals // nil: approvals off (approvals.go, #67)
 }
+
+type ctxJob struct{}
 
 // rule is one allowed Gitea REST call. The path pattern's first group is the repo (owner/name), checked against REPO.
 type rule struct {
@@ -45,7 +48,7 @@ func newServer(c *Config) *server {
 		r("GET", repoRe+`/issues`, nil),
 		r("GET", repoRe+`/issues/[0-9]+`, nil),
 		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/issues/[0-9]+/comments`, nil),
+		r("POST", repoRe+`/issues/[0-9]+/comments`, checkNoDecision),
 		r("GET", repoRe+`/pulls`, nil),
 		r("POST", repoRe+`/pulls`, checkOwnHead),
 		r("GET", repoRe+`/pulls/[0-9]+`, nil),
@@ -67,6 +70,29 @@ func (s *server) event(r *http.Request, rule, severity, action string) {
 
 func (s *server) logf(format string, a ...any) {
 	log.Printf("%s [%s] forge: %s", time.Now().UTC().Format("15:04:05"), s.c.ForgeUser, fmt.Sprintf(format, a...))
+}
+
+// checkNoDecision refuses a comment that contains an approval decision command (/approve, /approve-job, /deny): agents
+// never decide (docs/security-model.md, decision rule 1). The API ignores such comments from agents anyway; refusing
+// them here makes the attempt a security event.
+func checkNoDecision(_ *server, body []byte) error {
+	var c struct {
+		Body string `json:"body"`
+	}
+	_ = json.Unmarshal(body, &c)
+	if decisionCmdRe.MatchString(c.Body) {
+		return refuseAs("approval-self-decision", "high", "comment refused: agents cannot post approval decisions")
+	}
+	return nil
+}
+
+// enableApprovals turns protected-path refusals and Claude prompts into approval requests.
+func (s *server) enableApprovals(apiURL string, timeout time.Duration) {
+	s.appr = newApprovals(s, apiURL, timeout)
+	s.git.approve = func(ctx context.Context, branch, tip string, paths []string) error {
+		job, _ := ctx.Value(ctxJob{}).(string)
+		return s.appr.pushApproval(ctx, job, branch, tip, paths)
+	}
 }
 
 // checkOwnHead: a PR may only be opened from the agent's own branch.
@@ -96,6 +122,9 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /sync", s.sync)
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
+	if s.appr != nil {
+		mux.HandleFunc("/mcp", s.appr.mcp) // Claude's permission prompt tool (approvals.go)
+	}
 	return s.localOnly(mux)
 }
 
@@ -213,7 +242,7 @@ func (s *server) sync(w http.ResponseWriter, r *http.Request) {
 // ignored: the sidecar looks up the default branch itself.
 func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	branch := r.URL.Query().Get("branch")
-	tip, err := s.git.Push(r.Context(), branch, r.Body)
+	tip, err := s.git.Push(context.WithValue(r.Context(), ctxJob{}, r.Header.Get("X-Agentdev-Job")), branch, r.Body)
 	if err != nil {
 		s.logf("push to %s: %v", branch, err)
 		s.policyEvent(r, err, "push to "+branch)

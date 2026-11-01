@@ -61,7 +61,8 @@ func ApprovalHash(id, agent, repo, job, source, tool, input string) string {
 // from another container, or a line that does not validate (including a content hash that does not match: the sidecar
 // and the object must agree, or no decision could ever apply).
 func approvalFromLine(line string, pod *corev1.Pod, container, ns string) (*v1.Approval, bool) {
-	if container != forgeContainer {
+	// only the forge sidecar of an agent pod (not the agent container, not the egress proxy or any other pod)
+	if container != forgeContainer || pod.Labels["agent"] == "" {
 		return nil, false
 	}
 	ts, rest, found := strings.Cut(strings.TrimRight(line, "\r\n"), " ")

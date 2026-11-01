@@ -102,6 +102,10 @@ func main() {
 		log.Fatalf("forge: %v", err)
 	}
 	s := newServer(c)
+	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
+		s.enableApprovals(apiURL, timeout)
+		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
+	}
 	if err := s.git.init(); err != nil {
 		log.Fatalf("forge: mirror: %v", err)
 	}
