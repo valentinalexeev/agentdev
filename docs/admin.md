@@ -171,8 +171,8 @@ cluster.
 
 ## MCP tools
 
-MCP tools give the agents of a project more tools through ContextForge. On GKE, the playbook does not deploy
-ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
+MCP tools give the agents of a project more tools through ContextForge. On `kind`, run.sh step 08 deploys
+ContextForge. On GKE, the Ansible playbook deploys it.
 
 ### Deploy the platform namespace
 
@@ -182,6 +182,30 @@ ContextForge yet (#51). Until then, projects on GKE have no MCP tools.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
+
+### Deploy the platform namespace on GKE
+
+The playbook deploys Postgres and ContextForge in `agentdev-platform` on each run. It makes the passwords and keys
+on the first run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+
+1. In the deployment repository, put the project specifications in a directory, for example `projects/`.
+2. In `ansible/instance.yml`, list the specifications:
+
+   ```yaml
+   mcp_projects:
+     - "{{ lookup('env', 'PWD') }}/projects/web.yaml"
+   ```
+
+   Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
+   List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
+3. Run the playbook (refer to `infra/ansible/README.md`).
+   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
+
+CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
+the connection from ContextForge.
+
+NOTE: The dry run (`--check`) does not run the sync.
 
 ### Add MCP servers to a project
 
@@ -193,9 +217,17 @@ NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated pa
        - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
    ```
 
-2. Run the sync: `scripts/mcp-sync.sh <spec>`
+2. Add the host of each server to the allow-list. Use `host` or `host:port`.
+   - On kind: `MCP_ALLOWED_HOSTS` in `config.env` (separate the hosts with spaces).
+   - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
+
+   CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
+   A bad server can put instructions in them (prompt injection). Refer to R46 in `docs/security.md`.
+
+   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
+3. Run the sync: `scripts/mcp-sync.sh <spec>`
    The bootstrap also runs this script.
-3. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
+4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
@@ -208,6 +240,7 @@ agents. The bootstrap tells you the cause.
 
 You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
 
+- It stops if a server host is not in the allow-list.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.
@@ -218,7 +251,20 @@ When you remove an agent from `agents:` (or remove `mcp:`), the next sync delete
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
 Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
-applies the NetworkPolicies. Local `kind` (kindnet) does not.
+applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
+(kindnet) does not.
+
+To make sure that GKE applies the NetworkPolicies, do these steps:
+
+NOTE: The test pod gets the image `curlimages/curl` from Docker Hub. The cluster must have access to the internet.
+
+1. Start a test pod in the namespace `default`:
+   `kubectl run np-test --rm -it --restart=Never --image=curlimages/curl -- curl -m 5 http://contextforge.agentdev-platform:4444/health`
+2. Make sure that the command stops with a timeout.
+   If you get a response, the cluster does not apply NetworkPolicies.
+3. Make sure that agent pods cannot connect to Postgres:
+   `kubectl -n coding-agents exec agent-<name>-0 -c agent -- bash -c 'timeout 3 bash -c "</dev/tcp/platform-db.agentdev-platform/5432" && echo open || echo closed'`
+4. Make sure that the command shows `closed`.
 
 ## Identity (authentik)
 

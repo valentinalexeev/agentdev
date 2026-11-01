@@ -1,0 +1,20 @@
+---
+# Platform namespace on GKE (#51): Postgres + ContextForge, the same manifests/platform.yaml.tmpl as ./run.sh 08.
+platform_postgres_image: postgres:17.11
+platform_contextforge_image: ghcr.io/ibm/mcp-context-forge:v1.1.0
+platform_cf_admin_email: admin@agentdev.dev
+# ContextForge may only call MCP servers in the cluster Service range (SSRF guard); infra/terraform uses 10.30.0.0/20
+platform_service_cidr: 10.30.0.0/20
+# Secret Manager prefix; keys match .secrets/platform/ on kind (generated on the first run, never overwritten)
+platform_sm_prefix: platform-
+platform_secret_keys:
+  - pg-admin
+  - pg-contextforge
+  - pg-agentdev
+  - pg-authentik
+  - jwt
+  - enc
+  - cf-admin
+  - cf-default-user
+  - cf-basic-auth
+# mcp_projects (project specs for scripts/mcp-sync.sh) is in group_vars/all.yml

@@ -7,6 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
+  `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
+  `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
+  `CF_ADMIN_FILE` of `mcp-sync.sh` can be overridden. `docs/admin.md` shows how to check that Dataplane V2 enforces
+  the platform NetworkPolicies.
+- MCP server allow-list (GHAS on #99): `scripts/mcp-sync.sh` registers only servers whose host is in
+  `MCP_ALLOWED_HOSTS` (`config.env`, kind) or `mcp_allowed_hosts` (GKE `instance.yml`). **Breaking for specs with
+  `mcp:`**: the list is empty by default, so add your trusted hosts. Risk entries R46 (MCP prompt injection) and R47
+  (token leaks in logs) in `docs/security.md`; the secret and sync tasks of the platform role have `no_log`.
 - Audit trail in Postgres (#91): every `AGENTDEV_AUDIT` line of the write API is also stored in the append-only
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
