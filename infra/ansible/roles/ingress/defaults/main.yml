@@ -9,7 +9,10 @@ ingress_ssl_policy: "{{ ingress.ssl_policy | default('agentdev-public') }}"
 ingress_security_policy: "{{ ingress.security_policy | default('') }}"   # Cloud Armor; empty = none
 ingress_hsts_max_age: "{{ ingress.hsts_max_age | default(31536000) }}"   # one year
 # route the web UI (deployed by the role api with api.oidc_issuer); false: webhook only
-ingress_ui: "{{ ingress.ui | default((api.oidc_issuer | default('')) | length > 0) }}"
+ingress_ui: "{{ ingress.ui | default((api_effective_issuer | default(api.oidc_issuer | default(''))) | length > 0) }}"
+# authentik login (#114): https://<auth_host>/ -> authentik-server, only when the role authentik deployed it
+ingress_auth_host: "{{ ingress.auth_host | default('') }}"
+ingress_auth: "{{ (authentik_enabled | default(false) | bool) and ingress_auth_host | length > 0 }}"
 # the Gateway lives in the platform namespace; routes in both namespaces attach to it
 ingress_gateway_name: agentdev-public
 ingress_gateway_class: gke-l7-global-external-managed

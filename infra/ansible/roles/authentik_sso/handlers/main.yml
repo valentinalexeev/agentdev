@@ -11,5 +11,6 @@
     definition:
       spec: {template: {metadata: {annotations: {agentdev/sso-hash: "{{ (authentik_sso_env | to_json | hash('sha256'))[:16] }}"}}}}
   loop: [authentik-server, authentik-worker]
-  failed_when: false   # authentik is not deployed by the playbook yet (#114)
+  # authentik from another source (authentik.enabled false): nothing to restart here
+  failed_when: false
   no_log: true

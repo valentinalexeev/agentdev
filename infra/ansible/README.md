@@ -43,8 +43,8 @@ creates them first. The same holds for the API: a first `--check` without `platf
 from Secret Manager and run after `include_role: platform`.
 
 ## Management API (#104)
-The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; authentik on GKE
-is #114, so any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
+The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
+authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
 `./run.sh 10` it:
 - creates `agentdev_owner` (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies
   `images/api/schema.sql` as the owner, sets the retention (`api.db_retention_days`, default 365) and applies
@@ -60,6 +60,17 @@ source for kind is a new `secrets_local.yml` that sets the same facts when `run.
 With `forge_kind: github` the API checks GitHub permissions and decides approvals with the agents' GitHub App
 (#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
 API mints only read-only installation tokens.
+
+## authentik (#114)
+The `authentik` role runs after `platform` and before `authentik_sso` and `api` when `ingress.auth_host` is set (or
+`authentik.enabled: true`). Like `./run.sh 09` it makes the database `authentik`, the Secret `authentik` (same keys,
+plus the trusted proxy ranges and `AGENTDEV_UI_CALLBACK`), the ConfigMap `authentik-blueprints` from
+`manifests/authentik-blueprint-*.yaml` (never `manifests/kind/`) and installs the chart (`authentik.version`, default
+the `config.env` version). Secrets: Secret Manager `platform-pg-authentik`, `platform-authentik-secret-key`,
+`platform-authentik-admin` (the first `akadmin` password), generated once. It adds `akadmin` to `agentdev-admins`
+(add only, break-glass) and fails without an active superuser. Then `api.oidc_issuer` defaults to
+`https://<auth_host>/application/o/agentdev/` and `api.oidc_discovery_url` to the in-cluster service. Render test:
+`tests/authentik_render.yml`.
 
 ## Public HTTPS entry point (#120)
 The `ingress` role runs last when `instance.yml` sets `ingress.host`. It applies one GKE Gateway

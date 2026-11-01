@@ -1,0 +1,34 @@
+---
+# Break-glass admin (docs/admin.md, "Keep a break-glass admin"): akadmin is created by authentik's own bootstrap
+# blueprint at the first start, with the password from Secret Manager platform-authentik-admin (state: created, so a
+# password changed in the UI is kept). Here akadmin is added to agentdev-admins with the authentik REST API in-process
+# (same call as 09-authentik.sh): add_user only adds, a second run is a no-op, and no member is ever removed. No token
+# is created or printed.
+- name: Add akadmin to agentdev-admins (add only)
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, deploy/authentik-worker, --,
+           ak, shell]
+    stdin: |
+      import sys, time
+      from rest_framework.test import APIClient
+      from authentik.core.models import Group, User
+      for _ in range(60):
+          g = Group.objects.filter(name="agentdev-admins").first()
+          if g: break
+          time.sleep(5)
+      else: sys.exit("group agentdev-admins missing: blueprint not applied")
+      admin = User.objects.get(username="akadmin")
+      if g.users.filter(pk=admin.pk).exists():
+          print("BREAKGLASS=present")
+      else:
+          c = APIClient(); c.force_authenticate(admin)
+          r = c.post("/api/v3/core/groups/%s/add_user/" % g.pk, {"pk": admin.pk}, format="json")
+          if r.status_code != 204: sys.exit("add_user: HTTP %s" % r.status_code)
+          print("BREAKGLASS=added")
+      print("SUPERUSERS=%d" % sum(1 for u in User.objects.filter(is_active=True) if u.is_superuser))
+  register: authentik_breakglass
+  changed_when: "'BREAKGLASS=added' in authentik_breakglass.stdout"
+  failed_when: >-
+    authentik_breakglass.rc != 0
+    or 'BREAKGLASS=' not in authentik_breakglass.stdout
+    or 'SUPERUSERS=0' in authentik_breakglass.stdout

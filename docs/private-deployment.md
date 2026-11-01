@@ -63,7 +63,7 @@ CAUTION: The bootstrap makes a project and links billing. The owner of the billi
 1. In `terraform/instance.tfvars`, set the public DNS names:
 
    ```hcl
-   public_hosts = ["agentdev.example.com"]
+   public_hosts = ["agentdev.example.com", "auth.example.com"]   # the UI and the authentik login
    ```
 
 2. Go to `terraform/` in the deployment repository.
@@ -137,22 +137,23 @@ NOTE: The full list, with the secrets that the playbook makes on the first run, 
 
 ## Set up Google Workspace sign-in
 
-The API accepts tokens from authentik. authentik signs people in through Google Workspace and puts the groups and the
-`forge_login` claim into the token. The Workspace source and the group sync are in PR #134 (#122). Until that PR is
-merged and released, use the procedure in that PR.
+The API accepts tokens from authentik. The playbook deploys authentik on `https://<ingress.auth_host>/` (#114).
+authentik signs people in through Google Workspace and puts the groups and the `forge_login` claim into the token.
 
-1. In the Google Cloud console of the instance project, make an OAuth client of type **Web application**. Use the
-   redirect URL that PR #134 gives for the authentik Workspace source.
-2. Put the client secret in Secret Manager, with the name that PR #134 gives.
-3. In Google Workspace, make the group for agentdev admins (for example `agentdev-admins@example.com`).
-4. Set the SSO values in `ansible/instance.yml` as PR #134 gives, and set `api.oidc_issuer` to the authentik issuer:
+1. In `ansible/instance.yml`, set the login host. The playbook then sets the API and UI issuer to
+   `https://auth.example.com/application/o/agentdev/`. Do not set `api.oidc_issuer`.
 
    ```yaml
-   api:
-     oidc_issuer: https://auth.example.com/application/o/agentdev/
+   ingress:
+     host: agentdev.example.com
+     auth_host: auth.example.com
    ```
 
-5. Make sure that `forge_login` is the **GitHub login** of the person, from a stable and unique attribute. Refer to
+2. In Google Workspace, make the group for agentdev admins (for example `agentdev-admins@example.com`).
+3. Make the Workspace SAML app and set `authentik.sso`. Refer to
+   [Administration, "Sign in with Google Workspace"](admin.md#sign-in-with-google-workspace).
+
+4. Make sure that `forge_login` is the **GitHub login** of the person, from a stable and unique attribute. Refer to
    [Administration, "Map people to forge users"](admin.md#map-people-to-forge-users).
 
 WARNING: Do not let users edit `forge_login`. A person with a wrong `forge_login` can act as that GitHub user.
@@ -176,13 +177,14 @@ agentdev has two types of admin. The authentik administrator (`akadmin`) control
 WARNING: Do not remove the last way to log in as an administrator. Keep `akadmin` with a strong password and MFA,
 and keep it as the break-glass account. Do not delete it or change it to a Workspace-only login.
 
-1. Log in to authentik as `akadmin`. Refer to
-   [Administration, "Log in to authentik for the first time"](admin.md#log-in-to-authentik-for-the-first-time).
+1. Log in to authentik on `https://<auth_host>/` as `akadmin`. The first password is in Secret Manager
+   `platform-authentik-admin`. Refer to
+   [Administration, "Keep a break-glass admin"](admin.md#keep-a-break-glass-admin).
 2. Change the password and add MFA.
 3. Keep the new password and the MFA recovery codes in the password manager of the owner.
 4. Log in to the agentdev UI one time with your Workspace account.
    authentik makes your user.
-5. Make sure that you are a member of `agentdev-admins`: by the Workspace group sync (PR #134), or by hand. Refer to
+5. Make sure that you are a member of `agentdev-admins`: by the Workspace group sync, or by hand. Refer to
    [Administration, "Give a person admin rights for agents"](admin.md#give-a-person-admin-rights-for-agents).
 6. Log out of the UI and log in again.
    The new token has the group.

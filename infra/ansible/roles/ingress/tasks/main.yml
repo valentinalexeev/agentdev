@@ -3,16 +3,18 @@
 # static IP, with the Terraform Google-managed certificate and SSL policy. Only two paths are public:
 #   https://<webhook_host>/hook...  -> webhook-router (POST deliveries, HMAC checked by the router)
 #   https://<host>/...              -> agentdev-ui (static app and its /api proxy to the API)
+#   https://<auth_host>/...         -> authentik-server (login and issuer, #114; only with ingress.auth_host)
 # The router's /status, /register and /idle and every other Service stay cluster-internal. Port 80 only redirects.
 - name: Check the ingress settings
   ansible.builtin.assert:
     that:
       - ingress_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
       - ingress_webhook_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+      - ingress_auth_host | length == 0 or ingress_auth_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
       - ingress_certificate | length > 0
       - ingress_hsts_max_age | string is match('^[0-9]+$')
     fail_msg: >-
-      ingress.host and ingress.webhook_host must be plain DNS names, ingress.certificate the name from
+      ingress.host, ingress.webhook_host and ingress.auth_host must be plain DNS names, ingress.certificate the name from
       `terraform output ingress` (example.vars.yml)
     quiet: true
 
