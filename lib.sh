@@ -12,6 +12,13 @@ die()  { printf '\033[1;31m  ✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 k() { ${KUBECTL} "$@"; }
 
+# deprecated <step> <tag>: notice for a run.sh step that is now the Ansible playbook infra/ansible/kind.yml (#106).
+# The wrappers stay for one MINOR release, then they are removed.
+deprecated() {
+  warn "DEPRECATED: run.sh step $1 is now 'ansible-playbook infra/ansible/kind.yml --tags $2' (#106)."
+  warn "The shell step is removed in the next MINOR release. See docs/admin.md, Upgrade."
+}
+
 need() { command -v "$1" >/dev/null 2>&1 || die "missing '$1' (${2:-install it first})"; }
 
 # wait_for <timeout_s> <description> <command...>  — polls until command succeeds

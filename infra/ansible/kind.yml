@@ -1,0 +1,19 @@
+---
+# Local evaluation on kind (#106): the Ansible rollout that replaces the numbered shell steps, one step at a time.
+# GKE uses deploy.yml (cluster from infra/terraform); kind uses this playbook (cluster from kind). Both use the same
+# roles and manifests for the steps that are ported.
+#
+#   cd infra/ansible
+#   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
+#
+# Ported steps (tag: old run.sh step): cluster: 01.
+# The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
+- name: Deploy agentdev to kind
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Kind cluster with gVisor (was 01-cluster.sh)
+      ansible.builtin.include_role:
+        name: kind_cluster
+        apply: {tags: [cluster]}
+      tags: [cluster]

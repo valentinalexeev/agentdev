@@ -10,7 +10,8 @@ You can install agentdev in two ways:
 ### Prepare the computer
 
 1. Make sure that Docker (or OrbStack or Colima) has 4 CPUs and 6 GiB of RAM.
-2. Make sure that these tools are installed: `kind`, `kubectl`, `helm`, `jq`, `yq` and `envsubst`.
+2. Make sure that these tools are installed: `kind`, `kubectl`, `helm`, `jq`, `yq`, `envsubst` and
+   `ansible-playbook` (ansible-core 2.17 or later, for example `pipx install ansible-core`).
 3. Make sure that you have a Claude credential.
 
 ### Get the source and the credential
@@ -28,7 +29,9 @@ WARNING: Do not add the `.env` file to git. The file contains your Claude creden
 1. Do run.sh step 00: `./run.sh 00`
    The script checks the tools and the size of the VM.
 2. Do run.sh step 01: `./run.sh 01`
-   The script makes a `kind` cluster with a sandbox node pool and the gVisor runtime.
+   The script makes a `kind` cluster with a sandbox node pool and the gVisor runtime. Step 01 runs the Ansible
+   playbook `infra/ansible/kind.yml` (tag `cluster`). You can also run the playbook directly:
+   `ansible-playbook infra/ansible/kind.yml --tags cluster`
 3. Do run.sh step 05: `./run.sh 05`
    The script installs Gitea and makes the owner account, the agent accounts and the branch protection.
 4. Do run.sh step 06: `./run.sh 06`
@@ -36,6 +39,9 @@ WARNING: Do not add the `.env` file to git. The file contains your Claude creden
    webhook.
 
 NOTE: You can do the four run.sh steps in one command: `./run.sh 00 01 05 06`.
+
+NOTE: The run.sh steps are deprecated (#106). Each step moves to the Ansible playbook `infra/ansible/kind.yml`, one
+step at a time. A step that moved shows a `DEPRECATED` message and runs the playbook. The result is the same.
 
 ### Make sure that the installation operates
 

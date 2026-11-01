@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Deprecated
+- Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
+  step per PR. New playbook `infra/ansible/kind.yml` with the role `kind_cluster`; step 01 (`01-cluster.sh`) is now a
+  wrapper that prints a deprecation notice and runs `ansible-playbook infra/ansible/kind.yml --tags cluster`. Same
+  result as before (kind cluster, gVisor checked by sha512, RuntimeClass `gvisor`, smoke test), and a second run
+  changes nothing. **BREAKING for kind only:** step 01 needs `ansible-playbook` (ansible-core 2.17 or later). Each
+  wrapper is removed one MINOR release after its step moved. GKE does not change. Docs: `docs/install.md`,
+  `docs/admin.md` (Upgrade the local installation), `infra/ansible/README.md`. CI: ansible-lint covers `kind.yml`.
+  To apply: install ansible-core, then run `./run.sh 01` as before.
+
 ### Added
 - Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
   register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub

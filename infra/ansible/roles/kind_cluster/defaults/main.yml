@@ -1,0 +1,8 @@
+---
+# kind cluster with gVisor (#106, was 01-cluster.sh). The values match config.env; run.sh passes them with -e.
+kind_cluster_name: agentdev
+kind_cluster_engine: docker
+kind_cluster_gvisor_version: "20261012.0"
+kind_cluster_config: "{{ playbook_dir }}/../../manifests/kind-config.yaml"
+kind_cluster_min_version: [0, 24]   # NetworkPolicy enforcement for the egress allow-list (#65)
+kind_cluster_smoke_test: true
