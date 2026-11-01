@@ -7,6 +7,10 @@ global:
   podLabels: {agentdev/db-client: "true"}     # allowed through the platform-db NetworkPolicy
   env:
     - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
+  # company SSO settings (#122) for manifests/authentik-blueprint-sso.yaml: AGENTDEV_SSO_* keys. Optional: without
+  # the Secret the SSO blueprint creates nothing. Written by 09-authentik.sh (kind stand-in) or the playbook (GKE).
+  envFrom:
+    - secretRef: {name: authentik-sso, optional: true}
 server:
   resources:
     requests: {cpu: 100m, memory: 512Mi}

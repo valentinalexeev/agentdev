@@ -13,12 +13,16 @@ entries:
   identifiers: {name: "agentdev: forge login"}
   attrs:
     scope_name: forge
-    description: Forge login (agentdev)
+    description: Forge login and groups (agentdev)
     expression: |
+      # groups with inherited ones (#122): the profile scope lists direct groups only, so a member of
+      # agentdev-admins-sso (child of agentdev-admins, synced from the company SSO) would not get agentdev-admins.
+      # authentik merges this list into the profile one.
+      claims = {"groups": sorted({g.name for g in request.user.all_groups()})}
       login = request.user.attributes.get("forge_login")
       if isinstance(login, str) and login:
-          return {"forge_login": login}
-      return {}
+          claims["forge_login"] = login
+      return claims
 - model: authentik_providers_oauth2.oauth2provider
   id: provider
   identifiers: {name: agentdev}
