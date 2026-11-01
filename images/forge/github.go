@@ -47,6 +47,56 @@ type githubDriver struct {
 	botLogin   string // <app-slug>[bot]
 	botID      int64
 	identityAt time.Time
+	retryAt    time.Time // GitHub asked to wait (rate limit) before the next App call
+}
+
+// apiError is a non-2xx answer of an App call; retry is GitHub's Retry-After or rate-limit reset, if any.
+type apiError struct {
+	status int
+	retry  time.Duration
+	what   string
+}
+
+func (e *apiError) Error() string { return fmt.Sprintf("github %s: HTTP %d", e.what, e.status) }
+
+// retryAfter reads Retry-After (seconds) or, with X-RateLimit-Remaining 0, X-RateLimit-Reset (epoch); capped at 1 h.
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	var d time.Duration
+	if v, err := strconv.Atoi(h.Get("Retry-After")); err == nil && v > 0 {
+		d = time.Duration(v) * time.Second
+	} else if h.Get("X-RateLimit-Remaining") == "0" {
+		if v, err := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); err == nil && v > now.Unix() {
+			d = time.Unix(v, 0).Sub(now)
+		}
+	}
+	if d > time.Hour {
+		d = time.Hour
+	}
+	return d
+}
+
+// observe is called with every proxied answer: a 401 drops the cached token (revoked or rotated), so the next call
+// mints a new one instead of reusing a dead token until its expiry.
+func (d *githubDriver) observe(status int) {
+	if status == http.StatusUnauthorized {
+		d.mu.Lock()
+		d.token, d.expires = "", time.Time{}
+		d.mu.Unlock()
+	}
+}
+
+// checkQuery: list calls page at most 100 items (GitHub's maximum) and at most 100 pages deep; page and per_page
+// must be plain numbers. Other query keys are passed as they are (filters such as state, labels, since).
+func (d *githubDriver) checkQuery(q url.Values) error {
+	for _, k := range []string{"per_page", "page"} {
+		for _, v := range q[k] {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 100 || strconv.Itoa(n) != v {
+				return refuse("%s=%q: a number from 1 to 100", k, v)
+			}
+		}
+	}
+	return nil
 }
 
 var (
@@ -65,10 +115,16 @@ func githubAPIBase(forgeURL string) (string, error) {
 		return "", fmt.Errorf("FORGE_URL %q: a plain https:// URL", forgeURL)
 	}
 	// FORGE_API_URL, not GITHUB_API_URL: GitHub Actions and other tools set that name for their own use
+	// the API gets the App JWT and the installation tokens: only https, and only the forge's own API host
+	// (api.github.com for github.com, the forge host itself for GHES), so a wrong setting cannot send them elsewhere
 	if v := strings.TrimRight(os.Getenv("FORGE_API_URL"), "/"); v != "" {
 		a, err := url.Parse(v)
-		if err != nil || (a.Scheme != "https" && a.Scheme != "http") || a.Host == "" || a.User != nil || a.RawQuery != "" {
-			return "", fmt.Errorf("FORGE_API_URL %q is not a plain URL", v)
+		want := u.Host
+		if strings.EqualFold(u.Host, "github.com") {
+			want = "api.github.com"
+		}
+		if err != nil || a.Scheme != "https" || !strings.EqualFold(a.Host, want) || a.User != nil || a.RawQuery != "" || a.Fragment != "" {
+			return "", fmt.Errorf("FORGE_API_URL %q: must be https://%s[/path]", v, want)
 		}
 		return v, nil
 	}
@@ -201,7 +257,7 @@ func (d *githubDriver) appCall(ctx context.Context, method, path string, in, out
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("github %s %s: HTTP %d", method, path, resp.StatusCode)
+		return &apiError{status: resp.StatusCode, retry: retryAfter(resp.Header, d.now()), what: method + " " + path}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
 }
@@ -213,11 +269,29 @@ func (d *githubDriver) installationToken(ctx context.Context) (string, error) {
 	if d.token != "" && d.now().Add(10*time.Minute).Before(d.expires) {
 		return d.token, nil
 	}
+	// rate limited: do not hammer the App endpoints; an unexpired token is still used meanwhile
+	if d.now().Before(d.retryAt) {
+		if d.token != "" && d.now().Before(d.expires) {
+			return d.token, nil
+		}
+		return "", fmt.Errorf("installation token: GitHub asked to wait until %s", d.retryAt.UTC().Format(time.RFC3339))
+	}
+	backoff := func(err error) {
+		var ae *apiError
+		if errors.As(err, &ae) {
+			wait := ae.retry
+			if wait == 0 && (ae.status == 403 || ae.status == 429 || ae.status >= 500) {
+				wait = time.Minute
+			}
+			d.retryAt = d.now().Add(wait)
+		}
+	}
 	if d.installID == "" {
 		var inst struct {
 			ID json.Number `json:"id"`
 		}
 		if err := d.appCall(ctx, "GET", "/repos/"+d.c.Repos[0]+"/installation", nil, &inst); err != nil {
+			backoff(err)
 			return "", fmt.Errorf("installation lookup: %v (is the App installed on %s?)", err, d.c.Repos[0])
 		}
 		if !idRe.MatchString(inst.ID.String()) {
@@ -236,6 +310,7 @@ func (d *githubDriver) installationToken(ctx context.Context) (string, error) {
 	}
 	if err := d.appCall(ctx, "POST", "/app/installations/"+d.installID+"/access_tokens",
 		map[string]any{"repositories": names, "permissions": tokenPerms}, &tok); err != nil {
+		backoff(err)
 		return "", fmt.Errorf("installation token: %v", err)
 	}
 	exp, err := time.Parse(time.RFC3339, tok.ExpiresAt)
@@ -319,13 +394,13 @@ func signBody(s *server, body []byte) ([]byte, error) {
 // checkOwnHeadGitHub: on GitHub a head may also be "owner:branch" (a fork). Only a plain branch of the agent's own.
 func checkOwnHeadGitHub(s *server, body []byte) error {
 	var pr struct {
-		Head  string `json:"head"`
-		Draft any    `json:"head_repo"`
+		Head     string `json:"head"`
+		HeadRepo any    `json:"head_repo"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return refuse("bad PR body")
 	}
-	if strings.Contains(pr.Head, ":") || pr.Draft != nil {
+	if strings.Contains(pr.Head, ":") || pr.HeadRepo != nil {
 		return refuseAs("push-foreign-branch", "high", "PR head %q is not a branch of this repo", pr.Head)
 	}
 	return checkBranch(s.c.ForgeUser, pr.Head)
@@ -333,7 +408,9 @@ func checkOwnHeadGitHub(s *server, body []byte) error {
 
 // the calls the loop makes on GitHub (issues by label, PRs, comments, reviews, review threads, checks)
 func (d *githubDriver) rules() []rule {
-	r := mkRule
+	r := func(m, p string, chk func(*server, []byte) error) rule {
+		return mkRule(m, strings.ReplaceAll(p, "[0-9]+", "[1-9][0-9]{0,15}"), chk)
+	}
 	sign := func(ru rule) rule { ru.rewrite = signBody; return ru }
 	return []rule{
 		r("GET", repoRe, nil),
@@ -348,8 +425,31 @@ func (d *githubDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
 		r("GET", repoRe+`/pulls/[0-9]+/comments`, nil),
 		sign(r("POST", repoRe+`/pulls/[0-9]+/comments/[0-9]+/replies`, nil)),
-		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
+		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequest),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/check-runs`, nil),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
 	}
+}
+
+// checkReviewRequest: the agent asks people for a review, never teams; at most 5 plain logins.
+func checkReviewRequest(_ *server, body []byte) error {
+	var rq map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rq); err != nil {
+		return refuse("bad review request body")
+	}
+	var who []string
+	for k, v := range rq {
+		if k != "reviewers" || json.Unmarshal(v, &who) != nil {
+			return refuseAs("api-not-allowed", "medium", "review request: only \"reviewers\" (logins) is allowed")
+		}
+	}
+	if len(who) == 0 || len(who) > 5 {
+		return refuse("review request: 1 to 5 reviewers")
+	}
+	for _, l := range who {
+		if !ghLoginRe.MatchString(l) {
+			return refuse("review request: %q is not a login", l)
+		}
+	}
+	return nil
 }

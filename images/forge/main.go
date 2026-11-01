@@ -75,6 +75,15 @@ func loadConfig() (*Config, error) {
 		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
 		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 	}
+	// preferred: the key as a file (a Secret volume mounted only into this container), so it is never in any
+	// process environment; /proc/<pid>/environ keeps the original environment even after os.Unsetenv
+	if f := os.Getenv("GITHUB_APP_PRIVATE_KEY_FILE"); f != "" && c.ForgeKind == "github" {
+		b, err := os.ReadFile(f)
+		if err != nil || len(b) > 16<<10 {
+			return nil, fmt.Errorf("GITHUB_APP_PRIVATE_KEY_FILE: cannot read %s (or larger than 16 KiB)", f)
+		}
+		c.GitHubAppKey = string(b)
+	}
 	c.IncomingDir = getenv("INCOMING_DIR", filepath.Join(filepath.Dir(c.MirrorDir), "incoming"))
 	mb, err := strconv.ParseInt(getenv("MAX_PUSH_MB", "50"), 10, 64)
 	if err != nil || mb <= 0 {

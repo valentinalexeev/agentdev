@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -75,9 +76,23 @@ func testKey(t *testing.T) (*rsa.PrivateKey, string) {
 	return k, string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)}))
 }
 
+// testAPI: the fake server's URL; tests set it on the driver after construction (newGH), since FORGE_API_URL only
+// accepts the forge's real API host
+var testAPI string
+
+func newGH(c *Config) (*githubDriver, error) {
+	d, err := newGitHubDriver(c)
+	if err == nil && testAPI != "" {
+		d.api = testAPI
+	}
+	return d, err
+}
+
 func ghConfig(t *testing.T, api string) (*Config, *rsa.PrivateKey) {
 	k, p := testKey(t)
-	t.Setenv("FORGE_API_URL", api)
+	t.Setenv("FORGE_API_URL", "")
+	testAPI = api
+	t.Cleanup(func() { testAPI = "" })
 	return &Config{ForgeURL: "https://github.com", ForgeUser: "alice", AgentName: "alice", ForgeKind: "github",
 		Repos: []string{"octo-org/repo"}, GitHubAppID: "1012345", GitHubAppKey: p}, k
 }
@@ -88,7 +103,7 @@ var ghNow = time.Date(2026, 11, 1, 11, 0, 0, 0, time.UTC)
 func newTestGitHub(t *testing.T) (*githubDriver, *rsa.PrivateKey, func() []ghCall) {
 	srv, calls := fakeGitHub(t)
 	c, k := ghConfig(t, srv.URL)
-	d, err := newGitHubDriver(c)
+	d, err := newGH(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +247,7 @@ func TestGitHubTokenBadAnswers(t *testing.T) {
 			w.Write([]byte(answer))
 		}))
 		c, _ := ghConfig(t, srv.URL)
-		d, _ := newGitHubDriver(c)
+		d, _ := newGH(c)
 		d.now = func() time.Time { return ghNow }
 		if tok, err := d.installationToken(t.Context()); err == nil {
 			t.Errorf("%s: accepted %q", name, tok)
@@ -334,5 +349,108 @@ func TestGitHubGitCredential(t *testing.T) {
 	}
 	if d.remoteURL("octo-org/repo") != "https://github.com/octo-org/repo.git" {
 		t.Fatal(d.remoteURL("octo-org/repo"))
+	}
+}
+
+func TestGitHubReviewFindings128(t *testing.T) {
+	// 1: the API base only on the forge's own API host, https
+	_, p := testKey(t)
+	base := &Config{ForgeURL: "https://github.com", ForgeUser: "alice", AgentName: "alice", ForgeKind: "github",
+		Repos: []string{"octo-org/repo"}, GitHubAppID: "1012345", GitHubAppKey: p}
+	for _, v := range []string{"http://api.github.com", "https://evil.example", "https://api.github.com.evil.example", "https://api.github.com?x=1"} {
+		t.Setenv("FORGE_API_URL", v)
+		if _, err := newGitHubDriver(base); err == nil {
+			t.Errorf("FORGE_API_URL %s accepted", v)
+		}
+	}
+	t.Setenv("FORGE_API_URL", "https://api.github.com")
+	if _, err := newGitHubDriver(base); err != nil {
+		t.Error(err)
+	}
+	ghes := *base
+	ghes.ForgeURL = "https://ghe.example.com"
+	t.Setenv("FORGE_API_URL", "https://ghe.example.com/api/v3")
+	if _, err := newGitHubDriver(&ghes); err != nil {
+		t.Error(err)
+	}
+
+	// 2: rate limit on token minting: Retry-After honoured, no new call before it
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(429)
+	}))
+	defer srv.Close()
+	c, _ := ghConfig(t, srv.URL)
+	c.GitHubInstallationID = "51234567"
+	d, _ := newGH(c)
+	d.now = func() time.Time { return ghNow }
+	if _, err := d.installationToken(t.Context()); err == nil {
+		t.Fatal("429 accepted")
+	}
+	if _, err := d.installationToken(t.Context()); err == nil || n != 1 {
+		t.Fatalf("called again within Retry-After: %d calls", n)
+	}
+	d.now = func() time.Time { return ghNow.Add(121 * time.Second) }
+	_, _ = d.installationToken(t.Context())
+	if n != 2 {
+		t.Fatalf("no retry after the wait: %d", n)
+	}
+	if got := retryAfter(http.Header{"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {fmt.Sprint(ghNow.Unix() + 30)}}, ghNow); got != 30*time.Second {
+		t.Errorf("reset header: %v", got)
+	}
+
+	// 3: a 401 from GitHub drops the cached token
+	gd, _, calls := newTestGitHub(t)
+	_, _ = gd.installationToken(t.Context())
+	gd.observe(http.StatusUnauthorized)
+	_, _ = gd.installationToken(t.Context())
+	if mints := len(calls()); mints != 3 { // lookup + 2 token mints
+		t.Fatalf("token not re-minted after 401: %d calls", mints)
+	}
+
+	// 4, 5, 6: review requests, paging, bounded numbers
+	s := newServer(gd.c)
+	s.drv, s.rules = gd, gd.rules()
+	h := s.routes()
+	for _, c := range []struct{ p, b string }{
+		{"/api/v1/repos/octo-org/repo/pulls/14/requested_reviewers", `{"team_reviewers":["admins"]}`},
+		{"/api/v1/repos/octo-org/repo/pulls/14/requested_reviewers", `{"reviewers":["ok"],"team_reviewers":["x"]}`},
+		{"/api/v1/repos/octo-org/repo/pulls/14/requested_reviewers", `{"reviewers":["a b"]}`},
+		{"/api/v1/repos/octo-org/repo/pulls/14/requested_reviewers", `{"reviewers":[]}`},
+		{"/api/v1/repos/octo-org/repo/pulls/0/requested_reviewers", `{"reviewers":["ok"]}`},
+		{"/api/v1/repos/octo-org/repo/pulls/12345678901234567/requested_reviewers", `{"reviewers":["ok"]}`},
+	} {
+		if rec := call(t, h, "POST", c.p, c.b); rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s: %d", c.p, c.b, rec.Code)
+		}
+	}
+	for _, q := range []string{"per_page=1000", "per_page=0", "page=x", "per_page=01"} {
+		if rec := call(t, h, "GET", "/api/v1/repos/octo-org/repo/issues?"+q, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: %d", q, rec.Code)
+		}
+	}
+	if rec := call(t, h, "GET", "/api/v1/repos/octo-org/repo/issues?per_page=100&page=2", ""); rec.Code != 200 {
+		t.Errorf("valid paging: %d", rec.Code)
+	}
+}
+
+// 7: the key from a file, never in the environment
+func TestGitHubKeyFile(t *testing.T) {
+	_, p := testKey(t)
+	f := filepath.Join(t.TempDir(), "key.pem")
+	os.WriteFile(f, []byte(p), 0o600)
+	for k, v := range map[string]string{"FORGE_URL": "https://github.com", "FORGE_USER": "alice", "REPO": "o/r", "FORGE_KIND": "github",
+		"GITHUB_APP_ID": "1", "GITHUB_APP_PRIVATE_KEY": "", "GITHUB_APP_PRIVATE_KEY_FILE": f} {
+		t.Setenv(k, v)
+	}
+	c, err := loadConfig()
+	if err != nil || c.GitHubAppKey != p {
+		t.Fatalf("key file: %v", err)
+	}
+	t.Setenv("GITHUB_APP_PRIVATE_KEY_FILE", "/nonexistent")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("missing key file accepted")
 	}
 }

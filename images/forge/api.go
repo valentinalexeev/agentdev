@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -168,6 +169,14 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	drv := s.driver()
+	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
+		if err := qc.checkQuery(r.URL.Query()); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
 		s.logf("forge credential: %v", err)
@@ -188,8 +197,17 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if o, ok := drv.(interface{ observe(int) }); ok {
+		o.observe(resp.StatusCode)
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
+	}
+	// rate-limit hints reach the loop, so it can wait instead of retrying at once
+	for _, h := range []string{"Retry-After", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
