@@ -370,7 +370,7 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		// usage lines (#93) come from the agent container only (the loop prints them after each Claude run)
-		if c.Usage != nil && container != forgeContainer {
+		if c.Usage != nil && container == "agent" && p.Labels["agent"] != "" {
 			if u, at, ok := parseUsage(sc.Text()); ok {
 				if err := c.Usage.Observe(ctx, p, u, at); err != nil {
 					log.FromContext(ctx).Error(err, "record usage")
