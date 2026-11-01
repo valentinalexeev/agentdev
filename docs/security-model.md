@@ -383,9 +383,39 @@ operator turns those log lines into `SecurityEvent` objects; the agent itself ca
 
 **SIEM integration:** events follow a versioned schema (`agentdev.security/v1`) mapped to OCSF *Detection Finding*
 and ECS (`event.kind=alert`, `event.category=intrusion_detection`). A SIEM can pull from the cluster logs (a
-documented filter on the prefix), receive an HMAC-signed webhook (#70), or poll `GET /api/security-events`. Syslog
-over TLS, OTLP logs and a per-agent hash chain for tamper evidence follow in #71. Output settings live in
-`instance.yml`, never in git.
+documented filter on the prefix), receive an HMAC-signed webhook (#70), syslog over TLS or OTLP logs (#71), or poll `GET /api/security-events`.
+Output settings live in the instance secrets (Secret `agentdev-api-siem`), never in git.
+
+**SIEM outputs (#71).** All outputs share one design (`images/api/webhook.go`, `outputs.go`): a bounded queue per
+agent, round robin, retries with backoff, at most once after the queue. Several outputs can run at the same time;
+each has its own queues.
+
+- *Webhook:* JSON body, HMAC-SHA256 signature (#70).
+- *Syslog over TLS:* RFC 5424 messages in octet-counted frames (RFC 5425), one TLS connection, facility 13 (log
+  audit), severity low = notice (5), medium = warning (4), high = critical (2). Structured data `agentdev@32473`
+  (the RFC 5612 example enterprise number until the project has its own) carries the main fields; MSG is the full
+  event as JSON. One worker, so the collector gets each agent's events in chain order; while the collector is down
+  that worker blocks all agents, so syslog retries 4 times with at most 30 s between tries (about 1 minute per event)
+  and the per-agent queues take the rest (drops are logged).
+- *OTLP logs:* OTLP/HTTP with the JSON encoding to `/v1/logs`; one log record per event, `severityNumber` 10/13/17,
+  body is the event as JSON, attributes follow the ECS mapping below (`event.id`, `rule.name`, `user.name`) plus
+  `agentdev.*` (`agentdev.chain`, `agentdev.prev`, `agentdev.untrusted`). Optional headers carry an API key.
+- TLS: version 1.2 or later, certificates always verified (system roots or a configured CA), optional client
+  certificate (mTLS). The API refuses to start with an `http://` webhook or OTLP URL, a webhook without a secret, or
+  half a client certificate.
+
+**Hash chain (#71).** Each row carries `prev` and `chain`: `chain = sha256(prev + "\n" + canonical)` with `prev` the
+`chain` of the same agent's previous row (`""` for the first). `canonical` is the compact JSON of the fields in this
+order: `schema, time` (RFC 3339 UTC, up to microseconds, no trailing zeros), `agent, job, source, untrusted, rule,
+severity, action, pod, container, hash`. The API computes it at insert time in one transaction under a per-agent
+advisory lock, so the chain follows the id order. A SIEM keeps the last `chain` per agent: an event whose `prev`
+differs shows a gap (a lost or dropped delivery, or a deleted row), an event whose `chain` does not recompute shows
+an edit. The chain is tamper evidence, not tamper proof: someone with write access to the database can recompute
+the whole chain, so the SIEM's copy is the reference. The chain also cannot show a removed *tail*: deleting the
+newest event(s) of an agent leaves a valid chain, and only a SIEM that already received them notices. Exporting each
+event at once (webhook, syslog, OTLP) keeps that window short. `verifyChain` in `chain.go` is the reference check. Rows from before #71 have empty `prev` and `chain`. Pruning
+removes the oldest rows, so the first kept row of an agent then has a `prev` that no stored row has; that is
+expected.
 
 **Event schema `agentdev.security/v1` (#70).** One record per refusal. The same fields appear in the log line (the
 emitter's subset), the `SecurityEvent` object (`spec`), the `security_events` table, the `GET /api/security-events`
@@ -406,6 +436,8 @@ makes it v2.
 | `action` | string | emitter | the refused action as text, at most 500 characters plus `...` |
 | `pod`, `container` | string | operator | where the line came from |
 | `hash` | hex SHA-256 | operator | over pod UID, container, log timestamp and raw line: the dedupe key end to end |
+| `prev` | hex SHA-256 or empty | API | `chain` of the same agent's previous event (#71) |
+| `chain` | hex SHA-256 | API | per-agent hash chain value of this event (#71, "Hash chain" above) |
 
 Log line format (what the emitters print, one line on stdout): `AGENTDEV_SECURITY_EVENT {"source":..,"rule":..,
 "severity":..,"agent":..,"job":..,"action":..}`. The loop always writes `job` (maybe empty); the sidecar leaves it

@@ -40,18 +40,19 @@ printf 'DATABASE_URL=postgres://agentdev_api:%s@platform-db:5432/agentdev?sslmod
   | k -n "${PLATFORM_NS}" create secret generic agentdev-api-db --from-env-file=/dev/stdin --dry-run=client -o yaml \
   | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
 ok "database agentdev"
-# SIEM webhook (optional): put SECURITY_WEBHOOK_URL=... and SECURITY_WEBHOOK_SECRET=... into .secrets/platform/siem-webhook
+# SIEM outputs (optional): SECURITY_WEBHOOK_*, SECURITY_SYSLOG_*, SECURITY_OTLP_* (images/api/outputs.go) in
+# .secrets/platform/siem-webhook. Same keys as the GKE path (infra/ansible deploy.yml; table in docs/admin.md).
 if [[ -s "${S}/siem-webhook" ]]; then
   k -n "${PLATFORM_NS}" create secret generic agentdev-api-siem --from-env-file="${S}/siem-webhook" --dry-run=client -o yaml \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
-  ok "security webhook output configured"
+  ok "security outputs configured"
 fi
 
 log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev APPROVALS="${APPROVALS:-false}" APPROVAL_DENY_ACCOUNTS="${APPROVAL_DENY_ACCOUNTS:-}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
-  envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
+  USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-api)"
 ok "agentdev-api ready"

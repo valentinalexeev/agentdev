@@ -88,7 +88,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	// sidecar's /proc/<pid>/environ, which is the point of the sidecar (#64, R4)
 	p.ShareProcessNamespace = ptr.To(false)
 	// the sidecar's own git mirror: only the sidecar mounts it, so nothing the agent writes is read by its git
-	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
+	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		// usage pauses (#93): written by the operator, read by the loop before it starts a job; optional (no pauses yet)
+		{Name: "usage", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}}}
 	common := []corev1.EnvVar{env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
 	p.Containers = []corev1.Container{{
@@ -111,7 +114,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}},
 			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-mcp"}, Optional: ptr.To(true)}},
 		},
-		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"}},
+		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"},
+			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),

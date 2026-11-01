@@ -36,7 +36,8 @@ A **project** is one repository plus the agents that work on it, described by on
 ## Process pack
 
 The **process pack** (`process/default`) is the shared workflow for people and agents: labels, an issue template,
-a PR template and `AGENTS.md` with the rules agents follow. Bootstrap proposes it to the project repo **as a
+a PR template (with *Security findings* and *Reviewed at* sections) and `AGENTS.md` with the rules agents follow,
+including how agents answer security advisory threads. Bootstrap proposes it to the project repo **as a
 pull request**; files the repo already has are left alone.
 
 ## Owner approval

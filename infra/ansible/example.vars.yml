@@ -5,3 +5,16 @@ image_tag: "0.1.0"                # image tag of a release: the git tag without 
 reviewer: my-github-login         # whose Approve lets an agent PR merge
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+# Optional (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the defaults.
+# SIEM addresses only; secret values go into the Secret Manager secret security-siem (README.md). The API that reads
+# them is not deployed by this playbook yet (#105).
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com

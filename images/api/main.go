@@ -23,10 +23,9 @@ type config struct {
 	ForgeURL  string // forge API for the live permission check of writes (#57)
 	AdminGrp  string // OIDC group that may create, delete and always pause agents
 	// security events (#70)
-	DatabaseURL   string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
-	DBMigrate     bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
-	WebhookURL    string // SIEM webhook output; empty: off. Instance config, never in git
-	WebhookSecret string // HMAC-SHA256 key for the webhook signature (Secret, never in git)
+	DatabaseURL string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
+	DBMigrate   bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
+	// SIEM outputs are read by outputsFromEnv (outputs.go) from the Secret agentdev-api-siem
 }
 
 func env(k, def string) string {
@@ -46,10 +45,8 @@ func main() {
 		ForgeURL:  os.Getenv("FORGE_URL"),
 		AdminGrp:  env("ADMIN_GROUP", "agentdev-admins"),
 
-		DatabaseURL:   os.Getenv("DATABASE_URL"),
-		DBMigrate:     os.Getenv("DATABASE_MIGRATE") == "true",
-		WebhookURL:    os.Getenv("SECURITY_WEBHOOK_URL"),
-		WebhookSecret: os.Getenv("SECURITY_WEBHOOK_SECRET"),
+		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DBMigrate:   os.Getenv("DATABASE_MIGRATE") == "true",
 	}
 	if cfg.Issuer == "" || cfg.Audience == "" {
 		log.Fatal("OIDC_ISSUER and OIDC_AUDIENCE are required")
@@ -67,18 +64,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("security events: %v", err)
 	}
-	s := &sink{store: store}
-	if cfg.WebhookURL != "" {
-		if cfg.WebhookSecret == "" {
-			log.Fatal("SECURITY_WEBHOOK_URL is set but SECURITY_WEBHOOK_SECRET is empty: refusing to send unsigned events")
-		}
-		s.out = newWebhook(cfg.WebhookURL, []byte(cfg.WebhookSecret))
-		go s.out.Run(ctx)
+	// SIEM outputs (#70 webhook, #71 syslog over TLS and OTLP): outputs.go
+	outs, err := outputsFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("security outputs: %v", err)
+	}
+	s := &sink{store: store, outs: outs}
+	for _, o := range outs {
+		go o.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
-	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp}
+	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
+	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp, usage: agents}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
 		dc := newDecider(agents, agents, gp, gp)
@@ -100,6 +99,14 @@ func main() {
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// envPct reads a percent 1..100; any other value keeps def.
+func envPct(k string, def int) int {
+	if n := envInt(k, def); validPct(n) {
+		return n
+	}
+	return def
 }
 
 func envInt(k string, def int) int {
@@ -205,6 +212,12 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			mux.Handle("GET /api/approvals", auth(verify, http.HandlerFunc(ar.list)))
 			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
 		}
+	}
+	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
+		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
+		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
+		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
+		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
 	}
 	return mux
 }
