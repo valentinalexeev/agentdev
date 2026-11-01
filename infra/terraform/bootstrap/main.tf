@@ -46,6 +46,12 @@ provider "google" {
   region = var.region
 }
 
+# The project resource gained a count: keep the address of a project made by an earlier bootstrap run.
+moved {
+  from = google_project.this
+  to   = google_project.this[0]
+}
+
 resource "google_project" "this" {
   count           = var.create_project ? 1 : 0
   project_id      = var.project_id
