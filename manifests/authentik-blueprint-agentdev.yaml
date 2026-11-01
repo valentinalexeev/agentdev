@@ -26,3 +26,8 @@ entries:
 - model: authentik_core.application
   identifiers: {slug: agentdev}
   attrs: {name: agentdev, provider: !KeyOf provider}
+# Platform operators (#57, #100): the API gives this group the right to pause, add and delete any agent. Created
+# empty; add people to it in authentik (docs/admin.md). The name must match the API env ADMIN_GROUP.
+- model: authentik_core.group
+  identifiers: {name: agentdev-admins}
+  attrs: {name: agentdev-admins}

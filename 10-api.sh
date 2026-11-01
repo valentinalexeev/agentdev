@@ -4,7 +4,7 @@
 # The OIDC application `agentdev` comes from an authentik blueprint (09). OIDC_ISSUER must be the URL users reach
 # authentik through, because authentik puts that URL into tokens (locally: the https port-forward).
 source "$(dirname "$0")/lib.sh"
-need envsubst; need openssl
+need envsubst; need openssl; need jq; need curl
 k -n "${PLATFORM_NS}" get deploy authentik-server >/dev/null 2>&1 || die "authentik not deployed: run ./run.sh 09 first"
 
 log "Image ${API_IMAGE}"
@@ -46,6 +46,41 @@ if [[ -s "${S}/siem-webhook" ]]; then
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   ok "security webhook output configured"
 fi
+
+log "Forge account for the API (#100)"
+# The API reads each user's permission on the agent repositories before a change. Gitea shows another user's
+# permission only to a repository admin (or site admin), so the account `agentdev-api` is admin collaborator of the
+# Gitea agent repositories, and its token can only read (read:repository,read:user). Idempotent: an existing token
+# that still works is kept. The token goes from the Gitea CLI to the Secret through a pipe, never to argv or stdout.
+# GKE/Ansible: manual step in docs/admin.md ("Give the API access to the forge").
+if k -n "${FORGE_NS}" get deploy gitea >/dev/null 2>&1; then
+  gitea_cli() { k -n "${FORGE_NS}" exec deploy/gitea -- gitea "$@" 2>/dev/null; }
+  # shellcheck source=lib-forge.sh
+  source "${SPIKE_DIR}/lib-forge.sh"
+  api_user=agentdev-api
+  forge_mkuser "${api_user}" "$(openssl rand -hex 12)Aa1!" || die "cannot create forge user ${api_user}"
+  repos=$( { echo "${REPO}"; k -n "${AGENTS_NS}" get agents -o json 2>/dev/null \
+    | jq -r '.items[] | select((.spec.forge // "gitea") == "gitea") | .spec.repo'; } | sort -u)
+  for r in ${repos}; do
+    ga PUT "/repos/${r}/collaborators/${api_user}" '{"permission":"admin"}' >/dev/null \
+      || die "cannot make ${api_user} admin of ${r}"
+  done
+  have=$(k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data.FORGE_API_TOKEN}' 2>/dev/null | base64 -d || true)
+  if [[ -n "${have}" ]] && [[ "$(printf 'Authorization: token %s\n' "${have}" \
+       | curl -fsS -H @- "${FORGE_HOST_URL}/api/v1/user" 2>/dev/null | jq -r .login)" == "${api_user}" ]]; then
+    ok "token in Secret agentdev-api-forge still valid"
+  else
+    have=$(gitea_cli admin user generate-access-token --username "${api_user}" --token-name "agentdev-api-$(date +%s)" \
+      --scopes read:repository,read:user --raw | tr -d '\r\n')
+    [[ -n "${have}" ]] || die "cannot create a token for ${api_user}"
+    printf 'FORGE_API_TOKEN=%s\n' "${have}" \
+      | k -n "${PLATFORM_NS}" create secret generic agentdev-api-forge --from-env-file=/dev/stdin --dry-run=client -o yaml \
+      | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+    ok "new token in Secret agentdev-api-forge"
+  fi
+  unset have
+  ok "${api_user}: admin of $(tr '\n' ' ' <<<"${repos}")"
+else ok "no Gitea in ${FORGE_NS}: skipped (see docs/admin.md)"; fi
 
 log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
