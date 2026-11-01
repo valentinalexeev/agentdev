@@ -381,7 +381,7 @@ func (p *ExecutorPoller) createRun(ctx context.Context, e *v1.Executor, spec v1.
 func (p *ExecutorPoller) syncRun(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun) error {
 	// the spec is checked again: an ExecutorRun is only ever written by this operator, but never trust it blindly
 	if !shaRE.MatchString(r.Spec.Commit) || r.Spec.PR < 1 || r.Spec.Executor != e.Name {
-		return p.finish(ctx, e, f, r, "Failed", "invalid run spec", false)
+		return p.finish(ctx, e, r, "Failed", "invalid run spec", false)
 	}
 	switch r.Status.Phase {
 	case "", "Pending":
@@ -403,12 +403,12 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 	if r.Spec.Stage == "apply" {
 		switch {
 		case !hashRE.MatchString(r.Spec.PlanHash):
-			return p.finish(ctx, e, f, r, "Failed", "apply run without a plan hash", true)
+			return p.finish(ctx, e, r, "Failed", "apply run without a plan hash", true)
 		case !hashRE.MatchString(r.Spec.SpecHash) || r.Spec.SpecHash != specHash(e):
 			// the Executor (image, commands, credentials, ...) changed after the approval: not what was approved
-			return p.finish(ctx, e, f, r, "Failed", "executor spec changed since the approval", true)
+			return p.finish(ctx, e, r, "Failed", "executor spec changed since the approval", true)
 		case r.Spec.NotAfter == nil || p.Now().After(r.Spec.NotAfter.Time):
-			return p.finish(ctx, e, f, r, "Failed", "apply not started within the start window after the decision", true)
+			return p.finish(ctx, e, r, "Failed", "apply not started within the start window after the decision", true)
 		}
 	}
 	if r.Spec.Stage == "merge" {
@@ -461,7 +461,7 @@ func (p *ExecutorPoller) collect(ctx context.Context, e *v1.Executor, f forgeAPI
 	var job batchv1.Job
 	if err := p.Direct.Get(ctx, types.NamespacedName{Namespace: p.C.NS, Name: r.Name}, &job); err != nil {
 		if apierrors.IsNotFound(err) {
-			return p.finish(ctx, e, f, r, "Failed", "job disappeared", true)
+			return p.finish(ctx, e, r, "Failed", "job disappeared", true)
 		}
 		return err
 	}
@@ -557,7 +557,7 @@ func (p *ExecutorPoller) report(ctx context.Context, e *v1.Executor, f forgeAPI,
 			log.FromContext(ctx).Error(err, "set status")
 		}
 	}
-	if err := p.finish(ctx, e, f, r, phase, msg, false); err != nil {
+	if err := p.finish(ctx, e, r, phase, msg, false); err != nil {
 		return err
 	}
 	rule := "executor.plan"
@@ -581,7 +581,7 @@ func quoteOutput(out string) string {
 	return "<details><summary>output</summary>\n\n```text\n" + strings.Join(lines, "\n") + "\n```\n</details>"
 }
 
-func (p *ExecutorPoller) finish(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun, phase, msg string, refused bool) error {
+func (p *ExecutorPoller) finish(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun, phase, msg string, refused bool) error {
 	now := metav1.NewTime(p.Now())
 	r.Status.Phase, r.Status.Message, r.Status.FinishedAt = phase, msg, &now
 	if err := p.Status().Update(ctx, r); err != nil {

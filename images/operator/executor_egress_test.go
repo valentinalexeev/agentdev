@@ -204,7 +204,6 @@ func TestExecutorEgressSecret(t *testing.T) {
 func TestExecutorEgressRefusalEvent(t *testing.T) {
 	e := executor(nil)
 	x := newExecEnv(t, e)
-	px := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "executor-egress-proxy-a", Namespace: execNS, UID: "px"}}
 	pods := []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "tf-prod-pr-1-x", Namespace: execNS,
 		Labels: map[string]string{"app": "agentdev-executor", "agentdev/executor": "tf-prod", "job-name": "tf-prod-pr-1"}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9"}}}
@@ -215,7 +214,7 @@ func TestExecutorEgressRefusalEvent(t *testing.T) {
 	}, "\n")
 	byName := map[string]*v1.Executor{"tf-prod": e}
 	for i := 0; i < 2; i++ {
-		last := x.p.consumeEgress(context.Background(), strings.NewReader(log), px, pods, byName)
+		last := x.p.consumeEgress(context.Background(), strings.NewReader(log), pods, byName)
 		if last.Format("15:04:05") != "10:00:02" {
 			t.Fatalf("last %v", last)
 		}
@@ -242,7 +241,6 @@ func TestExecutorEgressRefusalFlood(t *testing.T) {
 	e := executor(nil)
 	x := newExecEnv(t, e)
 	x.p.C.EgressMaxEvents = 3
-	px := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "executor-egress-proxy-a", Namespace: execNS, UID: "px"}}
 	pods := []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "tf-prod-pr-1-x", Namespace: execNS,
 		Labels: map[string]string{"app": "agentdev-executor", "agentdev/executor": "tf-prod", "job-name": "tf-prod-pr-1"}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9"}}}
@@ -254,7 +252,7 @@ func TestExecutorEgressRefusalFlood(t *testing.T) {
 	lines = append(lines, line("2026-11-01T10:20:00Z", `{"rule":"egress-host","severity":"medium","client":"10.0.0.9","action":"GET http://late.example/x"}`))
 	byName := map[string]*v1.Executor{"tf-prod": e}
 	for i := 0; i < 2; i++ {
-		x.p.consumeEgress(context.Background(), strings.NewReader(strings.Join(lines, "\n")), px, pods, byName)
+		x.p.consumeEgress(context.Background(), strings.NewReader(strings.Join(lines, "\n")), pods, byName)
 	}
 	var evs v1.SecurityEventList
 	if err := x.c.List(context.Background(), &evs); err != nil {

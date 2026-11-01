@@ -175,17 +175,6 @@ func (w *webhook) next() (securityEvent, bool) {
 	return e, true
 }
 
-// Dropped is the number of events dropped from the webhook per agent since start.
-func (w *webhook) Dropped() map[string]int64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := map[string]int64{}
-	for k, v := range w.dropped {
-		out[k] = v
-	}
-	return out
-}
-
 func (w *webhook) Run(ctx context.Context) {
 	w.mu.Lock()
 	w.init()

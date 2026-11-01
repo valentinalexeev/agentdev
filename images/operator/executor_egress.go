@@ -232,7 +232,7 @@ func (p *ExecutorPoller) collectEgress(ctx context.Context, items []v1.Executor)
 			log.FromContext(ctx).V(1).Info("open executor proxy log", "err", err.Error())
 			continue
 		}
-		last := p.consumeEgress(ctx, rc, px, pods.Items, byName)
+		last := p.consumeEgress(ctx, rc, pods.Items, byName)
 		rc.Close()
 		if !last.IsZero() {
 			p.egressSince[px.UID] = last
@@ -244,7 +244,7 @@ func (p *ExecutorPoller) collectEgress(ctx context.Context, items []v1.Executor)
 }
 
 // consumeEgress records the refusal lines of one proxy log; returns the time of the last line read.
-func (p *ExecutorPoller) consumeEgress(ctx context.Context, r io.Reader, px *corev1.Pod, pods []corev1.Pod, byName map[string]*v1.Executor) time.Time {
+func (p *ExecutorPoller) consumeEgress(ctx context.Context, r io.Reader, pods []corev1.Pod, byName map[string]*v1.Executor) time.Time {
 	var last time.Time
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)

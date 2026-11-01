@@ -153,7 +153,7 @@ func TestWebhookFairQueue(t *testing.T) {
 		wh.Enqueue(ev("mallory", "low", fmt.Sprint("m", i), time.Now()))
 	}
 	wh.Enqueue(ev("alice", "high", "a1", time.Now()))
-	if d := wh.Dropped(); d["mallory"] != 95 || d["alice"] != 0 {
+	if d := wh.dropped; d["mallory"] != 95 || d["alice"] != 0 {
 		t.Fatalf("dropped %v", d)
 	}
 	// round robin: alice's event comes out second, not after mallory's backlog
