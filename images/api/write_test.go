@@ -83,7 +83,7 @@ func newEnv(t *testing.T, forgeURL string) *tenv {
 	auditOut = buf
 	t.Cleanup(func() { auditOut = old })
 	now = func() time.Time { return time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC) }
-	wr := &writer{store: k, perms: newGiteaPerms(forgeURL, "svc"), adminGroup: "agentdev-admins"}
+	wr := &writer{store: k, perms: newGiteaPerms(forgeURL, "svc"), adminGroup: "agentdev-admins", usage: k}
 	return &tenv{h: routes(idVerify, k, nil, wr), k: k, audit: buf}
 }
 

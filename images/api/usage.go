@@ -1,0 +1,433 @@
+package main
+
+// Subscription usage limits (#93, decisions on #92). The operator pauses new runs of the agents on a Claude
+// subscription when its 5-hour or weekly window passes a threshold (images/operator/usage.go). The thresholds live in
+// the ConfigMap agentdev-usage-settings, written only here:
+//
+//   - an agentdev admin (ADMIN_GROUP) sets the global thresholds (defaults 80 % 5-hour, 90 % weekly);
+//   - a user with write access to a project sets lower thresholds for that project. A value above the global one is
+//     refused here, and the operator clamps it in any case, so a project can never raise the limit.
+//
+// Every attempt is written with audit() (Action "set-limits"), like the Agent writes.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+const (
+	usageCM         = "agentdev-usage"          // written by the operator: state and pauses (read only here)
+	usageSettingsCM = "agentdev-usage-settings" // thresholds, written here
+)
+
+// defaultFiveHour and defaultWeekly: the global thresholds when none is set (#92: 80 and 90); USAGE_FIVE_HOUR and
+// USAGE_WEEKLY change them (same variables as the operator, config.env and Ansible usage.*).
+var (
+	defaultFiveHour = 80
+	defaultWeekly   = 90
+)
+
+// thresholds in percent (1..100); 0 = not set (project: use the global value).
+type thresholds struct {
+	FiveHour int `json:"fiveHour,omitempty"`
+	Weekly   int `json:"weekly,omitempty"`
+}
+
+// usageSettings is settings.json. The same format as UsageSettings in the operator.
+type usageSettings struct {
+	Global   thresholds            `json:"global"`
+	Projects map[string]thresholds `json:"projects,omitempty"`
+}
+
+func validPct(p int) bool { return p >= 1 && p <= 100 }
+
+// global returns the global thresholds with the defaults filled in.
+func (s usageSettings) global() thresholds {
+	t := thresholds{FiveHour: defaultFiveHour, Weekly: defaultWeekly}
+	if validPct(s.Global.FiveHour) {
+		t.FiveHour = s.Global.FiveHour
+	}
+	if validPct(s.Global.Weekly) {
+		t.Weekly = s.Global.Weekly
+	}
+	return t
+}
+
+// effective is the lower of the global and the project value (same rule as the operator).
+func (s usageSettings) effective(repo string) thresholds {
+	t := s.global()
+	if p, ok := s.Projects[repo]; ok {
+		if validPct(p.FiveHour) && p.FiveHour < t.FiveHour {
+			t.FiveHour = p.FiveHour
+		}
+		if validPct(p.Weekly) && p.Weekly < t.Weekly {
+			t.Weekly = p.Weekly
+		}
+	}
+	return t
+}
+
+// effectiveAll is the lowest effective threshold over all repositories of an agent: the same rule as
+// UsageSettings.EffectiveAll in the operator, which uses the Agent's spec.repo.
+func (s usageSettings) effectiveAll(repos []string) thresholds {
+	t := s.global()
+	for _, r := range repos {
+		e := s.effective(r)
+		t.FiveHour, t.Weekly = min(t.FiveHour, e.FiveHour), min(t.Weekly, e.Weekly)
+	}
+	return t
+}
+
+// usageStore reads and writes the two ConfigMaps.
+type usageStore interface {
+	Settings(ctx context.Context) (usageSettings, string, error) // settings, resourceVersion ("" = not created yet)
+	SaveSettings(ctx context.Context, s usageSettings, resourceVersion string) error
+	State(ctx context.Context) (map[string]json.RawMessage, error) // the operator's state.json and pauses.json
+}
+
+func (k *kubeAgents) Settings(ctx context.Context) (usageSettings, string, error) {
+	var s usageSettings
+	cm, err := k.c.CoreV1().ConfigMaps(k.ns).Get(ctx, usageSettingsCM, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return s, "", nil
+	}
+	if err != nil {
+		return s, "", err
+	}
+	if raw := cm.Data["settings.json"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			return usageSettings{}, versionOf(cm), fmt.Errorf("settings.json: %w", err)
+		}
+	}
+	return s, versionOf(cm), nil
+}
+
+// versionOf: the resourceVersion, or a marker for "exists" (fake clients set none; "" means not created yet).
+func versionOf(cm *corev1.ConfigMap) string {
+	if cm.ResourceVersion == "" {
+		return existsNoVersion
+	}
+	return cm.ResourceVersion
+}
+
+const existsNoVersion = "exists"
+
+func (k *kubeAgents) SaveSettings(ctx context.Context, s usageSettings, rv string) error {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: usageSettingsCM, Namespace: k.ns},
+		Data: map[string]string{"settings.json": string(b)}}
+	if rv != existsNoVersion {
+		cm.ResourceVersion = rv
+	}
+	if rv == "" {
+		_, err = k.c.CoreV1().ConfigMaps(k.ns).Create(ctx, cm, metav1.CreateOptions{})
+	} else {
+		// resourceVersion: a change made at the same time gives a conflict, not a lost update
+		_, err = k.c.CoreV1().ConfigMaps(k.ns).Update(ctx, cm, metav1.UpdateOptions{})
+	}
+	return err
+}
+
+func (k *kubeAgents) State(ctx context.Context) (map[string]json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+	cm, err := k.c.CoreV1().ConfigMaps(k.ns).Get(ctx, usageCM, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"state.json", "pauses.json"} {
+		if v := cm.Data[key]; v != "" && json.Valid([]byte(v)) {
+			out[key[:len(key)-5]] = json.RawMessage(v)
+		}
+	}
+	return out, nil
+}
+
+// usageView is GET /api/usage.
+type usageView struct {
+	Global   thresholds            `json:"global"`             // with defaults filled in
+	Projects map[string]thresholds `json:"projects,omitempty"` // as set (lower values only)
+	// Effective per project of a managed agent (the projects the operator applies limits to), so the UI need not
+	// repeat the clamp rule; Agents: the limits that apply to each managed agent.
+	Effective map[string]thresholds `json:"effective"`
+	Agents    map[string]thresholds `json:"agents"`
+	State     json.RawMessage       `json:"state,omitempty"`  // per Claude Secret: windows, tokens (operator)
+	Pauses    json.RawMessage       `json:"pauses,omitempty"` // per agent: until, reason (operator)
+}
+
+// GET /api/usage: every signed-in user, filtered (review #102): an agentdev admin sees everything; anyone else sees
+// the global limits and only the projects and agents they have write access to on the forge, with those agents'
+// pauses. The per-subscription state (Claude Secret names, windows, tokens) is shown to admins only.
+func (w *writer) getUsage(rw http.ResponseWriter, r *http.Request) {
+	s, _, err := w.usage.Settings(r.Context())
+	if err != nil {
+		writeJSON(rw, http.StatusBadGateway, map[string]string{"error": "cannot read the usage settings"})
+		return
+	}
+	id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+	admin := id != nil && w.isAdmin(id)
+	allowed := map[string]bool{} // repo -> caller may write (cached per request)
+	may := func(forge, repo string) bool {
+		if admin {
+			return true
+		}
+		if id == nil || forge == "github" {
+			return false
+		}
+		if ok, seen := allowed[repo]; seen {
+			return ok
+		}
+		p, err := w.repoPerm(r.Context(), id, forge, repo)
+		allowed[repo] = err == nil && p >= permWrite
+		return allowed[repo]
+	}
+	v := usageView{Global: s.global(), Projects: map[string]thresholds{}, Effective: map[string]thresholds{}, Agents: map[string]thresholds{}}
+	agents := map[string]bool{}
+	for _, a := range w.managedAgents(r.Context()) {
+		var repos []string
+		for _, repo := range a.Repos {
+			if may(a.Forge, repo) {
+				repos = append(repos, repo)
+				v.Effective[repo] = s.effective(repo)
+				if t, ok := s.Projects[repo]; ok {
+					v.Projects[repo] = t
+				}
+			}
+		}
+		if len(repos) > 0 {
+			v.Agents[a.Name] = s.effectiveAll(a.Repos)
+			agents[a.Name] = true
+		}
+	}
+	if admin {
+		v.Projects = s.Projects
+	}
+	if st, err := w.usage.State(r.Context()); err == nil {
+		if admin {
+			v.State, v.Pauses = st["state"], st["pauses"]
+		} else {
+			var all map[string]json.RawMessage
+			if json.Unmarshal(st["pauses"], &all) == nil {
+				mine := map[string]json.RawMessage{}
+				for name, p := range all {
+					if agents[name] {
+						mine[name] = p
+					}
+				}
+				v.Pauses, _ = json.Marshal(mine)
+			}
+		}
+	}
+	writeJSON(rw, http.StatusOK, v)
+}
+
+// managedAgents: only agents with an Agent object have usage pauses (the operator renders their pods).
+func (w *writer) managedAgents(ctx context.Context) []agent {
+	agents, ok := w.store.(agentLister)
+	if !ok {
+		return nil
+	}
+	list, err := agents.List(ctx)
+	if err != nil {
+		return nil
+	}
+	out := list[:0]
+	for _, a := range list {
+		if a.Managed {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// limitsBody reads {fiveHour, weekly}. Each is an integer 1..100, or null / 0 to clear (project only).
+// set lists the keys present in the body.
+func limitsBody(r *http.Request, allowClear bool) (t thresholds, set map[string]bool, err error) {
+	m, err := decodeObject(r)
+	if err != nil {
+		return thresholds{}, nil, err
+	}
+	set = map[string]bool{}
+	for k, raw := range m {
+		var p *int
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return t, nil, invalid(k + " must be an integer from 1 to 100")
+		}
+		n := 0
+		if p != nil {
+			n = *p
+		}
+		if n == 0 && !allowClear {
+			return t, nil, invalid(k + " must be an integer from 1 to 100")
+		}
+		if n != 0 && !validPct(n) {
+			return t, nil, invalid(k + " must be an integer from 1 to 100")
+		}
+		switch k {
+		case "fiveHour":
+			t.FiveHour, set[k] = n, true
+		case "weekly":
+			t.Weekly, set[k] = n, true
+		default:
+			return t, nil, invalid(fmt.Sprintf("field %q is not known (allowed: fiveHour, weekly)", k))
+		}
+	}
+	if len(m) == 0 {
+		return t, nil, invalid("nothing to change")
+	}
+	return t, set, nil
+}
+
+type limitsAudit struct {
+	Scope   string      `json:"scope"`             // global | project
+	Project string      `json:"project,omitempty"` // owner/name
+	Before  *thresholds `json:"before"`
+	After   *thresholds `json:"after,omitempty"`
+}
+
+func (w *writer) saveUsage(ctx context.Context, s usageSettings, rv string) error {
+	err := w.usage.SaveSettings(ctx, s, rv)
+	if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) {
+		return &httpErr{http.StatusConflict, "error", "the limits changed at the same time; try again"}
+	}
+	if err != nil {
+		return fmt.Errorf("save usage settings: %w", err)
+	}
+	return nil
+}
+
+// PUT /api/usage/global: agentdev admins only.
+func (w *writer) putGlobal(rw http.ResponseWriter, r *http.Request) {
+	id := r.Context().Value(ctxIdentity{}).(*identity)
+	la := &limitsAudit{Scope: "global"}
+	e := auditEntry{Who: w.who(id), Action: "set-limits", Request: la}
+	// read first, so that refused and invalid attempts also record the values they tried to change
+	s, rv, err := w.usage.Settings(r.Context())
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	before := s.global()
+	la.Before = &before
+	if !w.isAdmin(id) {
+		w.fail(rw, e, denied("only agentdev administrators can change the global usage limits"))
+		return
+	}
+	e.Grant = "admin-group"
+	t, _, err := limitsBody(r, false)
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	if t.FiveHour != 0 {
+		s.Global.FiveHour = t.FiveHour
+	}
+	if t.Weekly != 0 {
+		s.Global.Weekly = t.Weekly
+	}
+	if err := w.saveUsage(r.Context(), s, rv); err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	after := s.global()
+	la.After, e.Result = &after, "ok"
+	audit(e)
+	writeJSON(rw, http.StatusOK, after)
+}
+
+var repoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9._-]{1,100}$`)
+
+// forgeOfRepo returns the forge of the agents on repo; a project without an agent is not known here.
+func (w *writer) forgeOfRepo(ctx context.Context, repo string) (string, error) {
+	if _, ok := w.store.(agentLister); !ok {
+		return "", errors.New("agent store cannot list")
+	}
+	for _, a := range w.managedAgents(ctx) {
+		for _, r := range a.Repos {
+			if r == repo {
+				if a.Forge == "" {
+					return "gitea", nil
+				}
+				return a.Forge, nil
+			}
+		}
+	}
+	return "", &httpErr{http.StatusNotFound, "invalid", "no managed agent works on this project"}
+}
+
+// PUT /api/usage/projects/{owner}/{repo}: a user with write access to the project (or an agentdev admin). Values
+// must not be above the global ones; 0 or null clears the project value.
+func (w *writer) putProject(rw http.ResponseWriter, r *http.Request) {
+	id := r.Context().Value(ctxIdentity{}).(*identity)
+	repo := r.PathValue("owner") + "/" + r.PathValue("repo")
+	la := &limitsAudit{Scope: "project", Project: repo}
+	e := auditEntry{Who: w.who(id), Action: "set-limits", Request: la}
+	if !repoRe.MatchString(repo) {
+		la.Project = ""
+		w.fail(rw, e, invalid("project must be owner/name"))
+		return
+	}
+	s, rv, err := w.usage.Settings(r.Context())
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	cur := s.Projects[repo]
+	la.Before = &cur
+	t, set, err := limitsBody(r, true)
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	forge, err := w.forgeOfRepo(r.Context(), repo)
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	grant, err := w.authorize(r.Context(), id, forge, repo, permWrite, true)
+	if err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	e.Grant = grant
+	g := s.global()
+	if t.FiveHour > g.FiveHour || t.Weekly > g.Weekly {
+		w.fail(rw, e, invalid(fmt.Sprintf("a project can only lower the limits (global: %d%% 5-hour, %d%% weekly)", g.FiveHour, g.Weekly)))
+		return
+	}
+	next := cur
+	if set["fiveHour"] {
+		next.FiveHour = t.FiveHour
+	}
+	if set["weekly"] {
+		next.Weekly = t.Weekly
+	}
+	if s.Projects == nil {
+		s.Projects = map[string]thresholds{}
+	}
+	if next == (thresholds{}) {
+		delete(s.Projects, repo)
+	} else {
+		s.Projects[repo] = next
+	}
+	if err := w.saveUsage(r.Context(), s, rv); err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	la.After, e.Result = &next, "ok"
+	audit(e)
+	writeJSON(rw, http.StatusOK, map[string]any{"project": next, "effective": s.effective(repo)})
+}

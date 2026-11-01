@@ -96,7 +96,7 @@ log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
-  envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
+  USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 # restart: local images keep their tag, and the token Secret may have changed (env is read at start only). The
 # annotation records the Secret's hash (not its value), so a changed token is visible in the pod template too.
 fh=$(k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data}' 2>/dev/null | shasum -a 256 | cut -c1-16)
