@@ -68,6 +68,8 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: no tracked build/OS artifacts (__pycache__, *.pyc, .DS_Store, node_modules)
+        run: scripts/check-tracked-artifacts.sh
       - name: shellcheck and bash syntax
         if: needs.scope.outputs.shell == 'true'
         run: |
