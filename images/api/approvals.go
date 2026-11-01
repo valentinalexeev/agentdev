@@ -344,7 +344,9 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		st := map[string]any{"state": "allowed", "scope": "once"}
 		switch verb {
 		case "approve-job":
-			st["scope"] = "job"
+			if a.Source != "executor" { // an executor apply is single-use (#69): approve-job counts as once
+				st["scope"] = "job"
+			}
 		case "deny":
 			st = map[string]any{"state": "denied"}
 		}

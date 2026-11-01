@@ -111,11 +111,13 @@ spec:
                 maxLength: 201
                 type: string
               source:
-                description: 'What asks: claude (a tool permission prompt) or push
-                  (a push touching a protected path).'
+                description: |-
+                  What asks: claude (a tool permission prompt), push (a push touching a protected path) or executor (an apply
+                  gate of a deterministic executor, #69; created by the operator itself, agent is then the Executor name).
                 enum:
                 - claude
                 - push
+                - executor
                 type: string
               tool:
                 description: Tool name (claude) or "push" (push).

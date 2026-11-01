@@ -23,8 +23,9 @@ type ApprovalSpec struct {
 	// Job the request belongs to, issue-N or pr-N. The forge comments are read on that issue or PR.
 	// +kubebuilder:validation:Pattern=`^(issue|pr)-[0-9]{1,10}$`
 	Job string `json:"job"`
-	// What asks: claude (a tool permission prompt) or push (a push touching a protected path).
-	// +kubebuilder:validation:Enum=claude;push
+	// What asks: claude (a tool permission prompt), push (a push touching a protected path) or executor (an apply
+	// gate of a deterministic executor, #69; created by the operator itself, agent is then the Executor name).
+	// +kubebuilder:validation:Enum=claude;push;executor
 	Source string `json:"source"`
 	// Tool name (claude) or "push" (push).
 	// +kubebuilder:validation:MaxLength=128
