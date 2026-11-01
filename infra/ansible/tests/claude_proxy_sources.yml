@@ -1,6 +1,7 @@
 # Parity check (#66): the playbook's projected sources equal scripts/claude-proxy-sources.sh (kind).
 # Run: ansible-playbook infra/ansible/tests/claude_proxy_sources.yml
-- hosts: localhost
+- name: Claude proxy sources match the kind script (#66)
+  hosts: localhost
   gather_facts: false
   vars:
     agents: [{name: alice}, {name: bob-2}]
