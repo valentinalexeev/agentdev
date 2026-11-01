@@ -67,8 +67,9 @@ terminal with cluster access. The session can read and file issues but not push;
 
 ## Earlier spike: kind + gVisor + agent-sandbox + Coder
 
-Steps `02`–`04` (`./run.sh 02 03 04`) evaluated sandbox orchestration and interactive workspaces. Steps `02` and `03`
-now run the Ansible playbook `infra/ansible/kind.yml --tags sandbox` and `--tags sandbox-test` (#106).
+Steps `02`–`04` (`./run.sh 02 03 04`) evaluated sandbox orchestration and interactive workspaces. Steps `02`, `03`
+and `04` now run the Ansible playbook `infra/ansible/kind.yml --tags sandbox`, `--tags sandbox-test` and `--tags coder`
+(#106).
 
 A throwaway, dedicated kind cluster (`agentdev`) that answers one question:
 can a fully open-source Kubernetes stack give a personal agentic dev environment

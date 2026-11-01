@@ -1,0 +1,21 @@
+---
+# Coder as the interactive front end (#106, was 04-coder.sh): Postgres and Coder via Helm, a gVisor workspace template,
+# then the scale-to-zero check (stop: no pod, PVC kept; start: same home dir). The values match config.env; run.sh
+# passes them with -e. Commands use a kube context, so a GKE playbook can include the role with its own coder_context.
+coder_context: kind-agentdev
+coder_ns: coder
+coder_chart_version: "2.38.4"
+coder_url: http://localhost:8080
+coder_admin_user: admin
+coder_admin_email: admin@example.com
+# read from the environment (run.sh exports it from config.env), never from -e; the fallback is the spike default
+coder_admin_password: "{{ lookup('ansible.builtin.env', 'CODER_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
+coder_repo_dir: "{{ playbook_dir }}/../.."
+# keeps the session out of your normal ~/.config/coderv2 (the same directory as the old step)
+coder_config_dir: "{{ coder_repo_dir }}/.coder"
+coder_template: spike-gvisor
+coder_template_ttl: 30m
+coder_workspace: spike
+coder_timeout: 300
+# run the stop/start check (scale to zero); the workspace is Running again afterwards
+coder_scale_test: true

@@ -7,8 +7,9 @@
 #   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
+#   ansible-playbook kind.yml --tags coder             # was ./run.sh 04
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, coder: 04.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -38,3 +39,11 @@
       vars:
         sandbox_test_context: kind-{{ kind_cluster_name }}
       tags: [sandbox-test]
+
+    - name: Coder, gVisor workspace template and scale-to-zero check (was 04-coder.sh)
+      ansible.builtin.include_role:
+        name: coder
+        apply: {tags: [coder]}
+      vars:
+        coder_context: kind-{{ kind_cluster_name }}
+      tags: [coder]

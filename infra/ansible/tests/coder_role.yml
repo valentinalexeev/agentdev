@@ -1,0 +1,56 @@
+# The role coder (#106, was 04-coder.sh): kind.yml --tags coder runs only that role, every change is guarded by a
+# check (a second run reports changed=0), the password stays out of the logs, and the wrapper calls kind.yml.
+# Run: ansible-playbook infra/ansible/tests/coder_role.yml
+- name: Role coder (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List the tasks of the coder tag
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --tags, coder, --list-tasks]
+      register: coder_tasks
+      changed_when: false
+
+    - name: Only the coder role runs under the tag
+      ansible.builtin.assert:
+        that:
+          - "'Coder, gVisor workspace template' in coder_tasks.stdout"
+          - "'Kind cluster with gVisor' not in coder_tasks.stdout"
+          - "'Checks of the warm pool' not in coder_tasks.stdout"
+        quiet: true
+
+    - name: Read the role
+      ansible.builtin.set_fact:
+        coder_role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/coder/tasks/main.yml') | from_yaml }}"
+        coder_defaults_raw: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/coder/defaults/main.yml') }}"
+
+    - name: Commands that change something run only after a check
+      ansible.builtin.assert:
+        that:
+          - changing | length >= 5
+          - changing | rejectattr('when', 'defined') | list | length == 0
+        quiet: true
+      vars:
+        changing: "{{ coder_role | selectattr('changed_when', 'defined') | selectattr('changed_when', 'equalto', true) | list }}"
+
+    - name: Template push is keyed on a content hash, login and Postgres under no_log, restore in always
+      ansible.builtin.assert:
+        that:
+          - "'coder_template_version' in (coder_role | selectattr('name', 'search', '^Push the template') | first)['ansible.builtin.command'].argv"
+          - (coder_role | selectattr('name', 'search', '^First admin user') | first).no_log
+          - (coder_role | selectattr('name', 'search', '^Postgres \\(') | first).no_log
+          - scale.always | map(attribute='name') | list == ['Start the workspace', 'Agent is back after the start']
+          - "\"lookup('ansible.builtin.env', 'CODER_ADMIN_PASSWORD')\" in coder_defaults_raw"
+        quiet: true
+      vars:
+        scale: "{{ coder_role | selectattr('name', 'search', '^Scale to zero') | first }}"
+
+    - name: The wrapper prints the deprecation notice and calls kind.yml without the password on the command line
+      ansible.builtin.assert:
+        that:
+          - "'deprecated 04 coder' in wrapper"
+          - "'kind.yml\" --tags coder' in wrapper"
+          - "'coder_admin_password=' not in wrapper"
+        quiet: true
+      vars:
+        wrapper: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../04-coder.sh') }}"

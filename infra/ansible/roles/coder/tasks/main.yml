@@ -1,0 +1,224 @@
+---
+# Same result as the old 04-coder.sh. Every step checks first (Helm release, first user, template version by content
+# hash, default TTL, workspace), and the stop/start check leaves the workspace Running: a second run reports changed=0.
+- name: Namespace {{ coder_ns }}
+  kubernetes.core.k8s:
+    context: "{{ coder_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ coder_ns }}"}}
+
+- name: Postgres (Secret, PVC, Deployment, Service)
+  kubernetes.core.k8s:
+    context: "{{ coder_context }}"
+    src: "{{ coder_repo_dir }}/manifests/postgres.yaml"
+    namespace: "{{ coder_ns }}"
+    apply: true
+  no_log: true  # the manifest holds the database password
+
+- name: Postgres is ready
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ coder_context }}", -n, "{{ coder_ns }}", rollout, status, deploy/postgres, --timeout=180s]
+  changed_when: false
+
+- name: Helm repository coder-v2
+  kubernetes.core.helm_repository:
+    name: coder-v2
+    repo_url: https://helm.coder.com/v2
+
+- name: Coder via Helm, chart {{ coder_chart_version }}
+  kubernetes.core.helm:
+    kube_context: "{{ coder_context }}"
+    name: coder
+    chart_ref: coder-v2/coder
+    chart_version: "{{ coder_chart_version }}"
+    release_namespace: "{{ coder_ns }}"
+    values_files: ["{{ coder_repo_dir }}/manifests/coder-values.yaml"]
+    update_repo_cache: false
+    wait: true
+    wait_timeout: 6m
+
+- name: Coder answers on {{ coder_url }}
+  ansible.builtin.uri:
+    url: "{{ coder_url }}/healthz"
+  register: coder_health
+  until: coder_health.status == 200
+  retries: 24
+  delay: 5
+
+- name: Coder CLI command with its own config directory
+  ansible.builtin.set_fact:
+    coder_cli: [coder, --global-config, "{{ coder_config_dir }}"]
+
+- name: Session of the CLI
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['whoami'] }}"
+  register: coder_whoami
+  changed_when: false
+  failed_when: false
+
+- name: First admin user and login
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['login', coder_url, '--first-user-username', coder_admin_user, '--first-user-email',
+           coder_admin_email, '--first-user-password', coder_admin_password, '--first-user-full-name', 'Spike Admin',
+           '--first-user-trial=false'] }}"
+  when: coder_whoami.rc != 0
+  changed_when: true
+  no_log: true
+
+- name: Content hash of the template
+  ansible.builtin.set_fact:
+    # the version name carries the hash, so an unchanged template is not pushed again
+    coder_template_version: >-
+      h{{ (query('ansible.builtin.file', *(query('ansible.builtin.fileglob', coder_repo_dir ~ '/coder-template/*') | sort))
+           | join('\n') | hash('sha256'))[:12] }}
+
+- name: Active version of the template
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['templates', 'list', '--output', 'json'] }}"
+  register: coder_templates_before
+  changed_when: false
+
+- name: Versions of the template
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['templates', 'versions', 'list', coder_template, '--output', 'json'] }}"
+  register: coder_versions
+  changed_when: false
+  failed_when: false
+
+- name: Push the template {{ coder_template }}
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['templates', 'push', coder_template, '-d', coder_repo_dir ~ '/coder-template', '--var',
+           'namespace=' ~ coder_ns, '--name', coder_template_version, '--yes'] }}"
+  vars:
+    # the JSON rows of the CLI wrap the API object in TemplateVersion / Template
+    coder_hash_ids: "{{ ((coder_versions.stdout | from_json) if coder_versions.rc == 0 else [])
+                        | map(attribute='TemplateVersion', default={}) | selectattr('name', 'defined')
+                        | selectattr('name', 'equalto', coder_template_version) | map(attribute='id') | list }}"
+    coder_active_id: "{{ coder_templates_before.stdout | from_json | map(attribute='Template', default={})
+                         | selectattr('name', 'defined') | selectattr('name', 'equalto', coder_template)
+                         | map(attribute='active_version_id') | first | default('') }}"
+  when: coder_active_id not in coder_hash_ids
+  changed_when: true
+
+- name: Settings of the template
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['templates', 'list', '--output', 'json'] }}"
+  register: coder_templates
+  changed_when: false
+
+# the default auto-stop scales an idle workspace to zero
+- name: Default auto-stop of the template is {{ coder_template_ttl }}
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['templates', 'edit', coder_template, '--default-ttl', coder_template_ttl, '--yes'] }}"
+  vars:
+    coder_ttl_ms: "{{ (coder_templates.stdout | from_json | map(attribute='Template', default={})
+                       | selectattr('name', 'defined') | selectattr('name', 'equalto', coder_template)
+                       | map(attribute='default_ttl_ms') | first | default(0)) }}"
+    coder_ttl_want: "{{ (coder_template_ttl[:-1] | int) * {'s': 1000, 'm': 60000, 'h': 3600000}[coder_template_ttl[-1]] }}"
+  when: coder_ttl_ms | int != coder_ttl_want | int
+  changed_when: true
+
+- name: Workspaces
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['list', '--output', 'json'] }}"
+  register: coder_list
+  changed_when: false
+
+- name: Create the workspace {{ coder_workspace }}
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['create', coder_workspace, '-t', coder_template, '--yes'] }}"
+  when: coder_list.stdout | from_json | selectattr('name', 'equalto', coder_workspace) | list | length == 0
+  changed_when: true
+
+- name: Start the workspace when it is stopped
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['start', coder_workspace, '--yes'] }}"
+  when: >-
+    coder_list.stdout | from_json | selectattr('name', 'equalto', coder_workspace)
+    | map(attribute='latest_build.status') | select('in', ['stopped', 'failed']) | list | length > 0
+  changed_when: true
+
+- name: Workspace agent is connected
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['ssh', coder_workspace, '--', 'true'] }}"
+  register: coder_ssh
+  until: coder_ssh.rc == 0
+  retries: "{{ (coder_timeout | int / 10) | int }}"
+  delay: 10
+  changed_when: false
+
+# coder ssh joins the words after -- into one remote shell command line
+- name: Workspace runs under gVisor
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['ssh', coder_workspace, '--', 'dmesg 2>/dev/null | head -1'] }}"
+  register: coder_kernel
+  changed_when: false
+  failed_when: "'gVisor' not in coder_kernel.stdout"
+
+- name: Scale to zero (stop keeps the home PVC, start brings the same home dir back)
+  when: coder_scale_test | bool
+  vars:
+    coder_mark: written-by-coder-role
+    coder_kubectl: [kubectl, --context, "{{ coder_context }}", -n, "{{ coder_ns }}"]
+  block:
+    - name: Write a marker into the home dir
+      ansible.builtin.command:
+        argv: "{{ coder_cli + ['ssh', coder_workspace, '--', 'echo ' ~ coder_mark ~ ' > ~/marker'] }}"
+      changed_when: false
+
+    - name: Stop the workspace
+      ansible.builtin.command:
+        argv: "{{ coder_cli + ['stop', coder_workspace, '--yes'] }}"
+      changed_when: false
+
+    - name: No workspace pod is running
+      ansible.builtin.command:
+        argv: "{{ coder_kubectl + ['get', 'pods', '-l', 'app.kubernetes.io/name=coder-workspace', '-o', 'name'] }}"
+      register: coder_pods
+      until: coder_pods.stdout | length == 0
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: Home PVC survived the stop
+      ansible.builtin.command:
+        argv: "{{ coder_kubectl + ['get', 'pvc', '-l', 'app.kubernetes.io/name=coder-workspace', '-o', 'name'] }}"
+      register: coder_pvc
+      changed_when: false
+      failed_when: coder_pvc.stdout | length == 0
+  always:
+    # the workspace is Running again, also after a failed check
+    - name: Start the workspace
+      ansible.builtin.command:
+        argv: "{{ coder_cli + ['start', coder_workspace, '--yes'] }}"
+      register: coder_start
+      changed_when: false
+      # start fails when the workspace already runs (stop failed); the agent check below decides
+      failed_when: false
+
+    - name: Agent is back after the start
+      ansible.builtin.command:
+        argv: "{{ coder_cli + ['ssh', coder_workspace, '--', 'true'] }}"
+      register: coder_back
+      until: coder_back.rc == 0
+      retries: "{{ (coder_timeout | int / 10) | int }}"
+      delay: 10
+      changed_when: false
+      failed_when: false
+
+- name: Home dir is intact after stop and start
+  ansible.builtin.command:
+    argv: "{{ coder_cli + ['ssh', coder_workspace, '--', 'cat ~/marker'] }}"
+  register: coder_marker
+  when: coder_scale_test | bool
+  until: coder_marker.rc == 0
+  retries: "{{ (coder_timeout | int / 10) | int }}"
+  delay: 10
+  changed_when: false
+  failed_when: coder_marker.rc != 0 or coder_marker.stdout | trim != 'written-by-coder-role'
+
+- name: Result
+  ansible.builtin.debug:
+    msg:
+      - "Coder workspace {{ coder_workspace }} passed: gVisor{{ ', stop/start (pod gone, PVC and home dir kept)' if coder_scale_test | bool else '' }}"
+      - "Dashboard: {{ coder_url }} (user {{ coder_admin_email }})"
+      - "Shell:     coder --global-config {{ coder_config_dir }} ssh {{ coder_workspace }}"

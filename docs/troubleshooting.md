@@ -115,6 +115,16 @@
 
 To claim a new sandbox, delete the claim of the step: `kubectl --context kind-agentdev -n agents delete sandboxclaim agentdev-sandbox-test`.
 
+## Coder (run.sh step 04)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 04 stops with `missing 'coder'` or `No such file` for `coder`. | The Coder CLI is not installed. | 1. Install it: `brew install coder`. 2. Do run.sh step 04 again. |
+| Step 04 stops at `Coder answers on http://localhost:8080`. | Port 8080 on the host is used by an other cluster or program, or the Coder pod is not ready. | 1. Examine the port: `lsof -i :8080`. 2. Examine the pods: `kubectl --context kind-agentdev -n coder get pods`. 3. Do run.sh step 04 again. |
+| Step 04 stops at `First admin user and login`. | Coder already has a first user with an other password, or `.coder/` holds an old session. | 1. Set `CODER_ADMIN_PASSWORD` to the password of that user. 2. Or remove the session: `rm -rf .coder`. 3. Do run.sh step 04 again. |
+| Step 04 stops at `Workspace agent is connected` or `Workspace runs under gVisor`. | The workspace pod can not start on the sandbox node, or it does not run under gVisor. | 1. Examine the pod: `kubectl --context kind-agentdev -n coder describe pod -l app.kubernetes.io/name=coder-workspace`. 2. Do run.sh step 01 again (it checks gVisor). 3. Do run.sh step 04 again. |
+| Step 04 stops at `No workspace pod is running` or `Home dir is intact after stop and start`. | The stop or the start did not complete in time. | 1. Examine the builds: `coder --global-config .coder list`. 2. Do run.sh step 04 again. The step starts the workspace again also after a failure. |
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.

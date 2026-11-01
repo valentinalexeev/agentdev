@@ -1622,6 +1622,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
+| Coder workspaces and scale-to-zero check (evaluation) | 04 (`kind.yml --tags coder`) | not used |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |

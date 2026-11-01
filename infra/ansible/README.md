@@ -93,6 +93,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
+| 04 | `coder` | `coder` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -121,6 +122,17 @@ include it with its own `sandbox_test_context`. It takes `sandbox_test_ns`, `san
 fixed name (`agentdev-sandbox-test`, the old step made a new claim each run), so a second run reuses it and changes
 nothing. An `always` block sets the sandbox back to `Running` and the warm pool back to 1, also after a failed check.
 The headless Claude turn runs only when the Secret `claude-agent-keys` exists; the Secret is read under `no_log`.
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags coder    # Postgres, Coder, gVisor template, workspace, stop/start
+```
+The role `coder` installs Postgres (`manifests/postgres.yaml`) and Coder (`kubernetes.core.helm`, chart
+`coder_chart_version`, `manifests/coder-values.yaml`), creates the first admin user, pushes `coder-template/` and checks
+scale to zero. It takes `coder_context`, `coder_ns`, `coder_url`, `coder_admin_user`, `coder_admin_email`,
+`coder_template`, `coder_template_ttl`, `coder_workspace`, `coder_timeout` and `coder_scale_test`. The password is read
+from `CODER_ADMIN_PASSWORD` in the environment, and the login and the Postgres manifest run under `no_log`. A second run
+changes nothing: the template version is named after a content hash of `coder-template/` and is pushed only when that
+version is not active, and an `always` block starts the workspace again after the stop/start check.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

@@ -29,6 +29,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   workspace, warm pool to 0, optional headless Claude turn). Changed: the claim has the fixed name
   `agentdev-sandbox-test` (was `spike-<time>`), so a second run reuses it and changes nothing, and the warm pool and
   sandbox are restored also after a failed check. GKE does not change.
+- Step 04 (#106): `04-coder.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags coder` (new role
+  `coder`, `kubernetes.core.helm` like `deploy.yml`). Same result (Postgres, Coder via Helm, template `spike-gvisor`
+  with 30m auto-stop, workspace `spike` under gVisor, stop drops the pod and keeps the home PVC, start keeps the home
+  dir). Changed: the template is pushed only when its content hash is new, the admin password comes from the
+  environment (not `-e`), and the workspace is started again also after a failed check. GKE does not change.
 
 ### Added
 - Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
