@@ -117,6 +117,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | router | the agentdev service that receives forge webhooks and wakes agents |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
+| security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
+| thread | a comment on a line of a pull request, with its replies |
+| commit | one saved change of a git repository, identified by its sha |
 | security event | a record of an action that a guardrail stopped |
 | SecurityEvent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SecurityEvent`) that the operator makes for each security event |
 | guardrail | a check in agentdev that stops an action of an agent |
@@ -163,6 +166,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
 | register | record a webhook, an agent or an App in the system that uses it |
 | resume | start a paused agent again (STE alternative: start again) |
+| resolve | mark a thread of a pull request as done |
 | revoke | make a token not valid |
 | sign in, sign out | start or end a session in the web UI |
 

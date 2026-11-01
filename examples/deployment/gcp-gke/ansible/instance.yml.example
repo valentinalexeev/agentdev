@@ -28,3 +28,15 @@ github_app:
 #     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
 #     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
 #     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
+# Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
+# Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
+# security:
+#   pause_after: 5
+#   retention_days: 30
+#   max_per_agent: 500
+#   siem:                         # the API that reads these is not deployed on GKE yet (agentdev #105)
+#     webhook_url: https://siem.example.com/agentdev
+#     syslog_addr: siem.example.com:6514
+#     syslog_server_name: siem.example.com
+#     otlp_url: https://collector.example.com:4318/v1/logs
+#     otlp_server_name: collector.example.com

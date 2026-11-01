@@ -20,6 +20,21 @@ While the version is `0.x`, breaking changes bump MINOR.
   refuses the apply), the apply starts within `EXECUTOR_APPLY_START_MINUTES` (30) of the decision, one executor per
   environment (operator and Ansible), fork PRs only with `spec.allowForkPRs`. The API does not void executor
   approvals for their merged (closed) PR.
+- Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
+  False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
+  no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
+  at* sections; new label `security-finding`. Applies to new bootstraps; existing repos keep their files.
+- SIEM outputs (#71): syslog over TLS (RFC 5424 messages, RFC 5425 octet-counted framing, facility 13, structured
+  data `agentdev@32473`) and OTLP logs (OTLP/HTTP JSON to `/v1/logs`, ECS-style attributes, optional headers). Both
+  reuse the webhook's per-agent fair queues and retries and can run together with the webhook. TLS 1.2+, certificates
+  always verified, optional CA and client certificate; no plain-text fallback (`http://` OTLP refused). Settings
+  `SECURITY_SYSLOG_*`, `SECURITY_OTLP_*` in the Secret `agentdev-api-siem` (instance secrets only); on GCP the playbook fills it from
+  `instance.yml security.siem.*` and the optional Secret Manager secret `security-siem`. The webhook URL must now be
+  `https://` too. Syslog retries are capped (4 tries, 30 s) because one worker serves all agents.
+- Per-agent hash chain for security events (#71): new fields `prev` and `chain` (`sha256(prev + "\n" + canonical
+  event)`) in the table, the API, the webhook body, syslog and OTLP; computed at insert under a per-agent advisory
+  lock. A SIEM detects gaps and edits (`docs/admin.md`, "Do a check of the hash chain"). Schema stays
+  `agentdev.security/v1` (fields added); `schema.sql` adds the columns.
 - GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
   `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs
   `scripts/mcp-sync.sh` for each spec in the new instance var `mcp_projects`. `config.env` `KUBECTL` and the new
