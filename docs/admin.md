@@ -400,11 +400,32 @@ NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
 `manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
 interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
+### Give a person admin rights for agents
+
+The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+
+IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
+set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
+and never removes a member. Step 09 checks this each run: it adds a test user, re-applies the blueprints, and fails
+if a member is gone. Add and remove members by hand in authentik only.
+
+1. Log in to authentik as an administrator.
+2. Go to **Directory > Groups** and open `agentdev-admins`.
+3. Add the user on the **Users** tab.
+4. Tell the user to log in to agentdev again. The API reads the groups from the token, and an old token does not
+   have the new group.
+
+CAUTION: Give this group to platform operators only. A member can add an agent to each repository of the forge.
+
 ### Reference: authentik
 
 - The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
 - The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
 - The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
+- The blueprint `manifests/authentik-blueprint-agentdev.yaml` makes the OIDC application and the group
+  `agentdev-admins`, without members. On `kind`, `09-authentik.sh` adds `akadmin` to the group through the authentik
+  API (add only, never remove).
 - The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
   to authentik.
 
@@ -420,7 +441,8 @@ Do this task after run.sh step 09.
 1. Set `API_OIDC_ISSUER` in `config.env` to the URL that you use to log in to authentik.
    On `kind`, with the 9443 port-forward, this URL is `https://localhost:9443/application/o/agentdev/`.
 2. Run run.sh step 10: `./run.sh 10`
-   The script builds the API and deploys it in `agentdev-platform`.
+   The script builds the API and deploys it in `agentdev-platform`. On `kind`, it also gives the API access to the
+   forge. Refer to "Give the API access to the forge".
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
@@ -498,6 +520,14 @@ WARNING: Do not use a token with write access. The API only reads the permission
 Gitea tells the permission of another user only to a site admin or to an admin of the repository. With any other
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
+
+On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
+`read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
+works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+`./run.sh 10` again.
+
+On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.

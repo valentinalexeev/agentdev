@@ -29,6 +29,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
+  without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
+  process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and
+  `./run.sh 10` makes the Gitea account `agentdev-api`, admin collaborator of `REPO` and of every Gitea agent
+  repository, with a `read:repository,read:user` token in Secret `agentdev-api-forge` (kept if it still works for
+  `agentdev-api`, never printed; older `agentdev-api*` tokens are deleted, and the API restarts with the new token). On GKE the
+  forge token comes from Secret Manager through the Ansible role `api` (#104, #115); the group follows #114.
 - Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
   (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
   with the executor's own account, plans every PR that changes `spec.path` (commit status `agentdev/trusted-plan`,
