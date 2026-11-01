@@ -55,6 +55,11 @@ func validWindow(w *usageWindow, now time.Time, length time.Duration) bool {
 }
 
 func (s *server) usage(w http.ResponseWriter, r *http.Request) {
+	if s.c.NoUsage { // #66: the proxy observes usage itself; a report here is never printed (closes R47)
+		s.event(r, "usage-report-refused", "medium", "usage report refused: the Claude credential proxy is the usage source")
+		http.Error(w, "usage is reported by the Claude credential proxy", http.StatusGone)
+		return
+	}
 	var u usageReport
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
 	dec.DisallowUnknownFields()

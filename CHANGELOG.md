@@ -13,7 +13,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`agent-<name>-proxy`). Per-agent token budget for 24 h (`CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens`, default 0 =
   none; per agent in ConfigMap `claude-proxy-budgets`), shown in the UI column **Claude tokens (24 h)** through
   `GET /api/agents` (`budgetUsed`, `budgetLimit`). The proxy writes `AGENTDEV_USAGE` lines from the response
-  headers, the basis for closing R47 of #93. New risks R60 to R62.
+  headers; with the proxy on, the operator takes usage only from the proxy pods, the forge sidecar refuses
+  `POST /usage` and the loop posts nothing (closes R47). The loop removes an old Claude login from the `claude` volume
+  at start. On GKE an FQDNNetworkPolicy limits the proxy to `api.anthropic.com` when the cluster serves the type.
+  New risks R60 to R65.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
@@ -145,7 +148,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **BREAKING** (#66): agent pods no longer get the Claude credential. Re-run `./run.sh 06 12 10` on `kind`
   (06: proxy, signing key and agent keys; 12: operator `CLAUDE_PROXY_URL`; 10: API `CLAUDE_PROXY_STATUS_URL`), or the
   full `infra/ansible/deploy.yml` on GKE (the proxy tasks, the operator and the API). The playbook creates the Secret
-  Manager entry `claude-proxy-signing` on its first run. To roll back, set `CLAUDE_PROXY=false` /
+  Manager entry `claude-proxy-signing` on its first run. Agent images must be updated too (the loop removes an old
+  Claude login on start, and the forge sidecar gets `USAGE_REPORTS`). To roll back, set `CLAUDE_PROXY=false` /
   `claude_proxy: false` (deprecated, removed in the next minor release).
 - The manuals (`user-guide.md`, `install.md`, `admin.md`, `troubleshooting.md`) use ASD-STE100 Simplified Technical
   English: task procedures with numbered steps, safety notes before their steps, a reference part per section, and

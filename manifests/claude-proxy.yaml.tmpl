@@ -66,8 +66,9 @@ spec:
   ports: [{name: http, port: 8080, targetPort: http}]
 ---
 # Only agent pods (model calls) and the management API (GET /status for the UI) reach the proxy; the proxy reaches
-# only DNS and HTTPS on public addresses. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (R30). On GKE
-# the playbook adds an FQDNNetworkPolicy that narrows the egress to api.anthropic.com.
+# only DNS and HTTPS on public addresses. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (R30). On GKE,
+# when the cluster serves FQDNNetworkPolicy, the playbook adds one that narrows the egress to api.anthropic.com
+# (infra/ansible/deploy.yml); otherwise any public address on 443 stays reachable (docs/security.md R63).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}

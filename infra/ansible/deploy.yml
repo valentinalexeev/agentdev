@@ -251,6 +251,37 @@
           replace: []
       when: claude_proxy | bool
 
+    # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
+    # template allows HTTPS to any public address; Dataplane V2 enforces this one in addition when the type is served
+    # (infra/terraform enable_fqdn_network_policy). Not served: the playbook says so and keeps the plain policy.
+    - name: Is the FQDNNetworkPolicy type served (for the Claude proxy)?
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: fqdnnetworkpolicies.networking.gke.io
+      register: proxy_fqdn_crd
+      when: claude_proxy | bool
+
+    - name: Claude proxy FQDNNetworkPolicy (egress to api.anthropic.com only)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: networking.gke.io/v1alpha1
+          kind: FQDNNetworkPolicy
+          metadata: {name: claude-proxy, namespace: "{{ agents_ns }}"}
+          spec:
+            podSelector: {matchLabels: {app: claude-proxy}}
+            egress:
+              - matches: [{name: "{{ claude_proxy_upstream_host }}"}]
+                ports: [{protocol: TCP, port: 443}]
+      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length > 0)
+
+    - name: Claude proxy egress is not narrowed by name (FQDNNetworkPolicy not served)
+      ansible.builtin.debug:
+        msg: "FQDNNetworkPolicy is not available: claude-proxy may reach any public address on 443 (docs/security.md R63)"
+      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length == 0)
+
     - name: "Agents (#57): one Agent object each; own Claude secret if present, else the shared one (#5)"
       kubernetes.core.k8s:
         <<: *k8s

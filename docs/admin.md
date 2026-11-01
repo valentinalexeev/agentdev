@@ -155,6 +155,8 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
 | Usage of the subscription | the proxy reads the rate-limit headers of each response and writes `AGENTDEV_USAGE` lines (#93) |
+| Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
+| Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
 | Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
 
 WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that

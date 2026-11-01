@@ -55,9 +55,12 @@ func (c credStore) lookup(agent string) (credential, bool) {
 	return credential{}, false
 }
 
-// allowedPath: only the model endpoints Claude Code needs are forwarded.
-func allowedPath(p string) bool {
-	return p == "/v1/messages" || p == "/v1/messages/count_tokens"
+// allowedPath: only the model endpoints Claude Code needs are forwarded. It compares the escaped path, so an encoded
+// form such as /v1%2Fmessages is refused rather than forwarded as written (review #119).
+func allowedPath(u *url.URL) bool {
+	p := u.EscapedPath()
+	// Claude Code adds ?beta=true; no other query is forwarded
+	return (p == "/v1/messages" || p == "/v1/messages/count_tokens") && (u.RawQuery == "" || u.RawQuery == "beta=true")
 }
 
 type ctxKey struct{}
@@ -101,6 +104,9 @@ func (s *server) rewrite(pr *httputil.ProxyRequest) {
 	h.Del("X-Api-Key")
 	h.Del("Cookie")
 	h.Del("Proxy-Authorization")
+	// review #119: a client-chosen encoding (gzip) would reach the meter compressed and count 0 tokens. Without the
+	// header the transport asks for gzip itself and decompresses before the meter sees the body.
+	h.Del("Accept-Encoding")
 	if info.cred.apiKey != "" {
 		h.Set("X-Api-Key", info.cred.apiKey)
 	} else {
@@ -159,7 +165,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusUnauthorized, "authentication_error", "claude-proxy: missing or wrong agent key")
 		return
 	}
-	if r.Method != http.MethodPost || !allowedPath(r.URL.Path) {
+	if r.Method != http.MethodPost || !allowedPath(r.URL) {
 		emitEvent(agent, "proxy-path", "medium", r.Method+" "+clip(r.URL.Path, 100)+" is not forwarded")
 		apiError(w, http.StatusForbidden, "permission_error", "claude-proxy: only POST /v1/messages is forwarded")
 		return
@@ -201,8 +207,9 @@ func main() {
 		return
 	}
 	up, err := url.Parse(envOr("UPSTREAM", "https://api.anthropic.com"))
-	if err != nil || up.Scheme == "" {
-		log.Fatal("bad UPSTREAM")
+	// https only (review #119); plain http only for a local test with ALLOW_HTTP_UPSTREAM=true
+	if err != nil || up.Host == "" || (up.Scheme != "https" && !(up.Scheme == "http" && os.Getenv("ALLOW_HTTP_UPSTREAM") == "true")) {
+		log.Fatal("UPSTREAM must be an https URL")
 	}
 	def, err := strconv.ParseInt(envOr("CLAUDE_BUDGET_TOKENS", "0"), 10, 64)
 	if err != nil || def < 0 {

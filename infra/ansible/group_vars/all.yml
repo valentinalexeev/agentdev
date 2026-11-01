@@ -18,6 +18,7 @@ credproxy_image: "{{ image_registry }}/agentdev-credproxy:{{ image_tag }}"   # C
 
 # Claude credential proxy (#66): the only holder of the Claude credentials; agent pods get a per-agent key.
 claude_proxy: true                  # false: credential in the agent pod (deprecated rollback, docs/security.md R11)
+claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the proxy on GKE (FQDNNetworkPolicy)
 claude_budget_tokens: 0             # tokens per agent per 24 h (input, cache and output); 0 = no limit
 
 forge_kind: github

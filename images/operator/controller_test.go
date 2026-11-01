@@ -283,6 +283,11 @@ func TestClaudeProxyNoCredentialInPod(t *testing.T) {
 	if !base || !key {
 		t.Errorf("proxy env missing: %v", ag.Env)
 	}
+	for _, e := range container(s, "forge").Env {
+		if e.Name == "USAGE_REPORTS" && e.Value != "off" {
+			t.Errorf("forge USAGE_REPORTS=%s with the proxy on", e.Value)
+		}
+	}
 	if hasEnv(container(s, "forge"), "ANTHROPIC_AUTH_TOKEN") {
 		t.Error("forge sidecar has the proxy key")
 	}

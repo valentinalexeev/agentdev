@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -206,6 +207,8 @@ func TestRefusals(t *testing.T) {
 		{"/v1/messages", "alice.deadbeef", 401, "proxy-key-invalid"},
 		{"/v1/models", agentKey(testSigning, "alice"), 403, "proxy-path"},
 		{"/v1/messages/../files", agentKey(testSigning, "alice"), 403, "proxy-path"},
+		{"/v1%2Fmessages", agentKey(testSigning, "alice"), 403, "proxy-path"},
+		{"/v1/messages?x=1", agentKey(testSigning, "alice"), 403, "proxy-path"},
 	} {
 		resp := f.post(c.path, c.key, `{}`, nil)
 		resp.Body.Close()
@@ -295,5 +298,39 @@ func TestMeterCapsJSON(t *testing.T) {
 	m.Write(bytes.Repeat([]byte("x"), meterCap+1))
 	if in, o := m.totals(); in != 0 || o != 0 {
 		t.Error("oversized body counted")
+	}
+}
+
+// review #119 finding 1: a client asking for gzip must not make the meter count 0 tokens.
+func TestGzipDoesNotBypassMeter(t *testing.T) {
+	f := newFixture(t, 0)
+	f.upstream = func(w http.ResponseWriter, r *http.Request) {
+		body := `{"usage":{"input_tokens":40,"output_tokens":2}}`
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			w.Header().Set("Content-Encoding", "gzip")
+			zw := gzip.NewWriter(w)
+			io.WriteString(zw, body)
+			zw.Close()
+			return
+		}
+		io.WriteString(w, body)
+	}
+	resp := f.post("/v1/messages", agentKey(testSigning, "alice"), `{}`, map[string]string{"Accept-Encoding": "gzip"})
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	var ul usageLine
+	json.Unmarshal([]byte(lines(f.logs, usagePrefix)[0]), &ul)
+	if ul.InputTokens != 40 || ul.OutputTokens != 2 {
+		t.Errorf("gzip response metered as %+v", ul)
+	}
+}
+
+func TestBetaQueryAllowed(t *testing.T) {
+	f := newFixture(t, 0)
+	f.upstream = func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) }
+	resp := f.post("/v1/messages?beta=true", agentKey(testSigning, "alice"), `{}`, nil)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || f.got.URL.RawQuery != "beta=true" {
+		t.Errorf("status %d query %q", resp.StatusCode, f.got.URL.RawQuery)
 	}
 }

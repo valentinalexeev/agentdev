@@ -126,8 +126,8 @@ cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decision
 - **Usage observed by the proxy:** the `anthropic-ratelimit-unified-5h-*` / `-7d-*` / `-status` / `-reset` headers and
   `retry-after`, and the token counts of the body (JSON `usage`, or SSE `message_start` / `message_delta`). One
   `AGENTDEV_USAGE` line per response on the proxy's stdout, with the schema of #93 plus `agent` (from the verified
-  key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47 once the
-  operator reads them, see below).
+  key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47: the operator
+  reads them, see below).
 - **Budget:** tokens per agent in a rolling 24 h window (hourly buckets), `CLAUDE_BUDGET_TOKENS` for all agents (0 =
   none), a per-agent value in ConfigMap `claude-proxy-budgets`. Checked before a request is forwarded, so a response
   in flight can go over by itself. When used up: HTTP 429 `rate_limit_error` (Claude Code stops the run cleanly) and
@@ -135,11 +135,20 @@ cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decision
   restart can grant at most one more budget). `GET /status` lists spend and limits (no secrets); the API adds them to
   `GET /api/agents` and the UI shows a column.
 - **Network:** NetworkPolicy `claude-proxy`: ingress on 8080 from agent pods and the API only; egress DNS and 443 to
-  public addresses. With #65: `api.anthropic.com` leaves the agents' egress allow-list, agent pods may reach the
-  proxy, and on GKE an FQDNNetworkPolicy narrows the proxy's egress to `api.anthropic.com`.
+  public addresses. `UPSTREAM` must be https. The request's `Accept-Encoding` is dropped so the meter always sees
+  decoded bodies (review #119); the path is compared escaped, and only `?beta=true` is passed as a query.
 - **With #93:** the decision logic (thresholds, `agentdev-usage`, the loop's local pause) stays; only the source
-  moves: the operator accepts usage lines from `claude-proxy` pods (agent from the line, which the proxy took from
-  the key) and stops accepting the forge sidecar's `POST /usage`.
+  moves. With `CLAUDE_PROXY_URL` set, the operator follows the `claude-proxy` pods' logs and takes usage lines from
+  there (agent and subscription from the line, which the proxy took from the verified key and the credential it
+  used); proxy security events are recorded with source `claude-proxy`. Usage lines from agent pods, including the
+  forge sidecar, are ignored and raise `usage-line-forged`; the sidecar refuses `POST /usage` (`USAGE_REPORTS=off`)
+  and the loop posts nothing. The loop still pauses itself locally when a run is rate limited.
+- **Upgrade:** the `claude` volume of an agent may hold a Claude login from before the proxy. With
+  `ANTHROPIC_BASE_URL` set, the loop removes `~/.claude/.credentials.json` and the key fields of `~/.claude.json` on
+  every start.
+- **GKE egress:** when the cluster serves FQDNNetworkPolicy the playbook adds `claude-proxy` with egress to
+  `api.anthropic.com` only (R63).
+- **Not yet (#98):** `api.anthropic.com` is still on the agents' egress allow-list of #98 (R64).
 
 ### Phase 4: approvals (see below)
 

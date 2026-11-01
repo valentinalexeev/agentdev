@@ -122,7 +122,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		Env: append(append([]corev1.EnvVar{}, common...),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
-			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"),
+			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 			secretKey("FORGE_TOKEN", forgeSecret, false),
 		),
@@ -161,4 +161,12 @@ func (r *AgentReconciler) claudeProxyEnv(n string) []corev1.EnvVar {
 	return []corev1.EnvVar{{Name: "ANTHROPIC_BASE_URL", Value: r.D.ClaudeProxyURL},
 		{Name: "ANTHROPIC_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN"}}}}
+}
+
+// usageReports: "off" when the Claude credential proxy reports usage (#66), so the sidecar refuses POST /usage.
+func (r *AgentReconciler) usageReports() string {
+	if r.D.ClaudeProxyURL != "" {
+		return "off"
+	}
+	return "on"
 }
