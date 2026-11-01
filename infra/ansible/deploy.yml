@@ -207,6 +207,7 @@
             EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
@@ -294,6 +295,107 @@
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true
+
+    # ---------- Claude credential proxy (#66, same template as 06-agents.sh) ----------
+    - name: Claude proxy signing key (generated once, kept in Secret Manager)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ sm_claude_proxy_signing }}"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+          echo created
+        fi
+      args: {executable: /bin/bash}
+      register: proxy_signing_created
+      changed_when: "'created' in proxy_signing_created.stdout"
+      when: claude_proxy | bool and not ansible_check_mode
+
+    - name: Claude proxy keys of the agents (HMAC of the agent name; never the credential)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        k=$(gcloud secrets versions access latest --secret {{ sm_claude_proxy_signing }} --project {{ gcp_project }})
+        for a in {{ agents | map(attribute='name') | map('quote') | join(' ') }}; do
+          [[ "$a" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "bad agent name" >&2; exit 1; }
+          printf '%s.%s\n' "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
+        done
+        printf 'SIGNING=%s\n' "$k"
+      args: {executable: /bin/bash}
+      register: proxy_keys
+      changed_when: false
+      when: claude_proxy | bool and not ansible_check_mode
+      no_log: true
+
+    - name: Claude proxy signing Secret
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: claude-proxy-signing, namespace: "{{ agents_ns }}"}
+          stringData: {key: "{{ proxy_keys.stdout_lines[-1] | regex_replace('^SIGNING=', '') }}"}
+      when: claude_proxy | bool and not ansible_check_mode
+      no_log: true
+
+    - name: Per-agent proxy key Secrets (agent-<name>-proxy), the only Claude-related value in an agent pod
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: "agent-{{ item.split('.')[0] }}-proxy", namespace: "{{ agents_ns }}"}
+          stringData: {ANTHROPIC_AUTH_TOKEN: "{{ item }}"}
+      loop: "{{ proxy_keys.stdout_lines[:-1] if (claude_proxy | bool and not ansible_check_mode) else [] }}"
+      no_log: true
+
+    - name: Claude credential proxy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_proxy) | from_yaml_all | list }}"
+      vars:
+        vars_proxy:
+          src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
+            IMAGE_PULL_POLICY: IfNotPresent
+            CLAUDE_BUDGET_TOKENS: "{{ claude_budget_tokens | int }}"
+            # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
+            CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
+          replace: []
+      when: claude_proxy | bool
+
+    # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
+    # template allows HTTPS to any public address; Dataplane V2 enforces this one in addition when the type is served
+    # (infra/terraform enable_fqdn_network_policy). Not served: the playbook says so and keeps the plain policy.
+    - name: Is the FQDNNetworkPolicy type served (for the Claude proxy)?
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: fqdnnetworkpolicies.networking.gke.io
+      register: proxy_fqdn_crd
+      when: claude_proxy | bool
+
+    - name: Claude proxy FQDNNetworkPolicy (egress to api.anthropic.com only)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: networking.gke.io/v1alpha1
+          kind: FQDNNetworkPolicy
+          metadata: {name: claude-proxy, namespace: "{{ agents_ns }}"}
+          spec:
+            podSelector: {matchLabels: {app: claude-proxy}}
+            egress:
+              - matches: [{name: "{{ claude_proxy_upstream_host }}"}]
+                ports: [{protocol: TCP, port: 443}]
+      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length > 0)
+
+    - name: Claude proxy egress is not narrowed by name (FQDNNetworkPolicy not served)
+      ansible.builtin.debug:
+        msg: "FQDNNetworkPolicy is not available: claude-proxy may reach any public address on 443 (docs/security.md R63)"
+      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length == 0)
 
     - name: "Agents (#57): one Agent object each; own Claude secret if present, else the shared one (#5)"
       kubernetes.core.k8s:

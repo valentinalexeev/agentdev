@@ -79,6 +79,7 @@ func main() {
 		Approvals:       env("APPROVALS", "false"),
 		ApprovalsURL:    os.Getenv("APPROVALS_URL"),
 		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
+		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
@@ -99,6 +100,7 @@ func main() {
 		os.Exit(1)
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
+		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
 		C: SecurityConfig{
 			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),
 			Retention:         time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,

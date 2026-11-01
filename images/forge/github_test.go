@@ -486,3 +486,22 @@ func TestGitHubNoDecisionCommands(t *testing.T) {
 		}
 	}
 }
+
+// review of #130: the loop may read label events and a user's permission, nothing else under collaborators
+func TestGitHubLabelerRoutes(t *testing.T) {
+	gd, _, _ := newTestGitHub(t)
+	s := newServer(gd.c)
+	s.drv, s.rules = gd, gd.rules()
+	h := s.routes()
+	for _, p := range []string{"/api/v1/repos/octo-org/repo/issues/12/events?per_page=100", "/api/v1/repos/octo-org/repo/collaborators/octo-dev/permission"} {
+		if rec := call(t, h, "GET", p, ""); rec.Code != 200 {
+			t.Errorf("%s: %d", p, rec.Code)
+		}
+	}
+	for _, c := range []struct{ m, p string }{{"PUT", "/api/v1/repos/octo-org/repo/collaborators/mallory"},
+		{"GET", "/api/v1/repos/octo-org/repo/collaborators"}, {"GET", "/api/v1/repos/octo-org/repo/collaborators/a..b/permission"}} {
+		if rec := call(t, h, c.m, c.p, `{}`); rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s: %d", c.m, c.p, rec.Code)
+		}
+	}
+}

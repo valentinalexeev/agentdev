@@ -91,6 +91,7 @@ spec:
         - {name: BOTBOARD_URL, value: "${BOTBOARD_URL}"}
         - {name: POLL_SECONDS, value: "${POLL_SECONDS}"}
         - {name: IDLE_SECONDS, value: "${IDLE_SECONDS}"}
+        - {name: CLAUDE_PROXY_URL, value: "${CLAUDE_PROXY_URL}"}   # #66; empty = credential in the agent pod (deprecated)
         - {name: SECURITY_PAUSE_AFTER, value: "${SECURITY_PAUSE_AFTER}"}       # > N events in one job pause the agent
         - {name: SECURITY_RETENTION_DAYS, value: "${SECURITY_RETENTION_DAYS}"} # SecurityEvent objects; the API keeps history
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
