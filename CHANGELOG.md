@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
+  scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
+  The web UI requests the scope `forge`. **Breaking:** set `forge_login` for each person (source property mapping of
+  the company SSO, or the user attributes; `docs/admin.md`, "Map people to forge users"); without it a person is
+  read-only. Risk R42 updated.
+
 ### Added
 - GKE: the Ansible playbook deploys the platform namespace (Postgres + ContextForge, #51) from
   `manifests/platform.yaml.tmpl`, with passwords generated once into Secret Manager (`platform-<key>`), and runs

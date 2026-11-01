@@ -294,23 +294,53 @@ WARNING: Change the password and add MFA immediately after the first login. The 
 NOTE: The first password is also in the Secret `authentik`, but authentik uses it only at the first start. Thus, the
 password that you set in the UI is final.
 
-### Keep the usernames safe
+### Map people to forge users
 
-The intended setup: authentik keeps no users and passwords of its own. It signs people in through an external
-identity provider, the same single sign-on that the forge uses (for example Google Workspace). Thus, one company
-account gives the authentik username and the forge login. The API uses the authentik username as the forge login
-(#57). An authentik user who can pick a name can act as the forge user with that name. Thus, keep these settings:
+The API finds the forge user of a person from the token claim `forge_login` (#88). It does not use the authentik
+username, because a user can choose a username. The claim comes from the authentik user attribute `forge_login`.
+Users cannot change their attributes. The blueprint adds the scope `forge`, which sends this claim to the API.
 
-- Connect authentik to the company identity provider as a source, and take the username from it. Use the same
-  identity provider for the forge.
-- Only the identity provider or the administrators make authentik users. Do not add an enrollment flow. The
-  blueprint has none.
-- In **System > Settings**, keep **Allow users to change username** off (the default). The blueprint cannot set
-  this, so check it after each authentik upgrade.
-- Give each person the same username in authentik and on the forge, in lower case.
+The intended setup: authentik keeps no users and passwords of its own. It signs people in through the same company
+single sign-on as the forge (for example Google Workspace). The source property mapping of that identity provider
+sets `forge_login`.
 
-NOTE: The API refuses a username that has upper case letters or characters other than `a-z`, `0-9`, `.`, `_`, `-`.
-Such a user can read, but cannot change agents. A stable forge-login claim is planned in #88.
+To set the forge login from the company identity provider (kind and GKE):
+
+1. In the authentik admin interface, go to **Customization > Property Mappings**.
+2. Create a source property mapping for your source type (for example **OAuth Source Property Mapping**).
+3. Use an expression that gives the forge login of the person. Example, if the forge login is the local part of
+   the company email:
+
+   ```python
+   email = info.get("email", "")
+   return {"attributes": {"forge_login": email.split("@")[0].lower()}}
+   ```
+
+4. Go to **Directory > Federation and Social login**, open your source, and add the property mapping.
+5. Make sure that the forge uses the same rule for its logins.
+
+To set the forge login for one user (for example on kind, without a source):
+
+1. Go to **Directory > Users** and open the user.
+2. Click **Edit**.
+3. In **Attributes**, add `forge_login: <forge login>`.
+4. Click **Update**.
+
+The person logs out and logs in again. Then the new token has the claim.
+
+WARNING: Do not let users edit `forge_login`. Only the identity provider or the administrators set it. A person with
+a wrong `forge_login` can act as that forge user.
+
+- Do not add an enrollment flow. The blueprint has none.
+- Use the forge login in lower case.
+
+NOTE: If the token has no `forge_login`, or the value has upper case letters or characters other than `a-z`, `0-9`,
+`.`, `_`, `-`, the API finds no forge user. The person can read, but cannot change agents. Members of
+`agentdev-admins` can pause, add and remove agents without a forge user.
+
+NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
+`manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
+interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
 ### Reference: authentik
 
@@ -408,9 +438,9 @@ The owner decided this rule on #57. The API checks the permission on the forge a
 | Resume an agent, change `maxConcurrent` or `scaleToZero` | write access to the repository of the agent |
 | Add or remove an agent | admin access to the repository, or the group `agentdev-admins` |
 
-- The API finds the forge user from the authentik username. At this time, the two names must be the same.
-  If the names are different, the API refuses the change. The function `forgeUserOf` in `images/api/forge.go` does
-  this mapping.
+- The API finds the forge user from the claim `forge_login` (scope `forge`). If the token has no such claim, the
+  API refuses the change. Refer to "Map people to forge users". The function `forgeUserOf` in
+  `images/api/forge.go` does this mapping.
 - The API reads the groups from the `groups` claim of the token (scope `profile`).
 - If the API cannot reach the forge, it refuses the change (503). Only the group `agentdev-admins` can then pause,
   add and remove agents.
