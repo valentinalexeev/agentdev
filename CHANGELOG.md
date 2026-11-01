@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Removed
+- Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
+  (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under
+  `seed/` although `seed/.gitignore` excludes them.
+
 ### Security
 - Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
   their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
