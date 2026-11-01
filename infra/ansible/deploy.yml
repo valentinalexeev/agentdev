@@ -54,13 +54,16 @@
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
 
-    - name: "Approvals need agentdev-api, which this playbook does not deploy yet (#67): kind only for now"
+    - name: "Approvals need agentdev-api (#67, #115): deployed only when api.oidc_issuer is set"
       ansible.builtin.assert:
-        that: not (approvals.enabled | default(false) | bool)
+        that: >-
+          not (approvals.enabled | default(true) | bool)
+          or ((api.oidc_issuer | default('')) | length > 0)
         fail_msg: >-
-          approvals.enabled: true is not supported on GKE yet. The operator would send every request to
-          agentdev-api-internal, which is not deployed here, so every prompt and protected push would be refused.
-          Set approvals.enabled: false (docs/admin.md, Turn on approvals).
+          approvals are on by default on GKE and need the management API. The operator sends every request to
+          agentdev-api-internal, which this playbook deploys only when api.oidc_issuer is set; without it every
+          prompt and protected push would be refused. Set api.oidc_issuer, or opt out with approvals.enabled: false
+          (docs/admin.md, Turn on approvals).
         quiet: true
 
     - name: Check the kube context exists
@@ -323,7 +326,7 @@
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
             APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
-            APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+            APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
             APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
             EXEC_NS: "{{ exec_ns }}"
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
@@ -590,6 +593,17 @@
                | combine(dict(siem_secret.stdout_lines | select('search', '=') | map('split', '=', 1))) }}
       when: (security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0
       no_log: true
+
+    # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)
+    - name: Wait for the operator, router, egress proxy and Claude proxy
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
+      loop: "{{ [{'ns': platform_ns, 'name': 'agentdev-operator'}, {'ns': agents_ns, 'name': 'webhook-router'},
+                 {'ns': agents_ns, 'name': 'egress-proxy'}]
+                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else []) }}"
+      loop_control: {label: "{{ item.name }}"}
+      changed_when: false
+      when: not ansible_check_mode
 
     - name: Wait for the router and agents
       kubernetes.core.k8s_info:

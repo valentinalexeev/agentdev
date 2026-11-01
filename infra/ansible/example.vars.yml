@@ -10,6 +10,7 @@ agents:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
 #   oidc_audience: agentdev
 #   db_retention_days: 365
+#   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   host: agentdev.example.com              # web UI (DNS A record -> terraform output webhook_ip)
