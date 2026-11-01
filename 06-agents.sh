@@ -41,6 +41,17 @@ k -n "${AGENTS_NS}" rollout restart deploy/webhook-router >/dev/null   # pick up
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
 ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
 
+log "Egress allow-list (#65): proxy and NetworkPolicy"
+egress_render() {
+  AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" FORGE_NS="${FORGE_NS}" BOTBOARD_NS="${BOTBOARD_NS}" \
+    EGRESS_HOSTS="$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs)" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
+    envsubst '${AGENTS_NS} ${PLATFORM_NS} ${FORGE_NS} ${BOTBOARD_NS} ${EGRESS_HOSTS} ${EGRESS_PROXY_IMAGE}' \
+    < "${SPIKE_DIR}/manifests/egress.yaml.tmpl"
+}
+egress_render | k apply -f - >/dev/null
+k -n "${AGENTS_NS}" rollout status deploy/egress-proxy --timeout=180s >/dev/null
+ok "egress-proxy up; agents may reach only: ${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}"
+
 log "Agents"
 # agents are Agent objects (#47, #57): the operator turns them into StatefulSets. Install it when missing; to
 # pick up operator changes run ./run.sh 12 yourself.

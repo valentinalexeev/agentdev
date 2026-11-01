@@ -103,6 +103,7 @@ Agents read the forge at this interval when webhooks do not operate.
 | Log of the sidecar | `kubectl -n coding-agents logs agent-<name>-0 -c forge` |
 | The sidecar refuses a `git push` | to a branch outside `agent/<name>/*`; that touches `PROTECTED_PATHS` (default: the workflow directories); of more than `MAX_PUSH_MB` (50) |
 | Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
+| Egress | through `egress-proxy` only (`HTTPS_PROXY`), to the hosts of the allow-list. Refer to *Egress allow-list* |
 | Sidecar image | on `kind`, `./run.sh 06` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
 
 | Setting | `kind` | GKE (Ansible) |
@@ -593,6 +594,49 @@ filter `AGENTDEV_SECURITY_EVENT`.
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
+
+## Egress allow-list
+
+The agents can connect to the internet only through the egress proxy (`egress-proxy`, #65). The proxy lets an agent
+connect only to the hosts on the allow-list. The default list contains the Claude API, GitHub, npm, PyPI, the Go
+module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods.
+
+### Add a host to the allow-list
+
+Do this task when the build of a project needs a host that is not on the list, for example a different package
+registry.
+
+WARNING: Add only a host that you trust. An agent can send data to each host on the list.
+
+1. Add the host to the list:
+   - On `kind`: set `EGRESS_EXTRA_HOSTS` in `.env`, for example `EGRESS_EXTRA_HOSTS="repo.maven.apache.org .example.com"`.
+   - On GKE: add the host to `egress_extra_hosts` in `instance.yml`.
+2. Write a dot before the name to also allow all subdomains: `.example.com`.
+3. Apply the change:
+   - On `kind`: run `./run.sh 06`.
+   - On GKE: run the playbook (open a pull request in the deployment repository).
+   The proxy starts again with the new list.
+
+### Find the connections that the proxy refused
+
+1. Run this command:
+   `kubectl -n coding-agents logs deploy/egress-proxy | grep AGENTDEV_SECURITY_EVENT`
+   The output shows one line for each refused request, with the IP address of the agent pod.
+2. Open the **Security** page of the web UI. The events have the source `egress` and the rule `egress-host`.
+
+NOTE: The operator pauses an agent after more than 5 events in one job. Many refusals can thus pause an agent.
+
+### Reference: egress
+
+| Setting | Default | Where |
+|---|---|---|
+| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `config.env`; Ansible `egress_hosts` |
+| More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
+| Proxy image | `ubuntu/squid` (pinned digest) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
+| Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
+| FQDN policy for the proxy (GKE) | on | Ansible `egress_fqdn_policy`; Terraform `enable_fqdn_network_policy` |
+
+NOTE: The proxy refuses all private, loopback and link-local addresses, also when an allowed name points to one.
 
 ## GitHub App (registration)
 

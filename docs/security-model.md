@@ -98,6 +98,34 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 
 ### Phase 2: egress allow-list (fixes R10)
 
+Status: **implemented** in #65, pending an e2e pass on GKE. As built:
+
+- `manifests/egress.yaml.tmpl` (rendered by `06-agents.sh` and the Ansible playbook) holds a Squid forward proxy
+  (`egress-proxy`, pinned `ubuntu/squid` image, non-root, read-only root) and the NetworkPolicy `agent-egress`. Agent
+  pods may connect only to DNS, the proxy, the webhook router, the in-cluster forge (Gitea, kind), botboard and
+  ContextForge. The internet, the metadata server and every other cluster service are denied.
+- The operator sets `HTTPS_PROXY`/`HTTP_PROXY` (and the lower-case forms, `NO_PROXY` for cluster names) on both
+  containers of every agent pod (`EGRESS_PROXY`). It also sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so Claude
+  Code telemetry does not cause refusals.
+- The proxy allows `CONNECT` to port 443 and plain HTTP to port 80 for the hosts in `EGRESS_HOSTS` +
+  `EGRESS_EXTRA_HOSTS` only (Squid `dstdomain`; a leading dot means the domain and its subdomains), and never to a
+  private, loopback or link-local address, even if an allowed name resolves to one (DNS rebinding).
+- Default hosts (decision (b) on #6): the Anthropic API, GitHub (API, git, raw content), npm, PyPI, the Go module
+  proxy and checksum database, crates.io. With HTTPS the proxy sees only the host name, not the path, so an allowed
+  host is allowed as a whole: allowing `github.com` lets an agent read any public repository and push with a token it
+  holds (it holds none since #64).
+- GKE: Dataplane V2 enforces `agent-egress`; in addition an `FQDNNetworkPolicy` (`enable_fqdn_network_policy` in
+  Terraform) limits the proxy pod itself to the same hosts on 80/443, so a wrong `squid.conf` cannot open egress.
+- Signals: each refused request is one `AGENTDEV_SECURITY_EVENT` line (`rule` `egress-host`, `medium`) in the proxy
+  log, with the client pod IP. The operator follows the proxy pod like an agent pod and records the event for the
+  agent whose running pod has that IP: `source` `egress`, `untrusted` false (the proxy wrote it), counted in that
+  agent's run for auto-pause. A line from an unknown IP is logged by the operator and dropped.
+- Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project
+  extra hosts in the project spec (one instance-wide list for now), and an approval request for a refused host
+  (phase 4).
+
+Original design:
+
 - Default-deny egress NetworkPolicy for agent pods. Allowed: the forge (from the sidecar only, by port or FQDN), the
   claude-proxy, the registry proxy, DNS.
 - GKE: FQDN network policies (Dataplane V2). kind: a Squid forward proxy as the only allowed destination, which also

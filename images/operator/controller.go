@@ -22,6 +22,7 @@ import (
 type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	PollSeconds, IdleSeconds                                                             string
+	EgressProxy                                                                          string // http://egress-proxy...:3128, empty = none (#65)
 }
 
 type AgentReconciler struct {

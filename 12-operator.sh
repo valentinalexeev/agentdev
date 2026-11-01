@@ -26,11 +26,13 @@ BOTBOARD_URL="${BOTBOARD_URL:-}"
 if [[ -z "${BOTBOARD_URL}" ]] && k -n "${BOTBOARD_NS}" get svc botboard >/dev/null 2>&1; then
   BOTBOARD_URL="http://botboard.${BOTBOARD_NS}.svc.cluster.local"
 fi
+EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agents' HTTPS_PROXY (#65, 06-agents.sh deploys it)
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
   FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" BOTBOARD_URL="${BOTBOARD_URL}" POLL_SECONDS="${POLL_SECONDS}" IDLE_SECONDS="${IDLE_SECONDS}" \
   SECURITY_PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}" SECURITY_RETENTION_DAYS="${SECURITY_RETENTION_DAYS:-30}" SECURITY_MAX_PER_AGENT="${SECURITY_MAX_PER_AGENT:-500}" \
+  EGRESS_PROXY="${EGRESS_PROXY}" \
   SECURITY_RATE_PER_MIN="${SECURITY_RATE_PER_MIN:-10}" SECURITY_RATE_BURST="${SECURITY_RATE_BURST:-20}" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag

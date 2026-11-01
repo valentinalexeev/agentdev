@@ -89,6 +89,51 @@
           replace: []
       no_log: true
 
+    - name: Egress allow-list (#65) - proxy and agent NetworkPolicy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_egress) | from_yaml_all | list }}"
+      vars:
+        vars_egress:
+          src: "{{ repo_root }}/manifests/egress.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            FORGE_NS: forge
+            BOTBOARD_NS: botboard
+            EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | join(' ') }}"
+            EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
+          replace: []
+
+    # Dataplane V2 enforces this on the proxy pod: even a changed squid.conf reaches nothing else. Squid's
+    # ".example.com" becomes the name example.com plus the pattern *.example.com (GKE patterns match one level only).
+    - name: Egress hosts as FQDNNetworkPolicy matches
+      ansible.builtin.set_fact:
+        egress_fqdn_matches: >-
+          {%- set m = [] -%}
+          {%- for h in egress_hosts + egress_extra_hosts -%}
+          {%-   if h.startswith('.') -%}
+          {%-     set _ = m.extend([{'name': h[1:]}, {'pattern': '*' ~ h}]) -%}
+          {%-   else -%}
+          {%-     set _ = m.append({'name': h}) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ m }}
+
+    - name: Egress proxy FQDNNetworkPolicy (GKE, #65)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: networking.gke.io/v1alpha1
+          kind: FQDNNetworkPolicy
+          metadata: {name: egress-proxy, namespace: "{{ agents_ns }}"}
+          spec:
+            podSelector: {matchLabels: {app: egress-proxy}}
+            egress:
+              - matches: "{{ egress_fqdn_matches }}"
+                ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
+      when: egress_fqdn_policy | bool and not ansible_check_mode
+
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -153,6 +198,7 @@
             BOTBOARD_URL: "{{ botboard_url }}"
             POLL_SECONDS: "{{ poll_seconds }}"
             IDLE_SECONDS: "{{ idle_seconds }}"
+            EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"

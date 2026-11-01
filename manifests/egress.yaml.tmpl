@@ -1,0 +1,115 @@
+# Egress allow-list for agent pods (#65, security model phase 2, fixes R10). Rendered by 06-agents.sh (envsubst) and
+# infra/ansible/deploy.yml (same template).
+#
+# - agent-egress: agent pods may open connections only to DNS, the egress proxy, the webhook router, the in-cluster
+#   forge, botboard and ContextForge. Everything else (the internet, the metadata server, other platform services) is
+#   denied. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (docs/security.md R30).
+# - egress-proxy: a Squid forward proxy, the only way out. The operator sets HTTPS_PROXY/HTTP_PROXY on both containers
+#   of every agent pod. It allows HTTPS (CONNECT 443) and HTTP (80) to the hosts in EGRESS_HOSTS only, never to a
+#   private or link-local address, and prints one AGENTDEV_SECURITY_EVENT line per refused request; the operator turns
+#   that into a SecurityEvent of the agent with that pod IP (source egress).
+# - On GKE the playbook also adds an FQDNNetworkPolicy for the proxy itself, so even a misconfigured proxy cannot
+#   reach hosts outside the list.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
+data:
+  squid.conf: |
+    http_port 3128
+    pid_filename none
+    pinger_enable off
+    cache deny all
+    cache_mem 8 MB
+    cache_log /var/log/squid/cache.log
+    coredump_dir /tmp
+    # Squid sizes its tables from the file descriptor limit; the node's limit (about 1M) needs more than 600 MiB
+    max_filedescriptors 4096
+    forwarded_for delete
+    # allowed hosts: a leading dot allows the domain and every subdomain (EGRESS_HOSTS, EGRESS_EXTRA_HOSTS)
+    acl allowed dstdomain -n ${EGRESS_HOSTS}
+    # never a cluster, node, metadata or loopback address, even if a public name resolves to one
+    acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 ::1 fc00::/7 fe80::/10
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access deny private_dst
+    http_access allow allowed
+    http_access deny all
+    # one line per refused request; %# URL-encodes, so the request cannot break the JSON or the line
+    logformat agentdev AGENTDEV_SECURITY_EVENT {"rule":"egress-host","severity":"medium","client":"%>a","action":"%#rm %#ru"}
+    acl refused http_status 403
+    access_log /var/log/squid/access.log logformat=agentdev refused
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: egress-proxy, namespace: ${AGENTS_NS}, labels: {app: egress-proxy}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: egress-proxy}}
+  template:
+    metadata:
+      labels: {app: egress-proxy}
+      annotations: {agentdev/egress-hosts: "${EGRESS_HOSTS}"}   # a changed list restarts the proxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 13, runAsGroup: 13, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: squid
+        image: ${EGRESS_PROXY_IMAGE}
+        imagePullPolicy: IfNotPresent
+        # logs to files (Squid cannot write to a pipe as a non-root user), followed to stdout for the collector
+        command: [sh, -c, 'tail -qF /var/log/squid/access.log /var/log/squid/cache.log 2>/dev/null & exec squid -f /etc/squid/squid.conf -NYC']
+        ports: [{name: proxy, containerPort: 3128}]
+        readinessProbe: {tcpSocket: {port: proxy}, periodSeconds: 10}
+        livenessProbe: {tcpSocket: {port: proxy}, periodSeconds: 20}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: conf, mountPath: /etc/squid/squid.conf, subPath: squid.conf, readOnly: true}
+        - {name: logs, mountPath: /var/log/squid}
+        - {name: tmp, mountPath: /tmp}
+        resources:
+          requests: {cpu: 20m, memory: 64Mi}
+          limits: {cpu: "1", memory: 256Mi}
+      volumes:
+      - {name: conf, configMap: {name: egress-proxy}}
+      - {name: logs, emptyDir: {sizeLimit: 256Mi}}
+      - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
+spec:
+  selector: {app: egress-proxy}
+  ports: [{name: proxy, port: 3128, targetPort: proxy}]
+---
+# only agent pods may use the proxy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: egress-proxy}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: coding-agent}}}]
+    ports: [{port: 3128}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agent-egress, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: coding-agent}}
+  policyTypes: [Egress]
+  egress:
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+    ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+  - to: [{podSelector: {matchLabels: {app: egress-proxy}}}]
+    ports: [{port: 3128}]
+  - to: [{podSelector: {matchLabels: {app: webhook-router}}}]   # registration
+    ports: [{port: 8080}]
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${FORGE_NS}}}}]   # in-cluster Gitea (kind)
+    ports: [{port: 3000}]
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${BOTBOARD_NS}}}}]
+    ports: [{port: 8080}]
+  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: contextforge}}}]
+    ports: [{port: 4444}]

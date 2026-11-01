@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -252,5 +253,33 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 	}
 	if _, ok := mounts(ag)["forge"]; ok || mounts(fg)["forge"] != "/forge" {
 		t.Error("the sidecar's mirror volume is the sidecar's alone")
+	}
+}
+
+// #65: with an egress proxy configured, both containers send their traffic through it; in-cluster names go direct.
+func TestEgressProxyEnv(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	if hasEnv(container(s, "agent"), "HTTPS_PROXY") {
+		t.Fatal("no proxy configured, but HTTPS_PROXY set")
+	}
+	r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+	reconcile(t, r, "alice")
+	s = getSTS(t, c, "alice")
+	for _, name := range []string{"agent", "forge"} {
+		ct := container(s, name)
+		got := map[string]string{}
+		for _, e := range ct.Env {
+			got[e.Name] = e.Value
+		}
+		for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+			if got[k] != r.D.EgressProxy {
+				t.Errorf("%s: %s=%q", name, k, got[k])
+			}
+		}
+		if !strings.Contains(got["NO_PROXY"], ".svc.cluster.local") || got["no_proxy"] != got["NO_PROXY"] {
+			t.Errorf("%s: NO_PROXY=%q", name, got["NO_PROXY"])
+		}
 	}
 }

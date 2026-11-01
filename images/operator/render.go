@@ -86,6 +86,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 	common := []corev1.EnvVar{env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
+	common = append(common, r.proxyEnv()...)
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -138,4 +139,23 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// proxyEnv points both containers at the egress proxy (#65): the NetworkPolicy lets agent pods reach only the proxy
+// and in-cluster services, so anything that ignores the proxy simply fails. Cluster-internal names and loopback go
+// direct. Both spellings, because curl and git read only the lower-case http_proxy. Empty EgressProxy: no proxy
+// (the earlier behaviour, for clusters without manifests/egress.yaml.tmpl).
+func (r *AgentReconciler) proxyEnv() []corev1.EnvVar {
+	if r.D.EgressProxy == "" {
+		return nil
+	}
+	noProxy := "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+	var out []corev1.EnvVar
+	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+		out = append(out, corev1.EnvVar{Name: k, Value: r.D.EgressProxy})
+	}
+	out = append(out, corev1.EnvVar{Name: "NO_PROXY", Value: noProxy}, corev1.EnvVar{Name: "no_proxy", Value: noProxy},
+		// Claude Code telemetry and error reports are not on the allow-list; without this every run makes refusals
+		corev1.EnvVar{Name: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", Value: "1"})
+	return out
 }
