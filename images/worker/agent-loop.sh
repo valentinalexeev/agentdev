@@ -283,7 +283,7 @@ USAGE_DIR="${USAGE_DIR:-/etc/agentdev/usage}"
 USAGE_PAUSE_FILE="${USAGE_PAUSE_FILE:-${STATE}/usage-paused-until}"
 # report_usage <stream-json output> <stderr tail>: prints the usage line; returns 1 when the run was rate limited
 report_usage() {
-  local fd=1 line; { true >&3; } 2>/dev/null && fd=3
+  local fd=2 line; { true >&3; } 2>/dev/null && fd=3   # never stdout: run_claude's stdout is the result
   line=$(jq -cs --arg job "${JOB:-}" --arg err "$2" '
     [.[] | objects] as $ev
     | ([$ev[] | select(.type=="rate_limit_event") | .rate_limit_info // {}]) as $rl

@@ -16,7 +16,7 @@ now=$(date +%s); later=$(( now + 7200 ))
 ok_run='{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","utilization":0.42,"resetsAt":'"${later}"'}}
 {"type":"result","is_error":false,"result":"done","usage":{"input_tokens":10,"cache_read_input_tokens":5,"output_tokens":7}}'
 # shellcheck disable=SC2034
-line=$(report_usage "${ok_run}" ""); rc=$?
+line=$(report_usage "${ok_run}" "" 2>&1); rc=$?
 check "normal run: returns 0" "[[ ${rc} == 0 ]]"
 check "normal run: prints the usage line" "[[ \"\${line}\" == 'AGENTDEV_USAGE '* ]]"
 check "tokens summed (input + cache)" "[[ \$(jq -r .input_tokens <<<\"\${line#AGENTDEV_USAGE }\") == 15 ]]"
