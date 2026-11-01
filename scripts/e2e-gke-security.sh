@@ -294,7 +294,8 @@ if section api; then
       code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$HOST$p")
       [ "$code" = 401 ]; check $? "GET $p without a token gives 401" "HTTP $code"
     done
-    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -H 'Authorization: Bearer e2e.not.a-token' "https://$HOST/api/agents")
+    forged="Authorization: Bearer e2e.$(date +%s).forged"   # never a real token (built at run time)
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -H "$forged" "https://$HOST/api/agents")
     [ "$code" = 401 ]; check $? "a forged bearer token gives 401" "HTTP $code"
     code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"decision":"approve"}' "https://$HOST/api/approvals/e2e-none/decision")
     [ "$code" = 401 ]; check $? "an approval decision without a person's OIDC token gives 401 (R90)" "HTTP $code"
