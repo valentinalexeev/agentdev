@@ -1,0 +1,65 @@
+---
+# One agent: account (random password, agents only use the token), write collaborator, token file (mode 600).
+- name: Account {{ gitea_forge_agent }}
+  ansible.builtin.command:
+    argv: "{{ gitea_forge_cli + ['admin', 'user', 'create', '--username', gitea_forge_agent,
+           '--password', lookup('ansible.builtin.password', '/dev/null', length=24) ~ 'Aa1!',
+           '--email', gitea_forge_agent ~ '@agents.local', '--must-change-password=false'] }}"
+  when: gitea_forge_agent not in (gitea_forge_users.stdout | regex_findall('(?m)^\\d+\\s+(\\S+)'))
+  changed_when: true
+  no_log: true
+
+- name: Collaborator check of {{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/collaborators/{{ gitea_forge_agent }}"
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+    status_code: [204, 404]
+  register: gitea_forge_collab
+  no_log: true
+
+# Agents are collaborators (write), not admins: they push branches and open PRs, the owner merges.
+- name: Write collaborator {{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/collaborators/{{ gitea_forge_agent }}"
+    method: PUT
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: {permission: write}
+    status_code: 204
+  when: gitea_forge_collab.status == 404
+  changed_when: true
+  no_log: true
+
+- name: Token file of {{ gitea_forge_agent }}
+  ansible.builtin.stat:
+    path: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"
+  register: gitea_forge_token_file
+
+- name: Mint and store the token of {{ gitea_forge_agent }}
+  when: not gitea_forge_token_file.stat.exists or gitea_forge_token_file.stat.size == 0
+  block:
+    - name: Mint a token
+      ansible.builtin.command:
+        argv: "{{ gitea_forge_cli + ['admin', 'user', 'generate-access-token', '--username', gitea_forge_agent,
+               '--token-name', 'worker-' ~ now(utc=true, fmt='%s'), '--scopes',
+               'write:repository,write:issue,read:user', '--raw'] }}"
+      register: gitea_forge_token
+      changed_when: true
+      no_log: true
+
+    - name: Secrets directory
+      ansible.builtin.file:
+        path: "{{ gitea_forge_secrets_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write the token file
+      ansible.builtin.copy:
+        content: "{{ gitea_forge_token.stdout | trim }}"
+        dest: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"
+        mode: "0600"
+      no_log: true

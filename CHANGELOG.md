@@ -39,6 +39,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   workspace, warm pool to 0, optional headless Claude turn). Changed: the claim has the fixed name
   `agentdev-sandbox-test` (was `spike-<time>`), so a second run reuses it and changes nothing, and the warm pool and
   sandbox are restored also after a failed check. GKE does not change.
+- Step 05 (#106): `05-forge.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags forge` (new role
+  `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
+  `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
+  when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
