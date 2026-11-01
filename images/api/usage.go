@@ -168,22 +168,68 @@ type usageView struct {
 	Pauses    json.RawMessage       `json:"pauses,omitempty"` // per agent: until, reason (operator)
 }
 
-// GET /api/usage: every signed-in user (no secrets; the Secret names are already in /api/agents' data model).
+// GET /api/usage: every signed-in user, filtered (review #102): an agentdev admin sees everything; anyone else sees
+// the global limits and only the projects and agents they have write access to on the forge, with those agents'
+// pauses. The per-subscription state (Claude Secret names, windows, tokens) is shown to admins only.
 func (w *writer) getUsage(rw http.ResponseWriter, r *http.Request) {
 	s, _, err := w.usage.Settings(r.Context())
 	if err != nil {
 		writeJSON(rw, http.StatusBadGateway, map[string]string{"error": "cannot read the usage settings"})
 		return
 	}
-	v := usageView{Global: s.global(), Projects: s.Projects, Effective: map[string]thresholds{}, Agents: map[string]thresholds{}}
-	for _, a := range w.managedAgents(r.Context()) {
-		for _, repo := range a.Repos {
-			v.Effective[repo] = s.effective(repo)
+	id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+	admin := id != nil && w.isAdmin(id)
+	allowed := map[string]bool{} // repo -> caller may write (cached per request)
+	may := func(forge, repo string) bool {
+		if admin {
+			return true
 		}
-		v.Agents[a.Name] = s.effectiveAll(a.Repos)
+		if id == nil || forge == "github" {
+			return false
+		}
+		if ok, seen := allowed[repo]; seen {
+			return ok
+		}
+		p, err := w.repoPerm(r.Context(), id, forge, repo)
+		allowed[repo] = err == nil && p >= permWrite
+		return allowed[repo]
+	}
+	v := usageView{Global: s.global(), Projects: map[string]thresholds{}, Effective: map[string]thresholds{}, Agents: map[string]thresholds{}}
+	agents := map[string]bool{}
+	for _, a := range w.managedAgents(r.Context()) {
+		var repos []string
+		for _, repo := range a.Repos {
+			if may(a.Forge, repo) {
+				repos = append(repos, repo)
+				v.Effective[repo] = s.effective(repo)
+				if t, ok := s.Projects[repo]; ok {
+					v.Projects[repo] = t
+				}
+			}
+		}
+		if len(repos) > 0 {
+			v.Agents[a.Name] = s.effectiveAll(a.Repos)
+			agents[a.Name] = true
+		}
+	}
+	if admin {
+		v.Projects = s.Projects
 	}
 	if st, err := w.usage.State(r.Context()); err == nil {
-		v.State, v.Pauses = st["state"], st["pauses"]
+		if admin {
+			v.State, v.Pauses = st["state"], st["pauses"]
+		} else {
+			var all map[string]json.RawMessage
+			if json.Unmarshal(st["pauses"], &all) == nil {
+				mine := map[string]json.RawMessage{}
+				for name, p := range all {
+					if agents[name] {
+						mine[name] = p
+					}
+				}
+				v.Pauses, _ = json.Marshal(mine)
+			}
+		}
 	}
 	writeJSON(rw, http.StatusOK, v)
 }

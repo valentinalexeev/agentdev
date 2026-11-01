@@ -28,6 +28,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   global, clamped again by the operator); every attempt audited as `set-limits`. Web UI: **Usage** page. RBAC: the
   operator gets get/update on `agentdev-usage` and get on `agentdev-usage-settings`; the API gets configmap create
   and get/update on `agentdev-usage-settings`, get on `agentdev-usage`.
+  Security review of #102: usage reports go through the forge sidecar (`POST /usage`, schema/range check, rate limit)
+  and the operator reads usage only from the `forge` container (a usage line from the agent container raises
+  `usage-line-forged`); a report can only raise or extend a pause, never lift or shorten it, and one report pauses
+  for at most 5 h; anomalies raise `usage-anomaly`; reset times never come from model text; values from JSON and files
+  are checked as integers before bash arithmetic; `run_claude` fails closed on output that is not stream-json;
+  `GET /api/usage` shows non-admins only the projects and agents they can write to (risks R46, R47).
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are

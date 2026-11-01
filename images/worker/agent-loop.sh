@@ -173,7 +173,9 @@ is_running()   { [[ -e "${JOBS}/$1.lock" ]]; }
 # A job that fails is not retried before its backoff expires (60 s, doubling up to 30 min), so a persistent
 # error can't turn the wake-on-finish into a hot loop. A successful run clears the backoff.
 JOB_BACKOFF_MAX="${JOB_BACKOFF_MAX:-1800}"
-backing_off()  { local until=0; [[ -r "${JOBS}/$1.retry" ]] && read -r until _ < "${JOBS}/$1.retry"; (( $(date +%s) < until )); }
+# The retry file lives on the state volume: its values are checked as plain integers before any arithmetic
+# (bash evaluates a name like a[$(cmd)] inside (( )), review #102).
+backing_off()  { local until=0; [[ -r "${JOBS}/$1.retry" ]] && read -r until _ < "${JOBS}/$1.retry"; [[ "${until}" =~ ^[0-9]{1,12}$ ]] || return 1; (( $(date +%s) < until )); }
 
 # start_job <key> <function> [args...]: run in the background unless the key is already running, backing off
 # after a failure, or all slots are taken. Returns 0 if started, 1 if not (the dispatcher retries later).
@@ -191,7 +193,9 @@ start_job() {
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
-      [[ -r "${JOBS}/${key}.retry" ]] && read -r _until delay < "${JOBS}/${key}.retry" && delay=$(( delay * 2 ))
+      [[ -r "${JOBS}/${key}.retry" ]] && read -r _until delay < "${JOBS}/${key}.retry"
+      [[ "${delay}" =~ ^[0-9]{1,6}$ ]] || delay=30   # not a plain integer: never into arithmetic
+      delay=$(( delay * 2 ))
       (( delay > JOB_BACKOFF_MAX )) && delay=${JOB_BACKOFF_MAX}
       echo "$(( $(date +%s) + delay )) ${delay}" > "${JOBS}/${key}.retry"
       echo "[${key}] $(date -u +%H:%M:%S) [${FORGE_USER:-}] job failed; retry in ${delay}s"
@@ -266,46 +270,64 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "${CLAUDE_GUARD}" \
           "${mcp[@]}" 2>"${err}"); rc=$?
-  # stream-json: one event per line; the last one with a result is the answer
-  # if jq fails, print nothing: the raw transcript must never become a PR or issue comment
-  jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty' <<<"${out}" 2>/dev/null || log "claude output is not stream-json" >&2
-  [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}")"
+  # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
+  # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
+  if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
+    log "claude output is not stream-json: nothing posted" >&2
+    (( rc == 0 )) && rc=1
+  fi
+  [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}" | tr -cd '[:print:]\n' | tail -c 400)"
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"
   return ${rc}
 }
 
 # ---------- subscription usage (#93) ----------
-# After each run: one AGENTDEV_USAGE line with the tokens and the rate-limit windows the CLI reported (its
-# rate_limit_event lines). The operator sums them per Claude credential Secret and writes a pause time into the
-# ConfigMap agentdev-usage, mounted at USAGE_DIR (key paused.<agent>, Unix seconds). A run that hit the rate limit
-# also pauses this agent at once, locally (USAGE_PAUSE_FILE), without waiting for the operator.
+# After each run the loop sends one usage report (tokens, and the rate-limit windows from the CLI's rate_limit_event
+# lines) to the forge sidecar's POST /usage. The sidecar checks the schema, rate-limits it and prints the only
+# AGENTDEV_USAGE line the operator accepts, from the forge container (review #102: never from free-text stdout of the
+# agent container, where Claude can print anything). The operator sums the reports per Claude credential Secret and
+# writes a pause time into the ConfigMap agentdev-usage, mounted at USAGE_DIR (key paused.<agent>, Unix seconds).
+# A run that hit the rate limit also pauses this agent at once, locally (USAGE_PAUSE_FILE).
 USAGE_DIR="${USAGE_DIR:-/etc/agentdev/usage}"
 USAGE_PAUSE_FILE="${USAGE_PAUSE_FILE:-${STATE}/usage-paused-until}"
-# report_usage <stream-json output> <stderr tail>: prints the usage line; returns 1 when the run was rate limited
+USAGE_LOCAL_MAX="${USAGE_LOCAL_MAX:-18000}"   # a local pause lasts at most 5 h; the next run asks Claude again
+# is_epoch <value>: a plain decimal Unix time (at most 12 digits). Everything that reaches (( )), echo or date from
+# JSON, a file or the model passes this first: bash evaluates names like a[$(cmd)] in arithmetic (review #102).
+is_epoch() { [[ "$1" =~ ^[0-9]{1,12}$ ]]; }
+# usage_post <json>: hand the report to the sidecar (structured channel); best effort
+usage_post() { sidecar /usage -X POST -H 'Content-Type: application/json' -d "$1" >/dev/null 2>&1 || log "usage report not accepted by the sidecar"; }
+# report_usage <stream-json output> <stderr tail>: sends the usage report; returns 1 when the run was rate limited.
+# Rate limited = a rejected rate_limit_event, or an error run whose CLI stderr says so. The result text (written by the
+# model) is never used, and a reset time comes only from the structured rate_limit_event, never from text (review #102).
 report_usage() {
-  local fd=2 line; { true >&3; } 2>/dev/null && fd=3   # never stdout: run_claude's stdout is the result
+  local line
   line=$(jq -cs --arg job "${JOB:-}" --arg err "$2" '
+    def num: if type == "number" and (isnan | not) then . else null end;
+    def epoch: num | if . != null and . >= 0 and . < 1e12 then floor else null end;
+    def count: num | if . != null and . >= 0 then floor else 0 end;
     [.[] | objects] as $ev
-    | ([$ev[] | select(.type=="rate_limit_event") | .rate_limit_info // {}]) as $rl
+    | ([$ev[] | select(.type=="rate_limit_event") | .rate_limit_info | objects]) as $rl
     | ($ev | map(select(has("result"))) | last // {}) as $res
-    | def win($t): ([$rl[] | select(.rateLimitType==$t and .resetsAt != null)] | last
-                   | if . then {utilization: (.utilization // (if .status=="rejected" then 1 else 0 end)), resetsAt: .resetsAt} else null end);
-      (($res.result // "") + " " + $err) as $txt
-    | ([$rl[] | select(.status=="rejected")] | length > 0) as $rej
-    | (($res.is_error // false) and ($txt | test("usage limit|rate limit|limit reached"; "i"))) as $msg
+    | def win($t): ([$rl[] | select(.rateLimitType==$t and (.resetsAt | epoch) != null)] | last
+                   | if . then {utilization: ((.utilization | num) // (if .status=="rejected" then 1 else 0 end)), resetsAt: (.resetsAt | epoch)} else null end);
+      ([$rl[] | select(.status=="rejected")] | length > 0) as $rej
+    | (($res.is_error // false) == true and ($err | test("usage limit|rate limit|limit reached"; "i"))) as $msg
     | {job: $job,
-       input_tokens: (($res.usage.input_tokens // 0) + ($res.usage.cache_creation_input_tokens // 0) + ($res.usage.cache_read_input_tokens // 0)),
-       output_tokens: ($res.usage.output_tokens // 0),
+       input_tokens: (($res.usage.input_tokens | count) + ($res.usage.cache_creation_input_tokens | count) + ($res.usage.cache_read_input_tokens | count)),
+       output_tokens: ($res.usage.output_tokens | count),
        rate_limited: ($rej or $msg),
-       resets_at: ([$rl[] | select(.status=="rejected") | .resetsAt // empty] + [$txt | capture("limit reached\\|(?<t>[0-9]{9,})")? | .t | tonumber] | max // 0),
+       resets_at: ([$rl[] | select(.status=="rejected") | .resetsAt | epoch | numbers] | max // 0),
        five_hour: win("five_hour"), seven_day: win("seven_day")}' <<<"$1" 2>/dev/null) || return 0
   [[ -n "${line}" ]] || return 0
-  printf 'AGENTDEV_USAGE %s\n' "${line}" >&"${fd}"
+  usage_post "${line}"
   if [[ "$(jq -r .rate_limited <<<"${line}")" == true ]]; then
-    local until; until=$(jq -r '.resets_at' <<<"${line}")
-    (( until > $(date +%s) )) || until=$(( $(date +%s) + 3600 ))
-    echo "${until}" > "${USAGE_PAUSE_FILE}"
+    local now until; now=$(date +%s); until=$(jq -r '.resets_at' <<<"${line}")
+    is_epoch "${until}" || until=0                     # validated before any arithmetic
+    (( until > now )) || until=$(( now + 3600 ))
+    (( until > now + USAGE_LOCAL_MAX )) && until=$(( now + USAGE_LOCAL_MAX ))
+    local v; [[ -r "${USAGE_PAUSE_FILE}" ]] && read -r v < "${USAGE_PAUSE_FILE}" && is_epoch "${v}" && (( v > until )) && until=${v}
+    echo "${until}" > "${USAGE_PAUSE_FILE}"            # only ever extended here, never shortened
     log "rate limit reached: no new runs until $(date -u -d "@${until}" +%H:%M:%SZ 2>/dev/null || echo "${until}")"
     return 1
   fi
@@ -313,9 +335,9 @@ report_usage() {
 # usage_paused: 0 (true) while the operator or a rate-limited run paused new runs of this agent
 usage_paused() {
   local now until=0 v; now=$(date +%s)
-  [[ -r "${USAGE_PAUSE_FILE}" ]] && read -r v < "${USAGE_PAUSE_FILE}" && [[ "${v}" =~ ^[0-9]+$ ]] && until=${v}
+  [[ -r "${USAGE_PAUSE_FILE}" ]] && read -r v < "${USAGE_PAUSE_FILE}" && is_epoch "${v}" && until=${v}
   [[ -r "${USAGE_DIR}/paused.${AGENT_NAME:-${FORGE_USER}}" ]] && read -r v < "${USAGE_DIR}/paused.${AGENT_NAME:-${FORGE_USER}}" \
-    && [[ "${v}" =~ ^[0-9]+$ ]] && (( v > until )) && until=${v}
+    && is_epoch "${v}" && (( v > until )) && until=${v}
   (( until > now ))
 }
 

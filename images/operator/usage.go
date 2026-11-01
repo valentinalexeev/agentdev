@@ -44,6 +44,11 @@ const (
 	usageSettingsCM = "agentdev-usage-settings" // thresholds, written by the API
 	// rateLimitPause is used when a run hit the rate limit and the CLI gave no reset time.
 	rateLimitPause = time.Hour
+	// maxReportPause caps how long one report can pause (review #102): a pause from a window or a rate limit ends at
+	// most this long after the report that caused it. If the limit is real, the next run reports it again.
+	maxReportPause = 5 * time.Hour
+	// anomalyJump: a rise of utilization by more than this in one report of the same window raises a security event.
+	anomalyJump = 0.5
 )
 
 // DefaultFiveHour and DefaultWeekly are the global thresholds in percent when no setting exists (#92 decision: 80 and
@@ -103,6 +108,9 @@ func valid(p int) bool { return p >= 1 && p <= 100 }
 type Window struct {
 	Utilization float64 `json:"utilization"` // fraction used, 0..1 (can pass 1)
 	ResetsAt    int64   `json:"resetsAt"`    // Unix seconds; 0 = unknown
+	// PauseCap: a pause from this window ends at the latest then (the last report that raised it + maxReportPause).
+	// Only ever moves later; 0 = no cap known (old state), the reset applies.
+	PauseCap int64 `json:"pauseCap,omitempty"`
 }
 
 // SubscriptionState is the usage of one Claude credential Secret.
@@ -131,6 +139,12 @@ type usageLine struct {
 	ResetsAt     int64   `json:"resets_at"`
 	FiveHour     *Window `json:"five_hour"`
 	Weekly       *Window `json:"seven_day"`
+}
+
+// isUsageLine: a timestamped log line that carries a usage report (from any container).
+func isUsageLine(line string) bool {
+	_, rest, found := strings.Cut(line, " ")
+	return found && strings.HasPrefix(rest, usagePrefix)
 }
 
 // parseUsage reads one timestamped log line; ok=false for any other line.
@@ -177,47 +191,78 @@ type Usage struct {
 	paused map[string]Pause // by agent name, last written
 }
 
-// merge takes a new report of a window at time at; length is the window's length. The line comes from the agent
-// container, where Claude could print a forged one, so a report can add a pause but never lift one: within the same
-// window utilization only rises. A report counts as a new window only when the current one has reset (ResetsAt is
-// past) or its reset is at least 80 % of a window length later; anything else is taken as the same window (max).
-// Returns true for a new window.
-func merge(cur *Window, w *Window, at time.Time, length time.Duration) bool {
+// merge takes a new report of a window at time at; length is the window's length. A report can add a pause but
+// never lift or shorten one (review #102, owner: "the unsafe usage reset"): within the current window utilization
+// only rises and the reset time only moves later; a report starts a new window only after the current one has really
+// reset (its ResetsAt is past). A report with an earlier reset than the current one is ignored. Returns whether a new
+// window started, and an anomaly text for a security event ("" when none).
+func merge(cur *Window, w *Window, at time.Time, length time.Duration) (bool, string) {
 	if w == nil {
-		return false
+		return false, ""
 	}
 	if w.ResetsAt != 0 && w.ResetsAt < cur.ResetsAt {
-		return false // an older window reported late
+		return false, "" // an older window reported late
 	}
-	expired := cur.ResetsAt <= at.Unix()
-	later := w.ResetsAt >= cur.ResetsAt+int64((length*8/10)/time.Second)
-	if cur.ResetsAt == 0 || expired || later {
-		newWindow := cur.ResetsAt != 0
-		*cur = *w
-		return newWindow
+	newWindow := cur.ResetsAt == 0 || cur.ResetsAt <= at.Unix()
+	anomaly := ""
+	if newWindow {
+		started := cur.ResetsAt != 0
+		*cur = Window{Utilization: w.Utilization, ResetsAt: w.ResetsAt}
+		if w.ResetsAt == 0 {
+			cur.ResetsAt = at.Add(length).Unix() // unknown reset: assume a full window, the pause cap still applies
+		}
+		cur.PauseCap = at.Add(maxReportPause).Unix()
+		return started, anomaly
 	}
-	cur.Utilization = math.Max(cur.Utilization, w.Utilization)
+	if w.Utilization-cur.Utilization > anomalyJump {
+		anomaly = fmt.Sprintf("utilization jumped from %.2f to %.2f in one report", cur.Utilization, w.Utilization)
+	}
+	if w.ResetsAt > cur.ResetsAt {
+		// same window, later reset: taken (it can only extend a pause, never shorten it), so an early reset that a
+		// forged report planted is corrected by the next real one; the per-report cap still bounds the pause
+		cur.ResetsAt = w.ResetsAt
+	}
+	if w.Utilization > cur.Utilization {
+		cur.Utilization = w.Utilization
+		cur.PauseCap = max(cur.PauseCap, at.Add(maxReportPause).Unix())
+	}
+	return false, anomaly
+}
+
+// capReset cuts a reset time beyond the window length; returns true when it had to (an anomaly).
+func capReset(w *Window, at time.Time, d time.Duration) bool {
+	if w != nil && w.ResetsAt > at.Add(d).Unix() {
+		w.ResetsAt = at.Add(d).Unix()
+		return true
+	}
 	return false
 }
 
-func capReset(w *Window, at time.Time, d time.Duration) {
-	if w != nil && w.ResetsAt > at.Add(d).Unix() {
-		w.ResetsAt = at.Add(d).Unix()
+// apply adds one observation to the state of a subscription and returns the anomalies found (for security events).
+func (s *SubscriptionState) apply(u usageLine, at time.Time) []string {
+	var anomalies []string
+	// a reset time can not be later than the window is long
+	if capReset(u.FiveHour, at, 5*time.Hour) {
+		anomalies = append(anomalies, "five-hour resetsAt beyond the window length")
 	}
-}
-
-// apply adds one observation to the state of a subscription.
-func (s *SubscriptionState) apply(u usageLine, at time.Time) {
-	// a reset time can not be later than the window is long: a forged line can not pause for longer than that
-	capReset(u.FiveHour, at, 5*time.Hour)
-	capReset(u.Weekly, at, 7*24*time.Hour)
-	if u.ResetsAt > at.Add(7*24*time.Hour).Unix() {
-		u.ResetsAt = at.Add(7 * 24 * time.Hour).Unix()
+	if capReset(u.Weekly, at, 7*24*time.Hour) {
+		anomalies = append(anomalies, "weekly resetsAt beyond the window length")
 	}
-	if merge(&s.FiveHour, u.FiveHour, at, 5*time.Hour) {
+	for _, w := range []*Window{u.FiveHour, u.Weekly} {
+		if w != nil && w.Utilization > 1.5 {
+			anomalies = append(anomalies, fmt.Sprintf("utilization %.2f far above 1", w.Utilization))
+		}
+	}
+	newFive, a := merge(&s.FiveHour, u.FiveHour, at, 5*time.Hour)
+	if a != "" {
+		anomalies = append(anomalies, "five-hour: "+a)
+	}
+	if newFive {
 		s.InputTokens, s.OutputTokens, s.Runs = 0, 0, 0 // a new 5-hour window
 	}
-	merge(&s.Weekly, u.Weekly, at, 7*24*time.Hour)
+	if _, a := merge(&s.Weekly, u.Weekly, at, 7*24*time.Hour); a != "" {
+		anomalies = append(anomalies, "weekly: "+a)
+	}
 	s.InputTokens += u.InputTokens
 	s.OutputTokens += u.OutputTokens
 	s.Runs++
@@ -226,11 +271,16 @@ func (s *SubscriptionState) apply(u usageLine, at time.Time) {
 		if until <= at.Unix() {
 			until = at.Add(rateLimitPause).Unix()
 		}
+		if limit := at.Add(maxReportPause).Unix(); until > limit {
+			anomalies = append(anomalies, "rate-limit reset beyond the per-report pause cap")
+			until = limit
+		}
 		if until > s.RateLimited {
-			s.RateLimited = until
+			s.RateLimited = until // only ever extended
 		}
 	}
 	s.Updated = at.UTC()
+	return anomalies
 }
 
 // decide returns the pause of an agent on this subscription with thresholds t at now, or ok=false.
@@ -246,14 +296,20 @@ func decide(s *SubscriptionState, t Thresholds, now time.Time) (Pause, bool) {
 	if s.RateLimited > n {
 		take(s.RateLimited, "rate-limited")
 	}
+	end := func(w Window) int64 { // the reset, cut at the per-report cap
+		if w.PauseCap != 0 && w.PauseCap < w.ResetsAt {
+			return w.PauseCap
+		}
+		return w.ResetsAt
+	}
 	over := func(w Window, pct int) bool {
-		return w.ResetsAt > n && w.Utilization*100 >= float64(pct)
+		return end(w) > n && w.Utilization*100 >= float64(pct)
 	}
 	if over(s.FiveHour, t.FiveHour) {
-		take(s.FiveHour.ResetsAt, "five-hour")
+		take(end(s.FiveHour), "five-hour")
 	}
 	if over(s.Weekly, t.Weekly) {
-		take(s.Weekly.ResetsAt, "weekly")
+		take(end(s.Weekly), "weekly")
 	}
 	return p, p.Until > 0
 }
@@ -269,7 +325,7 @@ func (u *Usage) Observe(ctx context.Context, p *corev1.Pod, line usageLine, at t
 		u.mu.Unlock()
 		return err
 	}
-	key := string(p.UID) + "/agent"
+	key := string(p.UID) + "/" + forgeContainer
 	if u.last == nil {
 		u.last = map[string]time.Time{}
 	}
@@ -283,8 +339,11 @@ func (u *Usage) Observe(ctx context.Context, p *corev1.Pod, line usageLine, at t
 		s = &SubscriptionState{}
 		u.subs[a.Spec.ClaudeSecret] = s
 	}
-	s.apply(line, at)
+	anomalies := s.apply(line, at)
 	u.mu.Unlock()
+	for _, an := range anomalies {
+		u.anomaly(ctx, a.Name, a.Spec.ClaudeSecret, p, at, an)
+	}
 	log.FromContext(ctx).V(1).Info("usage", "agent", a.Name, "secret", a.Spec.ClaudeSecret, "rateLimited", line.RateLimited)
 	return u.Evaluate(ctx)
 }
@@ -434,6 +493,22 @@ func (u *Usage) event(ctx context.Context, agent string, p Pause, action string,
 		return
 	}
 	log.FromContext(ctx).Info("usage pause", "agent", agent, "reason", p.Reason, "until", p.Until)
+}
+
+// anomaly records a suspicious usage report (a jump, a reset beyond the window) as a medium SecurityEvent: the
+// report may be forged by the model (R47). The report itself was still applied within the caps.
+func (u *Usage) anomaly(ctx context.Context, agent, secret string, p *corev1.Pod, at time.Time, what string) {
+	h := sha256.Sum256([]byte(fmt.Sprintf("usage-anomaly\x00%s\x00%s\x00%s", p.UID, at.Format(time.RFC3339Nano), what)))
+	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "usage-anomaly", Severity: "medium",
+		Agent: agent, Action: clip(fmt.Sprintf("usage report on subscription %s: %s", secret, what), 500),
+		Time: metav1.NewTime(at), Pod: p.Name, Container: forgeContainer, Hash: hex.EncodeToString(h[:])}
+	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: u.NS,
+		Labels: map[string]string{"agent": agent, "agentdev/severity": spec.Severity}}, Spec: spec}
+	if err := u.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
+		log.FromContext(ctx).Error(err, "record usage anomaly", "agent", agent)
+		return
+	}
+	log.FromContext(ctx).Info("usage anomaly", "agent", agent, "what", what)
 }
 
 // Start implements manager.Runnable: re-evaluates every interval (threshold changes, window resets).

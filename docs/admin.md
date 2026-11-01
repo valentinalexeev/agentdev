@@ -597,7 +597,10 @@ for the rows in Postgres. The API cannot change the database retention.
 ## Subscription usage limits
 
 Each Claude subscription has a 5-hour usage window and a weekly usage window. After each Claude run, the agent loop
-writes one `AGENTDEV_USAGE` line to the log. The line gives the tokens and the use of each window. The operator adds
+sends one usage report to the forge sidecar of the pod. The sidecar checks the report and writes one `AGENTDEV_USAGE`
+line to the log of the `forge` container. The line gives the tokens and the use of each window. The operator reads
+usage lines only from the `forge` container. A usage line in the log of the `agent` container is not used: the
+operator records the SecurityEvent `usage-line-forged` (severity `medium`). The operator adds
 the lines for each subscription. Agents that use the same Claude Secret use the same subscription.
 
 When the use of a window is at the usage limit or more, the operator pauses the new runs of all agents on that
@@ -610,6 +613,15 @@ gives the name of the subscription.
 When Claude refuses a run because of its own rate limit, that agent pauses at once until the reset time. Then the
 operator pauses all agents on the same subscription until that time. If Claude gives no reset time, the pause is
 1 hour.
+
+A usage report can start a pause or make a pause longer. A usage report cannot stop a pause or make a pause shorter.
+One report can pause for 5 hours at most. If the limit is still real after 5 hours, the next run reports it again.
+When a report is not usual (the use goes up by more than 50 points in one report, or the reset time is after the end
+of the window), the operator records the SecurityEvent `usage-anomaly` (severity `medium`). Examine these events: the
+model can write a false report (risk R47 in `docs/security.md`).
+
+The **Usage** page shows the global limits to all users. A user sees the projects and agents for which the user has
+write access. Only agentdev administrators see the use of each subscription.
 
 The **Agents** page shows a banner when an agent is paused for usage. The row of the agent shows `usage-paused`.
 

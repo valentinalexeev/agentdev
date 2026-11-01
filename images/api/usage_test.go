@@ -86,10 +86,23 @@ func TestUsageLimitsAPI(t *testing.T) {
 	if w := e.call("PUT", "/api/usage/global", "", `{"fiveHour":50}`); w.Code != 401 || e.lastAudit(t).Result != "unauthenticated" {
 		t.Fatalf("anonymous: %d", w.Code)
 	}
-	w := e.call("GET", "/api/usage", "reader", "")
-	var v usageView
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.Global != (thresholds{70, 85}) ||
-		v.Effective["owner/x"] != (thresholds{70, 85}) || v.Agents["alice"] != (thresholds{70, 85}) {
-		t.Fatalf("GET /api/usage: %d %s", w.Code, w.Body)
+	// review #102: a writer of the project sees it and its agent; a reader sees only the global limits; an admin all
+	for _, c := range []struct {
+		token   string
+		visible bool
+	}{{"writer", true}, {"group", true}, {"reader", false}} {
+		w := e.call("GET", "/api/usage", c.token, "")
+		var v usageView
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.Global != (thresholds{70, 85}) {
+			t.Fatalf("GET /api/usage as %s: %d %s", c.token, w.Code, w.Body)
+		}
+		_, sees := v.Agents["alice"]
+		if sees != c.visible || (c.visible && v.Effective["owner/x"] != (thresholds{70, 85})) ||
+			(!c.visible && len(v.Effective)+len(v.Projects) != 0) {
+			t.Fatalf("GET /api/usage as %s: visibility want %v: %s", c.token, c.visible, w.Body)
+		}
+		if c.token != "group" && v.State != nil {
+			t.Fatalf("GET /api/usage as %s: subscription state shown to a non-admin: %s", c.token, w.Body)
+		}
 	}
 }

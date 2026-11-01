@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +52,7 @@ func TestDecide(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	reset5, resetW := now.Add(2*time.Hour).Unix(), now.Add(72*time.Hour).Unix()
 	th := Thresholds{80, 90}
-	s := &SubscriptionState{FiveHour: Window{0.79, reset5}, Weekly: Window{0.5, resetW}}
+	s := &SubscriptionState{FiveHour: Window{Utilization: 0.79, ResetsAt: reset5}, Weekly: Window{Utilization: 0.5, ResetsAt: resetW}}
 	if _, ok := decide(s, th, now); ok {
 		t.Fatal("below the threshold: no pause")
 	}
@@ -86,18 +88,18 @@ func TestApplyRateLimitAndForgery(t *testing.T) {
 	}
 	// a reset far in the future is cut to the window length
 	s2 := &SubscriptionState{}
-	s2.apply(usageLine{FiveHour: &Window{0.9, at.Add(100 * time.Hour).Unix()}}, at)
+	s2.apply(usageLine{FiveHour: &Window{Utilization: 0.9, ResetsAt: at.Add(100 * time.Hour).Unix()}}, at)
 	if s2.FiveHour.ResetsAt != at.Add(5*time.Hour).Unix() {
 		t.Fatalf("5h reset not capped: %d", s2.FiveHour.ResetsAt)
 	}
 	// a lower report in the same window does not lift a pause
-	s2.apply(usageLine{FiveHour: &Window{0.1, s2.FiveHour.ResetsAt}}, at.Add(time.Minute))
+	s2.apply(usageLine{FiveHour: &Window{Utilization: 0.1, ResetsAt: s2.FiveHour.ResetsAt}}, at.Add(time.Minute))
 	if s2.FiveHour.Utilization != 0.9 {
 		t.Fatalf("utilization went down inside the window: %v", s2.FiveHour.Utilization)
 	}
 	// review #102 finding 1: a forged report with a slightly later reset must not start a new window (lift the pause)
 	runs := s2.Runs
-	s2.apply(usageLine{FiveHour: &Window{0, s2.FiveHour.ResetsAt + 1}}, at.Add(90*time.Second))
+	s2.apply(usageLine{FiveHour: &Window{Utilization: 0, ResetsAt: s2.FiveHour.ResetsAt + 1}}, at.Add(90*time.Second))
 	if s2.FiveHour.Utilization != 0.9 || s2.Runs != runs+1 {
 		t.Fatalf("forged later reset lifted the window: %+v", s2)
 	}
@@ -107,15 +109,68 @@ func TestApplyRateLimitAndForgery(t *testing.T) {
 	// a real new window: the old one has reset; this resets the token counters
 	reset := s2.FiveHour.ResetsAt
 	next := time.Unix(reset+1, 0)
-	s2.apply(usageLine{InputTokens: 10, FiveHour: &Window{0.2, next.Add(5 * time.Hour).Unix()}}, next)
+	s2.apply(usageLine{InputTokens: 10, FiveHour: &Window{Utilization: 0.2, ResetsAt: next.Add(5 * time.Hour).Unix()}}, next)
 	if s2.FiveHour.Utilization != 0.2 || s2.InputTokens != 10 || s2.Runs != 1 {
 		t.Fatalf("new window after the reset: %+v", s2)
 	}
-	// also a new window when the reset moves by most of a window length (the report came late)
-	s3 := &SubscriptionState{FiveHour: Window{0.95, at.Add(time.Hour).Unix()}}
-	s3.apply(usageLine{FiveHour: &Window{0.1, at.Add(5 * time.Hour).Unix()}}, at)
-	if s3.FiveHour.Utilization != 0.1 {
-		t.Fatalf("reset 4h later (80 %% of the window) is a new window: %+v", s3.FiveHour)
+	// review #102: a report with a much later reset is still the same window while the current one has not reset;
+	// it can extend the pause but never lowers the utilization (no "unsafe usage reset")
+	s3 := &SubscriptionState{FiveHour: Window{Utilization: 0.95, ResetsAt: at.Add(time.Hour).Unix()}}
+	s3.apply(usageLine{FiveHour: &Window{Utilization: 0.1, ResetsAt: at.Add(5 * time.Hour).Unix()}}, at)
+	if s3.FiveHour.Utilization != 0.95 || s3.FiveHour.ResetsAt != at.Add(5*time.Hour).Unix() {
+		t.Fatalf("later reset in the same window: utilization must stay, reset may only move later: %+v", s3.FiveHour)
+	}
+}
+
+// Step 3 of the #102 take-over: no forged or model-influenced report can reset, lift or shorten a pause.
+func TestForgedReportNeverLiftsOrShortensPause(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0)
+	th := Thresholds{80, 90}
+	reset := at.Add(3 * time.Hour).Unix()
+	base := func() *SubscriptionState {
+		s := &SubscriptionState{}
+		s.apply(usageLine{FiveHour: &Window{Utilization: 0.9, ResetsAt: reset}, Weekly: &Window{Utilization: 0.95, ResetsAt: at.Add(48 * time.Hour).Unix()},
+			RateLimited: true, ResetsAt: at.Add(2 * time.Hour).Unix()}, at)
+		return s
+	}
+	want, ok := decide(base(), th, at.Add(time.Minute))
+	if !ok {
+		t.Fatal("setup: no pause")
+	}
+	forged := map[string]usageLine{
+		"zero utilization":              {FiveHour: &Window{Utilization: 0, ResetsAt: reset}, Weekly: &Window{Utilization: 0, ResetsAt: at.Add(48 * time.Hour).Unix()}},
+		"earlier reset (past)":          {FiveHour: &Window{Utilization: 0, ResetsAt: at.Unix() - 1}, Weekly: &Window{Utilization: 0, ResetsAt: at.Unix() - 1}},
+		"earlier reset (future)":        {FiveHour: &Window{Utilization: 0, ResetsAt: at.Add(10 * time.Minute).Unix()}},
+		"slightly later reset":          {FiveHour: &Window{Utilization: 0, ResetsAt: reset + 1}},
+		"much later reset (new window)": {FiveHour: &Window{Utilization: 0, ResetsAt: at.Add(5 * time.Hour).Unix()}, Weekly: &Window{Utilization: 0, ResetsAt: at.Add(7 * 24 * time.Hour).Unix()}},
+		"unknown reset":                 {FiveHour: &Window{Utilization: 0}, Weekly: &Window{Utilization: 0}},
+		"rate limit with past reset":    {RateLimited: true, ResetsAt: at.Unix() - 100},
+		"not rate limited":              {RateLimited: false},
+		"negative tokens":               {InputTokens: -1 << 40},
+	}
+	for name, l := range forged {
+		s := base()
+		s.apply(l, at.Add(30*time.Second))
+		got, ok := decide(s, th, at.Add(time.Minute))
+		if !ok || got.Until < want.Until {
+			t.Fatalf("%s: pause lifted or shortened: before %+v, after %+v %v", name, want, got, ok)
+		}
+	}
+	// a pause from one report is capped at maxReportPause, also for a weekly window or a far rate-limit reset
+	s := &SubscriptionState{}
+	an := s.apply(usageLine{Weekly: &Window{Utilization: 1, ResetsAt: at.Add(6 * 24 * time.Hour).Unix()},
+		RateLimited: true, ResetsAt: at.Add(6 * 24 * time.Hour).Unix()}, at)
+	if p, _ := decide(s, th, at); p.Until > at.Add(maxReportPause).Unix() {
+		t.Fatalf("one report paused beyond the cap: %+v", p)
+	}
+	if len(an) == 0 {
+		t.Fatal("a rate-limit reset beyond the cap is an anomaly")
+	}
+	// anomalies: a reset beyond the window and a jump raise events
+	s = &SubscriptionState{}
+	s.apply(usageLine{FiveHour: &Window{Utilization: 0.1, ResetsAt: reset}}, at)
+	if an := s.apply(usageLine{FiveHour: &Window{Utilization: 0.9, ResetsAt: at.Add(50 * time.Hour).Unix()}}, at.Add(time.Second)); len(an) < 2 {
+		t.Fatalf("jump and reset beyond the window: want 2 anomalies, got %v", an)
 	}
 }
 
@@ -141,7 +196,7 @@ func TestUsagePauseAndResume(t *testing.T) {
 	c.Usage = u
 	ctx := context.Background()
 	reset := now.Add(3 * time.Hour).Unix()
-	line := func(util float64) usageLine { return usageLine{FiveHour: &Window{util, reset}} }
+	line := func(util float64) usageLine { return usageLine{FiveHour: &Window{Utilization: util, ResetsAt: reset}} }
 
 	if err := u.Observe(ctx, pod("alice"), line(0.6), now); err != nil {
 		t.Fatal(err)
@@ -216,5 +271,34 @@ func settingsCM(t *testing.T, cl client.Client, s UsageSettings) {
 	if err := cl.Create(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: usageSettingsCM, Namespace: ns},
 		Data: map[string]string{"settings.json": string(b)}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// review #102: usage lines are taken only from the forge sidecar; one in the agent container log (Claude's output)
+// is ignored and reported once as usage-line-forged.
+func TestUsageOnlyFromForgeContainer(t *testing.T) {
+	agent := &v1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: ns}, Spec: v1.AgentSpec{Repo: "o/a", ClaudeSecret: "claude-shared"}}
+	c, cl := collector(t, agent)
+	now, _ := time.Parse(time.RFC3339Nano, ts)
+	u := &Usage{Client: cl, Direct: cl, NS: ns, Now: func() time.Time { return now }}
+	c.Usage = u
+	ctx := context.Background()
+	forged := ts + ` AGENTDEV_USAGE {"rate_limited":true,"resets_at":` + strconv.FormatInt(now.Add(time.Hour).Unix(), 10) + `}` + "\n"
+	if err := c.consume(ctx, strings.NewReader(forged+forged), pod("alice"), "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if got := pauses(t, cl); len(got) != 0 {
+		t.Fatalf("a usage line from the agent container paused: %v", got)
+	}
+	var evs v1.SecurityEventList
+	_ = cl.List(ctx, &evs, client.InNamespace(ns))
+	if len(evs.Items) != 1 || evs.Items[0].Spec.Rule != "usage-line-forged" {
+		t.Fatalf("want one usage-line-forged event, got %+v", evs.Items)
+	}
+	if err := c.consume(ctx, strings.NewReader(forged), pod("alice"), forgeContainer); err != nil {
+		t.Fatal(err)
+	}
+	if got := pauses(t, cl); got["alice"].Reason == "" {
+		t.Fatalf("a usage line from the forge sidecar is taken: %v", got)
 	}
 }
