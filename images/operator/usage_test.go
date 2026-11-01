@@ -302,3 +302,49 @@ func TestUsageOnlyFromForgeContainer(t *testing.T) {
 		t.Fatalf("a usage line from the forge sidecar is taken: %v", got)
 	}
 }
+
+// #66: with the credential proxy on, usage comes only from claude-proxy pods (agent from the line); the forge
+// sidecar's channel (R47) is ignored and reported.
+func TestUsageFromProxyOnly(t *testing.T) {
+	agent := &v1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "alice", Namespace: ns}, Spec: v1.AgentSpec{Repo: "o/a", ClaudeSecret: "claude-shared"}}
+	c, cl := collector(t, agent)
+	now, _ := time.Parse(time.RFC3339Nano, ts)
+	c.Usage = &Usage{Client: cl, Direct: cl, NS: ns, Now: func() time.Time { return now }}
+	c.ProxyUsage = true
+	ctx := context.Background()
+	reset := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	fromForge := ts + ` AGENTDEV_USAGE {"rate_limited":true,"resets_at":` + reset + `}` + "\n"
+	if err := c.consume(ctx, strings.NewReader(fromForge), pod("alice"), forgeContainer); err != nil {
+		t.Fatal(err)
+	}
+	if got := pauses(t, cl); len(got) != 0 {
+		t.Fatalf("forge sidecar usage taken with the proxy on: %v", got)
+	}
+	var evs v1.SecurityEventList
+	_ = cl.List(ctx, &evs, client.InNamespace(ns))
+	if len(evs.Items) != 1 || evs.Items[0].Spec.Rule != "usage-line-forged" {
+		t.Fatalf("want usage-line-forged, got %+v", evs.Items)
+	}
+	proxy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "claude-proxy-x", Namespace: ns, UID: "proxy-uid",
+		Labels: map[string]string{"app": "claude-proxy"}}}
+	bad := ts + ` AGENTDEV_USAGE {"agent":"Bob;rm","rate_limited":true,"resets_at":` + reset + `}` + "\n"
+	good := strings.Replace(ts, "Z", "1Z", 1) + ` AGENTDEV_USAGE {"agent":"alice","secret":"claude-shared","rate_limited":true,"resets_at":` + reset + `}` + "\n"
+	if err := c.consumeProxy(ctx, strings.NewReader(bad+good), proxy); err != nil {
+		t.Fatal(err)
+	}
+	if got := pauses(t, cl); got["alice"].Reason == "" {
+		t.Fatalf("proxy usage not taken: %v", got)
+	}
+	ev := strings.Replace(ts, "Z", "2Z", 1) + ` AGENTDEV_SECURITY_EVENT {"source":"claude-proxy","rule":"budget-exhausted","severity":"low","agent":"alice","action":"used"}` + "\n"
+	if err := c.consumeProxy(ctx, strings.NewReader(ev), proxy); err != nil {
+		t.Fatal(err)
+	}
+	_ = cl.List(ctx, &evs, client.InNamespace(ns))
+	found := false
+	for _, e := range evs.Items {
+		found = found || (e.Spec.Rule == "budget-exhausted" && e.Spec.Agent == "alice" && e.Spec.Source == "claude-proxy" && !e.Spec.Untrusted)
+	}
+	if !found {
+		t.Fatalf("proxy event not recorded: %+v", evs.Items)
+	}
+}

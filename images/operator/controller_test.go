@@ -273,10 +273,17 @@ func TestEgressProxyEnv(t *testing.T) {
 		for _, e := range ct.Env {
 			got[e.Name] = e.Value
 		}
+		want := r.D.EgressProxy
+		if name == "forge" { // only the sidecar carries the forge-host credential (GitHub is the sidecar's)
+			want = "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+		}
 		for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
-			if got[k] != r.D.EgressProxy {
+			if got[k] != want {
 				t.Errorf("%s: %s=%q", name, k, got[k])
 			}
+		}
+		if hasEnv(ct, "EGRESS_FORGE_KEY") != (name == "forge") {
+			t.Errorf("%s: EGRESS_FORGE_KEY present=%v", name, hasEnv(ct, "EGRESS_FORGE_KEY"))
 		}
 		if !strings.Contains(got["NO_PROXY"], ".svc.cluster.local") || got["no_proxy"] != got["NO_PROXY"] {
 			t.Errorf("%s: NO_PROXY=%q", name, got["NO_PROXY"])
@@ -302,5 +309,66 @@ func TestInClusterURLsBypassProxy(t *testing.T) {
 				t.Errorf("%s/%s=%s is not a full service name", ct.Name, e.Name, e.Value)
 			}
 		}
+	}
+}
+
+// #66: with the credential proxy, the agent container holds no Claude credential, only its proxy key.
+func TestClaudeProxyNoCredentialInPod(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	for _, ct := range s.Spec.Template.Spec.Containers {
+		for _, f := range ct.EnvFrom {
+			if f.SecretRef != nil && strings.HasPrefix(f.SecretRef.Name, "claude-") {
+				t.Errorf("%s mounts %s", ct.Name, f.SecretRef.Name)
+			}
+		}
+		for _, e := range ct.Env {
+			if e.Name == "CLAUDE_CODE_OAUTH_TOKEN" || e.Name == "ANTHROPIC_API_KEY" {
+				t.Errorf("%s has %s", ct.Name, e.Name)
+			}
+		}
+	}
+	ag := container(s, "agent")
+	var base, key bool
+	for _, e := range ag.Env {
+		base = base || (e.Name == "ANTHROPIC_BASE_URL" && e.Value == r.D.ClaudeProxyURL)
+		key = key || (e.Name == "ANTHROPIC_AUTH_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef.Name == "agent-alice-proxy")
+	}
+	if !base || !key {
+		t.Errorf("proxy env missing: %v", ag.Env)
+	}
+	for _, e := range container(s, "forge").Env {
+		if e.Name == "USAGE_REPORTS" && e.Value != "off" {
+			t.Errorf("forge USAGE_REPORTS=%s with the proxy on", e.Value)
+		}
+	}
+	if hasEnv(container(s, "forge"), "ANTHROPIC_AUTH_TOKEN") {
+		t.Error("forge sidecar has the proxy key")
+	}
+}
+
+// #65 + #66: with both proxies, the agent container reaches claude-proxy directly (full service name, in NO_PROXY)
+// and still sends everything else through the egress proxy.
+func TestEgressAndClaudeProxy(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	got := map[string]string{}
+	for _, e := range container(getSTS(t, c, "alice"), "agent").Env {
+		got[e.Name] = e.Value
+	}
+	if got["HTTPS_PROXY"] != r.D.EgressProxy || got["ANTHROPIC_BASE_URL"] != r.D.ClaudeProxyURL {
+		t.Fatalf("HTTPS_PROXY=%q ANTHROPIC_BASE_URL=%q", got["HTTPS_PROXY"], got["ANTHROPIC_BASE_URL"])
+	}
+	host := strings.Split(strings.TrimPrefix(got["ANTHROPIC_BASE_URL"], "http://"), ":")[0]
+	bypass := false
+	for _, s := range strings.Split(got["NO_PROXY"], ",") {
+		bypass = bypass || (strings.HasPrefix(s, ".") && strings.HasSuffix(host, s))
+	}
+	if !bypass {
+		t.Errorf("claude-proxy %s not in NO_PROXY=%q", host, got["NO_PROXY"])
 	}
 }

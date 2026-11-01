@@ -130,6 +130,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | Postgres | the PostgreSQL database of the instance |
 | setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
+| Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
+| proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
+| token budget | the number of Claude tokens that one agent can use in 24 hours |
 | specification (spec) | the project file, for example `my-project.yaml` |
 | sync | one run of `scripts/mcp-sync.sh` |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
@@ -142,7 +145,7 @@ Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone 
 
 These technical names are also allowed in the manuals with their usual meaning: browser, CORS, image (container
 image), namespace, nginx, OIDC, password, PKCE, port, redirect URI, session, SSH tunnel, tab (browser tab), token,
-user name, authentik blueprint, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
+user name, authentik blueprint, OIDC provider, public client, claim (a field in a token), authorization code, phase (of an agent: running, stopped and so on), API, CI, CRD, Docker, Gitea, GitHub App,
 Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terraform, Ansible, playbook, Secret Manager,
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a

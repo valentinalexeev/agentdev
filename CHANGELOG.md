@@ -6,7 +6,58 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
+  scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
+  The web UI requests the scope `forge`. **Breaking:** set `forge_login` for each person (source property mapping of
+  the company SSO, or the user attributes; `docs/admin.md`, "Map people to forge users"); without it a person is
+  read-only. Risk R42 updated.
+
 ### Added
+- Claude credential proxy (#66, security model phase 3, fixes R11): new image `agentdev-credproxy` and
+  `manifests/claude-proxy.yaml.tmpl`, deployed by `./run.sh 06` and the playbook. Only the proxy mounts
+  `claude-shared` / `claude-<agent>`; agent pods get `ANTHROPIC_BASE_URL` and a per-agent proxy key
+  (`agent-<name>-proxy`). Per-agent token budget for 24 h (`CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens`, default 0 =
+  none; per agent in ConfigMap `claude-proxy-budgets`), shown in the UI column **Claude tokens (24 h)** through
+  `GET /api/agents` (`budgetUsed`, `budgetLimit`). The proxy writes `AGENTDEV_USAGE` lines from the response
+  headers; with the proxy on, the operator takes usage only from the proxy pods, the forge sidecar refuses
+  `POST /usage` and the loop posts nothing (closes R47). The loop removes an old Claude login from the `claude` volume
+  at start. On GKE an FQDNNetworkPolicy limits the proxy to `api.anthropic.com` when the cluster serves the type.
+  New risks R60 to R65.
+- Forge sidecar: forge drivers (#2, step 1). The API location, the per-request credential, the git credential and
+  the REST allow-list are now one `driver` per `FORGE_KIND`; only `gitea` exists so far and behaves as before. An
+  unknown `FORGE_KIND` stops the sidecar at start. Prepares the GitHub App driver.
+- GKE: the Ansible role `api` deploys the management API (#104) when `instance.yml` sets `api.oidc_issuer` (new
+  optional instance vars `api.{oidc_issuer, oidc_discovery_url, oidc_audience, forge_url, db_retention_days}`). Same
+  steps as `./run.sh 10`: roles `agentdev_owner`/`agentdev_api`, `schema.sql`, retention and `grants.sql`; Secrets
+  `agentdev-api-db` (password generated once in Secret Manager `platform-pg-agentdev-api`), `agentdev-api-forge`
+  (from the optional Secret Manager `agentdev-api-forge-token`) and `agentdev-api-siem` (from `security.siem.*` and
+  the optional `security-siem`, the keys of #71); then `manifests/api.yaml.tmpl`. All secret tasks have `no_log`.
+  Secret lookup is one task file per source so the kind path can reuse the role (#106). The API restarts on every
+  Secret change; an optional secret without an enabled version counts as absent. authentik on GKE: #114.
+- Forge sidecar: GitHub App driver (#2, step 2), `FORGE_KIND=github`. Inputs `GITHUB_APP_ID`,
+  `GITHUB_APP_PRIVATE_KEY`, optional `GITHUB_INSTALLATION_ID` and `FORGE_API_URL` (GHES), forge container only.
+  The sidecar signs the App JWT (RS256, standard library), mints installation tokens narrowed to the agent's repos
+  and to contents/issues/pull requests write and metadata/checks/statuses read, caches them in memory and renews
+  them 10 minutes before expiry. git gets the token through the credential helper. Every comment, PR body and
+  review reply gets a fixed signature line with the agent's name. `GET /identity` gives the loop the commit author
+  (`<agent> (agentdev)` with the App bot's noreply address). Allowed calls add review threads (`.../replies`) and
+  the check runs and status of a commit; merging, labels, issue edits and GraphQL are refused. Review of #128:
+  `FORGE_API_URL` only `https://` on the forge's own API host; rate limits honoured (`Retry-After`, rate-limit reset,
+  passed through to the loop, back-off on token minting); a 401 drops the cached token; review requests only for 1
+  to 5 user logins (no teams); `per_page`/`page` 1 to 100; numbers in paths bounded; key preferably from
+  `GITHUB_APP_PRIVATE_KEY_FILE` (never in an environment).
+- Agent loop on GitHub (#2, step 3). The loop reads the forge kind and its commit author from the sidecar
+  (`GET /identity`, validated). On GitHub: work is the open issues labelled `agent:<name>` (pull requests dropped),
+  the agent's PRs are those of the App bot on `agent/<name>/*`, links use `/pull/`. Code scanning findings
+  (`github-advanced-security[bot]` review threads) are answered in their thread with one outcome: **Fixed in
+  `<sha>`** only when the pushed change touches the finding's file, else *Not fixed yet*; *Accepted risk* and *False
+  positive* are marked as proposals. The model only proposes the outcome word for thread ids the loop asked about; the
+  loop never resolves a thread. Failing check runs of the PR head are given to the model as feedback. Gitea unchanged. Review of
+  #130: the label alone does not give work. Before each start the loop reads who added `agent:<name>` last
+  (`issues/{n}/events`) and requires write, maintain or admin for that person, checked live
+  (`collaborators/{user}/permission`, both new on the sidecar allow-list); otherwise it skips the issue and raises
+  `label-not-writer` or `label-unverified`.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed
@@ -145,6 +196,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   deployment's URLs from `instance.yml` `github_app:` (#2).
 
 ### Changed
+- **BREAKING** (#66): agent pods no longer get the Claude credential. Re-run `./run.sh 06 12 10` on `kind`
+  (06: proxy, signing key and agent keys; 12: operator `CLAUDE_PROXY_URL`; 10: API `CLAUDE_PROXY_STATUS_URL`), or the
+  full `infra/ansible/deploy.yml` on GKE (the proxy tasks, the operator and the API). The playbook creates the Secret
+  Manager entry `claude-proxy-signing` on its first run. Agent images must be updated too (the loop removes an old
+  Claude login on start, and the forge sidecar gets `USAGE_REPORTS`). To roll back, set `CLAUDE_PROXY=false` /
+  `claude_proxy: false` (deprecated, removed in the next minor release).
 - The manuals (`user-guide.md`, `install.md`, `admin.md`, `troubleshooting.md`) use ASD-STE100 Simplified Technical
   English: task procedures with numbered steps, safety notes before their steps, a reference part per section, and
   troubleshooting as symptom / cause / procedure tables (#75). New technical words are in `docs/writing.md`.

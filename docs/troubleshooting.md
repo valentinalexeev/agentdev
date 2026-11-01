@@ -14,6 +14,11 @@
 
 | Symptom | Cause | Procedure |
 |---|---|---|
+| The agent log shows `claude-proxy: the token budget of agent ... is used`. | The agent used its token budget for 24 hours (#66). | 1. Wait. The agent continues when the 24-hour window has free tokens. 2. Or set a larger budget (admin.md, *Claude proxy and token budget*). |
+| The agent log shows `claude-proxy: missing or wrong agent key`. | The Secret `agent-<name>-proxy` does not agree with the signing key. | 1. Deploy again: `./run.sh 06`, or a pull request in the deployment repository. 2. Start the agent again. |
+| The agent log shows `claude-proxy: no Claude credential for agent`. | The proxy has no `claude-shared` and no `claude-<name>`. | 1. Add the credential (admin.md, *Give an agent its own Claude credential*). 2. Deploy again. |
+| The forge sidecar log shows the security event `usage-report-refused`. | The agent image is older than the proxy. Or a tool in the agent pod sent a usage report. | 1. Update the agent images (`./run.sh 06`, or the playbook). 2. If the images are new, read the job and look for an injection attempt. |
+| The agent log shows `claude-proxy: upstream not reachable`. | The proxy cannot connect to `api.anthropic.com`. | 1. Run `kubectl -n coding-agents logs deploy/claude-proxy`. 2. Examine the NetworkPolicy `claude-proxy` and the DNS of the cluster. |
 | The agent does not write a comment on an assigned issue. | The assignee is not the exact login of the agent. Or the agent does not run. Or the forge token is not valid. | 1. Examine the assignee. 2. Run `kubectl -n coding-agents get pods`. 3. If the log shows `cannot authenticate to forge`, give the agent a new forge token. |
 | The agent writes a comment, but does not open a pull request. | The Claude call failed (credential, quota). Or the agent made no change. | 1. Read the log of the agent. If the agent made no change, the issue shows "could not produce a change". |
 | The bootstrap issue shows `not ready`. | The check in the list failed (permission to send commits to the forge, tracker, Claude). | 1. Correct that item. 2. Start the agent again. The agent writes a new report only when the result changes. |

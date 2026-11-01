@@ -35,19 +35,18 @@ type permChecker interface {
 	Permission(ctx context.Context, forge, repo, user string) (perm, error)
 }
 
-// forgeUserOf maps the OIDC identity to the forge user name.
+// forgeUserOf maps the OIDC identity to the forge user name (#88).
 //
-// ASSUMPTION (#57): the authentik username is the same as the Gitea username. This is true while people are created
-// with the same name in both. When the forge accounts come from authentik (OIDC login on Gitea) or the names differ,
-// replace this function: for example read a claim with the forge login, or look the user up by e-mail. An empty
-// result means "no forge user", and every forge-based permission is then denied.
+// It reads only the custom claim forge_login. authentik emits it from the user attribute forge_login through the
+// scope mapping "agentdev: forge login" (scope "forge", manifests/authentik-blueprint-agentdev.yaml). The attribute
+// comes from the company SSO source property mapping or from an administrator; users cannot edit attributes, unlike
+// a username. preferred_username is never used: it can be chosen or changed in authentik.
 //
-// Gitea logins are case-insensitive, authentik usernames are not: "Adam" in authentik would act as "adam" on Gitea.
-// So only a username that is already lowercase and matches forgeLoginRe maps to a forge user; any other name
-// (upper case, spaces, other characters) gives "" and is denied. This relies on admin settings (docs/admin.md,
-// docs/security.md R42): closed enrollment and no username changes by users in authentik. Stable claim: #88.
+// Fail closed: no claim, or a value that is not a lowercase forge login, gives "" (no forge user), and every
+// forge-based permission is then denied. Gitea logins are case-insensitive, so "Adam" is refused rather than
+// silently acting as "adam".
 var forgeUserOf = func(id *identity) string {
-	u := id.Username
+	u := id.ForgeLogin
 	if u != strings.ToLower(u) || len(u) > 40 || !forgeLoginRe.MatchString(u) {
 		return ""
 	}

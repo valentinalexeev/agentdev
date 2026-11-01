@@ -45,6 +45,7 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | File | Role |
 |---|---|
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
+| `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent token budget, usage from the response headers |
 | `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
 | `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |

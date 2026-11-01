@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type server struct {
 	git    *gitRepo
 	client *http.Client
 	rules  []rule
+	drv    driver // forge-specific API location, auth and allow-list (driver.go)
 
 	usageGate usageGate // POST /usage rate limit (usage.go)
 }
@@ -28,6 +30,8 @@ type rule struct {
 	method string
 	path   *regexp.Regexp
 	check  func(s *server, body []byte) error // optional body policy
+	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
+	rewrite func(s *server, body []byte) ([]byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -37,24 +41,8 @@ func newServer(c *Config) *server {
 		client: &http.Client{Timeout: 60 * time.Second,
 			// never follow a redirect: it could carry the Authorization header to another host
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	r := func(m, p string, chk func(*server, []byte) error) rule {
-		return rule{m, regexp.MustCompile("^" + p + "$"), chk}
-	}
-	// exactly the calls agent-loop.sh makes (issues, PRs, comments, reviews, review requests)
-	s.rules = []rule{
-		r("GET", `/user`, nil),
-		r("GET", repoRe, nil),
-		r("GET", repoRe+`/issues`, nil),
-		r("GET", repoRe+`/issues/[0-9]+`, nil),
-		r("GET", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/issues/[0-9]+/comments`, nil),
-		r("GET", repoRe+`/pulls`, nil),
-		r("POST", repoRe+`/pulls`, checkOwnHead),
-		r("GET", repoRe+`/pulls/[0-9]+`, nil),
-		r("GET", repoRe+`/pulls/[0-9]+/reviews`, nil),
-		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
-	}
+	s.drv = driverOrGitea(c)
+	s.rules = s.drv.rules()
 	return s
 }
 
@@ -99,6 +87,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }
 
@@ -171,16 +160,35 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	u := s.c.ForgeURL + "/api/v1" + p
-	if r.URL.RawQuery != "" {
-		u += "?" + r.URL.RawQuery
+	if match.rewrite != nil {
+		if body, err = match.rewrite(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, u, bytes.NewReader(body))
+	drv := s.driver()
+	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
+		if err := qc.checkQuery(r.URL.Query()); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
+	auth, err := drv.authorization(r.Context())
+	if err != nil {
+		s.logf("forge credential: %v", err)
+		fail(w, errors.New("forge credential unavailable"))
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, drv.apiURL(p, r.URL.RawQuery), bytes.NewReader(body))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	req.Header.Set("Authorization", "token "+s.c.Token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.client.Do(req)
@@ -189,8 +197,17 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if o, ok := drv.(interface{ observe(int) }); ok {
+		o.observe(resp.StatusCode)
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
+	}
+	// rate-limit hints reach the loop, so it can wait instead of retrying at once
+	for _, h := range []string{"Retry-After", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -226,4 +243,24 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	s.logf("pushed %s to %s", tip[:12], branch)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": tip})
+}
+
+// GET /identity: the forge kind and the commit author the loop uses (#2). On GitHub the author is the agent's name
+// with the App bot's noreply address, so GitHub links the commit to the App; on Gitea it is the agent's own user.
+func (s *server) identity(w http.ResponseWriter, r *http.Request) {
+	out := map[string]string{"forge": s.driver().kind(), "agent": s.c.AgentName,
+		"name": s.c.ForgeUser, "email": s.c.ForgeUser + "@agents.local"}
+	if d, ok := s.driver().(*githubDriver); ok {
+		login, id, err := d.identity(r.Context())
+		if err != nil {
+			s.logf("identity: %v", err)
+			fail(w, errors.New("forge identity unavailable"))
+			return
+		}
+		out["name"] = s.c.AgentName + " (agentdev)"
+		out["email"] = fmt.Sprintf("%d+%s@users.noreply.github.com", id, login)
+		out["login"] = login
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }

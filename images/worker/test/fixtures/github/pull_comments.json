@@ -1,0 +1,5 @@
+[{"id":1900000001,"in_reply_to_id":null,"path":"app.js","line":3,"original_line":3,"body":"## Incomplete string escaping\nThis does not escape backslash characters.","user":{"login":"github-advanced-security[bot]","type":"Bot"},"created_at":"2026-11-01T09:20:00Z"},
+ {"id":1900000002,"in_reply_to_id":null,"path":"lib/util.js","line":10,"original_line":10,"body":"## Clear-text logging of sensitive information\nx","user":{"login":"github-advanced-security[bot]","type":"Bot"},"created_at":"2026-11-01T09:21:00Z"},
+ {"id":1900000003,"in_reply_to_id":1900000001,"path":"app.js","line":3,"body":"reply","user":{"login":"octo-dev","type":"User"},"created_at":"2026-11-01T09:22:00Z"},
+ {"id":1900000004,"in_reply_to_id":null,"path":"app.js","line":5,"body":"Use a const here.","user":{"login":"octo-dev","type":"User"},"created_at":"2026-11-01T09:23:00Z"},
+ {"id":1900000000,"in_reply_to_id":null,"path":"old.js","line":1,"body":"## Old finding","user":{"login":"github-advanced-security[bot]","type":"Bot"},"created_at":"2026-11-01T08:00:00Z"}]

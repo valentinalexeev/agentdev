@@ -132,6 +132,8 @@ type Pause struct {
 
 // usageLine is the worker's AGENTDEV_USAGE JSON. Agent and Secret come from the pod and the Agent, not the line.
 type usageLine struct {
+	Agent        string  `json:"agent"`  // claude-proxy lines only (#66); ignored from the forge sidecar
+	Secret       string  `json:"secret"` // claude-proxy lines only
 	Job          string  `json:"job"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
@@ -316,8 +318,21 @@ func decide(s *SubscriptionState, t Thresholds, now time.Time) (Pause, bool) {
 
 // Observe records one usage line of an agent pod and re-evaluates the pauses.
 func (u *Usage) Observe(ctx context.Context, p *corev1.Pod, line usageLine, at time.Time) error {
+	return u.observe(ctx, p, agentOf(p), forgeContainer, line, at)
+}
+
+// ObserveProxy records one usage line of the Claude credential proxy (#66). The proxy took the agent from the agent's
+// verified key, so the agent and the subscription come from the line; the model cannot write to this log.
+func (u *Usage) ObserveProxy(ctx context.Context, p *corev1.Pod, line usageLine, at time.Time) error {
+	if !agentNameRE.MatchString(line.Agent) {
+		return nil
+	}
+	return u.observe(ctx, p, line.Agent, proxyContainer, line, at)
+}
+
+func (u *Usage) observe(ctx context.Context, p *corev1.Pod, agent, container string, line usageLine, at time.Time) error {
 	var a v1.Agent
-	if err := u.Direct.Get(ctx, types.NamespacedName{Namespace: u.NS, Name: agentOf(p)}, &a); err != nil {
+	if err := u.Direct.Get(ctx, types.NamespacedName{Namespace: u.NS, Name: agent}, &a); err != nil {
 		return client.IgnoreNotFound(err) // an agent without an Agent object: no subscription known
 	}
 	u.mu.Lock()
@@ -325,7 +340,7 @@ func (u *Usage) Observe(ctx context.Context, p *corev1.Pod, line usageLine, at t
 		u.mu.Unlock()
 		return err
 	}
-	key := string(p.UID) + "/" + forgeContainer
+	key := string(p.UID) + "/" + container + "/" + agent
 	if u.last == nil {
 		u.last = map[string]time.Time{}
 	}
@@ -334,17 +349,22 @@ func (u *Usage) Observe(ctx context.Context, p *corev1.Pod, line usageLine, at t
 		return nil // read again after a stream reconnect
 	}
 	u.last[key] = at
-	s := u.subs[a.Spec.ClaudeSecret]
+	// the subscription: the Agent's Claude Secret, or the one the proxy really used (claude-<agent> or claude-shared)
+	secret := a.Spec.ClaudeSecret
+	if container == proxyContainer && (line.Secret == "claude-shared" || line.Secret == "claude-"+agent) {
+		secret = line.Secret
+	}
+	s := u.subs[secret]
 	if s == nil {
 		s = &SubscriptionState{}
-		u.subs[a.Spec.ClaudeSecret] = s
+		u.subs[secret] = s
 	}
 	anomalies := s.apply(line, at)
 	u.mu.Unlock()
 	for _, an := range anomalies {
-		u.anomaly(ctx, a.Name, a.Spec.ClaudeSecret, p, at, an)
+		u.anomaly(ctx, a.Name, secret, p, container, at, an)
 	}
-	log.FromContext(ctx).V(1).Info("usage", "agent", a.Name, "secret", a.Spec.ClaudeSecret, "rateLimited", line.RateLimited)
+	log.FromContext(ctx).V(1).Info("usage", "agent", a.Name, "secret", secret, "rateLimited", line.RateLimited, "source", container)
 	return u.Evaluate(ctx)
 }
 
@@ -497,11 +517,11 @@ func (u *Usage) event(ctx context.Context, agent string, p Pause, action string,
 
 // anomaly records a suspicious usage report (a jump, a reset beyond the window) as a medium SecurityEvent: the
 // report may be forged by the model (R47). The report itself was still applied within the caps.
-func (u *Usage) anomaly(ctx context.Context, agent, secret string, p *corev1.Pod, at time.Time, what string) {
-	h := sha256.Sum256([]byte(fmt.Sprintf("usage-anomaly\x00%s\x00%s\x00%s", p.UID, at.Format(time.RFC3339Nano), what)))
+func (u *Usage) anomaly(ctx context.Context, agent, secret string, p *corev1.Pod, container string, at time.Time, what string) {
+	h := sha256.Sum256([]byte(fmt.Sprintf("usage-anomaly\x00%s\x00%s\x00%s\x00%s", p.UID, agent, at.Format(time.RFC3339Nano), what)))
 	spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "usage-anomaly", Severity: "medium",
 		Agent: agent, Action: clip(fmt.Sprintf("usage report on subscription %s: %s", secret, what), 500),
-		Time: metav1.NewTime(at), Pod: p.Name, Container: forgeContainer, Hash: hex.EncodeToString(h[:])}
+		Time: metav1.NewTime(at), Pod: p.Name, Container: container, Hash: hex.EncodeToString(h[:])}
 	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: u.NS,
 		Labels: map[string]string{"agent": agent, "agentdev/severity": spec.Severity}}, Spec: spec}
 	if err := u.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {

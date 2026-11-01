@@ -131,10 +131,12 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 type verifier func(ctx context.Context, raw string) (*identity, error)
 
 type identity struct {
-	Subject  string   `json:"sub"`
-	Username string   `json:"preferred_username"`
-	Email    string   `json:"email"`
-	Groups   []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
+	Subject  string `json:"sub"`
+	Username string `json:"preferred_username"`
+	Email    string `json:"email"`
+	// ForgeLogin is the custom claim forge_login (scope "forge", #88): the only source of the forge user name.
+	ForgeLogin string   `json:"forge_login,omitempty"`
+	Groups     []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
 }
 
 // agentLister returns the agents' current state.
@@ -155,6 +157,9 @@ type agent struct {
 	Paused        bool     `json:"paused"`
 	// SecurityEvents in the last 7 days (#70)
 	SecurityEvents int `json:"securityEvents"`
+	// Claude tokens in the last 24 h and the agent's limit (0 = none), from the credential proxy (#66, budget.go)
+	BudgetUsed  *int64 `json:"budgetUsed,omitempty"`
+	BudgetLimit *int64 `json:"budgetLimit,omitempty"`
 }
 
 func routes(verify verifier, agents agentLister, events eventStore, wr *writer) http.Handler {
@@ -180,6 +185,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 				list[i].SecurityEvents = counts[list[i].Name]
 			}
 		}
+		addBudgets(r.Context(), list) // #66
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
 	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has

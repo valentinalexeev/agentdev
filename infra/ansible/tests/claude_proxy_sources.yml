@@ -1,0 +1,21 @@
+# Parity check (#66): the playbook's projected sources equal scripts/claude-proxy-sources.sh (kind).
+# Run: ansible-playbook infra/ansible/tests/claude_proxy_sources.yml
+- name: Claude proxy sources match the kind script (#66)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    agents: [{name: alice}, {name: bob-2}]
+  tasks:
+    - name: Render the template
+      ansible.builtin.set_fact:
+        rendered: "{{ lookup('ansible.builtin.template', '../templates/claude-proxy-sources.j2') | trim | from_json }}"
+    - name: Run the kind helper
+      ansible.builtin.command: "{{ playbook_dir }}/../../../scripts/claude-proxy-sources.sh alice bob-2"
+      register: kind_out
+      changed_when: false
+    - name: Compare
+      ansible.builtin.assert:
+        that:
+          - rendered == (kind_out.stdout | from_json)
+          - rendered | length == 3
+          - rendered[2].secret.name == 'claude-bob-2'

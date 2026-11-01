@@ -5,12 +5,22 @@
   vars:
     egress_hosts: [api.anthropic.com, .github.com]
     egress_extra_hosts: [.example.org]
+    forge_egress_hosts: [api.github.com]
+    claude_proxy: false
     want:
       - {name: api.anthropic.com}
       - {name: github.com}
       - {pattern: "*.github.com"}
       - {name: example.org}
       - {pattern: "*.example.org"}
+      - {name: api.github.com}
+    # with the credential proxy, api.anthropic.com is claude-proxy's only (R64)
+    want_proxy:
+      - {name: github.com}
+      - {pattern: "*.github.com"}
+      - {name: example.org}
+      - {pattern: "*.example.org"}
+      - {name: api.github.com}
   tasks:
     - name: Render
       ansible.builtin.set_fact:
@@ -21,3 +31,11 @@
           - got == want
 
         fail_msg: "{{ got | to_json }}"
+    - name: Render with the credential proxy on
+      ansible.builtin.set_fact:
+        got_proxy: "{{ lookup('ansible.builtin.template', '../egress_fqdn.j2', template_vars={'claude_proxy': true}) | from_yaml }}"
+    - name: Check with the credential proxy on
+      ansible.builtin.assert:
+        that:
+          - got_proxy == want_proxy
+        fail_msg: "{{ got_proxy | to_json }}"

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -89,7 +90,6 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}}}
 	common := []corev1.EnvVar{env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
-	common = append(common, r.proxyEnv()...)
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -97,19 +97,15 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append([]corev1.EnvVar{}, common...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", r.D.ForgePublicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		),
-		// exactly one Claude credential per agent (#5); MCP token optional (#14)
-		EnvFrom: []corev1.EnvFromSource{
-			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}},
-			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-mcp"}, Optional: ptr.To(true)}},
-		},
+		), r.claudeProxyEnv(n)...),
+		EnvFrom: r.claudeEnvFrom(a),
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
@@ -124,10 +120,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Env: append(append([]corev1.EnvVar{}, common...),
+		Env: append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
-			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"),
+			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 			secretKey("FORGE_TOKEN", forgeSecret, false),
 		),
@@ -147,19 +143,62 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 
 // proxyEnv points both containers at the egress proxy (#65): the NetworkPolicy lets agent pods reach only the proxy
 // and in-cluster services, so anything that ignores the proxy simply fails. Cluster-internal names and loopback go
-// direct. Both spellings, because curl and git read only the lower-case http_proxy. Empty EgressProxy: no proxy
-// (the earlier behaviour, for clusters without manifests/egress.yaml.tmpl).
-func (r *AgentReconciler) proxyEnv() []corev1.EnvVar {
+// direct (including claude-proxy, #66). Both spellings, because curl and git read only the lower-case http_proxy.
+// Empty EgressProxy: no proxy (the earlier behaviour, for clusters without manifests/egress.yaml.tmpl).
+//
+// forge: the forge sidecar's proxy URL carries the credential of Secret egress-forge-proxy (expanded by the kubelet,
+// never in the agent container); the proxy allows the forge hosts (GitHub) only with it, so they are the sidecar's.
+func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
 	if r.D.EgressProxy == "" {
 		return nil
 	}
 	noProxy := "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
 	var out []corev1.EnvVar
+	proxy := r.D.EgressProxy
+	if forge {
+		out = append(out, corev1.EnvVar{Name: "EGRESS_FORGE_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: forgeProxySecret}, Key: "password"}}})
+		proxy = strings.Replace(proxy, "://", "://forge:$(EGRESS_FORGE_KEY)@", 1)
+	}
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
-		out = append(out, corev1.EnvVar{Name: k, Value: r.D.EgressProxy})
+		out = append(out, corev1.EnvVar{Name: k, Value: proxy})
 	}
 	out = append(out, corev1.EnvVar{Name: "NO_PROXY", Value: noProxy}, corev1.EnvVar{Name: "no_proxy", Value: noProxy},
 		// Claude Code telemetry and error reports are not on the allow-list; without this every run makes refusals
 		corev1.EnvVar{Name: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", Value: "1"})
 	return out
+}
+
+// forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
+const forgeProxySecret = "egress-forge-proxy"
+
+// claudeEnvFrom: with the credential proxy (#66) the agent container gets no Claude Secret, only the optional MCP
+// token (#14). Without it, exactly one Claude credential per agent (#5), as before.
+func (r *AgentReconciler) claudeEnvFrom(a *v1.Agent) []corev1.EnvFromSource {
+	mcp := corev1.EnvFromSource{SecretRef: &corev1.SecretEnvSource{
+		LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + a.Name + "-mcp"}, Optional: ptr.To(true)}}
+	if r.D.ClaudeProxyURL != "" {
+		return []corev1.EnvFromSource{mcp}
+	}
+	return []corev1.EnvFromSource{
+		{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: a.Spec.ClaudeSecret}}}, mcp}
+}
+
+// claudeProxyEnv points Claude Code at the credential proxy (#66) with the agent's key. The key only identifies the
+// agent to the proxy; the model can read it, but it is worth nothing outside the cluster.
+func (r *AgentReconciler) claudeProxyEnv(n string) []corev1.EnvVar {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "ANTHROPIC_BASE_URL", Value: r.D.ClaudeProxyURL},
+		{Name: "ANTHROPIC_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN"}}}}
+}
+
+// usageReports: "off" when the Claude credential proxy reports usage (#66), so the sidecar refuses POST /usage.
+func (r *AgentReconciler) usageReports() string {
+	if r.D.ClaudeProxyURL != "" {
+		return "off"
+	}
+	return "on"
 }
