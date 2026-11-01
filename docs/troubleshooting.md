@@ -123,6 +123,7 @@ To claim a new sandbox, delete the claim of the step: `kubectl --context kind-ag
 | Step 05 stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Export the password that was used the first time. 2. Do run.sh step 05 again. |
 | An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Do run.sh step 05 again, it mints a new token. |
 
+## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.
 

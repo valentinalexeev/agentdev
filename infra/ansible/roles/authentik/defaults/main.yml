@@ -1,0 +1,19 @@
+---
+# authentik on GKE (#114): the same Helm chart, values and blueprints as ./run.sh 09. Instance values go into
+# instance.yml under `authentik` (example.vars.yml). The role runs when authentik.enabled is true (the default when
+# ingress.auth_host is set), before the role api.
+authentik_cfg: "{{ authentik | default({}) }}"
+authentik_version: "{{ authentik_cfg.version | default('2026.8.5') }}"   # chart = app version; config.env AUTHENTIK_VERSION
+authentik_admin_email: "{{ authentik_cfg.admin_email | default('admin@agentdev.dev') }}"   # config.env AUTHENTIK_ADMIN_EMAIL
+authentik_chart_repo: https://charts.goauthentik.io
+# public host of the login (Gateway route, role ingress); the issuer users and tokens see
+authentik_host: "{{ (ingress | default({})).auth_host | default('') }}"
+# the web UI's OIDC callback (blueprint redirect URI, env AGENTDEV_UI_CALLBACK); kind keeps the localhost default
+authentik_ui_callback: "{{ ('https://' ~ ingress.host ~ '/callback') if (ingress | default({})).host | default('') | length > 0 else '' }}"
+# Secret Manager (platform role, generated once, never overwritten): platform-<key>
+authentik_sm_keys: [pg-authentik, authentik-secret-key, authentik-admin]
+# Google Front End ranges: authentik trusts X-Forwarded-* only from these and private ranges (role ingress uses the same)
+authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+authentik_db_pod: platform-db-0
+# break-glass (docs/admin.md): akadmin is added to agentdev-admins once; add only, never removed by the playbook
+authentik_breakglass_admin_group: true

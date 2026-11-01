@@ -32,7 +32,8 @@ github_app:
 #     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
 #     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
 #     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
-# Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
+# Management API (agentdev #104): deployed with ingress.auth_host (authentik is the issuer, #114) or an explicit
+# api.oidc_issuer (another OIDC provider; then set authentik.enabled: false).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
 # api:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
@@ -46,6 +47,7 @@ github_app:
 # ingress:
 #   host: agentdev.example.com              # web UI
 #   webhook_host: agentdev.example.com      # optional, default host
+#   auth_host: auth.example.com             # authentik login (#114); also in terraform public_hosts
 #   certificate: agentdev-public-1a2b3c4d
 #   security_policy: agentdev-public        # only with cloud_armor = true
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.

@@ -6,5 +6,5 @@ zone               = "europe-west4-a"
 billing_account_id = "000000-000000-000000"
 github_repository  = "my-org/my-agentdev-deploy"
 budget_amount_usd  = 150
-# public_hosts       = ["agentdev.example.com"]   # agentdev #120; DNS A record -> terraform output webhook_ip
+# public_hosts       = ["agentdev.example.com", "auth.example.com"]   # agentdev #120; DNS A record -> terraform output webhook_ip
 # cloud_armor        = false
