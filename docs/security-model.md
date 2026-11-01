@@ -113,6 +113,58 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 
 ### Phase 2: egress allow-list (fixes R10)
 
+Status: **implemented** in #65, pending an e2e pass on GKE. As built:
+
+- `manifests/egress.yaml.tmpl` (rendered by `06-agents.sh` and the Ansible playbook) holds a Squid forward proxy
+  (`egress-proxy`, pinned `ubuntu/squid` image, non-root, read-only root) and the NetworkPolicy `agent-egress`. Agent
+  pods may connect only to DNS, the proxy, the webhook router, the in-cluster forge (Gitea, kind), botboard and
+  ContextForge. The internet, the metadata server and every other cluster service are denied.
+- The operator sets `HTTPS_PROXY`/`HTTP_PROXY` (and the lower-case forms, `NO_PROXY` for cluster names) on both
+  containers of every agent pod (`EGRESS_PROXY`). It also sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so Claude
+  Code telemetry does not cause refusals.
+- The proxy allows `CONNECT` to port 443 and plain HTTP to port 80 for the hosts in `EGRESS_HOSTS` +
+  `EGRESS_EXTRA_HOSTS` only (Squid `dstdomain`; a leading dot means the domain and its subdomains), and never to a
+  private, loopback, link-local, multicast or reserved address (also in IPv4-mapped and NAT64 IPv6 form), even if an
+  allowed name resolves to one (DNS rebinding: the ACL and the connection use the same Squid DNS cache). A bare IP
+  never matches the host list. The refusal line has the method and `host:port` only, never the path, query or
+  userinfo (they can hold credentials, and the line is stored as a SecurityEvent).
+- NetworkPolicy cannot tell the containers of a pod apart: the design said "the forge from the sidecar only", but the
+  agent container can reach the in-cluster forge too. It holds no forge token (#64), so it can read only what an
+  anonymous user can.
+- In-cluster URLs given to agent pods (router, forge, botboard, ContextForge) are full `*.svc.cluster.local` names,
+  so `NO_PROXY` sends them direct; a test checks the rendered env.
+- Default hosts (decision (b) on #6): the Anthropic API, GitHub (API, git, raw content), npm, PyPI, the Go module
+  proxy and checksum database, crates.io. Not `storage.googleapis.com` (any bucket, including an attacker's, through
+  a signed URL) and not `statsig.anthropic.com` (telemetry, off through `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`);
+  checked on kind that the Go proxy, PyPI, npm and crates.io downloads work without them. With HTTPS the proxy sees only the host name, not the path, so an allowed
+  host is allowed as a whole: allowing `github.com` lets an agent read any public repository and push with a token it
+  holds (it holds none since #64).
+- GKE: Dataplane V2 enforces `agent-egress`; in addition an `FQDNNetworkPolicy` (`enable_fqdn_network_policy` in
+  Terraform; GKE Standard with Dataplane V2, no Enterprise tier since GKE Enterprise features came to all clusters)
+  limits the proxy pod itself to the same hosts on 80/443, so a wrong `squid.conf` cannot open egress. The FQDN policy
+  isolates the proxy for egress, so `egress-proxy-dns` allows its DNS. The playbook refuses to run when the policy is
+  on but the type is not served; with `egress_fqdn_policy: false` (and on kind) `egress-proxy-web` lets the proxy reach
+  any address on 80/443 and Squid alone enforces the list. GKE patterns match one subdomain level only, so `.x.org`
+  allows `a.x.org` but not `a.b.x.org` there.
+- kind: kindnet enforces NetworkPolicy since kind v0.24 (`00-prereqs.sh` checks it). On older kind the proxy is
+  advisory: a tool that ignores `HTTPS_PROXY` gets out directly.
+- GKE e2e checklist (before R10 counts as mitigated on GKE): from both containers of an agent pod,
+  `curl -m3 http://169.254.169.254/` and `env -u HTTPS_PROXY -u https_proxy curl -m5 https://example.com` fail,
+  `curl https://api.anthropic.com` and a `git ls-remote` of the agent's repository work, and a refused host shows up as
+  a SecurityEvent. GKE serves metadata to Workload Identity pods through the node, so the first check matters.
+- Signals: each refused request is one `AGENTDEV_SECURITY_EVENT` line (`rule` `egress-host`, `medium`) in the proxy
+  log, with the client pod IP. The operator follows the proxy pod like an agent pod and records the event for the
+  agent whose running pod has that IP: `source` `egress`, `untrusted` false (the proxy wrote it). Egress refusals do
+  **not** count toward the auto-pause (a build that needs a host off the list makes one refusal per request), and a
+  flood of them gives a `medium` rate-limited event, not `high`; this holds until approvals (phase 4) let a person
+  allow the host. A line from an unknown IP is logged by the operator and dropped.
+- The proxy is one replica (new pod first on a change); a change of the list breaks agent egress for a few seconds.
+- Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project
+  extra hosts in the project spec (one instance-wide list for now), and an approval request for a refused host
+  (phase 4).
+
+Original design:
+
 - Default-deny egress NetworkPolicy for agent pods. Allowed: the forge (from the sidecar only, by port or FQDN), the
   claude-proxy, the registry proxy, DNS.
 - GKE: FQDN network policies (Dataplane V2). kind: a Squid forward proxy as the only allowed destination, which also
@@ -582,7 +634,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
   ... merge commit ... plan file sha256 ...". The operator may create Approvals but not write their status.
 - Security events: `executor.plan` (low), `executor.apply` (medium), `executor.refused` (high), source `executor`.
 - Not yet: the `agentdev-exec-terraform` image (any image by digest works, for example `hashicorp/terraform`),
-  egress allow-list for executor Jobs (#65), deciding in the UI (#80), reopening the issue on a failed apply.
+  egress allow-list for executor Jobs (#135), deciding in the UI (#80), reopening the issue on a failed apply.
 
 ### Resources
 
@@ -599,7 +651,7 @@ Status: **implemented** in #69 (operator `executor.go`), pending an e2e pass on 
 | Actor | Runs as | Cloud credentials | Can |
 |---|---|---|---|
 | design agent (AI) | agent pod | read-only (viewer, state read) | read code and state, run a plan for itself, open the PR |
-| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, egress allow-list, no service account token) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
+| plan executor | Kubernetes Job, sandboxed like an agent (gVisor, no service account token; egress allow-list planned in #135, today it can reach all hosts) | read-only; write only to its own prefix in the plan bucket | plan a given commit, store the plan where agents cannot write |
 | apply executor | Kubernetes Job | write, scoped to one environment (Workload Identity, lifetime of the Job) | apply exactly the approved plan |
 | person with write access | forge, UI | own | review, merge, `/approve` the apply |
 

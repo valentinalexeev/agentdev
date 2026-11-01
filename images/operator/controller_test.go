@@ -256,6 +256,62 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 	}
 }
 
+// #65: with an egress proxy configured, both containers send their traffic through it; in-cluster names go direct.
+func TestEgressProxyEnv(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	if hasEnv(container(s, "agent"), "HTTPS_PROXY") {
+		t.Fatal("no proxy configured, but HTTPS_PROXY set")
+	}
+	r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+	reconcile(t, r, "alice")
+	s = getSTS(t, c, "alice")
+	for _, name := range []string{"agent", "forge"} {
+		ct := container(s, name)
+		got := map[string]string{}
+		for _, e := range ct.Env {
+			got[e.Name] = e.Value
+		}
+		want := r.D.EgressProxy
+		if name == "forge" { // only the sidecar carries the forge-host credential (GitHub is the sidecar's)
+			want = "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+		}
+		for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+			if got[k] != want {
+				t.Errorf("%s: %s=%q", name, k, got[k])
+			}
+		}
+		if hasEnv(ct, "EGRESS_FORGE_KEY") != (name == "forge") {
+			t.Errorf("%s: EGRESS_FORGE_KEY present=%v", name, hasEnv(ct, "EGRESS_FORGE_KEY"))
+		}
+		if !strings.Contains(got["NO_PROXY"], ".svc.cluster.local") || got["no_proxy"] != got["NO_PROXY"] {
+			t.Errorf("%s: NO_PROXY=%q", name, got["NO_PROXY"])
+		}
+	}
+}
+
+// #65: in-cluster URLs given to agent pods are full service names, so NO_PROXY (.svc.cluster.local) sends them direct;
+// a short name would go to the proxy and get a 403.
+func TestInClusterURLsBypassProxy(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.EgressProxy, r.D.ForgeURL = "http://egress-proxy.coding-agents.svc.cluster.local:3128", "http://gitea.forge.svc.cluster.local:3000"
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	for _, ct := range s.Spec.Template.Spec.Containers {
+		for _, e := range ct.Env {
+			if !strings.HasSuffix(e.Name, "_URL") || !strings.HasPrefix(e.Value, "http://") || strings.HasPrefix(e.Value, "http://127.0.0.1") {
+				continue
+			}
+			host := strings.Split(strings.TrimPrefix(e.Value, "http://"), "/")[0]
+			host = strings.Split(host, ":")[0]
+			if !strings.HasSuffix(host, ".svc.cluster.local") {
+				t.Errorf("%s/%s=%s is not a full service name", ct.Name, e.Name, e.Value)
+			}
+		}
+	}
+}
+
 // #2: a GitHub agent gets the App credentials from its own Secret, in the forge container only, and github.com URLs.
 func TestGitHubAgentCredentials(t *testing.T) {
 	r, c := setup(t, agent("gina", func(a *v1.Agent) { a.Spec.Forge = "github"; a.Spec.Repo = "octo-org/repo" }))
@@ -347,6 +403,30 @@ func TestClaudeProxyNoCredentialInPod(t *testing.T) {
 	}
 }
 
+// #65 + #66: with both proxies, the agent container reaches claude-proxy directly (full service name, in NO_PROXY)
+// and still sends everything else through the egress proxy.
+func TestEgressAndClaudeProxy(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	got := map[string]string{}
+	for _, e := range container(getSTS(t, c, "alice"), "agent").Env {
+		got[e.Name] = e.Value
+	}
+	if got["HTTPS_PROXY"] != r.D.EgressProxy || got["ANTHROPIC_BASE_URL"] != r.D.ClaudeProxyURL {
+		t.Fatalf("HTTPS_PROXY=%q ANTHROPIC_BASE_URL=%q", got["HTTPS_PROXY"], got["ANTHROPIC_BASE_URL"])
+	}
+	host := strings.Split(strings.TrimPrefix(got["ANTHROPIC_BASE_URL"], "http://"), ":")[0]
+	bypass := false
+	for _, s := range strings.Split(got["NO_PROXY"], ",") {
+		bypass = bypass || (strings.HasPrefix(s, ".") && strings.HasSuffix(host, s))
+	}
+	if !bypass {
+		t.Errorf("claude-proxy %s not in NO_PROXY=%q", host, got["NO_PROXY"])
+	}
+}
+
 // #2 + #66: a GitHub agent also goes through the Claude proxy and never holds the Claude credential.
 func TestGitHubAgentUsesClaudeProxy(t *testing.T) {
 	r, c := setup(t, agent("gina", func(a *v1.Agent) { a.Spec.Forge = "github"; a.Spec.Repo = "octo-org/repo" }))
@@ -377,5 +457,51 @@ func TestGitHubAgentUsesClaudeProxy(t *testing.T) {
 	}
 	if !hasEnv(container(s, "forge"), "GITHUB_APP_PRIVATE_KEY_FILE") || hasEnv(container(s, "agent"), "GITHUB_APP_ID") {
 		t.Error("App credentials misplaced")
+	}
+}
+
+// #2 + #65: a GitHub agent's forge sidecar reaches GitHub through the egress proxy with the forge credential, next to
+// its App credentials; the agent container gets the plain proxy and neither the credential nor the App key.
+func TestGitHubAgentEgressProxy(t *testing.T) {
+	r, c := setup(t, agent("gina", func(a *v1.Agent) { a.Spec.Forge = "github"; a.Spec.Repo = "octo-org/repo" }))
+	r.D.GitHubURL = "https://github.com"
+	r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+	reconcile(t, r, "gina")
+	s := getSTS(t, c, "gina")
+	fg, ag := container(s, "forge"), container(s, "agent")
+	got := map[string]string{}
+	for _, e := range fg.Env {
+		got[e.Name] = e.Value
+	}
+	if got["HTTPS_PROXY"] != "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128" ||
+		got["https_proxy"] != got["HTTPS_PROXY"] || !hasEnv(fg, "EGRESS_FORGE_KEY") {
+		t.Errorf("forge proxy env: HTTPS_PROXY=%q", got["HTTPS_PROXY"])
+	}
+	if got["FORGE_KIND"] != "github" || got["FORGE_URL"] != "https://github.com" || !hasEnv(fg, "GITHUB_APP_ID") ||
+		!hasEnv(fg, "GITHUB_APP_PRIVATE_KEY_FILE") {
+		t.Errorf("forge github env missing: %v", got)
+	}
+	// github.com is not in NO_PROXY, so the sidecar's GitHub calls go through the proxy
+	for _, d := range strings.Split(got["NO_PROXY"], ",") {
+		if strings.HasSuffix("api.github.com", strings.TrimPrefix(d, ".")) && d != "" {
+			t.Errorf("NO_PROXY %q bypasses the proxy for GitHub", d)
+		}
+	}
+	// an EnvVar defined after its $(VAR) reference is not expanded by the kubelet
+	key, proxy := -1, -1
+	for i, e := range fg.Env {
+		if e.Name == "EGRESS_FORGE_KEY" {
+			key = i
+		} else if e.Name == "HTTPS_PROXY" {
+			proxy = i
+		}
+	}
+	if key < 0 || key > proxy {
+		t.Errorf("EGRESS_FORGE_KEY (%d) must precede HTTPS_PROXY (%d)", key, proxy)
+	}
+	for _, e := range ag.Env {
+		if e.Name == "EGRESS_FORGE_KEY" || strings.HasPrefix(e.Name, "GITHUB_APP") || strings.Contains(e.Value, "EGRESS_FORGE_KEY") {
+			t.Errorf("agent container has %s=%s", e.Name, e.Value)
+		}
 	}
 }

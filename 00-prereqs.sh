@@ -14,6 +14,10 @@ command -v zstd  >/dev/null 2>&1 || warn "zstd missing - gVisor download falls b
 
 "${CONTAINER_ENGINE}" info >/dev/null 2>&1 || die "${CONTAINER_ENGINE} daemon is not running"
 ok "$(kind version)"
+# kindnet enforces NetworkPolicy since kind v0.24; older kind makes the egress allow-list (#65) advisory only
+kv=$(kind version | sed -n 's/^kind v\([0-9]*\)\.\([0-9]*\).*/\1 \2/p')
+read -r kmaj kmin <<<"${kv:-0 0}"
+(( kmaj > 0 || kmin >= 24 )) || die "kind v0.24 or later is needed (NetworkPolicy enforcement for the egress allow-list, #65): brew upgrade kind"
 ok "container engine: ${CONTAINER_ENGINE} $("${CONTAINER_ENGINE}" version --format '{{.Server.Version}}' 2>/dev/null || true)"
 
 # kind runs everything inside the container engine's VM, so that VM's limits are what count.

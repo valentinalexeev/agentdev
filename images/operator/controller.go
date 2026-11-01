@@ -23,6 +23,7 @@ type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	GitHubURL                                                                            string // FORGE_URL of forge: github agents (#2)
 	PollSeconds, IdleSeconds                                                             string
+	EgressProxy                                                                          string // http://egress-proxy...:3128, empty = none (#65)
 	// approvals (#67): on/off, the API's internal URL the sidecar asks, and the timeout in minutes
 	Approvals, ApprovalsURL, ApprovalTimeout string
 	// ClaudeProxyURL (#66): when set, the agent container gets no Claude credential; it calls this URL as

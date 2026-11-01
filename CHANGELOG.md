@@ -31,6 +31,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
+  without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
+  process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and
+  `./run.sh 10` makes the Gitea account `agentdev-api`, admin collaborator of `REPO` and of every Gitea agent
+  repository, with a `read:repository,read:user` token in Secret `agentdev-api-forge` (kept if it still works for
+  `agentdev-api`, never printed; older `agentdev-api*` tokens are deleted, and the API restarts with the new token). On GKE the
+  forge token comes from Secret Manager through the Ansible role `api` (#104, #115); the group follows #114.
 - Deterministic executors (#69, security model phase 5): new resources `Executor` and `ExecutorRun`
   (`agentdev.dev/v1alpha1`) in their own namespace `agentdev-executors` (`EXEC_NS`). The operator polls the forge
   with the executor's own account, plans every PR that changes `spec.path` (commit status `agentdev/trusted-plan`,
@@ -186,6 +193,16 @@ While the version is `0.x`, breaking changes bump MINOR.
   users until #87.
 
 ### Security
+- Egress allow-list (#65, security model phase 2, mitigates R10): agent pods reach the outside only through the new
+  `egress-proxy` (Squid, pinned `ubuntu/squid` image, non-root) and only the hosts in `EGRESS_HOSTS` /
+  `EGRESS_EXTRA_HOSTS` (Ansible `egress_hosts`, `egress_extra_hosts`); private and link-local addresses are always
+  refused (also IPv4-mapped/NAT64 forms, multicast, reserved). Refusal lines log only method and `host:port`. The NetworkPolicy `agent-egress` limits agent pods to DNS, the proxy, the router, the in-cluster forge,
+  botboard and ContextForge. The operator sets `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` and
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` on both containers (operator env `EGRESS_PROXY`; empty = no proxy). Each
+  refused request becomes a SecurityEvent of the agent whose pod made it (`source: egress`, rule `egress-host`); these
+  events do not count toward auto-pause until approvals exist. GKE: Terraform sets `enable_fqdn_network_policy`, and
+  the playbook adds an `FQDNNetworkPolicy` for the proxy pod (`egress_fqdn_policy`, refuses to run if the type is not
+  served) plus `egress-proxy-dns`. `00-prereqs.sh` requires kind v0.24 or later (NetworkPolicy enforcement). Upgrade: an agent tool that ignores `HTTPS_PROXY` now fails; add hosts a project needs.
 - Forge sidecar (#64, security model phase 1, fixes R4 pending e2e): every agent pod gets a `forge` container
   (`images/forge`, image `ghcr.io/valentinalexeev/agentdev-forge`, UID 1001, own process namespace) that alone holds
   `FORGE_TOKEN`, `WAKE_TOKEN` and `REGISTER_TOKEN` and does every forge operation for the loop over localhost:

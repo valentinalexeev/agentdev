@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -120,7 +121,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append(append([]corev1.EnvVar{}, common...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)), env("APPROVALS", r.D.approvals()),
@@ -143,7 +144,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Env: append(append(append([]corev1.EnvVar{}, common...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
@@ -163,6 +164,37 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		},
 	}}
 }
+
+// proxyEnv points both containers at the egress proxy (#65): the NetworkPolicy lets agent pods reach only the proxy
+// and in-cluster services, so anything that ignores the proxy simply fails. Cluster-internal names and loopback go
+// direct (including claude-proxy, #66). Both spellings, because curl and git read only the lower-case http_proxy.
+// Empty EgressProxy: no proxy (the earlier behaviour, for clusters without manifests/egress.yaml.tmpl).
+//
+// forge: the forge sidecar's proxy URL carries the credential of Secret egress-forge-proxy (expanded by the kubelet,
+// never in the agent container); the proxy allows the forge hosts (GitHub) only with it, so they are the sidecar's.
+func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
+	if r.D.EgressProxy == "" {
+		return nil
+	}
+	noProxy := "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+	var out []corev1.EnvVar
+	proxy := r.D.EgressProxy
+	if forge {
+		out = append(out, corev1.EnvVar{Name: "EGRESS_FORGE_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: forgeProxySecret}, Key: "password"}}})
+		proxy = strings.Replace(proxy, "://", "://forge:$(EGRESS_FORGE_KEY)@", 1)
+	}
+	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+		out = append(out, corev1.EnvVar{Name: k, Value: proxy})
+	}
+	out = append(out, corev1.EnvVar{Name: "NO_PROXY", Value: noProxy}, corev1.EnvVar{Name: "no_proxy", Value: noProxy},
+		// Claude Code telemetry and error reports are not on the allow-list; without this every run makes refusals
+		corev1.EnvVar{Name: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", Value: "1"})
+	return out
+}
+
+// forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
+const forgeProxySecret = "egress-forge-proxy"
 
 // claudeEnvFrom: with the credential proxy (#66) the agent container gets no Claude Secret, only the optional MCP
 // token (#14). Without it, exactly one Claude credential per agent (#5), as before.

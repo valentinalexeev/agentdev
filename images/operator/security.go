@@ -281,11 +281,16 @@ func (c *Collector) Start(ctx context.Context) error {
 
 func (c *Collector) scan(ctx context.Context) {
 	c.scanProxy(ctx)
-	var pods corev1.PodList
+	var pods, proxies corev1.PodList
 	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "coding-agent"}); err != nil {
 		log.FromContext(ctx).Error(err, "list agent pods")
 		return
 	}
+	// the egress proxy (#65) refuses on behalf of the agents: its lines name the agent pod by IP (consume)
+	if err := c.List(ctx, &proxies, client.InNamespace(c.NS), client.MatchingLabels{"app": egressApp}); err != nil {
+		log.FromContext(ctx).Error(err, "list egress proxy pods")
+	}
+	pods.Items = append(pods.Items, proxies.Items...)
 	for i := range pods.Items {
 		p := pods.Items[i]
 		if p.Status.Phase != corev1.PodRunning {
@@ -403,14 +408,24 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 		if !ok {
 			continue
 		}
-		if ok, first := c.admit(string(p.UID)+"/"+container, spec.Hash, spec.Time.Time); !ok {
+		owner := p // the pod the event belongs to: itself, or for the egress proxy the agent pod that made the request
+		if p.Labels["app"] == egressApp {
+			if owner, ok = c.egressOwner(ctx, sc.Text(), &spec); !ok {
+				log.FromContext(ctx).Info("egress refusal from a client that is no agent pod", "action", clip(spec.Action, 200))
+				if err := c.savePosition(ctx, p, container, spec.Time.Time); err != nil {
+					log.FromContext(ctx).Error(err, "save log position")
+				}
+				continue
+			}
+		}
+		if ok, first := c.admit(string(owner.UID)+"/"+spec.Container, spec.Hash, spec.Time.Time); !ok {
 			c.Dropped.Add(1)
 			if !first {
 				continue
 			}
 			spec = rateLimited(spec, c.C.RatePerMin)
 		}
-		if err := c.Record(ctx, p, spec); err != nil {
+		if err := c.Record(ctx, owner, spec); err != nil {
 			return fmt.Errorf("record security event %s: %w", spec.Rule, err)
 		}
 		if err := c.savePosition(ctx, p, container, spec.Time.Time); err != nil {
@@ -424,6 +439,9 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 func rateLimited(s v1.SecurityEventSpec, rate int) v1.SecurityEventSpec {
 	h := sha256.Sum256([]byte("rate-limited\x00" + s.Hash))
 	s.Rule, s.Severity, s.Job = "rate-limited", "high", ""
+	if s.Source == "egress" { // many refused requests are a build, not an attack on the collector: no pause (maybePause)
+		s.Severity = "medium"
+	}
 	s.Action = fmt.Sprintf("more than %d security events per minute from container %s; further lines dropped", rate, s.Container)
 	s.Hash = hex.EncodeToString(h[:])
 	return s
@@ -450,6 +468,11 @@ func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityE
 // (spec.paused=false) after looking; the reason stays in the SecurityPaused condition.
 func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, spec v1.SecurityEventSpec) error {
 	reason, msg := "", ""
+	if spec.Source == "egress" && spec.Severity != "high" {
+		// a build that needs a host not on the list makes one refusal per request: recorded and reported, but not
+		// counted toward the pause until a person can approve a host (phase 4, #67)
+		return nil
+	}
 	if spec.Severity == "high" {
 		reason, msg = "HighSeverity", fmt.Sprintf("high severity %s/%s: %s", spec.Source, spec.Rule, clip(spec.Action, 200))
 	} else {
@@ -459,7 +482,7 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 		}
 		n := 1 // the event just recorded
 		for _, e := range list.Items {
-			if e.Name != name && e.Spec.Job == spec.Job {
+			if e.Name != name && e.Spec.Job == spec.Job && e.Spec.Source != "egress" {
 				n++
 			}
 		}
@@ -536,8 +559,12 @@ func (c *Collector) prunePositions(ctx context.Context) error {
 	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "coding-agent"}); err != nil {
 		return err
 	}
+	var proxies corev1.PodList
+	if err := c.List(ctx, &proxies, client.InNamespace(c.NS), client.MatchingLabels{"app": egressApp}); err != nil {
+		return err
+	}
 	live := map[string]bool{}
-	for _, p := range pods.Items {
+	for _, p := range append(pods.Items, proxies.Items...) {
 		live[string(p.UID)] = true
 	}
 	c.pruneBuckets(live)
@@ -558,6 +585,36 @@ func (c *Collector) prunePositions(ctx context.Context) error {
 		return nil
 	}
 	return c.Update(ctx, &cm)
+}
+
+// egressApp is the app label of the egress proxy (manifests/egress.yaml.tmpl, #65).
+const egressApp = "egress-proxy"
+
+// egressOwner finds the agent pod behind an egress proxy refusal by the client IP in the line, and rewrites the event
+// as that agent's: source egress, trusted (the proxy, not the agent, wrote the line), pod and agent from the agent
+// pod. The hash stays the proxy's (pod UID, container, time, line), so a re-read line still dedupes. ok=false when
+// no running agent pod has that IP (a deleted pod, or a client that is not an agent).
+func (c *Collector) egressOwner(ctx context.Context, line string, spec *v1.SecurityEventSpec) (*corev1.Pod, bool) {
+	_, rest, _ := strings.Cut(line, " ")
+	var e struct {
+		Client string `json:"client"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(rest, eventPrefix)), &e); err != nil || e.Client == "" {
+		return nil, false
+	}
+	var pods corev1.PodList
+	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "coding-agent"}); err != nil {
+		return nil, false
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.PodIP != e.Client || p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		spec.Source, spec.Untrusted, spec.Agent, spec.Pod, spec.Container = "egress", false, agentOf(p), p.Name, egressApp
+		return p, true
+	}
+	return nil, false
 }
 
 // forgedUsage reports a usage line printed outside the structured channel (the agent container): one medium event per

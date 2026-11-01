@@ -30,6 +30,11 @@
 | The bootstrap stops with a message about branch protection. | The repository has a rule already. The bootstrap keeps the rule. | 1. Keep the rule, or run the bootstrap again with `REPLACE_BRANCH_PROTECTION=1`. |
 | The agent log shows `push to agent/<name>/... failed: push refused: ... protected path`. | The change touches `.github/workflows/` (or a different `PROTECTED_PATHS` entry). | No procedure. This is the design (#64): a person makes that change. The issue shows "could not produce a change". |
 | The agent log shows `AGENTDEV_SECURITY_EVENT` lines. | A guardrail stopped an action. The JSON gives the rule and the action. | 1. For `high`, read the issue or the review of the job and look for an injection attempt. 2. Also examine `medium` git-config and hook events after a Claude run. |
+| A build or a download in the agent fails with `403` or `CONNECT tunnel failed`. | The host is not on the egress allow-list (#65). | 1. Find the host in the log of `egress-proxy` (refer to *Egress allow-list* in admin.md). 2. If the project needs the host, add it to the allow-list. |
+| A tool in the agent cannot connect, but the proxy log shows no line for it. | The tool does not use `HTTPS_PROXY`. The NetworkPolicy stops the direct connection. | 1. Set the proxy for the tool (for example in its configuration file). |
+| All agents cannot connect to the internet after the GKE deploy. The proxy log shows DNS errors. | The policy `egress-proxy-dns` is missing. | 1. Run the playbook again. 2. Run `kubectl -n coding-agents get networkpolicy egress-proxy-dns`. |
+| The playbook stops with `FQDNNetworkPolicy is not available`. | The cluster does not have FQDN network policy. | 1. Apply `infra/terraform`. 2. On a Standard cluster, run `kubectl -n kube-system rollout restart ds anetd`. |
+| `egress-proxy` shows `OOMKilled`. | Squid uses more memory than its limit. | 1. Increase the memory limit in `manifests/egress.yaml.tmpl`. |
 | The agent does not start new work. The log shows `subscription usage limit: new runs paused`. | The subscription is at the usage limit, or Claude refused a run because of its rate limit. | 1. On the **Usage** page, find the reason and the end time. 2. Wait for the end time. Or an administrator increases the global usage limit. |
 | The agent log shows `sync: the forge sidecar failed`. | The `forge` container does not run, or it cannot connect to the forge. | 1. Run `kubectl -n coding-agents logs agent-<name>-0 -c forge`. 2. Examine `FORGE_TOKEN` in the Secret `agent-<name>`. |
 
@@ -62,7 +67,7 @@
 |---|---|---|
 | The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
 | On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. The output is hidden (`no_log`). | The specification path is not correct, a server host is not in `mcp_allowed_hosts`, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Make sure that the host of each server in `mcp:` is in `mcp_allowed_hosts`. 3. Install `yq`, `jq` and `curl`. 4. Run the playbook again. 5. To see the error, run `scripts/mcp-sync.sh <spec>` with `KUBECTL`, `MCP_ALLOWED_HOSTS` and `CF_ADMIN_FILE` set. The script does not show tokens. |
-| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R46). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
+| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
 
 ## authentik, API and web UI

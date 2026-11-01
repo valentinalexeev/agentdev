@@ -80,6 +80,7 @@ func main() {
 		Approvals:       env("APPROVALS", "false"),
 		ApprovalsURL:    os.Getenv("APPROVALS_URL"),
 		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
+		EgressProxy:     os.Getenv("EGRESS_PROXY"),
 		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {

@@ -105,6 +105,7 @@ Agents read the forge at this interval when webhooks do not operate.
 | Log of the sidecar | `kubectl -n coding-agents logs agent-<name>-0 -c forge` |
 | The sidecar refuses a `git push` | to a branch outside `agent/<name>/*`; that touches `PROTECTED_PATHS` (default: the workflow directories); of more than `MAX_PUSH_MB` (50) |
 | Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
+| Egress | through `egress-proxy` only (`HTTPS_PROXY`), to the hosts of the allow-list. Refer to *Egress allow-list* |
 | Sidecar image | on `kind`, `./run.sh 06` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
 
 | Setting | `kind` | GKE (Ansible) |
@@ -271,7 +272,7 @@ NOTE: The dry run (`--check`) does not run the sync.
    - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
 
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
-   A bad server can put instructions in them (prompt injection). Refer to R46 in `docs/security.md`.
+   A bad server can put instructions in them (prompt injection). Refer to R51 in `docs/security.md`.
 
    The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
 3. Run the sync: `scripts/mcp-sync.sh <spec>`
@@ -400,11 +401,32 @@ NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
 `manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
 interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
+### Give a person admin rights for agents
+
+The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+
+IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
+set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
+and never removes a member. Step 09 checks this each run: it adds a test user, re-applies the blueprints, and fails
+if a member is gone. Add and remove members by hand in authentik only.
+
+1. Log in to authentik as an administrator.
+2. Go to **Directory > Groups** and open `agentdev-admins`.
+3. Add the user on the **Users** tab.
+4. Tell the user to log in to agentdev again. The API reads the groups from the token, and an old token does not
+   have the new group.
+
+CAUTION: Give this group to platform operators only. A member can add an agent to each repository of the forge.
+
 ### Reference: authentik
 
 - The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
 - The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
 - The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
+- The blueprint `manifests/authentik-blueprint-agentdev.yaml` makes the OIDC application and the group
+  `agentdev-admins`, without members. On `kind`, `09-authentik.sh` adds `akadmin` to the group through the authentik
+  API (add only, never remove).
 - The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
   to authentik.
 
@@ -420,7 +442,8 @@ Do this task after run.sh step 09.
 1. Set `API_OIDC_ISSUER` in `config.env` to the URL that you use to log in to authentik.
    On `kind`, with the 9443 port-forward, this URL is `https://localhost:9443/application/o/agentdev/`.
 2. Run run.sh step 10: `./run.sh 10`
-   The script builds the API and deploys it in `agentdev-platform`.
+   The script builds the API and deploys it in `agentdev-platform`. On `kind`, it also gives the API access to the
+   forge. Refer to "Give the API access to the forge".
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
@@ -498,6 +521,14 @@ WARNING: Do not use a token with write access. The API only reads the permission
 Gitea tells the permission of another user only to a site admin or to an admin of the repository. With any other
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
+
+On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
+`read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
+works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+`./run.sh 10` again.
+
+On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.
@@ -985,6 +1016,56 @@ Ansible role `api` installs the API when `instance.yml` sets `api.oidc_issuer` (
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
 
+## Egress allow-list
+
+The agents can connect to the internet only through the egress proxy (`egress-proxy`, #65). The proxy lets an agent
+connect only to the hosts on the allow-list. The default list contains the Claude API, GitHub, npm, PyPI, the Go
+module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods. On `kind`, this
+NetworkPolicy operates only with kind v0.24 or later. `./run.sh 00` makes sure of this.
+
+### Add a host to the allow-list
+
+Do this task when the build of a project needs a host that is not on the list, for example a different package
+registry.
+
+WARNING: Add only a host that you trust. An agent can send data to each host on the list.
+
+1. Add the host to the list:
+   - On `kind`: set `EGRESS_EXTRA_HOSTS` in `.env`, for example `EGRESS_EXTRA_HOSTS="repo.maven.apache.org .example.com"`.
+   - On GKE: add the host to `egress_extra_hosts` in `instance.yml`.
+2. Write a dot before the name to also allow all subdomains: `.example.com`.
+3. Apply the change:
+   - On `kind`: run `./run.sh 06`.
+   - On GKE: run the playbook (open a pull request in the deployment repository).
+   The proxy starts again with the new list.
+   NOTE: During the restart of the proxy, the agents cannot connect to the internet for some seconds.
+
+### Find the connections that the proxy refused
+
+1. Run this command:
+   `kubectl -n coding-agents logs deploy/egress-proxy | grep AGENTDEV_SECURITY_EVENT`
+   The output shows one line for each refused request, with the IP address of the agent pod.
+2. Open the **Security** page of the web UI. The events have the source `egress` and the rule `egress-host`.
+
+NOTE: The operator does not pause an agent because of egress events. Look at the events and add the host, or find the
+cause of the requests.
+
+NOTE: The event shows only the method, the host and the port. The event does not show the path of the request.
+
+### Reference: egress
+
+| Setting | Default | Where |
+|---|---|---|
+| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `config.env`; Ansible `egress_hosts` |
+| Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
+| Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
+| More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
+| Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
+| Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
+| FQDN policy for the proxy (GKE) | on | Ansible `egress_fqdn_policy`; Terraform `enable_fqdn_network_policy`. If it is on and the cluster does not have it, the playbook stops |
+
+NOTE: The proxy refuses all private, loopback and link-local addresses, also when an allowed name points to one.
+
 ## Deterministic executors
 
 An executor applies a change that a person approved (#69). An AI agent designs the change with read-only
@@ -1087,6 +1168,9 @@ and the Executor objects.
   credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
   is closed with `executor spec changed`. Merge a new commit to plan again.
 - The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
+- The egress allow-list of the agents does not apply to the executors. The executor Jobs do not use the egress proxy,
+  because the tools need the cloud APIs of the environment. An executor Job can connect to all hosts. An allow-list
+  for the executors is planned in #135.
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
 ## Subscription usage limits

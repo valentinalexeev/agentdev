@@ -30,7 +30,7 @@ the playbook on first run.
 ## Platform (#51)
 The `platform` role deploys Postgres and ContextForge from `manifests/platform.yaml.tmpl` into `platform_ns`,
 then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the operator machine; needs `yq`, `jq`,
-`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R46); the sync output is
+`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
 not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`

@@ -109,8 +109,8 @@ Results land in `results.md`.
   (Hetzner dedicated, GCP with nested virt) swap the RuntimeClass to Kata; nothing else changes.
 - **Node autoscaling is not exercised** — kind nodes are fixed containers. Scale-to-zero here is at the
   pod level (suspend / stop / warm pool 0). Node scale-to-zero needs Cluster Autoscaler on a real cloud.
-- **Egress is open** and the API key sits in a Secret inside the pod. Production needs default-deny
-  NetworkPolicy (Cilium) and a credential-injecting egress proxy.
+- **Egress goes through an allow-list proxy** (#65), but the API key still sits in a Secret inside the pod
+  (credential proxy: security-model.md phase 3).
 - **local-path storage** is node-local; real clusters need a CSI driver with snapshots (Longhorn, JuiceFS, cloud PD).
 - gVisor on Apple Silicon inside Docker Desktop/OrbStack generally works; if 01's smoke test fails, run the
   spike on a Linux VM instead (any 4 vCPU / 8 GB box).
