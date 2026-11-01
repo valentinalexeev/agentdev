@@ -18,6 +18,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-security-positions], verbs: [get, update]}
+# subscription usage limits (#93): state and pauses (written), thresholds set through the API (read only)
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get, update]}
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

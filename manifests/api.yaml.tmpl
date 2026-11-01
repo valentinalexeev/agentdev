@@ -12,6 +12,10 @@ rules:
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [agents], verbs: [get, list, watch, patch, create, delete]}   # Agents only: no Secrets, no StatefulSets, no PVCs
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
+# usage limits (#93): thresholds (written by admins and project writers, audited) and the operator's usage state (read)
+- {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
