@@ -68,6 +68,27 @@ k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"
 ok "claude-proxy up: http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"
 
+log "Egress allow-list (#65): proxy and NetworkPolicy"
+# with the credential proxy on, only claude-proxy reaches the Claude API (R64): drop it from the agents' list
+agent_egress_hosts=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
+  { if [[ "${CLAUDE_PROXY}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
+# the forge hosts (GitHub) are for the forge sidecar only: the proxy wants its credential (manifests/egress.yaml.tmpl)
+FORGE_PROXY_KEY=$(secret_file "${SPIKE_DIR}/.secrets/egress-forge-proxy.key")
+forge_auth="^Basic $(printf 'forge:%s' "${FORGE_PROXY_KEY}" | base64 | tr -d '\n')\$"
+printf '%s' "${FORGE_PROXY_KEY}" | k -n "${AGENTS_NS}" create secret generic egress-forge-proxy --from-file=password=/dev/stdin \
+  --from-literal=auth="${forge_auth}" --dry-run=client -o yaml | k apply -f - >/dev/null
+egress_render() {
+  AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" FORGE_NS="${FORGE_NS}" BOTBOARD_NS="${BOTBOARD_NS}" \
+    EGRESS_HOSTS="${agent_egress_hosts}" FORGE_EGRESS_HOSTS="${FORGE_EGRESS_HOSTS}" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
+    FORGE_PROXY_AUTH_SHA="$(printf '%s' "${forge_auth}" | openssl dgst -sha256 -r | cut -c1-16)" \
+    envsubst '${AGENTS_NS} ${PLATFORM_NS} ${FORGE_NS} ${BOTBOARD_NS} ${EGRESS_HOSTS} ${FORGE_EGRESS_HOSTS} ${EGRESS_PROXY_IMAGE} ${FORGE_PROXY_AUTH_SHA}' \
+    < "${SPIKE_DIR}/manifests/egress.yaml.tmpl"
+}
+egress_render | k apply -f - >/dev/null
+AGENTS_NS="${AGENTS_NS}" envsubst '${AGENTS_NS}' < "${SPIKE_DIR}/manifests/egress-proxy-web.yaml.tmpl" | k apply -f - >/dev/null
+k -n "${AGENTS_NS}" rollout status deploy/egress-proxy --timeout=180s >/dev/null
+ok "egress-proxy up; agents may reach only: ${agent_egress_hosts} (forge sidecar also: ${FORGE_EGRESS_HOSTS})"
+
 log "Agents"
 # agents are Agent objects (#47, #57): the operator turns them into StatefulSets. Install it when missing; to
 # pick up operator changes run ./run.sh 12 yourself.

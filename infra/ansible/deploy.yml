@@ -124,6 +124,102 @@
           replace: []
       no_log: true
 
+    - name: Forge sidecar egress credential (generated once, kept in Secret Manager)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ sm_egress_forge_proxy }}"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+        fi
+        gcloud secrets versions access latest --secret "$name" --project {{ gcp_project }}
+      args: {executable: /bin/bash}
+      register: forge_proxy_key
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Forge sidecar egress credential Secret (password for the sidecar, header regex for Squid)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: egress-forge-proxy, namespace: "{{ agents_ns }}"}
+          stringData:
+            password: "{{ forge_proxy_key.stdout }}"
+            auth: "^Basic {{ ('forge:' ~ forge_proxy_key.stdout) | b64encode }}$"
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Egress allow-list (#65) - proxy and agent NetworkPolicy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_egress) | from_yaml_all | list }}"
+      vars:
+        vars_egress:
+          src: "{{ repo_root }}/manifests/egress.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            FORGE_NS: forge
+            BOTBOARD_NS: botboard
+            # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
+            EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}"
+            FORGE_EGRESS_HOSTS: "{{ forge_egress_hosts | join(' ') }}"
+            FORGE_PROXY_AUTH_SHA: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
+            EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
+          replace: []
+
+    # Dataplane V2 enforces this on the proxy pod: even a changed squid.conf reaches nothing else. Squid's
+    # ".example.com" becomes the name example.com plus the pattern *.example.com (GKE patterns match one level only);
+    # the mapping lives in egress_fqdn.j2 (tested by tests/egress_fqdn.yml).
+    - name: Egress hosts as FQDNNetworkPolicy matches
+      ansible.builtin.set_fact:
+        egress_fqdn_matches: "{{ lookup('ansible.builtin.template', 'egress_fqdn.j2') | from_yaml }}"
+
+    - name: Is the FQDNNetworkPolicy type served (enable_fqdn_network_policy)?
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: fqdnnetworkpolicies.networking.gke.io
+      register: fqdn_crd
+      when: egress_fqdn_policy | bool
+
+    # also runs in --check (a dry run against the served type) when the type exists; without it the proxy has DNS only
+    - name: "Egress proxy FQDNNetworkPolicy (GKE, #65)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: networking.gke.io/v1alpha1
+          kind: FQDNNetworkPolicy
+          metadata: {name: egress-proxy, namespace: "{{ agents_ns }}"}
+          spec:
+            podSelector: {matchLabels: {app: egress-proxy}}
+            egress:
+              - matches: "{{ egress_fqdn_matches }}"
+                ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
+      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length > 0)
+
+    - name: The FQDN policy is on, but the cluster does not serve it
+      ansible.builtin.fail:
+        msg: >-
+          egress_fqdn_policy is true, but FQDNNetworkPolicy is not available: apply infra/terraform
+          (enable_fqdn_network_policy) or set egress_fqdn_policy: false
+      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length == 0) and not ansible_check_mode
+
+    - name: Egress proxy may reach any address on 80/443 when the FQDN policy is off (Squid alone enforces the list)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: "{{ 'absent' if egress_fqdn_policy | bool else 'present' }}"
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_web) | from_yaml }}"
+      vars:
+        vars_web:
+          src: "{{ repo_root }}/manifests/egress-proxy-web.yaml.tmpl"
+          values: {AGENTS_NS: "{{ agents_ns }}"}
+          replace: []
+
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -220,6 +316,7 @@
             BOTBOARD_URL: "{{ botboard_url }}"
             POLL_SECONDS: "{{ poll_seconds }}"
             IDLE_SECONDS: "{{ idle_seconds }}"
+            EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
