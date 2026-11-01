@@ -14,8 +14,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   router, `https://<host>/` to the web UI, HTTP to HTTPS redirect, HSTS. Nothing else is public. The role `api` now
   also deploys the web UI (`manifests/ui.yaml.tmpl`; `api.ui: false` skips it). UI nginx limits bodies to 1 MB.
   Docs: `docs/admin.md` "Public HTTPS entry point (GKE)", kind parity with port-forward. New risks R66 to R68.
+- Approvals on GKE (#67): `deploy.yml` now accepts `approvals.enabled: true` when `api.oidc_issuer` is set (so
+  agentdev-api is deployed); before, the assert refused approvals on GKE. Docs: `docs/admin.md`, "Turn on approvals".
 
 ### Changed
+- Approvals are on by default on GKE (#67): `approvals.enabled` defaults to `true`. **BREAKING** for a GKE instance
+  without `api.oidc_issuer`: `deploy.yml` now stops; set `api.oidc_issuer`, or `approvals.enabled: false`. kind keeps
+  `APPROVALS=false`, because `./run.sh` does not install the API by default.
 - GitHub App webhook URL is `<public_url>/hook` (was `<public_url>/`), because the Gateway routes only `/hook` to the
   router (#120). **BREAKING** for an App registered before: change the webhook URL on github.com to
   `https://<host>/hook`. To apply #120: Terraform `infra/terraform` (gateway_api_config is an in-place cluster update),
