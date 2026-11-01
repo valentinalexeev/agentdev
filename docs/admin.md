@@ -480,7 +480,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
 | `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
-| `approvals.enabled` | `false` | `APPROVALS` |
+| `approvals.enabled` | `true` | `APPROVALS` (`false`) |
 | `usage.five_hour`, `usage.weekly` | `80`, `90` | `USAGE_FIVE_HOUR`, `USAGE_WEEKLY` |
 
 - The API and the operator get the same `approvals.enabled` and `usage` values.
@@ -841,8 +841,13 @@ Approvals let agents ask a project member for permission on the forge, instead o
 CAUTION: Make sure that the API has a forge token (refer to *Give the API access to the forge*). Without the token,
 the API cannot make a decision, and each request stays open until it becomes void.
 
-IMPORTANT: At this time, approvals operate only on kind. The GKE playbook does not deploy agentdev-api, which
-decides the requests, so the playbook stops with an error if `approvals.enabled` is `true`.
+IMPORTANT: Approvals need agentdev-api, which decides the requests. On GKE, approvals are on by default
+(`approvals.enabled: true`). The playbook deploys the API only when `api.oidc_issuer` is set. Thus, if
+`api.oidc_issuer` is empty, the playbook stops with an error. Set `api.oidc_issuer` in `instance.yml`. To turn off
+approvals, set `approvals.enabled: false`. Optional: set `approvals.timeout_minutes`.
+
+NOTE: On kind, approvals are off by default (`APPROVALS=false`), because `./run.sh` does not install the API by
+default. To turn on approvals on kind, do the steps that follow.
 
 1. Set `APPROVALS=true` in `.env`.
 2. Optional: set the time that the agent waits for a decision with `APPROVAL_TIMEOUT_MINUTES`. The default is 30

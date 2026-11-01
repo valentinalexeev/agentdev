@@ -36,7 +36,7 @@
         OIDC_AUDIENCE: "{{ api_oidc_audience }}"
         FORGE_URL: "{{ api_forge_url }}"
         # same switch as the operator (deploy.yml), so the API and the operator agree on approvals (#67)
-        APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+        APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
         APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
