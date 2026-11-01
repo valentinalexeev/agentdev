@@ -21,6 +21,10 @@ module "agentdev" {
   budget_amount_usd    = var.budget_amount_usd
   budget_alert_emails  = var.budget_alert_emails
   agent_pool_max_nodes = var.agent_pool_max_nodes
+
+  # public HTTPS entry point (agentdev #120): uncomment with a ref= that contains #120
+  # public_hosts = var.public_hosts
+  # cloud_armor  = var.cloud_armor
 }
 
 variable "project_id" { type = string }
@@ -46,8 +50,18 @@ variable "agent_pool_max_nodes" {
 
 output "get_credentials" { value = module.agentdev.get_credentials }
 output "webhook_ip" { value = module.agentdev.webhook_ip }
+# output "ingress" { value = module.agentdev.ingress }   # agentdev #120: values for instance.yml `ingress`
 output "github_actions_auth" { value = module.agentdev.github_actions_auth }
 
+variable "public_hosts" {
+  description = "DNS names of the public HTTPS entry point (web UI and webhook); empty = none."
+  type        = list(string)
+  default     = []
+}
+variable "cloud_armor" {
+  type    = bool
+  default = false
+}
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's
 # Kubernetes service account in agentdev-executors use each. Grant the roles your tool needs; keep plan read-only.

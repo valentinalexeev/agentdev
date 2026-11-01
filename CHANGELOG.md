@@ -6,6 +6,21 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- GKE public HTTPS entry point (#120): Terraform `public_hosts` makes a Google-managed certificate and a TLS 1.2+
+  SSL policy, optional `cloud_armor` a Cloud Armor policy (size limit, per-IP rate limit); the cluster turns on the
+  Gateway API. New Ansible role `ingress` (runs when `instance.yml` sets `ingress.host`, values from
+  `terraform output ingress`) applies a Gateway on the existing static IP: `https://<webhook_host>/hook` to the
+  router, `https://<host>/` to the web UI, HTTP to HTTPS redirect, HSTS. Nothing else is public. The role `api` now
+  also deploys the web UI (`manifests/ui.yaml.tmpl`; `api.ui: false` skips it). UI nginx limits bodies to 1 MB.
+  Docs: `docs/admin.md` "Public HTTPS entry point (GKE)", kind parity with port-forward. New risks R66 to R68.
+
+### Changed
+- GitHub App webhook URL is `<public_url>/hook` (was `<public_url>/`), because the Gateway routes only `/hook` to the
+  router (#120). **BREAKING** for an App registered before: change the webhook URL on github.com to
+  `https://<host>/hook`. To apply #120: Terraform `infra/terraform` (gateway_api_config is an in-place cluster update),
+  then the Ansible playbook `deploy.yml` (roles `api` and `ingress`). The router itself still accepts `/`.
+
 ### Changed
 - API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
   scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.

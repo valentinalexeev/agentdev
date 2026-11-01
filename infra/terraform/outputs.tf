@@ -26,3 +26,13 @@ output "github_actions_auth" {
     service_account            = google_service_account.automation.email
   }
 }
+
+output "ingress" {
+  description = "Names for instance.yml `ingress` (Ansible role ingress, #120): copy them as they are."
+  value = {
+    static_ip_name  = google_compute_global_address.webhook.name
+    certificate     = try(google_compute_managed_ssl_certificate.public[0].name, "")
+    ssl_policy      = try(google_compute_ssl_policy.public[0].name, "")
+    security_policy = try(google_compute_security_policy.public[0].name, "")
+  }
+}
