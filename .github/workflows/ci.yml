@@ -155,6 +155,10 @@ jobs:
         if: needs.scope.outputs.ui == 'true'
         working-directory: images/ui
         run: npm ci && npm run lint && npm run build
+      - name: UI unused exports, files and dependencies (knip, #132)
+        if: needs.scope.outputs.ui == 'true'
+        working-directory: images/ui
+        run: npx --yes knip@5 --no-progress
 
   worker-image:
     needs: scope
