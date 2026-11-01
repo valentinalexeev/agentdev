@@ -369,7 +369,7 @@ handle_issues() {
 
 # one issue -> one PR, in its own worktree (runs as a background job)
 issue_job() {
-  local n=$1 base=$2 issue title body branch dir result
+  local n=$1 base=$2 issue title body branch dir result claude_rc=0
   issue=$(api GET "/repos/${REPO}/issues/${n}") || return
   title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
   branch="agent/${FORGE_USER}/issue-${n}"
@@ -486,7 +486,7 @@ board_finish() {
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result
+  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
   [[ -z "${fb}" ]] && return
@@ -595,9 +595,16 @@ maybe_stop() {
     log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; exec sleep infinity
   else log "idle: router keeps this agent ($(jq -r .reason <<<"${r}"))"; idle_since=$(date +%s); fi
 }
+usage_note=0
 while true; do
-  handle_issues
-  handle_feedback
+  # subscription usage (#93): while paused, start no new job; running jobs finish. Resumes by itself at the reset.
+  if usage_paused; then
+    (( usage_note )) || log "subscription usage limit: new runs paused"; usage_note=1
+  else
+    (( usage_note )) && log "subscription usage pause ended: resuming"; usage_note=0
+    handle_issues
+    handle_feedback
+  fi
   maybe_stop
   wait_for_work
 done
