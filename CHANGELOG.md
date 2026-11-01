@@ -7,6 +7,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- GKE parity with run.sh (#121): the playbook fills every value of `manifests/api.yaml.tmpl` (`APPROVALS`,
+  `APPROVAL_DENY_ACCOUNTS` from the new `api.approval_deny_accounts`, `USAGE_FIVE_HOUR`, `USAGE_WEEKLY`; before,
+  they reached the cluster as literal `${...}`), waits for the operator, router, egress proxy, Claude proxy and web
+  UI like `rollout status` in run.sh, and `templates/render.j2` now stops on a placeholder that the playbook does
+  not fill. New test `tests/render_values.yml`. Docs: `docs/admin.md` "Reference: run.sh steps and the GKE playbook",
+  upgrade step. New risk R84. To apply: run the playbook `deploy.yml`.
 - GKE public HTTPS entry point (#120): Terraform `public_hosts` makes a Google-managed certificate and a TLS 1.2+
   SSL policy, optional `cloud_armor` a Cloud Armor policy (size limit, per-IP rate limit); the cluster turns on the
   Gateway API. New Ansible role `ingress` (runs when `instance.yml` sets `ingress.host`, values from

@@ -1,0 +1,72 @@
+# Render check (#121): templates/render.j2 fails on a ${VAR} that the playbook does not set (kind/GKE drift), and the
+# role api sets every value of manifests/api.yaml.tmpl and manifests/ui.yaml.tmpl.
+# Run: ansible-playbook infra/ansible/tests/render_values.yml
+- name: Render guard and API/UI values (#121)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    image_registry: ghcr.io/example
+    image_tag: v0.0.0
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    forge_url: https://api.github.com
+    sm_security_siem: security-siem
+    platform_sm_prefix: platform-
+    approvals: {enabled: true}
+    usage: {five_hour: 70, weekly: 85}
+    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b]}
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/api/defaults/main.yml
+
+    - name: Render the API with the role's values (same as roles/api/tasks/main.yml)
+      ansible.builtin.set_fact:
+        api_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=api_render) | from_yaml_all | list }}"
+      vars:
+        api_render:
+          src: "{{ repo_root }}/manifests/api.yaml.tmpl"
+          values:
+            PLATFORM_NS: "{{ platform_ns }}"
+            AGENTS_NS: "{{ agents_ns }}"
+            API_IMAGE: "{{ api_image }}"
+            OIDC_ISSUER: "{{ api_oidc_issuer }}"
+            OIDC_DISCOVERY_URL: "{{ api_oidc_discovery_url }}"
+            OIDC_AUDIENCE: "{{ api_oidc_audience }}"
+            FORGE_URL: "{{ api_forge_url }}"
+            APPROVALS: "{{ approvals.enabled | default(false) | string | lower }}"
+            APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
+            USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+            USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+          replace: []
+
+    - name: The API container gets the values
+      vars:
+        env: "{{ (api_docs | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                 | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+      ansible.builtin.assert:
+        that:
+          - env.APPROVALS == 'true'
+          - env.APPROVAL_DENY_ACCOUNTS == 'bot-a,bot-b'
+          - env.USAGE_FIVE_HOUR == '70'
+          - env.USAGE_WEEKLY == '85'
+          - (api_docs | to_json) is not search('\$\{')
+
+    - name: A missing value fails the render and names the placeholder
+      block:
+        - name: Render the UI without OIDC_ISSUER
+          ansible.builtin.set_fact:
+            ui_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render) }}"
+          vars:
+            ui_render:
+              src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+              values: {PLATFORM_NS: "{{ platform_ns }}", UI_IMAGE: img}
+              replace: []
+        - name: Not reached
+          ansible.builtin.fail: {msg: "render.j2 accepted a template with an unset placeholder"}
+      rescue:
+        - name: The error names the placeholder
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('no value for \$\{OIDC_ISSUER\}')
+              - ansible_failed_result.msg is not search('render.j2 accepted')

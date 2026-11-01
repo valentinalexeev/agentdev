@@ -9,6 +9,9 @@ api_oidc_audience: "{{ api.oidc_audience | default('agentdev') }}"
 # forge for the live permission check of writes; the API speaks the Gitea API only (images/api/forge.go)
 api_forge_url: "{{ api.forge_url | default(forge_url) }}"
 # security_events / api_audit retention in Postgres (SECURITY_DB_RETENTION_DAYS on kind)
+# forge logins that never decide an approval (service accounts, executor accounts: docs/security.md R83);
+# APPROVAL_DENY_ACCOUNTS on kind. The API's own token user is excluded automatically.
+api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
 # Where secrets come from. Only `gcp` (Secret Manager) exists now; a `local` source (.secrets/ on kind) can be
 # added as tasks/secrets_local.yml when run.sh moves to Ansible (#106).
