@@ -52,6 +52,15 @@
 | The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
 | In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
 
+## Approvals
+
+| Symptom | Cause | Action |
+|---|---|---|
+| The agent waits, and a `/approve` comment has no effect | The comment is edited, the id is wrong, or the commenter does not have write access | Write a new comment with the correct id. Make sure that you have write access to the repository. |
+| Each request expires | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
+| No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
+| A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision. The agent sends the same commit again in the next pass. |
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.

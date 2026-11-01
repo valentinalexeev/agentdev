@@ -135,6 +135,32 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 3. Click **Delete <name>**. To stop, click **Cancel** or push Escape.
    The agent stops and goes out of the list. The volumes of the agent stay.
 
+## Answer an approval request from an agent
+
+An agent can ask for permission when it needs a tool that is not on its list, or when it must change a protected
+path such as `.github/workflows/`. The administrator turns on this function (`APPROVALS`). The agent writes a comment
+on its issue or pull request: "waiting for approval `<id>`". The comment shows the tool and the request text.
+
+WARNING: Read the request text carefully before you approve it. The agent wrote this text, and it can contain a
+prompt injection from the issue.
+
+1. Read the comment "waiting for approval" on the issue or the pull request.
+2. Write a new comment with one of these lines:
+   - `/approve <id>`: the agent can do this action one time.
+   - `/approve-job <id>`: the agent can do this action until the job ends.
+   - `/deny <id>`: the agent cannot do this action.
+   The agent continues, usually in less than one minute.
+
+NOTE: You must have write access to the repository. A decision from a person without write access, or from an agent,
+has no effect.
+
+NOTE: Do not edit the comment with the decision. The system ignores an edited comment. Write a new comment.
+
+NOTE: If nobody answers in 30 minutes, the system denies the request.
+
+NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
+pending requests. You cannot make a decision in the web UI at this time.
+
 ## Know what agents do
 
 | Condition | Result |

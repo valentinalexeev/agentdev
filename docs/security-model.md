@@ -234,8 +234,66 @@ sequenceDiagram
 - Admins get an "all projects" view of both tabs.
 - Agent overview shows "waiting for approval" as a state.
 - The same request also appears on the forge (see *Forge as an approval surface*).
-- **Open question (#67):** whether UI decisions ship in the first version (forge accounts sign in to the UI through
-  authentik) or the UI only shows requests and decisions are taken on the forge.
+- Decided on #67 (owner, 2026-10-31): the first version decides on the forge only; the UI shows Pending and History
+  read-only. Deciding in the UI is #80.
+
+### What is implemented (#67, forge-first)
+
+The design above is the target. The first version (#67) implements this part of it; the rest is #80 (UI decisions,
+SSE stream, decision note) or later (egress requests, GitHub forges, transcript excerpt and diff in the context,
+Postgres history table).
+
+```mermaid
+sequenceDiagram
+  participant C as Claude (agent container)
+  participant S as forge sidecar
+  participant O as operator
+  participant API as agentdev-api
+  participant F as forge (issue / PR)
+  participant U as project member (write access)
+  C->>S: permission prompt (MCP tool approve on localhost) or push touching a protected path
+  S->>S: id = random nonce, contentHash = sha256(id, agent, repo, job, source, tool, input)
+  S-->>O: log line AGENTDEV_APPROVAL_REQUEST (trusted only from the forge container)
+  O->>O: create Approval (spec immutable, hash re-checked)
+  S->>F: comment "waiting for approval <id>"
+  U->>F: /approve <id> | /approve-job <id> | /deny <id>
+  API->>F: read comments of the job's issue or PR, commenter's permission
+  API->>API: rules 1-6, status update with resourceVersion (first wins), audit
+  S->>API: GET /internal/approvals/{agent}/{id} (agent pods only)
+  S-->>C: allow / deny (only if the decided hash is the hash the sidecar computed)
+```
+
+- **Switch.** `APPROVALS=true` (instance config, default off). Off: Claude runs with `--permission-mode dontAsk` and
+  protected pushes are refused, as before. On: Claude runs with `--permission-prompt-tool mcp__agentdev__approve`
+  for tools outside the allow-list; the `--disallowedTools` list stays a hard deny and is never asked about.
+- **Sources.** Claude permission prompts (sidecar `POST /mcp`, a minimal MCP server on localhost) and protected-path
+  pushes. A push waits up to 14 minutes (the loop's request timeout); if still pending, the push is refused with
+  `push-approval-pending` and the next push of the same commit reuses the same request.
+- **Approval resource** (`agentdev.dev/v1alpha1`, short name `apv`, namespace of the agents). The operator creates it
+  from the sidecar's line; its spec is immutable (CEL). The status (`pending | allowed | denied | expired`, scope,
+  decided by, comment id, decided content hash) is written by agentdev-api only, through the `approvals/status`
+  subresource. Agents have no RBAC on Approvals. Objects are deleted 90 days after creation
+  (`APPROVAL_RETENTION_DAYS`); the audit log keeps the decisions.
+- **Decision rules as implemented.** 1: comments from any agent's forge account (by account id; a pass with an
+  unresolvable agent account decides nothing) or a bot account are ignored and audited. 2: the comment must quote the
+  id at the start of a line and be created after the request. 3: an edited comment is ignored and audited. 4: the
+  status carries the content hash, and the sidecar acts only if it equals its own. 5: the API reads the comment from
+  the forge and checks the commenter's permission (`write` or more) at decision time. 6: compare-and-set on
+  `resourceVersion`; a lost race is audited. The sidecar refuses to post a comment that starts a line with a decision
+  command (`approval-self-decision`, high).
+- **Scope.** `/approve` allows once. `/approve-job` allows the same tool (or the same commit for a push) until the job
+  ends; the grant is kept in the sidecar's memory and never outlives the pod.
+- **Fail closed.** API unreachable, no job, unknown answer, hash mismatch or timeout: denied. GitHub-forge requests
+  are not decided yet (they expire, #87).
+- **Audit.** Every decision (`approval-allowed`, `approval-denied`), expiry (`approval-expire`) and refused decision
+  attempt (`approval-decision`, result `denied`) is an `AGENTDEV_AUDIT` line with the request id, repo, job, tool,
+  content hash and comment id.
+- **API.** `GET /api/approvals?state=pending|decided|allowed|denied|expired|all&agent=&project=` and
+  `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
+  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
+  sidecar with state, scope, decider and decided hash only.
+- **UI.** An **Approvals** tab with a pending count, Pending and History tabs, the request text shown as untrusted
+  plain text.
 
 ### Safety rules
 

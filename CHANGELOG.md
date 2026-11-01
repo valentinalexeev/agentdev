@@ -20,6 +20,16 @@ While the version is `0.x`, breaking changes bump MINOR.
   `api_audit` table (same owner/API role split, trigger and `security_settings` retention as `security_events`; the
   API login has INSERT/SELECT and EXECUTE on `api_audit_prune()` only). The stdout line stays. New
   `GET /api/audit` (filters `agent`, `result`, `since`, `limit`, `cursor`), readable only by `agentdev-admins`.
+- Approvals, decided on the forge (#67, off by default: `APPROVALS=true` / `approvals.enabled`). Claude's tool
+  permission prompts (`--permission-prompt-tool mcp__agentdev__approve`, served by the forge sidecar) and pushes to
+  protected paths become requests: the sidecar comments "waiting for approval `<id>`", a person with write access
+  answers `/approve <id>`, `/approve-job <id>` or `/deny <id>`. New `Approval` CRD (short name `apv`), created by the
+  operator from the sidecar's `AGENTDEV_APPROVAL_REQUEST` line; status written by agentdev-api with a
+  compare-and-set. Decision rules: agent and bot comments ignored, edited comments ignored, live write-access check,
+  content hash, first decision wins, timeout (30 min) = denied. Every decision is audited. Read-only
+  `GET /api/approvals`, `GET /api/approvals/{name}`; internal listener `agentdev-api-internal:8081` for the sidecars.
+  UI: **Approvals** tab with a pending badge, Pending and History. New settings `APPROVALS`,
+  `APPROVAL_TIMEOUT_MINUTES`, `APPROVAL_RETENTION_DAYS`. Deciding in the UI is #80.
 - Web UI controls for agents (#57 step 4): per agent **Pause**/**Resume**, **Edit** (`maxConcurrent`, `scaleToZero`)
   and **Delete** with a confirm dialog (native `<dialog>`, keyboard usable, names the agent); **Add agent** form
   (name, repo, forge, maxConcurrent, scaleToZero) with client-side checks that mirror the API patterns. Buttons are
