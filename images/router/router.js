@@ -114,7 +114,7 @@ function k8s(method, path, body, contentType = 'application/json') {
       let b = ''; res.on('data', (c) => (b += c));
       res.on('end', () => {
         if (res.statusCode >= 300) return reject(new Error(`k8s ${method} ${u.pathname}: HTTP ${res.statusCode}`));
-        try { resolve(b ? JSON.parse(b) : {}); } catch (e) { reject(new Error(`k8s ${method} ${u.pathname}: bad JSON`)); }
+        try { resolve(b ? JSON.parse(b) : {}); } catch { reject(new Error(`k8s ${method} ${u.pathname}: bad JSON`)); }
       });
     });
     r.on('error', reject); r.on('timeout', () => r.destroy(new Error('k8s timeout'))); r.end(data);
