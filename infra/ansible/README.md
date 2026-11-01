@@ -26,6 +26,9 @@ then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the op
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`
 (must match the Terraform `services` range, `roles/platform/defaults/main.yml`).
+On a first `--check` run the platform secrets do not exist yet, so the diff shows empty passwords; the real run
+creates them first. Other roles that need a platform password (for example the API, #95) read `platform-<key>`
+from Secret Manager and run after `include_role: platform`.
 
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:

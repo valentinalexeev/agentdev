@@ -246,10 +246,15 @@ applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`A
 
 To make sure that GKE applies the NetworkPolicies, do these steps:
 
+NOTE: The test pod gets the image `curlimages/curl` from Docker Hub. The cluster must have access to the internet.
+
 1. Start a test pod in the namespace `default`:
    `kubectl run np-test --rm -it --restart=Never --image=curlimages/curl -- curl -m 5 http://contextforge.agentdev-platform:4444/health`
 2. Make sure that the command stops with a timeout.
    If you get a response, the cluster does not apply NetworkPolicies.
+3. Make sure that agent pods cannot connect to Postgres:
+   `kubectl -n coding-agents exec agent-<name>-0 -c agent -- bash -c 'timeout 3 bash -c "</dev/tcp/platform-db.agentdev-platform/5432" && echo open || echo closed'`
+4. Make sure that the command shows `closed`.
 
 ## Identity (authentik)
 

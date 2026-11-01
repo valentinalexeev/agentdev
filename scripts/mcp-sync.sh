@@ -107,6 +107,7 @@ for a in $(yq -r '.agents[].name' "${spec}"); do
   tok=$(jq -r '.access_token // .token // empty' <<<"${resp}"); tid=$(jq -r '.token.id // .id // empty' <<<"${resp}")
   [[ -n "${tok}" && "${tok}" != null ]] || die "could not mint a token for ${a}"
   [[ -n "${ann}" ]] && revoke "${s}"   # the token it replaces (other server, or close to expiry)
+  # never echo ${tok} or ${T}: the GKE playbook (#51) logs this script's stdout
   printf 'CF_URL=%s\nCF_TOKEN=%s\n' "${CF_IN_CLUSTER}/servers/${sid}/mcp" "${tok}" \
     | k -n "${AGENTS_NS}" create secret generic "${s}" --from-env-file=/dev/stdin --dry-run=client -o yaml \
     | k label --local -f - "agentdev/mcp-project=${project}" -o yaml \

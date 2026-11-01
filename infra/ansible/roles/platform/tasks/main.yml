@@ -5,8 +5,11 @@
   ansible.builtin.shell: |
     set -euo pipefail
     name="{{ platform_sm_prefix }}{{ item }}"
-    if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
-      gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+    p={{ gcp_project }}
+    # an enabled version, not only the container: a create that failed at "versions add" is completed here
+    if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
+      gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
+        || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
       openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
       echo created
     fi
@@ -58,16 +61,12 @@
       replace: []
   no_log: true
 
+# wait on the workloads, not on pods by label: right after the apply the pod list can still be empty
 - name: Wait for Postgres and ContextForge
-  kubernetes.core.k8s_info:
-    context: "{{ kube_context }}"
-    kind: Pod
-    namespace: "{{ platform_ns }}"
-    label_selectors: ["app={{ item }}"]
-    wait: true
-    wait_condition: {type: Ready, status: "True"}
-    wait_timeout: 600
-  loop: [platform-db, contextforge]
+  ansible.builtin.command: >-
+    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status {{ item }} --timeout=600s
+  loop: [statefulset/platform-db, deployment/contextforge]
+  changed_when: false
   when: not ansible_check_mode
 
 - name: MCP sync for each project spec
@@ -84,6 +83,7 @@
         mode: "0600"
       no_log: true
 
+    # stdout is logged: mcp-sync.sh never prints a token
     - name: Run scripts/mcp-sync.sh
       ansible.builtin.command:
         argv: ["{{ repo_root }}/scripts/mcp-sync.sh", "{{ item }}"]
@@ -95,7 +95,7 @@
         CF_ADMIN_FILE: "{{ platform_cf_file.path }}"
       loop: "{{ mcp_projects }}"
       register: platform_mcp_sync
-      changed_when: "'registered http' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
+      changed_when: "': registered' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
   always:
     - name: Remove the admin password file
       ansible.builtin.file: {path: "{{ platform_cf_file.path }}", state: absent}
