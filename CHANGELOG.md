@@ -58,6 +58,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`issues/{n}/events`) and requires write, maintain or admin for that person, checked live
   (`collaborators/{user}/permission`, both new on the sidecar allow-list); otherwise it skips the issue and raises
   `label-not-writer` or `label-unverified`.
+  loop never resolves a thread. Failing check runs of the PR head are given to the model as feedback. Gitea unchanged.
+- GitHub routing and deployment (#2, step 4). The router routes GitHub events by the label `agent:<name>` and the
+  branch `agent/<name>/...` (also on check runs), never by login (all agents share the App bot). The operator gives a
+  `forge: github` agent `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` and optional `GITHUB_INSTALLATION_ID` from its own
+  Secret `agent-<name>` (forge container only, no `FORGE_TOKEN`; the key as a read-only file, `GITHUB_APP_PRIVATE_KEY_FILE`) and `FORGE_URL` from the new operator setting
+  `GITHUB_URL` (default `https://github.com`). GKE: `instance.yml` gets `github_app.app_id` (and optional
+  `installation_id`), the key comes from the Secret Manager secret `github-app-private-key`; the playbook checks the
+  ids and agent names. kind: `FORGE_KIND=github` in `config.env`, `./run.sh 06` reads `.secrets/github-app/`.
+  Docs: admin.md (connect agents, agent labels, reference), user guide, security model, risks R48 to R50.
+  **Re-run:** GKE: the playbook (operator, agents); kind: `./run.sh 12` and `./run.sh 06` for GitHub agents. Gitea
+  agents need no change.
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and
   no model output in control paths; the PR template gets *Security findings* (thread, outcome, sha) and *Reviewed

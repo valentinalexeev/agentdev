@@ -63,6 +63,7 @@ func main() {
 		PullPolicy:     env("IMAGE_PULL_POLICY", "IfNotPresent"),
 		ForgeURL:       os.Getenv("FORGE_URL"),
 		ForgePublicURL: os.Getenv("FORGE_PUBLIC_URL"),
+		GitHubURL:      env("GITHUB_URL", "https://github.com"),
 		Reviewer:       os.Getenv("REVIEWER"),
 		BotboardURL:    os.Getenv("BOTBOARD_URL"),
 		PollSeconds:    env("POLL_SECONDS", "20"),

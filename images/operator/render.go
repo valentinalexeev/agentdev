@@ -88,7 +88,26 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// usage pauses (#93): written by the operator, read by the loop before it starts a job; optional (no pauses yet)
 		{Name: "usage", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}}}
-	common := []corev1.EnvVar{env("FORGE_URL", r.D.ForgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
+	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
+	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
+	// Secret agent-<name> (so the CEL binding of R21 still holds)
+	forgeCreds := []corev1.EnvVar{secretKey("FORGE_TOKEN", forgeSecret, false)}
+	if forge == "github" {
+		forgeURL, publicURL = r.D.GitHubURL, r.D.GitHubURL
+		// the private key is a file (Secret volume, forge container only), never an environment variable: a process
+		// environment stays readable in /proc/<pid>/environ even after unsetenv (review of #128)
+		forgeCreds = []corev1.EnvVar{secretKey("GITHUB_APP_ID", forgeSecret, false),
+			env("GITHUB_APP_PRIVATE_KEY_FILE", "/var/run/agentdev/github-app/private-key.pem"),
+			secretKey("GITHUB_INSTALLATION_ID", forgeSecret, true)}
+	}
+	forgeMounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}}
+	if forge == "github" {
+		p.Volumes = append(p.Volumes, corev1.Volume{Name: "github-app", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: forgeSecret, DefaultMode: ptr.To[int32](0o400),
+			Items: []corev1.KeyToPath{{Key: "GITHUB_APP_PRIVATE_KEY", Path: "private-key.pem"}}}}})
+		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "github-app", MountPath: "/var/run/agentdev/github-app", ReadOnly: true})
+	}
+	common := []corev1.EnvVar{env("FORGE_URL", forgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
@@ -101,7 +120,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)),
-			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", r.D.ForgePublicURL),
+			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
 		), r.claudeProxyEnv(n)...),
@@ -120,16 +139,15 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Env: append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
-			secretKey("FORGE_TOKEN", forgeSecret, false),
-		),
+		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more
 		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
-		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}},
+		VolumeMounts: forgeMounts,
 		// own UID (not the agent's 1000), group 1000 to share /state
 		SecurityContext: &corev1.SecurityContext{RunAsUser: ptr.To[int64](1001), RunAsGroup: ptr.To[int64](1000),
 			RunAsNonRoot: ptr.To(true), AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),

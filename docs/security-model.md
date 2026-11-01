@@ -53,6 +53,21 @@ The image is Alpine with git rather than distroless, because the sidecar runs gi
 protected-path check is looked up by the sidecar from the forge, never taken from the caller, and the check fails
 closed (review of #68).
 
+**Forge drivers (#2).** What differs per forge is one driver in the sidecar (`images/forge/driver.go`): API base,
+the credential of one request, the git credential and the allow-list. Gitea uses the agent's own token. GitHub uses
+one GitHub App: the sidecar signs the App JWT with the private key (which it removes from its environment after
+parsing) and mints installation tokens narrowed to the agent's repos and to contents, issues and pull requests write
+(no workflows, no administration). Tokens live in memory for at most an hour. All agents share the App bot account,
+so the sidecar adds a fixed signature line with the agent's name to everything the agent writes, the loop sets the
+commit author from the sidecar's `/identity`, and own work is found by the branch prefix `agent/<name>/`. Work is
+given by the label `agent:<name>` (an App cannot be assigned), and only when the person who added it last has
+write access, checked live before each start; the router routes GitHub events by that label and the
+branch, never by login. Code scanning threads get one in-thread reply per finding; the outcome word comes from a
+fixed set and "Fixed in `<sha>`" is only written when the pushed diff touches the finding's file. The sidecar refuses
+GraphQL, so the agent cannot resolve a thread. The App key reaches the sidecar as a file on a Secret volume mounted
+only into the forge container, never as an environment variable (a process environment stays readable in
+`/proc/<pid>/environ`).
+
 **Security events.** Every guardrail that fires prints one line to the container log (stdout), so a bypass attempt
 is reported, not only blocked (collection, UI and auto-pause: #70):
 

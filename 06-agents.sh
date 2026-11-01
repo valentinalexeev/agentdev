@@ -31,10 +31,20 @@ fi
 # registration token (agents -> router). Per-agent wake tokens (router -> agent) are below.
 secret_file() { [[ -s "$1" ]] || { openssl rand -hex 32 > "$1"; chmod 600 "$1"; }; cat "$1"; }
 GITEA_WEBHOOK_SECRET=$(secret_file "${SPIKE_DIR}/.secrets/router-gitea.secret")
+FORGE_SECRETS="gitea=${GITEA_WEBHOOK_SECRET}"
+gh_app="${SPIKE_DIR}/.secrets/github-app"
+if [[ "${FORGE_KIND}" == github ]]; then   # #2: the App from scripts/github-app.sh convert
+  [[ -s "${gh_app}/app-id" && -s "${gh_app}/private-key.pem" && -s "${gh_app}/webhook-secret" ]] \
+    || die "FORGE_KIND=github: register the App first (scripts/github-app.sh, docs/admin.md)"
+  [[ "$(cat "${gh_app}/app-id")" =~ ^[1-9][0-9]{0,15}$ ]] || die "${gh_app}/app-id is not a number"
+  [[ -z "${GITHUB_INSTALLATION_ID}" || "${GITHUB_INSTALLATION_ID}" =~ ^[1-9][0-9]{0,15}$ ]] || die "GITHUB_INSTALLATION_ID is not a number"
+  FORGE_SECRETS="github=$(cat "${gh_app}/webhook-secret")"
+elif [[ "${FORGE_KIND}" != gitea ]]; then die "FORGE_KIND must be gitea or github"
+fi
 REGISTER_TOKEN=$(secret_file "${SPIKE_DIR}/.secrets/router-register.token")
 
 log "Webhook router"
-AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="gitea=${GITEA_WEBHOOK_SECRET}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
+AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="${FORGE_SECRETS}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
   ROUTER_IMAGE="${ROUTER_IMAGE}" IMAGE_PULL_POLICY=Never \
   envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_IMAGE} ${IMAGE_PULL_POLICY}' \
   < "${SPIKE_DIR}/manifests/router.yaml.tmpl" | k apply -f - >/dev/null
@@ -99,19 +109,28 @@ for a in ${AGENTS}; do
   # a blocked agent (#27, scripts/agent-block.sh) stays blocked and stopped across redeploys: the operator keeps it at 0
   blocked=$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)
   # the agent's tokens; the operator mounts them by name (agent-<name>)
+  # GitHub (#2): the App's id and key instead of a forge token, in the same per-agent Secret (forge container only)
+  if [[ "${FORGE_KIND}" == github ]]; then
+    k -n "${AGENTS_NS}" create secret generic "agent-${a}" --from-file=GITHUB_APP_ID="${gh_app}/app-id" \
+        --from-file=GITHUB_APP_PRIVATE_KEY="${gh_app}/private-key.pem" --from-literal=GITHUB_INSTALLATION_ID="${GITHUB_INSTALLATION_ID}" \
+        --from-literal=WAKE_TOKEN="$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" --from-literal=REGISTER_TOKEN="${REGISTER_TOKEN}" \
+        --dry-run=client -o yaml \
+      | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+  else
   printf 'FORGE_TOKEN=%s\nWAKE_TOKEN=%s\nREGISTER_TOKEN=%s\n' "$(cat "${SPIKE_DIR}/.secrets/${a}.token")" \
       "$(secret_file "${SPIKE_DIR}/.secrets/${a}.wake")" "${REGISTER_TOKEN}" \
     | k -n "${AGENTS_NS}" create secret generic "agent-${a}" --from-env-file=/dev/stdin --dry-run=client -o yaml \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+  fi
   # the agent's key for the Claude credential proxy (#66); the agent container gets this, never the credential
   printf 'ANTHROPIC_AUTH_TOKEN=%s.%s\n' "${a}" "$(proxy_key "${a}")" \
     | k -n "${AGENTS_NS}" create secret generic "agent-${a}-proxy" --from-env-file=/dev/stdin --dry-run=client -o yaml \
     | k apply -f - >/dev/null
   # the agent itself (#47, #57): the operator renders its Service and StatefulSet; an existing one is adopted in place
-  jq -n --arg n "${a}" --arg ns "${AGENTS_NS}" --arg repo "${REPO}" --arg claude "${secret}" \
+  jq -n --arg n "${a}" --arg ns "${AGENTS_NS}" --arg repo "${REPO}" --arg claude "${secret}" --arg forge "${FORGE_KIND}" \
       --arg maxc "${MAX_CONCURRENT}" --arg s2z "${SCALE_TO_ZERO}" \
       '{apiVersion:"agentdev.dev/v1alpha1", kind:"Agent", metadata:{name:$n, namespace:$ns},
-        spec:{repo:$repo, forge:"gitea", claudeSecret:$claude, maxConcurrent:($maxc|tonumber),
+        spec:{repo:$repo, forge:$forge, claudeSecret:$claude, maxConcurrent:($maxc|tonumber),
               scaleToZero:($s2z|ascii_downcase|IN("true","1","yes"))}}' \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   if [[ "${blocked}" == true ]]; then
@@ -128,6 +147,12 @@ for a in ${AGENTS}; do
   k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
 done
 
+if [[ "${FORGE_KIND}" == github ]]; then
+  ok "GitHub: the App's webhook goes to its public_url (GKE); on kind the agents poll every ${POLL_SECONDS}s"
+  echo "  Work:   label an issue in ${REPO} with agent:<name>, one of: ${AGENTS}"
+  record "agents running under gVisor on GitHub: ${AGENTS}"
+  exit 0
+fi
 log "Forge webhook (${REPO} -> router)"
 # shellcheck source=lib-forge.sh
 source "${SPIKE_DIR}/lib-forge.sh"
