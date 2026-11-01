@@ -37,7 +37,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   `custom_agentdev_admin_sync`; members of `agentdev-admins` are never changed (#103). `forge_login` comes from a
   Workspace custom attribute that only directory admins can edit. The scope `forge` now also sends the `groups` claim
   with inherited groups. Only e-mail addresses of `authentik.sso.allowed_domains` (and a matching Google `hd`) sign
-  in; the source has its own enrollment flow. New risks R69 to R74.
+  in; the source has its own enrollment flow. New risks R84 to R89.
 - kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
   without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
   process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and
