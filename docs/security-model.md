@@ -152,6 +152,7 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   `curl -m3 http://169.254.169.254/` and `env -u HTTPS_PROXY -u https_proxy curl -m5 https://example.com` fail,
   `curl https://api.anthropic.com` and a `git ls-remote` of the agent's repository work, and a refused host shows up as
   a SecurityEvent. GKE serves metadata to Workload Identity pods through the node, so the first check matters.
+  Scripted in `scripts/e2e-gke-security.sh` ([e2e-security.md](e2e-security.md), #123).
 - Signals: each refused request is one `AGENTDEV_SECURITY_EVENT` line (`rule` `egress-host`, `medium`) in the proxy
   log, with the client pod IP. The operator follows the proxy pod like an agent pod and records the event for the
   agent whose running pod has that IP: `source` `egress`, `untrusted` false (the proxy wrote it). Egress refusals do
@@ -436,16 +437,19 @@ sequenceDiagram
      (the loop calls the sidecar's `POST /job-done`); a newer push of the same branch and paths supersedes it (a new
      commit); the issue or PR is closed (API, each pass); the pod that asked is gone (API, by the `agentdev/pod-uid`
      label), since only that sidecar holds the request's secret.
-     On a GitHub forge (#87) the API does not read the issue or PR, so a closed issue or PR does not void the record:
-     it becomes void only by job end, supersede or the pod-gone check.
+     On GitHub (#87) the API reads the issue or PR with the App's read-only installation token, as on Gitea.
      The sidecar tries the void 3 times (2 s, then 4 s apart). If the API stays unreachable, the record stays
      `pending` until the API sees that the pod is gone; a pod that serves several jobs keeps it pending until the pod
      restarts. Decisions on it still need the sidecar's secret, so nothing acts on it.
   5. A decision comment on a decided or void record has no effect and is audited (`approval-decision`, denied, for 7
      days after it closed). Void transitions are audited as `approval-void` with the reason.
 - **Fail closed.** API unreachable, no job, a job that is not the agent's, unknown answer, hash mismatch or no
-  decision in the waiting time: the action is refused. GitHub-forge requests are not decided yet (#87): they stay
-  pending until void.
+  decision in the waiting time: the action is refused. On GitHub the API decides with the App's read-only
+  installation token (#87); without a GitHub credential a GitHub request stays pending until void.
+- **GitHub (#87).** All agents write as the App's bot account: the API adds `<app-slug>[bot]` (from `GET /app`) to
+  the deny list and refuses every comment whose author type is not `User`; the request's `requesterId` is the App
+  bot's id. The sidecar checks the job by the label `agent:<name>` (GitHub agents have no assignee). Write access is
+  `write`, `maintain` or `admin` from `GET /repos/{o}/{r}/collaborators/{u}/permission`; any error fails closed.
 - **Command parsing.** Only a line the person wrote counts: lines inside fenced code blocks (```` ``` ```` or `~~~`),
   indented code and quoted lines (`>`) are ignored, so a command quoted from tool or plan output never decides.
 - **Audit.** Every decision (`approval-allowed`, `approval-denied`), void (`approval-void`) and refused decision

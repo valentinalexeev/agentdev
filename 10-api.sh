@@ -92,14 +92,31 @@ if k -n "${FORGE_NS}" get deploy gitea >/dev/null 2>&1; then
   ok "${api_user}: admin of $(tr '\n' ' ' <<<"${repos}")"
 else ok "no Gitea in ${FORGE_NS}: skipped (see docs/admin.md)"; fi
 
+log "GitHub permission checks (#87)"
+# FORGE_KIND=github: the API checks GitHub permissions and decides approvals with the same App as the agents
+# (read-only installation tokens). The key goes from the file to the Secret, never to argv or stdout.
+gh_app="${SPIKE_DIR}/.secrets/github-app"
+if [[ "${FORGE_KIND}" == github ]]; then
+  [[ -s "${gh_app}/app-id" && -s "${gh_app}/private-key.pem" ]] \
+    || die "FORGE_KIND=github: register the App first (scripts/github-app.sh, docs/admin.md)"
+  k -n "${PLATFORM_NS}" create secret generic agentdev-api-github --from-file=GITHUB_APP_ID="${gh_app}/app-id" \
+      --from-file=GITHUB_APP_PRIVATE_KEY="${gh_app}/private-key.pem" --dry-run=client -o yaml \
+    | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
+  ok "Secret agentdev-api-github (App $(cat "${gh_app}/app-id"))"
+else
+  k -n "${PLATFORM_NS}" delete secret agentdev-api-github --ignore-not-found >/dev/null
+  ok "FORGE_KIND=${FORGE_KIND}: no GitHub credential for the API"
+fi
+
 log "Deploy (${PLATFORM_NS})"
 disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/agentdev/"   # in-cluster, for keys
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
-  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev APPROVALS="${APPROVALS:-false}" APPROVAL_DENY_ACCOUNTS="${APPROVAL_DENY_ACCOUNTS:-}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" \
+  OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev APPROVALS="${APPROVALS:-false}" APPROVAL_DENY_ACCOUNTS="${APPROVAL_DENY_ACCOUNTS:-}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" GITHUB_URL="${GITHUB_URL:-https://github.com}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 # restart: local images keep their tag, and the token Secret may have changed (env is read at start only). The
 # annotation records the Secret's hash (not its value), so a changed token is visible in the pod template too.
-fh=$(k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data}' 2>/dev/null | shasum -a 256 | cut -c1-16)
+fh=$( { k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data}' 2>/dev/null
+       k -n "${PLATFORM_NS}" get secret agentdev-api-github -o jsonpath='{.data}' 2>/dev/null; } | shasum -a 256 | cut -c1-16)
 k -n "${PLATFORM_NS}" patch deploy/agentdev-api --type merge \
   -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"agentdev/forge-token-hash\":\"${fh}\"}}}}}" >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-api >/dev/null

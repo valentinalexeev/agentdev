@@ -17,6 +17,18 @@ agents:
 #   webhook_host: hooks.example.com         # optional, default host; GitHub App webhook https://<this>/hook
 #   certificate: agentdev-public-1a2b3c4d   # managed certificate name
 #   security_policy: agentdev-public        # only with Terraform cloud_armor = true
+# Optional company SSO for authentik (#122, docs/admin.md "Sign in with Google Workspace"). The IdP certificate goes
+# into the Secret Manager secret authentik-sso-idp-cert (README.md). Members of admin_group become agentdev admins;
+# nothing else changes the members of agentdev-admins.
+# authentik:
+#   sso:
+#     kind: saml                                   # Google Workspace SAML app (oidc: another OIDC provider)
+#     admin_group: agentdev-admins@example.com     # the Workspace group (its e-mail address)
+#     allowed_domains: [example.com]               # only these e-mail domains sign in (required)
+#     forge_attribute_github: githubLogin          # SAML app attribute with the GitHub login (claim forge_login_github, #122)
+#     forge_attribute_gitea: giteaLogin            # SAML app attribute with the Gitea login (claim forge_login_gitea)
+#     forge_attribute: forgeLogin                  # fallback for a forge without its own login (claim forge_login)
+#     saml_sso_url: https://accounts.google.com/o/saml2/idp?idpid=C0abc123
 # Optional SIEM outputs (#70, #71). Setting security replaces the whole default dict (group_vars/all.yml): repeat the
 # defaults. Addresses only; secret values go into the Secret Manager secret security-siem (README.md).
 # security:

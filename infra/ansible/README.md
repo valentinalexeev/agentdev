@@ -17,6 +17,7 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 | `agent-<name>-forge-token` | only with `forge_kind: gitea`: the agent's forge token. On GitHub the sidecar mints App installation tokens |
 | `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
+| `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
 
 SIEM addresses (not secret) go into `instance.yml` under `security.siem`: `webhook_url`, `syslog_addr`,
@@ -56,7 +57,9 @@ is #114, so any OIDC provider with a public client `agentdev` and a `groups` cla
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
 (`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
-The API checks permissions on Gitea only (#87); with `forge_url` on GitHub only `agentdev-admins` can change agents.
+With `forge_kind: github` the API checks GitHub permissions and decides approvals with the agents' GitHub App
+(#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
+API mints only read-only installation tokens.
 
 ## Public HTTPS entry point (#120)
 The `ingress` role runs last when `instance.yml` sets `ingress.host`. It applies one GKE Gateway

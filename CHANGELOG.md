@@ -26,6 +26,20 @@ While the version is `0.x`, breaking changes bump MINOR.
   nothing. Needs the `kubernetes` Python package for ansible (`docs/troubleshooting.md`). GKE does not change.
 
 ### Added
+- End-to-end security checklist (#123): `scripts/e2e-gke-security.sh` checks a running instance (GKE, or kind
+  with `--kind`) for every "pending GKE e2e" control: no credentials in the agent container, egress default-deny and
+  the metadata server, Claude proxy only, usage reports refused, approvals and executors out of the agent's reach,
+  HTTPS/HSTS, API permission checks, and the #2 GitHub flow (issue, PR with the owner as reviewer, review reply).
+  Read-only or self-cleaning, PASS/FAIL per check, exit 1 on a FAIL. Docs: `docs/e2e-security.md`.
+- GitHub permission check and approval decisions in the API (#87). For an agent on GitHub, the API reads the
+  collaborator permission (`GET /repos/{o}/{r}/collaborators/{u}/permission`) with the agents' GitHub App
+  (read-only installation tokens) or a read-only `GITHUB_API_TOKEN`, and applies the same rule table as on Gitea
+  (`maintain` and `write` are write, `triage` and `read` are read). Errors give 503; `agentdev-admins` still works.
+  Approvals on GitHub repositories are now decided: the API reads the comments and the issue state on GitHub; the
+  App bot is always in the deny list and non-`User` authors are refused. The forge sidecar's approval calls now use
+  the forge driver (GitHub API and installation token; job check by the label `agent:<name>`). Deploy: new optional
+  Secret `agentdev-api-github` (kind: `./run.sh 10` with `FORGE_KIND=github`; GKE: the `api` role with
+  `forge_kind: github`). README no longer lists "Gitea only" in the MVP limits. New risk R93.
 - Release checklist and private-deployment guide (#124): `docs/release.md` (1.0.0 gates, GKE e2e checklist, risk
   register review, image pinning, CHANGELOG and SemVer, release steps) and `docs/private-deployment.md` (GKE + GitHub
   App + Google Workspace from `examples/deployment/gcp-gke`: secrets, first admin with a break-glass `akadmin`, checks,
@@ -72,6 +86,23 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Company SSO (#122): sign-in to authentik through Google Workspace (SAML) or another OIDC provider, configured by the
+  new blueprint `manifests/authentik-blueprint-sso.yaml` from the optional Secret `authentik-sso` (GKE: new role
+  `authentik_sso`, `instance.yml` `authentik.sso`, Secret Manager `authentik-sso-idp-cert`; kind: a local OIDC
+  stand-in in `./run.sh 09`). One Workspace group syncs to `agentdev-admins-sso`, a child of `agentdev-admins`: added
+  when the directory lists the person, removed only when it no longer does, each change audited as
+  `custom_agentdev_admin_sync`; members of `agentdev-admins` are never changed (#103). `forge_login` comes from a
+  Workspace custom attribute that only directory admins can edit. The scope `forge` now also sends the `groups` claim
+  with inherited groups. Only e-mail addresses of `authentik.sso.allowed_domains` (and a matching Google `hd`) sign
+  in; the source has its own enrollment flow. New risks R84 to R89.
+- Per-forge logins (#122, decision 6559184875): the scope `forge` sends `forge_login_github` and `forge_login_gitea`
+  from the user attributes of the same names, and the company SSO sets them from admin-only Workspace custom
+  attributes (`authentik.sso.forge_attribute_github`, default `githubLogin`; `forge_attribute_gitea`, default
+  `giteaLogin`; `forge_attribute`, now default `forgeLogin`, for the fallback). The API (`forgeUserOf`) takes the claim
+  of the agent's forge, else `forge_login`; never the claim of another forge, never the username. Same on kind
+  (`SSO_FORGE_ATTR_GITHUB`, `SSO_FORGE_ATTR_GITEA`) and GKE. Several logins on one forge are not supported. Existing
+  `forge_login` attributes keep working. Docs: `docs/admin.md` "Map people to forge users" and "Prepare Google
+  Workspace".
 - kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
   without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
   process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and

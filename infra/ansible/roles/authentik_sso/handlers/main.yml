@@ -1,0 +1,15 @@
+---
+# envFrom is read at pod start, and the authentik worker re-applies a blueprint only when its file changes: restart
+# both when the Secret changed, so the worker applies the SSO blueprint with the new values at start.
+- name: Restart authentik for the SSO settings
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: patched
+    kind: Deployment
+    name: "{{ item }}"
+    namespace: "{{ platform_ns }}"
+    definition:
+      spec: {template: {metadata: {annotations: {agentdev/sso-hash: "{{ (authentik_sso_env | to_json | hash('sha256'))[:16] }}"}}}}
+  loop: [authentik-server, authentik-worker]
+  failed_when: false   # authentik is not deployed by the playbook yet (#114)
+  no_log: true
