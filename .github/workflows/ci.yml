@@ -99,7 +99,9 @@ jobs:
         run: |
           [ -f manifests/egress.yaml.tmpl ] || { echo "no egress manifest yet, skipped"; exit 0; }
           set -a; . ./config.env; set +a
-          [ -f manifests/egress-proxy-web.yaml.tmpl ] && AGENTS_NS=coding-agents envsubst < manifests/egress-proxy-web.yaml.tmpl | ./kubeconform -strict -summary -
+          if [ -f manifests/egress-proxy-web.yaml.tmpl ]; then
+            AGENTS_NS=coding-agents envsubst < manifests/egress-proxy-web.yaml.tmpl | ./kubeconform -strict -summary -
+          fi
           AGENTS_NS=coding-agents PLATFORM_NS=agentdev-platform FORGE_NS=forge BOTBOARD_NS=botboard \
             envsubst < manifests/egress.yaml.tmpl > egress.yaml
           ./kubeconform -strict -summary egress.yaml
@@ -114,7 +116,7 @@ jobs:
           ansible-lint
           printf 'gcp_project: p\ngcp_zone: z\nimage_tag: "0"\nreviewer: r\nagents: [{name: a, user: a, repos: o/r}]\napi: {oidc_issuer: "https://i/"}\n' > /tmp/i.yml
           ansible-playbook deploy.yml -e @/tmp/i.yml --syntax-check
-          for t in tests/*.yml; do [ -f "$t" ] && ansible-playbook "$t"; done
+          for t in tests/*.yml; do if [ -f "$t" ]; then ansible-playbook "$t"; fi; done
       - name: router tests (no dependencies, a few seconds)
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
