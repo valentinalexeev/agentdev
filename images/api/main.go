@@ -77,10 +77,22 @@ func main() {
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
-	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp, usage: agents}
+	gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
+	// GitHub (#87): the App (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_FILE) or a read-only GITHUB_API_TOKEN. Without
+	// either, every GitHub permission check fails closed (503); agentdev-admins can still pause, add and remove.
+	gh, err := githubFromEnv(os.Getenv)
+	if err != nil {
+		log.Fatalf("github: %v", err)
+	}
+	perms := forgePerms{gitea: gp}
+	if gh != nil {
+		perms.github = gh
+		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
+	}
+	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
-		gp := newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN"))
-		dc := newDecider(agents, agents, gp, gp)
+		dc := newDecider(agents, agents, gp, perms)
+		dc.github = gh
 		dc.pods = agents
 		for _, l := range strings.Split(os.Getenv("APPROVAL_DENY_ACCOUNTS"), ",") {
 			if l = strings.ToLower(strings.TrimSpace(l)); l != "" {

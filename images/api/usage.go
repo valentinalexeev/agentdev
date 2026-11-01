@@ -184,7 +184,7 @@ func (w *writer) getUsage(rw http.ResponseWriter, r *http.Request) {
 		if admin {
 			return true
 		}
-		if id == nil || forge == "github" {
+		if id == nil {
 			return false
 		}
 		if ok, seen := allowed[repo]; seen {

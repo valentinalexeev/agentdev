@@ -222,15 +222,27 @@ func clip(s string, n int) string {
 	return s
 }
 
+// authorize sets the forge credential of the driver (Gitea token, or the GitHub App installation token, #87).
+func (a *approvals) authorize(ctx context.Context, req *http.Request) error {
+	h, err := a.s.driver().authorization(ctx)
+	if err != nil {
+		return fmt.Errorf("forge credential: %v", err)
+	}
+	req.Header.Set("Authorization", h)
+	return nil
+}
+
 // forgeGet reads a forge API path with the agent's token into out.
 func (a *approvals) forgeGet(path string, out any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.s.c.ForgeURL+"/api/v1"+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.s.driver().apiURL(path, ""), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "token "+a.s.c.Token)
+	if err := a.authorize(ctx, req); err != nil {
+		return err
+	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.s.client.Do(req)
 	if err != nil {
@@ -250,6 +262,17 @@ func (a *approvals) requester() (int64, error) {
 	a.mu.Unlock()
 	if id > 0 {
 		return id, nil
+	}
+	// GitHub (#87): every agent writes as the App's bot account, so the requester is that account
+	if d, ok := a.s.driver().(*githubDriver); ok {
+		_, bid, err := d.identity(context.Background())
+		if err != nil || bid <= 0 {
+			return 0, fmt.Errorf("cannot read the App bot account: %v", err)
+		}
+		a.mu.Lock()
+		a.selfID = bid
+		a.mu.Unlock()
+		return bid, nil
 	}
 	var u struct {
 		ID int64 `json:"id"`
@@ -271,9 +294,21 @@ func (a *approvals) ownJob(job string) error {
 			Assignees []struct {
 				Login string `json:"login"`
 			} `json:"assignees"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
 		}
 		if err := a.forgeGet(fmt.Sprintf("/repos/%s/issues/%s", a.s.c.Repos[0], num), &is); err != nil {
 			return err
+		}
+		if a.s.driver().kind() == "github" {
+			// GitHub (#130): an agent's work is the label agent:<name> (all agents share the App bot, no assignee)
+			for _, l := range is.Labels {
+				if l.Name == "agent:"+a.s.c.AgentName {
+					return nil
+				}
+			}
+			return fmt.Errorf("issue %s has no label agent:%s", num, a.s.c.AgentName)
 		}
 		for _, u := range is.Assignees {
 			if strings.EqualFold(u.Login, a.s.c.ForgeUser) {
@@ -323,11 +358,13 @@ func (a *approvals) forgeSend(method, path string, body, out any) error {
 	b, _ := json.Marshal(body)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, a.s.c.ForgeURL+"/api/v1"+path, strings.NewReader(string(b)))
+	req, err := http.NewRequestWithContext(ctx, method, a.s.driver().apiURL(path, ""), strings.NewReader(string(b)))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "token "+a.s.c.Token)
+	if err := a.authorize(ctx, req); err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.s.client.Do(req)
 	if err != nil {

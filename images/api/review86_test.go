@@ -9,7 +9,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestForgeUserOfRejectsAmbiguousNames(t *testing.T) {
@@ -97,26 +96,6 @@ func TestUnauthenticatedWritesAreAudited(t *testing.T) {
 	e.call("GET", "/api/agents", "", "")
 	if e.audit.Len() != 0 {
 		t.Fatal("reads must not be audited")
-	}
-}
-
-func TestGitHubAgentGives403ForRepoUsers(t *testing.T) {
-	gitea := fakeGitea(t)
-	defer gitea.Close()
-	e := newEnv(t, gitea.URL)
-	u, _ := e.k.Get(context.Background(), "alice")
-	_ = unstructured.SetNestedField(u.Object, "github", "spec", "forge")
-	_, _ = e.k.d.Resource(agentsGVR).Namespace("coding-agents").Update(context.Background(), u, updateOpts)
-	w := e.call("PATCH", "/api/agents/alice", "writer", `{"paused":true}`)
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "issues/87") {
-		t.Fatalf("code %d %s", w.Code, w.Body)
-	}
-	w = e.call("POST", "/api/agents", "admin", `{"name":"bob","repo":"owner/x","forge":"github"}`)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("create code %d", w.Code)
-	}
-	if w = e.call("PATCH", "/api/agents/alice", "group", `{"paused":true}`); w.Code != http.StatusOK {
-		t.Fatalf("admin group pause code %d", w.Code)
 	}
 }
 
