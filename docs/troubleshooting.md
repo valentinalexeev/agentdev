@@ -115,7 +115,14 @@
 
 To claim a new sandbox, delete the claim of the step: `kubectl --context kind-agentdev -n agents delete sandboxclaim agentdev-sandbox-test`.
 
-## Report a problem that continues
+## Forge (run.sh step 05)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 05 stops at `Gitea answers on http://localhost:3000`. | The kind cluster has no port mapping for 3000, or Gitea did not start. | 1. Examine the pod: `kubectl --context kind-agentdev -n forge get pods,pvc`. 2. If the cluster was made without `manifests/kind-config.yaml`, do run.sh step 01 again. 3. Do run.sh step 05 again. |
+| Step 05 stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Export the password that was used the first time. 2. Do run.sh step 05 again. |
+| An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Do run.sh step 05 again, it mints a new token. |
+
 
 WARNING: Do not put credentials in the issue.
 

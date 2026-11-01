@@ -93,6 +93,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
+| 05 | `forge` | `gitea_forge` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -121,6 +122,16 @@ include it with its own `sandbox_test_context`. It takes `sandbox_test_ns`, `san
 fixed name (`agentdev-sandbox-test`, the old step made a new claim each run), so a second run reuses it and changes
 nothing. An `always` block sets the sandbox back to `Running` and the warm pool back to 1, also after a failed check.
 The headless Claude turn runs only when the Secret `claude-agent-keys` exists; the Secret is read under `no_log`.
+
+```bash
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags forge    # Gitea, accounts, seeded repo
+```
+The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, the owner account, the repo
+`gitea_forge_repo` seeded from `seed/`, one write collaborator per entry of `gitea_forge_agents` with a token in
+`gitea_forge_secrets_dir/<agent>.token` (mode 600), and the branch protection of `gitea_forge_branch`. The owner
+password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
+`no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
+changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

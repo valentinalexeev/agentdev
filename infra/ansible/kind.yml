@@ -38,3 +38,11 @@
       vars:
         sandbox_test_context: kind-{{ kind_cluster_name }}
       tags: [sandbox-test]
+
+    - name: Gitea forge, owner and agent accounts, seeded repo, branch protection (was 05-forge.sh)
+      ansible.builtin.include_role:
+        name: gitea_forge
+        apply: {tags: [forge]}
+      vars:
+        gitea_forge_context: kind-{{ kind_cluster_name }}
+      tags: [forge]
