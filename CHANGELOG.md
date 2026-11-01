@@ -37,7 +37,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   passed through to the loop, back-off on token minting); a 401 drops the cached token; review requests only for 1
   to 5 user logins (no teams); `per_page`/`page` 1 to 100; numbers in paths bounded; key preferably from
   `GITHUB_APP_PRIVATE_KEY_FILE` (never in an environment).
-  the check runs and status of a commit; merging, labels, issue edits and GraphQL are refused.
 - Agent loop on GitHub (#2, step 3). The loop reads the forge kind and its commit author from the sidecar
   (`GET /identity`, validated). On GitHub: work is the open issues labelled `agent:<name>` (pull requests dropped),
   the agent's PRs are those of the App bot on `agent/<name>/*`, links use `/pull/`. Code scanning findings
