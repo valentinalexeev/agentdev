@@ -53,6 +53,23 @@ While the version is `0.x`, breaking changes bump MINOR.
   read-only. Risk R42 updated.
 
 ### Added
+- Company SSO (#122): sign-in to authentik through Google Workspace (SAML) or another OIDC provider, configured by the
+  new blueprint `manifests/authentik-blueprint-sso.yaml` from the optional Secret `authentik-sso` (GKE: new role
+  `authentik_sso`, `instance.yml` `authentik.sso`, Secret Manager `authentik-sso-idp-cert`; kind: a local OIDC
+  stand-in in `./run.sh 09`). One Workspace group syncs to `agentdev-admins-sso`, a child of `agentdev-admins`: added
+  when the directory lists the person, removed only when it no longer does, each change audited as
+  `custom_agentdev_admin_sync`; members of `agentdev-admins` are never changed (#103). `forge_login` comes from a
+  Workspace custom attribute that only directory admins can edit. The scope `forge` now also sends the `groups` claim
+  with inherited groups. Only e-mail addresses of `authentik.sso.allowed_domains` (and a matching Google `hd`) sign
+  in; the source has its own enrollment flow. New risks R84 to R89.
+- Per-forge logins (#122, decision 6559184875): the scope `forge` sends `forge_login_github` and `forge_login_gitea`
+  from the user attributes of the same names, and the company SSO sets them from admin-only Workspace custom
+  attributes (`authentik.sso.forge_attribute_github`, default `githubLogin`; `forge_attribute_gitea`, default
+  `giteaLogin`; `forge_attribute`, now default `forgeLogin`, for the fallback). The API (`forgeUserOf`) takes the claim
+  of the agent's forge, else `forge_login`; never the claim of another forge, never the username. Same on kind
+  (`SSO_FORGE_ATTR_GITHUB`, `SSO_FORGE_ATTR_GITEA`) and GKE. Several logins on one forge are not supported. Existing
+  `forge_login` attributes keep working. Docs: `docs/admin.md` "Map people to forge users" and "Prepare Google
+  Workspace".
 - kind provisioning for the API permissions (#100): the authentik blueprint makes the group `agentdev-admins`
   without members (on kind, `./run.sh 09` adds `akadmin` once through the authentik API, add only; no automated
   process sets or removes members, and step 09 checks that a re-apply keeps a member added by hand), and

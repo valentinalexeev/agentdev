@@ -1,0 +1,15 @@
+---
+# One refused allowed_domains case for tests/authentik_sso.yml (included per case, so each one is checked).
+- name: Refuse allowed_domains {{ bad_domains }}
+  block:
+    - name: Try it
+      ansible.builtin.include_tasks: ../../roles/authentik_sso/tasks/env.yml
+      vars:
+        authentik_sso_cfg: {admin_group: a@example.com, allowed_domains: "{{ bad_domains }}", saml_sso_url: https://a/}
+    - name: Not reached
+      ansible.builtin.fail:
+        msg: unsafe allowed_domains accepted
+  rescue:
+    - name: Refused as expected
+      ansible.builtin.assert:
+        that: ansible_failed_task.name == 'Check the SSO settings'

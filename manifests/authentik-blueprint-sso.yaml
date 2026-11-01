@@ -1,0 +1,276 @@
+# authentik blueprint (#122): sign-in through the company SSO (Google Workspace), the admin group sync and the forge
+# login. No instance values here: they come from the optional Secret `authentik-sso` as AGENTDEV_SSO_* env of the
+# authentik pods (manifests/authentik-values.yaml). Without that Secret no entry applies.
+#   GKE: the playbook writes the Secret from instance.yml authentik.sso and Secret Manager (infra/ansible, #114).
+#   kind: 09-authentik.sh writes it for the local OIDC stand-in (manifests/kind/sso-standin.yaml).
+# AGENTDEV_SSO_SAML=true: Google Workspace SAML app. AGENTDEV_SSO_OIDC=true: an OIDC provider (the kind stand-in).
+#
+# Admin group sync (owner rule on #103: no automated process may lock out legitimate users):
+# - The source maps exactly one directory group (AGENTDEV_SSO_ADMIN_GROUP) to the authentik group
+#   `agentdev-admins-sso`. Every other directory group is dropped before authentik sees it.
+# - `agentdev-admins-sso` is a child of `agentdev-admins`, so its members get the `agentdev-admins` claim. The sync
+#   writes the members of `agentdev-admins-sso` only, never those of `agentdev-admins`.
+# - At each sign-in authentik adds the person when the directory lists them in the group, and removes them from
+#   `agentdev-admins-sso` only when the directory no longer lists them. the mapping logs each change as the event
+#   custom_agentdev_admin_sync (person, add/remove, directory group).
+# - No entry in any blueprint sets `users:`.
+# Only e-mail addresses of AGENTDEV_SSO_ALLOWED_DOMAINS sign in (policy agentdev-sso-allowed-domains).
+# The values that go into expressions are checked against strict patterns before they reach the Secret
+# (09-authentik.sh, infra/ansible/roles/authentik_sso): no quotes, backslashes or new lines.
+version: 1
+metadata: {name: agentdev company SSO}
+entries:
+# ---- shared by both kinds of source ----
+- model: authentik_core.group
+  id: admins
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-admins}
+  attrs: {name: agentdev-admins}            # no users: members are never set by a blueprint (#103)
+- model: authentik_core.group
+  id: admins-sso
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-admins-sso}
+  attrs:
+    name: agentdev-admins-sso
+    parents: [!KeyOf admins]                # members inherit agentdev-admins; no users here either
+    attributes: {agentdev/source-group: !Env AGENTDEV_SSO_ADMIN_GROUP}
+# Returning users: update name, e-mail and the attributes forge_login* from the directory at each sign-in, then log in.
+# The default source authentication flow only logs in, so a changed directory value would never arrive.
+- model: authentik_flows.flow
+  id: auth-flow
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {slug: agentdev-sso-authentication}
+  attrs:
+    name: agentdev SSO authentication
+    title: Welcome to agentdev
+    designation: authentication
+    policy_engine_mode: all          # every binding must pass (SSO flow and company domain)
+    authentication: require_unauthenticated
+- model: authentik_stages_user_write.userwritestage
+  id: auth-write
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-sso-authentication-write}
+  attrs: {user_creation_mode: never_create}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 0, stage: !KeyOf auth-write, target: !KeyOf auth-flow}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 10
+    stage: !Find [authentik_stages_user_login.userloginstage, [name, default-source-authentication-login]]
+    target: !KeyOf auth-flow
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 0
+    policy: !Find [authentik_policies_expression.expressionpolicy, [name, default-source-authentication-if-sso]]
+    target: !KeyOf auth-flow
+
+# Company domain (review #134): only e-mail addresses of AGENTDEV_SSO_ALLOWED_DOMAINS (comma-separated) may sign in
+# or be enrolled; Google's `hd` claim, when sent, must match too. Bound to both flows of this source, so the plan is
+# refused before any user, connection or group change. No domain configured: nobody gets in (fail closed).
+- model: authentik_policies_expression.expressionpolicy
+  id: domain-policy
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-sso-allowed-domains}
+  attrs:
+    execution_logging: true
+    expression: !Format
+    - |
+      allowed = [d for d in "%s".split(",") if d]
+      prompt = context.get("prompt_data") or {}
+      email = str(prompt.get("email") or "").strip().lower()
+      domain = email.rsplit("@", 1)[1] if email.count("@") == 1 else ""
+      hd = (context.get("oauth_userinfo") or {}).get("hd")
+      if domain in allowed and (hd is None or hd in allowed):
+          return True
+      ak_message("Sign-in is limited to the company domain.")
+      return False
+    - !Env AGENTDEV_SSO_ALLOWED_DOMAINS
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 10, policy: !KeyOf domain-policy, target: !KeyOf auth-flow}
+# New users: an own enrollment flow (the default one is shared with other sources), same stages plus the domain policy
+- model: authentik_flows.flow
+  id: enroll-flow
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {slug: agentdev-sso-enrollment}
+  attrs:
+    name: agentdev SSO enrollment
+    title: Welcome to agentdev
+    designation: enrollment
+    policy_engine_mode: all          # every binding must pass (SSO flow and company domain)
+    authentication: require_unauthenticated
+- model: authentik_stages_user_write.userwritestage
+  id: enroll-write
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {name: agentdev-sso-enrollment-write}
+  attrs: {user_creation_mode: always_create}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 0, stage: !KeyOf enroll-write, target: !KeyOf enroll-flow}
+- model: authentik_flows.flowstagebinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 10
+    stage: !Find [authentik_stages_user_login.userloginstage, [name, default-source-enrollment-login]]
+    target: !KeyOf enroll-flow
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers:
+    order: 0
+    policy: !Find [authentik_policies_expression.expressionpolicy, [name, default-source-enrollment-if-sso]]
+    target: !KeyOf enroll-flow
+- model: authentik_policies.policybinding
+  conditions: [!Condition [OR, !Env AGENTDEV_SSO_SAML, !Env AGENTDEV_SSO_OIDC]]
+  identifiers: {order: 10, policy: !KeyOf domain-policy, target: !KeyOf enroll-flow}
+
+# ---- Google Workspace (SAML) ----
+# Google sends groups only through SAML ("Group membership" in the SAML app), and custom attributes only through SAML
+# attribute mapping. Set in the Workspace SAML app: Name ID = primary e-mail; Group membership -> app attribute
+# `http://schemas.xmlsoap.org/claims/Group`; the custom attributes (agentdev.githubLogin, agentdev.giteaLogin and the
+# fallback agentdev.forgeLogin) -> app attributes AGENTDEV_SSO_FORGE_ATTR_GITHUB, AGENTDEV_SSO_FORGE_ATTR_GITEA and
+# AGENTDEV_SSO_FORGE_ATTR (docs/admin.md).
+- model: authentik_crypto.certificatekeypair
+  id: saml-idp-cert
+  conditions: [!Env AGENTDEV_SSO_SAML]
+  identifiers: {name: "agentdev: SSO IdP certificate"}
+  attrs: {certificate_data: !Env AGENTDEV_SSO_SAML_IDP_CERT, key_data: ""}
+- model: authentik_sources_saml.samlsourcepropertymapping
+  id: saml-user
+  conditions: [!Env AGENTDEV_SSO_SAML]
+  identifiers: {name: "agentdev: SSO user (SAML)"}
+  attrs:
+    expression: !Format
+    - |
+      # Only the configured directory group reaches authentik (#122). Mutating `properties` drops the others,
+      # because mapping results are merged into lists and cannot remove an entry.
+      admin_group = "%s"
+      groups = properties.get("groups") or []
+      if isinstance(groups, str):
+          groups = [groups]
+      properties["groups"] = [admin_group] if admin_group in groups else []
+      # Audit (#122): one event per change of the synced membership, with the person, the change and the directory
+      # group only. ak_create_event is not used: it copies the whole context, including the IdP token.
+      from authentik.core.models import Group, UserSourceConnection
+      from authentik.events.models import Event
+      conn = UserSourceConnection.objects.filter(source=source, identifier=name_id.text).select_related("user").first()
+      was = bool(conn) and Group.objects.filter(name="agentdev-admins-sso", users=conn.user).exists()
+      now = bool(properties["groups"])
+      if was != now:
+          Event.new("agentdev_admin_sync", app="agentdev", message="agentdev-admins-sso: " + ("add" if now else "remove"),
+                    change="add" if now else "remove", group="agentdev-admins-sso", directory_group=admin_group,
+                    username=conn.user.username if conn else properties.get("username"),
+                    source_slug=source.slug).save()
+      # forge logins (#88, #122) from admin-only directory custom attributes: forge_login_github and forge_login_gitea
+      # per forge kind, forge_login as the fallback. Not a valid forge login (or absent): empty, which the agentdev
+      # scope mapping does not emit, so the API gives read-only (fail closed).
+      def forge_login(attr):
+          login = properties.pop(attr, None)
+          if isinstance(login, list):
+              login = login[0] if len(login) == 1 else None
+          login = login.strip().lower() if isinstance(login, str) else ""
+          return login if regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$") else ""
+      logins = {"forge_login": forge_login("%s"), "forge_login_github": forge_login("%s"),
+                "forge_login_gitea": forge_login("%s")}
+      # e-mail = Name ID (primary e-mail in the Workspace app); the domain policy checks it
+      return {"email": str(name_id.text or "").strip().lower(), "attributes": logins}
+    - !Env AGENTDEV_SSO_ADMIN_GROUP
+    - !Env AGENTDEV_SSO_FORGE_ATTR
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITHUB
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITEA
+- model: authentik_sources_saml.samlsourcepropertymapping
+  id: saml-group
+  conditions: [!Env AGENTDEV_SSO_SAML]
+  identifiers: {name: "agentdev: SSO admin group (SAML)"}
+  attrs:
+    expression: |
+      # the only group left by "agentdev: SSO user (SAML)" is the configured one
+      return {"name": "agentdev-admins-sso"}
+- model: authentik_sources_saml.samlsource
+  conditions: [!Env AGENTDEV_SSO_SAML]
+  identifiers: {slug: agentdev-sso}
+  attrs:
+    name: !Env [AGENTDEV_SSO_NAME, Google Workspace]
+    enabled: true
+    sso_url: !Env AGENTDEV_SSO_SAML_SSO_URL
+    # issuer: authentik's metadata URL (the default), which is the Entity ID set in the Workspace SAML app
+    binding_type: REDIRECT
+    name_id_policy: urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress
+    verification_kp: !KeyOf saml-idp-cert
+    signed_assertion: true
+    allow_idp_initiated: false
+    user_matching_mode: identifier
+    group_matching_mode: name_link     # safe: only agentdev-admins-sso can reach the matcher
+    pre_authentication_flow: !Find [authentik_flows.flow, [slug, default-source-pre-authentication]]
+    authentication_flow: !KeyOf auth-flow
+    enrollment_flow: !KeyOf enroll-flow
+    user_property_mappings: [!KeyOf saml-user]
+    group_property_mappings: [!KeyOf saml-group]
+
+# ---- OIDC (the kind stand-in, or another OIDC provider that sends groups and the custom claim) ----
+- model: authentik_sources_oauth.oauthsourcepropertymapping
+  id: oidc-user
+  conditions: [!Env AGENTDEV_SSO_OIDC]
+  identifiers: {name: "agentdev: SSO user (OIDC)"}
+  attrs:
+    expression: !Format
+    - |
+      # same rules as "agentdev: SSO user (SAML)"
+      admin_group = "%s"
+      groups = info.get("groups") or []
+      if isinstance(groups, str):
+          groups = [groups]
+      properties["groups"] = [admin_group] if admin_group in groups else []
+      # Audit (#122): one event per change of the synced membership, with the person, the change and the directory
+      # group only. ak_create_event is not used: it copies the whole context, including the IdP token.
+      from authentik.core.models import Group, UserSourceConnection
+      from authentik.events.models import Event
+      conn = UserSourceConnection.objects.filter(source=source, identifier=str(info.get("sub") or info.get("id"))).select_related("user").first()
+      was = bool(conn) and Group.objects.filter(name="agentdev-admins-sso", users=conn.user).exists()
+      now = bool(properties["groups"])
+      if was != now:
+          Event.new("agentdev_admin_sync", app="agentdev", message="agentdev-admins-sso: " + ("add" if now else "remove"),
+                    change="add" if now else "remove", group="agentdev-admins-sso", directory_group=admin_group,
+                    username=conn.user.username if conn else properties.get("username"),
+                    source_slug=source.slug).save()
+      def forge_login(attr):
+          login = info.get(attr)
+          login = login.strip().lower() if isinstance(login, str) else ""
+          return login if regex_match(login, r"^[a-z0-9][a-z0-9._-]{0,38}$") else ""
+      out = {"attributes": {"forge_login": forge_login("%s"), "forge_login_github": forge_login("%s"),
+                            "forge_login_gitea": forge_login("%s")}}
+      if not properties.get("username"):
+          out["username"] = info.get("email")    # the enrollment flow has no username prompt
+      return out
+    - !Env AGENTDEV_SSO_ADMIN_GROUP
+    - !Env AGENTDEV_SSO_FORGE_ATTR
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITHUB
+    - !Env AGENTDEV_SSO_FORGE_ATTR_GITEA
+- model: authentik_sources_oauth.oauthsourcepropertymapping
+  id: oidc-group
+  conditions: [!Env AGENTDEV_SSO_OIDC]
+  identifiers: {name: "agentdev: SSO admin group (OIDC)"}
+  attrs:
+    expression: |
+      return {"name": "agentdev-admins-sso"}
+- model: authentik_sources_oauth.oauthsource
+  conditions: [!Env AGENTDEV_SSO_OIDC]
+  identifiers: {slug: agentdev-sso}
+  attrs:
+    name: !Env [AGENTDEV_SSO_NAME, Company SSO]
+    enabled: true
+    provider_type: openidconnect
+    consumer_key: !Env AGENTDEV_SSO_OIDC_CLIENT_ID
+    consumer_secret: !Env AGENTDEV_SSO_OIDC_CLIENT_SECRET
+    authorization_url: !Env AGENTDEV_SSO_OIDC_AUTHORIZE_URL
+    access_token_url: !Env AGENTDEV_SSO_OIDC_TOKEN_URL
+    profile_url: !Env AGENTDEV_SSO_OIDC_USERINFO_URL
+    additional_scopes: ""
+    user_matching_mode: identifier
+    group_matching_mode: name_link
+    authentication_flow: !KeyOf auth-flow
+    enrollment_flow: !KeyOf enroll-flow
+    user_property_mappings: [!KeyOf oidc-user]
+    group_property_mappings: [!KeyOf oidc-group]

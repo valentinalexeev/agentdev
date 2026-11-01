@@ -152,9 +152,12 @@ type identity struct {
 	Subject  string `json:"sub"`
 	Username string `json:"preferred_username"`
 	Email    string `json:"email"`
-	// ForgeLogin is the custom claim forge_login (scope "forge", #88): the only source of the forge user name.
-	ForgeLogin string   `json:"forge_login,omitempty"`
-	Groups     []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
+	// ForgeLogin* are the custom claims of scope "forge" (#88, #122), the only source of the forge user name:
+	// forge_login_<kind> per forge kind, forge_login as the fallback (forgeUserOf).
+	ForgeLogin       string   `json:"forge_login,omitempty"`
+	ForgeLoginGitHub string   `json:"forge_login_github,omitempty"`
+	ForgeLoginGitea  string   `json:"forge_login_gitea,omitempty"`
+	Groups           []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
 }
 
 // agentLister returns the agents' current state.
