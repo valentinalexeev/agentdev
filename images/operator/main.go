@@ -80,12 +80,13 @@ func main() {
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now,
 		C: SecurityConfig{
-			PauseAfter:  envInt("SECURITY_PAUSE_AFTER", 5),
-			Retention:   time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,
-			MaxPerAgent: envInt("SECURITY_MAX_PER_AGENT", 500),
-			RatePerMin:  envInt("SECURITY_RATE_PER_MIN", 10),
-			RateBurst:   envInt("SECURITY_RATE_BURST", 20),
-			Rescan:      15 * time.Second,
+			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),
+			Retention:         time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,
+			MaxPerAgent:       envInt("SECURITY_MAX_PER_AGENT", 500),
+			RatePerMin:        envInt("SECURITY_RATE_PER_MIN", 10),
+			RateBurst:         envInt("SECURITY_RATE_BURST", 20),
+			ApprovalRetention: time.Duration(envInt("APPROVAL_RETENTION_DAYS", 90)) * 24 * time.Hour,
+			Rescan:            15 * time.Second,
 		}}
 	if err := mgr.Add(col); err != nil {
 		log.Error(err, "security collector")

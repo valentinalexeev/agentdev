@@ -118,7 +118,7 @@
       changed_when: false
       no_log: true
 
-    - name: "Agent and SecurityEvent CRDs (#47, #70)"
+    - name: "Agent, SecurityEvent and Approval CRDs (#47, #70, #67)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -126,7 +126,7 @@
         wait: true
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
-      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml]
+      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -161,6 +161,7 @@
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
             SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
             SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
+            APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
           replace: []
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods

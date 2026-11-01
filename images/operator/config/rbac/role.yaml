@@ -59,6 +59,7 @@ rules:
 - apiGroups:
   - agentdev.dev
   resources:
+  - approvals
   - securityevents
   verbs:
   - create

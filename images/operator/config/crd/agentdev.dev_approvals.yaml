@@ -1,0 +1,181 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: approvals.agentdev.dev
+spec:
+  group: agentdev.dev
+  names:
+    kind: Approval
+    listKind: ApprovalList
+    plural: approvals
+    shortNames:
+    - apv
+    singular: approval
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agent
+      name: Agent
+      type: string
+    - jsonPath: .spec.job
+      name: Job
+      type: string
+    - jsonPath: .spec.tool
+      name: Tool
+      type: string
+    - jsonPath: .status.state
+      name: State
+      type: string
+    - jsonPath: .status.decidedBy
+      name: By
+      type: string
+    - jsonPath: .spec.created
+      name: Created
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ApprovalSpec is one permission request of an agent (#67). Written by the operator from the forge sidecar's
+              AGENTDEV_APPROVAL_REQUEST log line (never from the agent container, never by the agent: agents have no RBAC on this
+              resource). Immutable once created; the decision is in the status, written only by agentdev-api.
+            properties:
+              agent:
+                description: 'Agent name: taken from the pod''s agent label, not from
+                  the log line.'
+                maxLength: 63
+                type: string
+              contentHash:
+                description: |-
+                  SHA-256 (hex) over id, agent, repo, job, source, tool and input, computed by the sidecar. A decision covers this
+                  hash; the sidecar acts only on a decision with the hash it computed.
+                pattern: ^[a-f0-9]{64}$
+                type: string
+              created:
+                description: When the sidecar asked (container runtime timestamp of
+                  the line).
+                format: date-time
+                type: string
+              expires:
+                description: After this time the request expires (same effect as a
+                  denial).
+                format: date-time
+                type: string
+              forge:
+                description: Forge kind of the repository.
+                enum:
+                - gitea
+                - github
+                type: string
+              id:
+                description: 'Request id: a random nonce chosen by the sidecar. Decisions
+                  quote it (/approve <id>).'
+                pattern: ^[a-f0-9]{16}$
+                type: string
+              input:
+                description: |-
+                  The request as text: the tool input, or the branch, commit and protected paths. Untrusted: written by Claude's
+                  choice of input, shown to people as data only.
+                maxLength: 4100
+                type: string
+              job:
+                description: Job the request belongs to, issue-N or pr-N. The forge
+                  comments are read on that issue or PR.
+                pattern: ^(issue|pr)-[0-9]{1,10}$
+                type: string
+              repo:
+                description: 'Repository (owner/name) of the agent: the project. Anyone
+                  with write access to it may decide.'
+                maxLength: 201
+                type: string
+              source:
+                description: 'What asks: claude (a tool permission prompt) or push
+                  (a push touching a protected path).'
+                enum:
+                - claude
+                - push
+                type: string
+              tool:
+                description: Tool name (claude) or "push" (push).
+                maxLength: 128
+                type: string
+            required:
+            - agent
+            - contentHash
+            - created
+            - expires
+            - forge
+            - id
+            - input
+            - job
+            - repo
+            - source
+            - tool
+            type: object
+          status:
+            description: |-
+              ApprovalStatus is written by agentdev-api only, with a compare-and-set on resourceVersion: the first valid decision
+              wins.
+            properties:
+              commentId:
+                description: Forge comment id of the decision.
+                format: int64
+                type: integer
+              contentHash:
+                description: The content hash the decision covers (copied from spec
+                  when deciding).
+                type: string
+              decidedAt:
+                format: date-time
+                type: string
+              decidedBy:
+                description: Forge login of the person who decided, and where (forge).
+                type: string
+              decidedVia:
+                type: string
+              scope:
+                description: 'once | job: for allowed, how far the approval reaches
+                  (never beyond the job).'
+                type: string
+              state:
+                description: pending (empty) | allowed | denied | expired
+                enum:
+                - ""
+                - pending
+                - allowed
+                - denied
+                - expired
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: Approval spec is immutable
+          rule: self.spec == oldSelf.spec
+    served: true
+    storage: true
+    subresources:
+      status: {}

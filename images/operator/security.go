@@ -51,6 +51,8 @@ type SecurityConfig struct {
 	Rescan      time.Duration // how often new pods and containers are picked up
 	RatePerMin  int           // events per minute one pod container may record (token bucket refill, default 10)
 	RateBurst   int           // bucket size (default 20)
+	// Approval objects older than this are deleted (default 90 days, #67)
+	ApprovalRetention time.Duration
 }
 
 // logOpener opens a container's log, with runtime timestamps, from since (nil: from the start), following it.
@@ -261,6 +263,9 @@ func (c *Collector) Start(ctx context.Context) error {
 			if err := c.Prune(ctx); err != nil {
 				log.FromContext(ctx).Error(err, "prune security events")
 			}
+			if err := c.pruneApprovals(ctx); err != nil {
+				log.FromContext(ctx).Error(err, "prune approvals")
+			}
 			if n := c.Dropped.Load(); n > 0 {
 				log.FromContext(ctx).Info("security event lines dropped by the rate limit (total since start)", "dropped", n)
 			}
@@ -367,6 +372,12 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		if handled, err := c.recordApproval(ctx, sc.Text(), p, container); handled { // approvals.go (#67)
+			if err != nil {
+				return fmt.Errorf("record approval: %w", err)
+			}
+			continue
+		}
 		spec, ok := parseLine(sc.Text(), p, container)
 		if !ok {
 			continue

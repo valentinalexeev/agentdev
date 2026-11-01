@@ -18,6 +18,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-security-positions], verbs: [get, update]}
+# approvals (#67): create from the forge sidecar's request line, prune; the decision (status) is the API's
+- {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch, create, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -55,6 +57,7 @@ spec:
         - {name: SECURITY_MAX_PER_AGENT, value: "${SECURITY_MAX_PER_AGENT}"}
         - {name: SECURITY_RATE_PER_MIN, value: "${SECURITY_RATE_PER_MIN}"}
         - {name: SECURITY_RATE_BURST, value: "${SECURITY_RATE_BURST}"}
+        - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
