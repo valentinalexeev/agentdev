@@ -35,9 +35,11 @@ type Config struct {
 	RouterURL, SelfURL         string
 	WakeToken, RegisterToken   string
 	AgentName, ForgeKind       string
-	RegisterEvery              time.Duration
-	Git                        string // git binary
-	Self                       string // this binary, used as git credential helper
+	// GitHub App (FORGE_KIND=github, #2): only in this container
+	GitHubAppID, GitHubInstallationID, GitHubAppKey string
+	RegisterEvery                                   time.Duration
+	Git                                             string // git binary
+	Self                                            string // this binary, used as git credential helper
 }
 
 func getenv(k, def string) string {
@@ -69,7 +71,18 @@ func loadConfig() (*Config, error) {
 		RouterURL:     os.Getenv("ROUTER_URL"), SelfURL: os.Getenv("SELF_URL"),
 		WakeToken: os.Getenv("WAKE_TOKEN"), RegisterToken: os.Getenv("REGISTER_TOKEN"),
 		AgentName: getenv("AGENT_NAME", os.Getenv("FORGE_USER")), ForgeKind: getenv("FORGE_KIND", "gitea"),
-		Git: getenv("GIT", "git"),
+		Git:         getenv("GIT", "git"),
+		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
+		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
+	}
+	// preferred: the key as a file (a Secret volume mounted only into this container), so it is never in any
+	// process environment; /proc/<pid>/environ keeps the original environment even after os.Unsetenv
+	if f := os.Getenv("GITHUB_APP_PRIVATE_KEY_FILE"); f != "" && c.ForgeKind == "github" {
+		b, err := os.ReadFile(f)
+		if err != nil || len(b) > 16<<10 {
+			return nil, fmt.Errorf("GITHUB_APP_PRIVATE_KEY_FILE: cannot read %s (or larger than 16 KiB)", f)
+		}
+		c.GitHubAppKey = string(b)
 	}
 	c.IncomingDir = getenv("INCOMING_DIR", filepath.Join(filepath.Dir(c.MirrorDir), "incoming"))
 	mb, err := strconv.ParseInt(getenv("MAX_PUSH_MB", "50"), 10, 64)
@@ -82,7 +95,12 @@ func loadConfig() (*Config, error) {
 		return nil, fmt.Errorf("REGISTER_EVERY: %q", os.Getenv("REGISTER_EVERY"))
 	}
 	c.RegisterEvery = time.Duration(every) * time.Second
-	if c.ForgeURL == "" || c.ForgeUser == "" || c.Token == "" || len(c.Repos) == 0 {
+	if c.ForgeKind == "github" {
+		// the App's key replaces FORGE_TOKEN; the driver checks the App values (github.go)
+		if c.ForgeURL == "" || c.ForgeUser == "" || len(c.Repos) == 0 {
+			return nil, fmt.Errorf("FORGE_URL, FORGE_USER and REPO are required")
+		}
+	} else if c.ForgeURL == "" || c.ForgeUser == "" || c.Token == "" || len(c.Repos) == 0 {
 		return nil, fmt.Errorf("FORGE_URL, FORGE_USER, FORGE_TOKEN and REPO are required")
 	}
 	if c.Self, err = os.Executable(); err != nil {
@@ -102,11 +120,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("forge: %v", err)
 	}
-	if _, err := newDriver(c); err != nil {
+	drv, err := newDriver(c)
+	if err != nil {
 		log.Fatalf("forge: %v", err)
 	}
+	// the key is parsed; drop it from the environment so no child process (git, the credential helper) inherits it
+	_ = os.Unsetenv("GITHUB_APP_PRIVATE_KEY")
 	s := newServer(c)
-	s.git.drv = s.drv
+	s.drv, s.rules, s.git.drv = drv, drv.rules(), drv
 	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
 		s.enableApprovals(apiURL, timeout)
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)

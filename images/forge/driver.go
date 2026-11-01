@@ -29,13 +29,15 @@ func newDriver(c *Config) (driver, error) {
 	switch c.ForgeKind {
 	case "", "gitea":
 		return &giteaDriver{c: c}, nil
+	case "github":
+		return newGitHubDriver(c)
 	default:
 		return nil, fmt.Errorf("FORGE_KIND %q is not supported", c.ForgeKind)
 	}
 }
 
 func mkRule(m, p string, chk func(*server, []byte) error) rule {
-	return rule{m, regexp.MustCompile("^" + p + "$"), chk}
+	return rule{method: m, path: regexp.MustCompile("^" + p + "$"), check: chk}
 }
 
 // giteaDriver: a Gitea (or Forgejo) with one personal access token per agent (FORGE_TOKEN). Unchanged behaviour of

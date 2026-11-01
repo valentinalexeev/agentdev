@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -32,6 +33,8 @@ type rule struct {
 	method string
 	path   *regexp.Regexp
 	check  func(s *server, body []byte) error // optional body policy
+	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
+	rewrite func(s *server, body []byte) ([]byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -64,10 +67,11 @@ func (s *server) logf(format string, a ...any) {
 // them here makes the attempt a security event.
 func checkNoDecision(_ *server, body []byte) error {
 	var c struct {
-		Body string `json:"body"`
+		Body  string `json:"body"`
+		Title string `json:"title"`
 	}
 	_ = json.Unmarshal(body, &c)
-	if decisionCmdRe.MatchString(c.Body) {
+	if decisionCmdRe.MatchString(c.Body) || decisionCmdRe.MatchString(c.Title) {
 		return refuseAs("approval-self-decision", "high", "comment refused: agents cannot post approval decisions")
 	}
 	return nil
@@ -114,6 +118,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
 	}
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }
 
@@ -186,7 +191,33 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// #67: agents never post an approval decision, on any forge driver and on any write that carries text
+	// (issue comments, PR bodies, review replies). Driver rules may add checks but cannot skip this one.
+	if r.Method != http.MethodGet {
+		if err := checkNoDecision(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
+	if match.rewrite != nil {
+		if body, err = match.rewrite(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	drv := s.driver()
+	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
+		if err := qc.checkQuery(r.URL.Query()); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
 		s.logf("forge credential: %v", err)
@@ -207,8 +238,17 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if o, ok := drv.(interface{ observe(int) }); ok {
+		o.observe(resp.StatusCode)
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
+	}
+	// rate-limit hints reach the loop, so it can wait instead of retrying at once
+	for _, h := range []string{"Retry-After", "X-RateLimit-Remaining", "X-RateLimit-Reset"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
@@ -244,4 +284,24 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	s.logf("pushed %s to %s", tip[:12], branch)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"branch": branch, "sha": tip})
+}
+
+// GET /identity: the forge kind and the commit author the loop uses (#2). On GitHub the author is the agent's name
+// with the App bot's noreply address, so GitHub links the commit to the App; on Gitea it is the agent's own user.
+func (s *server) identity(w http.ResponseWriter, r *http.Request) {
+	out := map[string]string{"forge": s.driver().kind(), "agent": s.c.AgentName,
+		"name": s.c.ForgeUser, "email": s.c.ForgeUser + "@agents.local"}
+	if d, ok := s.driver().(*githubDriver); ok {
+		login, id, err := d.identity(r.Context())
+		if err != nil {
+			s.logf("identity: %v", err)
+			fail(w, errors.New("forge identity unavailable"))
+			return
+		}
+		out["name"] = s.c.AgentName + " (agentdev)"
+		out["email"] = fmt.Sprintf("%d+%s@users.noreply.github.com", id, login)
+		out["login"] = login
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
