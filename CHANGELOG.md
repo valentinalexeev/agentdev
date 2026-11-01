@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- API forge identity (#88): the forge user comes from the new token claim `forge_login` (authentik scope `forge`,
+  scope mapping in the agentdev blueprint, from the user attribute `forge_login`), not from the authentik username.
+  The web UI requests the scope `forge`. **Breaking:** set `forge_login` for each person (source property mapping of
+  the company SSO, or the user attributes; `docs/admin.md`, "Map people to forge users"); without it a person is
+  read-only. Risk R42 updated.
+
 ### Added
 - Process pack `default` (#110): `AGENTS.md` rules for security advisory threads (reply with Fixed / Accepted risk /
   False positive, never resolve a thread the agent did not fix), deployment targets in sync, no secrets printed and

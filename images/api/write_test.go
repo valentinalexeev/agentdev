@@ -20,10 +20,10 @@ import (
 
 // Tokens of the tests: each maps to one identity.
 var testIDs = map[string]*identity{
-	"writer": {Subject: "s-w", Username: "wendy"},
-	"reader": {Subject: "s-r", Username: "rita"},
-	"admin":  {Subject: "s-a", Username: "adam"},                                      // admin on owner/x
-	"group":  {Subject: "s-g", Username: "gina", Groups: []string{"agentdev-admins"}}, // no forge access at all
+	"writer": {Subject: "s-w", Username: "wendy", ForgeLogin: "wendy"},
+	"reader": {Subject: "s-r", Username: "rita", ForgeLogin: "rita"},
+	"admin":  {Subject: "s-a", Username: "adam", ForgeLogin: "adam"},                                      // admin on owner/x
+	"group":  {Subject: "s-g", Username: "gina", ForgeLogin: "gina", Groups: []string{"agentdev-admins"}}, // no forge access at all
 	"nobody": {Subject: "s-n", Username: ""},
 }
 

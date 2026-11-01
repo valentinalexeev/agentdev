@@ -17,7 +17,7 @@ func TestForgeUserOfRejectsAmbiguousNames(t *testing.T) {
 		"adam": "adam", "a.b-c_d": "a.b-c_d", "Adam": "", "ADAM": "", " adam": "", "adam ": "", "": "",
 		"-adam": "", ".adam": "", "ad/am": "", "adäm": "", strings.Repeat("a", 41): "",
 	} {
-		if got := forgeUserOf(&identity{Username: in}); got != want {
+		if got := forgeUserOf(&identity{ForgeLogin: in}); got != want {
 			t.Errorf("forgeUserOf(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -26,7 +26,7 @@ func TestForgeUserOfRejectsAmbiguousNames(t *testing.T) {
 func TestUppercaseUsernameCannotActAsForgeUser(t *testing.T) {
 	gitea := fakeGitea(t)
 	defer gitea.Close()
-	testIDs["Adam"] = &identity{Subject: "s-x", Username: "Adam"}
+	testIDs["Adam"] = &identity{Subject: "s-x", Username: "adam", ForgeLogin: "Adam"}
 	defer delete(testIDs, "Adam")
 	e := newEnv(t, gitea.URL)
 	if w := e.call("DELETE", "/api/agents/alice", "Adam", ""); w.Code != http.StatusForbidden {
@@ -155,5 +155,26 @@ func TestClientAddr(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", strings.Repeat("x", 500))
 	if got := clientAddr(r); len(got) > 64+len(" via 10.0.0.5:1234") {
 		t.Errorf("forwarded value not clipped: %d", len(got))
+	}
+}
+
+// #88: the authentik username never maps to a forge user; only the forge_login claim does.
+func TestUsernameWithoutForgeLoginIsReadOnly(t *testing.T) {
+	if got := forgeUserOf(&identity{Username: "adam", Email: "adam@example.com"}); got != "" {
+		t.Fatalf("forgeUserOf without claim = %q, want empty", got)
+	}
+	if got := forgeUserOf(&identity{Username: "mallory", ForgeLogin: "adam"}); got != "adam" {
+		t.Fatalf("forgeUserOf = %q, want claim value", got)
+	}
+	gitea := fakeGitea(t)
+	defer gitea.Close()
+	testIDs["noclaim"] = &identity{Subject: "s-nc", Username: "adam"} // same username as the repo admin, no claim
+	defer delete(testIDs, "noclaim")
+	e := newEnv(t, gitea.URL)
+	if w := e.call("DELETE", "/api/agents/alice", "noclaim", ""); w.Code != http.StatusForbidden {
+		t.Fatalf("code %d", w.Code)
+	}
+	if e.spec(t, "alice") == nil {
+		t.Fatal("agent deleted")
 	}
 }
