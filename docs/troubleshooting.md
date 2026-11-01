@@ -104,6 +104,17 @@
 | Step 02 stops with `No module named 'kubernetes'`. | The Python package of `kubernetes.core` is not installed for ansible. | 1. Install it: `pipx inject ansible-core kubernetes`. 2. Install the collection: `ansible-galaxy collection install -r infra/ansible/requirements.yml`. 3. Do run.sh step 02 again. |
 | Step 02 stops at `Warm pool has 1 ready sandbox` after 300 s. | The sandbox pod can not start (image not loaded, PVC not bound, or the sandbox node is full). | 1. Examine the pods: `kubectl --context kind-agentdev -n agents get pods,pvc`. 2. Examine the events: `kubectl --context kind-agentdev -n agents describe pod`. 3. Do run.sh step 02 again. |
 
+## Sandbox checks (run.sh step 03)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 03 stops at `Claim is Ready`. | Step 02 was not done, or the warm pool has no ready sandbox. | 1. Do run.sh step 02 again. 2. Examine the pool: `kubectl --context kind-agentdev -n agents get sandboxwarmpool,sandbox,pods`. 3. Do run.sh step 03 again. |
+| Step 03 stops at `Isolation check` or `Pod uses the runtime class gvisor`. | The sandbox does not run under gVisor. | 1. Do run.sh step 01 again (it checks gVisor). 2. Examine `runtimeClassName` in `manifests/sandbox-template.yaml`. 3. Do run.sh step 03 again. |
+| Step 03 stops at `Suspend released the pod` or `Sandbox is Ready again`. | The controller did not suspend or resume the sandbox in 180 s. | 1. Examine the controller: `kubectl --context kind-agentdev -n agent-sandbox-system logs deploy/agent-sandbox-controller`. 2. Do run.sh step 03 again. The step sets the sandbox to `Running` and the warm pool to 1 also after a failure. |
+| Step 03 says `Claude Code ran but hello.txt is missing`. | The API key is not valid, or the sandbox has no access to the Claude API. | 1. Examine the key. 2. Do run.sh step 02 with `ANTHROPIC_API_KEY` exported. 3. Do run.sh step 03 again. This is a warning, the step does not fail. |
+
+To claim a new sandbox, delete the claim of the step: `kubectl --context kind-agentdev -n agents delete sandboxclaim agentdev-sandbox-test`.
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.

@@ -1,0 +1,183 @@
+---
+# Same checks as the old 03-test-sandbox.sh. The role leaves the cluster as it found it (warm pool at 1, the claimed
+# sandbox Running), so the checks report changed only when the claim is new: a second run reports changed=0.
+- name: Claim a sandbox from the warm pool
+  kubernetes.core.k8s:
+    context: "{{ sandbox_test_context }}"
+    definition:
+      apiVersion: extensions.agents.x-k8s.io/v1beta1
+      kind: SandboxClaim
+      metadata: {name: "{{ sandbox_test_claim }}", namespace: "{{ sandbox_test_ns }}"}
+      spec: {warmPoolRef: {name: "{{ sandbox_test_pool }}"}}
+  register: sandbox_test_claim_apply
+
+- name: Claim is Ready
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ sandbox_test_context }}", -n, "{{ sandbox_test_ns }}", wait, --for=condition=Ready,
+           "sandboxclaim/{{ sandbox_test_claim }}", "--timeout={{ sandbox_test_timeout }}s"]
+  changed_when: false
+
+- name: Sandbox of the claim
+  kubernetes.core.k8s_info:
+    context: "{{ sandbox_test_context }}"
+    api_version: extensions.agents.x-k8s.io/v1beta1
+    kind: SandboxClaim
+    namespace: "{{ sandbox_test_ns }}"
+    name: "{{ sandbox_test_claim }}"
+  register: sandbox_test_claim_info
+  failed_when: (sandbox_test_claim_info.resources[0].status.sandbox.name | default('')) | length == 0
+
+- name: Name of the sandbox
+  ansible.builtin.set_fact:
+    sandbox_test_sbx: "{{ sandbox_test_claim_info.resources[0].status.sandbox.name }}"
+    sandbox_test_kubectl: [kubectl, --context, "{{ sandbox_test_context }}", -n, "{{ sandbox_test_ns }}"]
+
+- name: Isolation check (runtime class and gVisor kernel)
+  ansible.builtin.command:
+    argv: "{{ sandbox_test_kubectl + ['exec', sandbox_test_sbx, '--', 'sh', '-c', 'dmesg 2>/dev/null | head -1'] }}"
+  register: sandbox_test_dmesg
+  changed_when: false
+  failed_when: "'gVisor' not in sandbox_test_dmesg.stdout"
+
+- name: Pod uses the runtime class {{ sandbox_test_runtime_class }}
+  kubernetes.core.k8s_info:
+    context: "{{ sandbox_test_context }}"
+    kind: Pod
+    namespace: "{{ sandbox_test_ns }}"
+    name: "{{ sandbox_test_sbx }}"
+  register: sandbox_test_pod
+  failed_when: (sandbox_test_pod.resources[0].spec.runtimeClassName | default('')) != sandbox_test_runtime_class
+
+- name: Suspend, resume and warm pool to zero (the cluster is restored afterwards)
+  vars:
+    sandbox_test_mark: written-by-sandbox-test
+  block:
+    - name: Write a marker and a git repo into the workspace
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['exec', sandbox_test_sbx, '--', 'sh', '-c', sandbox_test_write] }}"
+      vars:
+        sandbox_test_write: >-
+          echo {{ sandbox_test_mark }} > /workspace/marker && mkdir -p /workspace/repo && cd /workspace/repo &&
+          git init -q && echo ok
+      changed_when: false
+
+    - name: Suspend the sandbox
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['patch', 'sandbox', sandbox_test_sbx, '--type', 'merge', '-p',
+               '{\"spec\":{\"operatingMode\":\"Suspended\"}}'] }}"
+      changed_when: false
+
+    - name: Suspend released the pod
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['wait', '--for=delete', 'pod/' ~ sandbox_test_sbx, '--timeout=' ~ sandbox_test_timeout ~ 's'] }}"
+      changed_when: false
+
+    - name: Both PVCs of the sandbox are kept
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['get', 'pvc', '-o', 'name'] }}"
+      register: sandbox_test_pvcs
+      changed_when: false
+      failed_when: sandbox_test_pvcs.stdout_lines | select('search', sandbox_test_sbx) | list | length < 2
+
+    - name: Resume the sandbox
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['patch', 'sandbox', sandbox_test_sbx, '--type', 'merge', '-p',
+               '{\"spec\":{\"operatingMode\":\"Running\"}}'] }}"
+      changed_when: false
+
+    - name: Sandbox is Ready again
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['wait', '--for=condition=Ready', 'sandbox/' ~ sandbox_test_sbx, '--timeout=' ~ sandbox_test_timeout ~ 's'] }}"
+      changed_when: false
+
+    - name: Workspace marker and git repo survived the suspend
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['exec', sandbox_test_sbx, '--', 'sh', '-c', 'cat /workspace/marker && test -d /workspace/repo/.git'] }}"
+      register: sandbox_test_marker
+      changed_when: false
+      failed_when: sandbox_test_marker.rc != 0 or sandbox_test_marker.stdout | trim != sandbox_test_mark
+
+    - name: Scale the warm pool to 0
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['scale', 'sandboxwarmpool', sandbox_test_pool, '--replicas=0'] }}"
+      changed_when: false
+
+    - name: Selector of the warm pool
+      kubernetes.core.k8s_info:
+        context: "{{ sandbox_test_context }}"
+        api_version: extensions.agents.x-k8s.io/v1beta1
+        kind: SandboxWarmPool
+        namespace: "{{ sandbox_test_ns }}"
+        name: "{{ sandbox_test_pool }}"
+      register: sandbox_test_pool_info
+
+    - name: No unclaimed warm sandbox is left
+      kubernetes.core.k8s_info:
+        context: "{{ sandbox_test_context }}"
+        api_version: agents.x-k8s.io/v1beta1
+        kind: Sandbox
+        namespace: "{{ sandbox_test_ns }}"
+        label_selectors: ["{{ sandbox_test_pool_info.resources[0].status.selector }}"]
+      register: sandbox_test_unclaimed
+      until: sandbox_test_unclaimed.resources | length == 0
+      retries: "{{ (sandbox_test_timeout | int / 5) | int }}"
+      delay: 5
+  always:
+    # restore what the test changed, also after a failed check
+    - name: Sandbox is Running
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['patch', 'sandbox', sandbox_test_sbx, '--type', 'merge', '-p',
+               '{\"spec\":{\"operatingMode\":\"Running\"}}'] }}"
+      changed_when: false
+
+    - name: Warm pool back to 1
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['scale', 'sandboxwarmpool', sandbox_test_pool, '--replicas=1'] }}"
+      changed_when: false
+
+- name: API key Secret claude-agent-keys (optional)
+  kubernetes.core.k8s_info:
+    context: "{{ sandbox_test_context }}"
+    kind: Secret
+    namespace: "{{ sandbox_test_ns }}"
+    name: claude-agent-keys
+  register: sandbox_test_keys
+  no_log: true
+
+- name: Headless Claude Code turn
+  when: sandbox_test_claude | bool and sandbox_test_keys.resources | length > 0
+  block:
+    - name: Claude Code writes hello.txt
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['exec', sandbox_test_sbx, '--', 'sh', '-c', sandbox_test_prompt] }}"
+      vars:
+        sandbox_test_prompt: >-
+          cd /workspace/repo && claude -p "Create hello.txt containing the word spike, then reply with just DONE"
+          --output-format json --dangerously-skip-permissions
+      register: sandbox_test_claude_out
+      changed_when: false
+      failed_when: false
+
+    - name: The file exists
+      ansible.builtin.command:
+        argv: "{{ sandbox_test_kubectl + ['exec', sandbox_test_sbx, '--', 'test', '-f', '/workspace/repo/hello.txt'] }}"
+      register: sandbox_test_hello
+      changed_when: false
+      failed_when: false
+
+    - name: Claude Code result
+      ansible.builtin.debug:
+        msg: "{{ 'Claude Code ran headless under gVisor and wrote a file' if sandbox_test_hello.rc == 0
+                 else 'WARNING: Claude Code ran but hello.txt is missing: ' ~ sandbox_test_claude_out.stdout[:300] }}"
+
+- name: No API key, the live Claude call is skipped
+  ansible.builtin.debug:
+    msg: "skipped: no Secret claude-agent-keys (run the sandbox tag with ANTHROPIC_API_KEY exported)"
+  when: sandbox_test_keys.resources | length == 0
+
+- name: Result
+  ansible.builtin.debug:
+    msg:
+      - "Sandbox {{ sandbox_test_sbx }} passed: warm claim, {{ sandbox_test_runtime_class }}, suspend keeps the workspace, resume, pool to 0"
+      - "Shell into it: kubectl --context {{ sandbox_test_context }} -n {{ sandbox_test_ns }} exec -it {{ sandbox_test_sbx }} -- bash"
+      - "Delete it:     kubectl --context {{ sandbox_test_context }} -n {{ sandbox_test_ns }} delete sandboxclaim {{ sandbox_test_claim }}"

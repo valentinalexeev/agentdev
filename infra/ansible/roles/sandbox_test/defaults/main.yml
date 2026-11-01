@@ -1,0 +1,13 @@
+---
+# Checks of the warm pool from the agent_sandbox role (#106, was 03-test-sandbox.sh): warm claim, gVisor, suspend keeps
+# the workspace, resume, warm pool to zero, optional headless Claude turn. The checks use kubectl with a context, so a
+# GKE playbook can include the role with its own sandbox_test_context (the runtime class is gvisor on GKE too).
+sandbox_test_context: kind-agentdev
+sandbox_test_ns: agents
+sandbox_test_pool: claude-agent-pool
+# fixed name, so a second run reuses the claim instead of adding one per run
+sandbox_test_claim: agentdev-sandbox-test
+sandbox_test_runtime_class: gvisor
+sandbox_test_timeout: 180
+# run the live Claude Code turn when the Secret claude-agent-keys exists
+sandbox_test_claude: true
