@@ -854,7 +854,7 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 			writeJSON(rw, http.StatusOK, fromApprovalObject(u2))
 			return
 		}
-		if !apierrors.IsConflict(err) || attempt > 0 {
+		if !apierrors.IsConflict(err) {
 			fail(http.StatusBadGateway, "error", "cannot write the decision")
 			return
 		}
@@ -864,6 +864,11 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a = fromApprovalObject(u)
+		if attempt > 0 && a.State == "pending" {
+			// still pending after a second conflict: nothing was written, the caller retries
+			fail(http.StatusConflict, "denied", "the request changed meanwhile; reload and decide again")
+			return
+		}
 	}
 }
 

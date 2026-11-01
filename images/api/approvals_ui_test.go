@@ -140,3 +140,19 @@ func TestUIDecisionAdminGroupDenies(t *testing.T) {
 		t.Fatalf("record: %+v", a)
 	}
 }
+
+// A write that keeps conflicting (another writer touches the object each time) answers 409, not 502: nothing was
+// written and the caller reloads (#138 review).
+func TestUIDecisionRepeatedConflictIs409(t *testing.T) {
+	_, k, _, _ := uiDecideEnv(t)
+	gitea := fakeGitea(t)
+	t.Cleanup(gitea.Close)
+	wr := &writer{store: conflictStore{k}, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"}
+	h := routes(idVerify, k, nil, wr)
+	if w := postDecision(h, "writer", "", body("approve")); w.Code != http.StatusConflict {
+		t.Fatalf("repeated conflict: %d %s", w.Code, w.Body)
+	}
+	if a := status(t, k, "carol-"+aid); a.State != "pending" {
+		t.Fatalf("written despite conflicts: %+v", a)
+	}
+}
