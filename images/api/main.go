@@ -131,10 +131,12 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 type verifier func(ctx context.Context, raw string) (*identity, error)
 
 type identity struct {
-	Subject  string   `json:"sub"`
-	Username string   `json:"preferred_username"`
-	Email    string   `json:"email"`
-	Groups   []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
+	Subject  string `json:"sub"`
+	Username string `json:"preferred_username"`
+	Email    string `json:"email"`
+	// ForgeLogin is the custom claim forge_login (scope "forge", #88): the only source of the forge user name.
+	ForgeLogin string   `json:"forge_login,omitempty"`
+	Groups     []string `json:"groups,omitempty"` // authentik groups (profile scope); agentdev-admins is checked here
 }
 
 // agentLister returns the agents' current state.

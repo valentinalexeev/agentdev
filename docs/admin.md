@@ -294,23 +294,62 @@ WARNING: Change the password and add MFA immediately after the first login. The 
 NOTE: The first password is also in the Secret `authentik`, but authentik uses it only at the first start. Thus, the
 password that you set in the UI is final.
 
-### Keep the usernames safe
+### Map people to forge users
 
-The intended setup: authentik keeps no users and passwords of its own. It signs people in through an external
-identity provider, the same single sign-on that the forge uses (for example Google Workspace). Thus, one company
-account gives the authentik username and the forge login. The API uses the authentik username as the forge login
-(#57). An authentik user who can pick a name can act as the forge user with that name. Thus, keep these settings:
+The API finds the forge user of a person from the token claim `forge_login` (#88). It does not use the authentik
+username, because a user can choose a username. The claim comes from the authentik user attribute `forge_login`.
+Users cannot change this attribute in the default setup, but only by configuration (see the WARNING below). The blueprint adds the scope `forge`, which sends this claim to the API.
 
-- Connect authentik to the company identity provider as a source, and take the username from it. Use the same
-  identity provider for the forge.
-- Only the identity provider or the administrators make authentik users. Do not add an enrollment flow. The
-  blueprint has none.
-- In **System > Settings**, keep **Allow users to change username** off (the default). The blueprint cannot set
-  this, so check it after each authentik upgrade.
-- Give each person the same username in authentik and on the forge, in lower case.
+The intended setup: authentik keeps no users and passwords of its own. It signs people in through the same company
+single sign-on as the forge (for example Google Workspace). The source property mapping of that identity provider
+sets `forge_login`.
 
-NOTE: The API refuses a username that has upper case letters or characters other than `a-z`, `0-9`, `.`, `_`, `-`.
-Such a user can read, but cannot change agents. A stable forge-login claim is planned in #88.
+To set the forge login from the company identity provider (kind and GKE):
+
+1. In the authentik admin interface, go to **Customization > Property Mappings**.
+2. Create a source property mapping for your source type (for example **OAuth Source Property Mapping**).
+3. Use an expression that gives the forge login of the person. Example, if the forge login is the local part of
+   the company email:
+
+   ```python
+   email = info.get("email", "")
+   return {"attributes": {"forge_login": email.split("@")[0].lower()}}
+   ```
+
+   NOTE: Use the email local part only with one verified company domain. With two domains, `a.b@x` and `a.b@y` get
+   the same forge login. A reassigned mailbox also gives its forge login to the new owner. Otherwise, map from a
+   unique, stable claim of the identity provider.
+
+4. Go to **Directory > Federation and Social login**, open your source, and add the property mapping.
+5. Make sure that the forge uses the same rule for its logins.
+
+To set the forge login for one user (for example on kind, without a source):
+
+1. Go to **Directory > Users** and open the user.
+2. Click **Edit**.
+3. In **Attributes**, add `forge_login: <forge login>`.
+4. Click **Update**.
+
+The person logs out and logs in again. Then the new token has the claim.
+
+WARNING: Do not let users edit `forge_login`. Only the identity provider or the administrators set it. A person with
+a wrong `forge_login` can act as that forge user.
+
+- Do not add an enrollment flow. The blueprint has none.
+- No flow, stage or prompt may write `attributes.forge_login`. authentik writes every prompt whose field key is
+  `attributes.<name>` to the user. The default user settings flow (`default-user-settings-flow`) already writes
+  `attributes.settings.locale` this way. A prompt with the field key `attributes.forge_login` in the user settings
+  flow, an enrollment flow or a source flow lets users choose their forge user. Check this in
+  **Flows and Stages > Prompts** (search `forge_login`) after setup and after each authentik upgrade.
+- Use the forge login in lower case.
+
+NOTE: If the token has no `forge_login`, or the value has upper case letters or characters other than `a-z`, `0-9`,
+`.`, `_`, `-`, the API finds no forge user. The person can read, but cannot change agents. Members of
+`agentdev-admins` can pause, add and remove agents without a forge user.
+
+NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
+`manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
+interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
 ### Give a person admin rights for agents
 
@@ -344,7 +383,7 @@ CAUTION: Give this group to platform operators only. A member can add an agent t
 ## Management API
 
 The agentdev API (`images/api`, Go, #46) shows the agents of the instance. It also pauses, resumes, changes, adds and removes
-agents (#57). On GKE, refer to #51.
+agents (#57). On GKE, the Ansible playbook deploys it when `instance.yml` sets `api.oidc_issuer`.
 
 ### Deploy the API
 
@@ -357,6 +396,46 @@ Do this task after run.sh step 09.
    forge. Refer to "Give the API access to the forge".
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
+
+### Deploy the API on GKE
+
+The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
+step 10. The playbook does not deploy authentik yet (#114). Thus, you must use an OIDC provider that you have.
+
+WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Manager.
+
+1. In the OIDC provider, make a public client `agentdev` with the authorization code and PKCE.
+2. In the OIDC provider, make the group `agentdev-admins`. Put the groups of the user in the claim `groups`.
+3. Add the API settings to `ansible/instance.yml`:
+
+   ```yaml
+   api:
+     oidc_issuer: https://auth.example.com/application/o/agentdev/
+   ```
+
+4. Optional: give the API access to the forge. Refer to "Give the API access to the forge".
+5. Open a pull request in the deployment repository. Merge it after the dry run.
+   The playbook deploys the API in `agentdev-platform`.
+6. Make sure that the API is ready: `kubectl -n agentdev-platform rollout status deploy/agentdev-api`
+
+NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
+
+### Reference: the API settings on GKE
+
+| `instance.yml` | Default | `kind` (`config.env`) |
+|---|---|---|
+| `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
+| `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
+| `api.oidc_audience` | `agentdev` | `agentdev` |
+| `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
+| `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
+
+- The playbook makes the database password one time in Secret Manager `platform-pg-agentdev-api`.
+- The database login `agentdev_api` can only add and read rows. The role `agentdev_owner` owns the tables.
+- The playbook writes the Secrets `agentdev-api-db`, `agentdev-api-forge` and `agentdev-api-siem`. When a Secret
+  changes, the playbook restarts the API.
+- The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
+  version, the playbook acts as if the secret is not there.
 
 ### Connect to the API
 
@@ -403,11 +482,16 @@ On GKE, do these steps manually. The playbook does not do them yet (#104).
 
 1. Sign in to the forge as the service account. Make a token with the scopes `read:repository` and `read:user`
    only.
-2. Put the token in the Secret `agentdev-api-forge`:
+2. Put the token in the Secret `agentdev-api-forge`.
+   On GKE: put the token in Secret Manager `agentdev-api-forge-token`, then run the playbook. Do not do step 3.
+   On `kind`:
    `kubectl -n agentdev-platform create secret generic agentdev-api-forge --from-literal=FORGE_API_TOKEN=<token>`
 3. Restart the API: `kubectl -n agentdev-platform rollout restart deploy/agentdev-api`
 
 NOTE: Without the Secret, each change that needs the forge gives 503.
+
+NOTE: At this time, the API can only ask a Gitea forge (#87). On GKE with GitHub, each change that needs the forge
+gives 503. Members of `agentdev-admins` can still pause agents.
 
 ### Add an agent through the API
 
@@ -438,9 +522,9 @@ The owner decided this rule on #57. The API checks the permission on the forge a
 | Resume an agent, change `maxConcurrent` or `scaleToZero` | write access to the repository of the agent |
 | Add or remove an agent | admin access to the repository, or the group `agentdev-admins` |
 
-- The API finds the forge user from the authentik username. At this time, the two names must be the same.
-  If the names are different, the API refuses the change. The function `forgeUserOf` in `images/api/forge.go` does
-  this mapping.
+- The API finds the forge user from the claim `forge_login` (scope `forge`). If the token has no such claim, the
+  API refuses the change. Refer to "Map people to forge users". The function `forgeUserOf` in
+  `images/api/forge.go` does this mapping.
 - The API reads the groups from the `groups` claim of the token (scope `profile`).
 - If the API cannot reach the forge, it refuses the change (503). Only the group `agentdev-admins` can then pause,
   add and remove agents.
@@ -757,9 +841,8 @@ SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All 
 | `SECURITY_OTLP_CA` | no | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 | `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
 
-NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. At this
-time, the Ansible playbook does not install the API on GKE (issue #105). The playbook writes the Secret, but no
-API reads it yet.
+NOTE: On GKE, a key in the Secret Manager secret `security-siem` replaces the same key from `instance.yml`. The
+Ansible role `api` installs the API when `instance.yml` sets `api.oidc_issuer` (#104). The API reads the Secret.
 
 NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
 for the rows in Postgres. The API cannot change the database retention.
