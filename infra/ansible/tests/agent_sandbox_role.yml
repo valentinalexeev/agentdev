@@ -1,0 +1,65 @@
+# The role agent_sandbox (#106, was 02-agent-sandbox.sh): kind.yml --tags sandbox runs only that role, and the API key
+# is read from the environment and only handled under no_log. Run: ansible-playbook infra/ansible/tests/agent_sandbox_role.yml
+- name: Role agent_sandbox (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List the tasks of the sandbox tag
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --tags, sandbox, --list-tasks]
+      register: sandbox_tasks
+      changed_when: false
+
+    - name: Only the agent_sandbox role runs under the tag
+      ansible.builtin.assert:
+        that:
+          - "'agent_sandbox' in sandbox_tasks.stdout or 'Agent-sandbox' in sandbox_tasks.stdout"
+          - "'Kind cluster with gVisor' not in sandbox_tasks.stdout"
+        quiet: true
+
+    - name: Read the role tasks
+      ansible.builtin.set_fact:
+        sandbox_role: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_sandbox/tasks/main.yml') | from_yaml }}"
+        sandbox_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/agent_sandbox/defaults/main.yml') }}"
+
+    - name: Every task that touches the API key has no_log, and the key comes from the environment
+      ansible.builtin.assert:
+        that:
+          - sandbox_role | selectattr('name', 'search', 'API key Secret') | map(attribute='no_log') | list == [true]
+          - "\"lookup('env', 'ANTHROPIC_API_KEY')\" in sandbox_defaults"
+        quiet: true
+
+    - name: The wrapper never passes the key on the command line
+      ansible.builtin.assert:
+        that: "'ANTHROPIC_API_KEY=' not in lookup('ansible.builtin.file', playbook_dir ~ '/../../../02-agent-sandbox.sh')"
+        quiet: true
+
+    # Second run is idempotent (#143 review): the build and kind load are skipped when the hash label matches, and
+    # kind load counts as unchanged on the exact message kind v0.33 writes to stderr when it skips the copy.
+    - name: Image tasks of the role
+      ansible.builtin.set_fact:
+        image_tasks: "{{ (sandbox_role | selectattr('name', 'equalto', 'Agent image (kind)') | first).block }}"
+
+    - name: Build and load are guarded by the context hash
+      ansible.builtin.assert:
+        that:
+          - (image_tasks | selectattr('name', 'search', '^Build the agent image') | first).when is search('agent_sandbox_ctx_hash')
+          - (image_tasks | selectattr('name', 'search', '^Load the image') | first).when is search('agent_sandbox_ctx_hash')
+          - >-
+            'agent_sandbox_hash_label' in
+            (image_tasks | selectattr('name', 'search', '^Build the agent image') | first)['ansible.builtin.command'].argv | join(' ')
+        quiet: true
+
+    - name: The changed_when marker of kind load matches real kind v0.33 output
+      ansible.builtin.assert:
+        that:
+          - load_task.changed_when is search("not in \\(agent_sandbox_load.stdout ~ agent_sandbox_load.stderr\\)")
+          - marker in present
+          - marker not in copied
+        quiet: true
+      vars:
+        load_task: "{{ image_tasks | selectattr('name', 'search', '^Load the image') | first }}"
+        marker: "{{ load_task.changed_when.split(\"'\")[1] }}"
+        # stderr of kind v0.33.0 load docker-image (stdout is empty), captured on a throwaway cluster
+        present: 'Image: "agentdev/claude-agent:spike" with ID "sha256:71654ce9" found to be already present on all nodes.'
+        copied: 'Image: "agentdev/claude-agent:spike" with ID "sha256:71654ce9" not yet present on node "fx143-worker", loading...'

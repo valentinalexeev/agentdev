@@ -20,6 +20,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   cluster, `changed=0` on the second) is run by hand for each port and reported in the pull request; a CI job for it
   is a follow-up (it needs a workflow change by the owner).
   To apply: install ansible-core, then run `./run.sh 01` as before.
+- Step 02 (#106): `02-agent-sandbox.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags sandbox`
+  (new role `agent_sandbox`, `kubernetes.core` like `deploy.yml`). Same result (agent-sandbox release, CRDs, agent
+  image in kind, optional `claude-agent-keys`, template and warm pool with 1 ready sandbox); a second run changes
+  nothing. Needs the `kubernetes` Python package for ansible (`docs/troubleshooting.md`). GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

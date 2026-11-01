@@ -96,6 +96,14 @@
 | Step 01 stops with `ansible-playbook: command not found`. | ansible-core is not installed. | 1. Install it: `pipx install ansible-core` (2.17 or later). 2. Do run.sh step 01 again. |
 | `kind create cluster` stops with `port is already allocated` or `address already in use`. | A different program or a different `kind` cluster uses port 8080 or 3000 of the computer. `manifests/kind-config.yaml` (`extraPortMappings`) needs these ports. | 1. Stop the other program, or delete the other cluster: `kind delete cluster --name <name>`. 2. Or remove `extraPortMappings` from a copy of the configuration and set `kind_cluster_config` to the copy. Then use `kubectl port-forward` for the web pages. |
 
+## agent-sandbox (run.sh step 02)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 02 stops at `Download the agent-sandbox release manifest`. | No access to github.com, or `AGENT_SANDBOX_VERSION` is not a release. | 1. Examine the version in `config.env`. 2. Do run.sh step 02 again. The manifest is kept in `~/.cache/agentdev` after the first download. |
+| Step 02 stops with `No module named 'kubernetes'`. | The Python package of `kubernetes.core` is not installed for ansible. | 1. Install it: `pipx inject ansible-core kubernetes`. 2. Install the collection: `ansible-galaxy collection install -r infra/ansible/requirements.yml`. 3. Do run.sh step 02 again. |
+| Step 02 stops at `Warm pool has 1 ready sandbox` after 300 s. | The sandbox pod can not start (image not loaded, PVC not bound, or the sandbox node is full). | 1. Examine the pods: `kubectl --context kind-agentdev -n agents get pods,pvc`. 2. Examine the events: `kubectl --context kind-agentdev -n agents describe pod`. 3. Do run.sh step 02 again. |
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.
