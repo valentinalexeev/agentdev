@@ -276,7 +276,12 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
     log "claude output is not stream-json: nothing posted" >&2
     (( rc == 0 )) && rc=1
   fi
-  [[ ${rc} -ne 0 ]] && log "claude exited ${rc}: $(tail -c 400 "${err}" | tr -cd '[:print:]\n' | tail -c 400)"
+  # stderr is never logged (review #102: with --verbose it can carry transcript or tool output); only the exit code and
+  # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
+  if [[ ${rc} -ne 0 ]]; then
+    local why=error; grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
+    log "claude exited ${rc} (${why}; stderr not logged)"
+  fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"
   return ${rc}

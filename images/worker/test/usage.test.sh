@@ -91,4 +91,8 @@ MAX_TURNS=1 CLAUDE_TOOLS=x CLAUDE_GUARD=x MCP_CONFIG=/nonexistent; mkdir -p "${S
 # shellcheck disable=SC2034  # read by check (eval)
 out=$(run_claude "${tmp}" "p" 2>/dev/null); rc=$?
 check "run_claude: unparsable output is not printed and the run fails" "[[ -z \"\${out}\" && ${rc} != 0 ]]"
+printf '#!/bin/sh\necho "SECRET-STDERR tool output" >&2\nexit 3\n' > "${tmp}/bin/claude"
+# shellcheck disable=SC2034  # read by check (eval)
+logged=$( log() { printf '%s\n' "$*"; }; run_claude "${tmp}" "p" 2>&1 )
+check "run_claude: stderr of the CLI is never logged" "[[ \"\${logged}\" != *SECRET-STDERR* && \"\${logged}\" == *'claude exited 3'* ]]"
 exit ${fail}
