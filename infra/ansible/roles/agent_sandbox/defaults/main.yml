@@ -15,6 +15,8 @@ agent_sandbox_image: agentdev/claude-agent:spike
 agent_sandbox_image_dir: "{{ playbook_dir }}/../../images/agent"
 agent_sandbox_engine: docker
 agent_sandbox_cluster_name: agentdev
+# image label with the content hash of agent_sandbox_image_dir; the build and kind load are skipped when it matches
+agent_sandbox_hash_label: dev.agentdev.context-hash
 # optional, read from the environment so it never appears in -e arguments or logs
 agent_sandbox_api_key: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
 agent_sandbox_warm_timeout: 300

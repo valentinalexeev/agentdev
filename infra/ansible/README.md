@@ -108,7 +108,8 @@ The role `agent_sandbox` uses `kubernetes.core` like `deploy.yml` (server-side a
 cached in `~/.cache/agentdev`), so GKE can include it with its own `agent_sandbox_context` and
 `agent_sandbox_load_image: false`. It takes `agent_sandbox_version`, `agent_sandbox_ns`, `agent_sandbox_image` and
 `agent_sandbox_engine`. `ANTHROPIC_API_KEY` is read from the environment, never from `-e`, and the Secret task has
-`no_log`. A second run changes nothing (the image is rebuilt from cache and `kind load` sees it is present).
+`no_log`. A second run changes nothing: the image carries a label with a content hash of `images/agent`
+(`agent_sandbox_hash_label`); the build is skipped when the local image has that hash and `kind load` when every node has it.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

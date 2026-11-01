@@ -40,23 +40,72 @@
 - name: Agent image (kind)
   when: agent_sandbox_load_image | bool
   block:
-    - name: Image id before the build
-      ansible.builtin.command: "{{ agent_sandbox_engine }} image inspect --format '{{ '{{' }}.Id{{ '}}' }}' {{ agent_sandbox_image | quote }}"
-      register: agent_sandbox_img_before
+    # Content hash of the build context (relative paths and file contents). It goes into the image as a label, so
+    # "rebuild needed" and "load needed" are plain string comparisons, not a guess from engine output.
+    - name: Content hash of the agent image build context
+      ansible.builtin.shell:
+        cmd: set -o pipefail && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-64
+        chdir: "{{ agent_sandbox_image_dir }}"
+        executable: /bin/bash
+      register: agent_sandbox_ctx_hash
+      changed_when: false
+
+    - name: Hash label of the local image
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - image
+          - inspect
+          - --format
+          - '{{ "{{" }} index .Config.Labels "{{ agent_sandbox_hash_label }}" {{ "}}" }}'
+          - "{{ agent_sandbox_image }}"
+      register: agent_sandbox_img_hash
       changed_when: false
       failed_when: false
 
-    # the layer cache makes a rebuild a no-op
-    - name: Build the agent image {{ agent_sandbox_image }}
-      ansible.builtin.command: "{{ agent_sandbox_engine }} build -q -t {{ agent_sandbox_image | quote }} {{ agent_sandbox_image_dir | quote }}"
-      register: agent_sandbox_build
-      changed_when: agent_sandbox_build.stdout | trim != agent_sandbox_img_before.stdout | trim
+    - name: Build the agent image {{ agent_sandbox_image }} (only when the build context changed)
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - build
+          - -q
+          - --label
+          - "{{ agent_sandbox_hash_label }}={{ agent_sandbox_ctx_hash.stdout }}"
+          - -t
+          - "{{ agent_sandbox_image }}"
+          - "{{ agent_sandbox_image_dir }}"
+      when: agent_sandbox_img_hash.stdout | trim != agent_sandbox_ctx_hash.stdout
 
-    # kind compares image ids and says "already present" when every node has this image
-    - name: Load the image into kind
+    - name: Nodes of the kind cluster
+      ansible.builtin.command: kind get nodes --name {{ agent_sandbox_cluster_name | quote }}
+      register: agent_sandbox_nodes
+      changed_when: false
+
+    # what containerd in each node has; an absent image gives an empty answer
+    - name: Hash label of the image in each node
+      ansible.builtin.command:
+        argv:
+          - "{{ agent_sandbox_engine }}"
+          - exec
+          - "{{ item }}"
+          - crictl
+          - inspecti
+          - -o
+          - go-template
+          - --template
+          - '{{ "{{" }} index .info.imageSpec.config.Labels "{{ agent_sandbox_hash_label }}" {{ "}}" }}'
+          - "{{ agent_sandbox_image }}"
+      loop: "{{ agent_sandbox_nodes.stdout_lines }}"
+      register: agent_sandbox_node_hash
+      changed_when: false
+      failed_when: false
+
+    - name: Load the image into kind (only when a node has a different hash)
       ansible.builtin.command: kind load docker-image {{ agent_sandbox_image | quote }} --name {{ agent_sandbox_cluster_name | quote }}
       register: agent_sandbox_load
-      changed_when: "'already present' not in (agent_sandbox_load.stdout ~ agent_sandbox_load.stderr)"
+      when: agent_sandbox_node_hash.results | map(attribute='stdout') | map('trim') | reject('equalto', agent_sandbox_ctx_hash.stdout) | list | length > 0
+      # kind v0.33 writes "Image: ... found to be already present on all nodes." to stderr (stdout empty) on a skip
+      changed_when: "'already present on all nodes' not in (agent_sandbox_load.stdout ~ agent_sandbox_load.stderr)"
 
 - name: Namespace {{ agent_sandbox_ns }}
   kubernetes.core.k8s:
