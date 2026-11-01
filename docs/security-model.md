@@ -368,6 +368,14 @@ stored retention; a trigger refuses `UPDATE` and any `DELETE` inside the retenti
 add and read rows, but cannot truncate, delete, drop the trigger or shorten the retention. The Postgres superuser
 can; tamper evidence against it (hash chain, external copy) is #71.
 
+**Audit trail of the write API (#91).** Every `AGENTDEV_AUDIT` line (`images/api/write.go`) is also appended to
+`api_audit` (`images/api/audit.go`): time, action, agent, result, username and the full line as `jsonb`. Same rules
+as `security_events`: owned by `agentdev_owner`, `agentdev_api` has `INSERT`/`SELECT` and `EXECUTE` on the
+`SECURITY DEFINER` `api_audit_prune()` only, a trigger refuses `UPDATE` and `DELETE` inside the retention, and the
+retention is the one in `security_settings`. A failed insert is logged and does not fail the write; the stdout line
+is written first and stays the second copy. `GET /api/audit` is readable by the admin group only, because entries
+name users and show requested changes of every agent. Audit rows are not sent to the SIEM outputs yet.
+
 Each phase's issue includes its signals in its acceptance criteria.
 
 ## Phase 5: deterministic executors (#69)

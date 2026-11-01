@@ -18,7 +18,7 @@
 # CF_ADMIN_FILE overrides the admin password file (the GKE playbook, #51, reads it from Secret Manager).
 # MCP_ALLOWED_HOSTS (config.env; the GKE playbook passes mcp_allowed_hosts) lists the trusted MCP server hosts
 # (host or host:port). A server URL on any other host stops the sync before anything is registered: tool metadata and
-# tool outputs of a server reach the model (prompt injection, docs/security.md R44).
+# tool outputs of a server reach the model (prompt injection, docs/security.md R46).
 # Never prints a token: the GKE playbook (#51) runs this script; errors name the step, not the response.
 # Separation is enforced by ContextForge: an agent's token is refused on any other server (verified in the ADR spike).
 source "$(dirname "$0")/../lib.sh"
