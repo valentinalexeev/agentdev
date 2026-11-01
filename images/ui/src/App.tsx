@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserManager, User } from './auth'
 import {
-  listAgents, patchAgent, createAgent, deleteAgent, Unauthorized,
-  nameError, repoError, maxConcurrentError, type Agent, type NewAgent,
+  listAgents, listSecurityEvents, patchAgent, createAgent, deleteAgent, Unauthorized,
+  nameError, repoError, maxConcurrentError, type Agent, type NewAgent, type EventFilter, type SecurityEvent,
 } from './api'
 
 export function App({ um }: { um: UserManager }) {
@@ -43,8 +43,38 @@ export function App({ um }: { um: UserManager }) {
   }
   return (
     <Shell user={user} onLogout={signOut}>
-      <Overview token={user.access_token} onExpired={onExpired} />
+      <Pages token={user.access_token} onExpired={onExpired} />
     </Shell>
+  )
+}
+
+// two pages, chosen by the URL hash (#security?agent=x), so a link to one agent's events can be shared
+function usePage(): [string, URLSearchParams, (p: string) => void] {
+  const read = () => {
+    const [p, q] = window.location.hash.replace(/^#/, '').split('?')
+    return [p || 'agents', new URLSearchParams(q ?? '')] as const
+  }
+  const [state, setState] = useState(read)
+  useEffect(() => {
+    const on = () => setState(read())
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+  return [state[0], state[1], (p) => { window.location.hash = p }]
+}
+
+function Pages({ token, onExpired }: { token: string; onExpired: () => void }) {
+  const [page, params, go] = usePage()
+  return (
+    <>
+      <nav>
+        <button className={`tab ${page === 'agents' ? 'on' : ''}`} onClick={() => go('agents')}>Agents</button>
+        <button className={`tab ${page === 'security' ? 'on' : ''}`} onClick={() => go('security')}>Security</button>
+      </nav>
+      {page === 'security'
+        ? <Security key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
+        : <Overview token={token} onExpired={onExpired} />}
+    </>
   )
 }
 
@@ -118,7 +148,7 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
         : (
           <table>
             <thead>
-              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Settings</th><th>Actions</th></tr>
+              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Security (7 days)</th><th>Settings</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {agents.map((a) => (
@@ -127,6 +157,11 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
                   <td><span className={`phase ${a.phase}`}>{a.phase}</span></td>
                   <td>{(a.repos ?? []).join(', ')}</td>
                   <td>{a.forge ?? ''}</td>
+                  <td>
+                    {a.securityEvents
+                      ? <a className="badge" href={`#security?agent=${encodeURIComponent(a.name)}`}>{a.securityEvents}</a>
+                      : <span className="muted">0</span>}
+                  </td>
                   <td>
                     {a.managed === false ? <span className="muted">no Agent object</span> : editing === a.name
                       ? (
@@ -182,6 +217,70 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
           {notice && <p className="error" role="alert">{notice}</p>}
         </Modal>
       )}
+    </>
+  )
+}
+
+const SINCE: [string, string][] = [['24h', 'last 24 hours'], ['168h', 'last 7 days'], ['720h', 'last 30 days'], ['', 'all']]
+
+function Security({ token, onExpired, initialAgent }: { token: string; onExpired: () => void; initialAgent: string }) {
+  const [filter, setFilter] = useState<EventFilter>({ agent: initialAgent, severity: '', since: '168h' })
+  // the loaded page belongs to one filter; a result for an older filter is shown as loading
+  const [result, setResult] = useState<{ for: EventFilter; events: SecurityEvent[]; next?: string } | null>(null)
+  const [error, setError] = useState('')
+  const fail = useCallback((e: Error) => (e instanceof Unauthorized ? onExpired() : setError(e.message)), [onExpired])
+
+  useEffect(() => {
+    listSecurityEvents(token, filter)
+      .then((r) => { setResult({ for: filter, events: r.events, next: r.next_cursor }); setError('') })
+      .catch(fail)
+  }, [token, filter, fail])
+
+  const events = result && result.for === filter ? result.events : null
+  const next = result && result.for === filter ? result.next : undefined
+  const more = () => {
+    if (!next) return
+    listSecurityEvents(token, { ...filter, cursor: next })
+      .then((r) => setResult((p) => (p && p.for === filter ? { ...p, events: [...p.events, ...r.events], next: r.next_cursor } : p)))
+      .catch(fail)
+  }
+
+  return (
+    <>
+      <h1>Security events</h1>
+      <p className="muted">Guardrails that refused an action. High severity, or too many events in one job, pause the agent.</p>
+      <div className="filters">
+        <label>Agent <input value={filter.agent ?? ''} placeholder="all"
+          onChange={(e) => setFilter({ ...filter, agent: e.target.value.trim() })} /></label>
+        <label>Severity <select value={filter.severity ?? ''}
+          onChange={(e) => setFilter({ ...filter, severity: e.target.value as EventFilter['severity'] })}>
+          <option value="">all</option><option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
+        </select></label>
+        <label>Time <select value={filter.since ?? ''} onChange={(e) => setFilter({ ...filter, since: e.target.value })}>
+          {SINCE.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select></label>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {!events && !error && <p>Loading events…</p>}
+      {events && events.length === 0 && <p>No security events for this filter.</p>}
+      {events && events.length > 0 && (
+        <table>
+          <thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th>Source / rule</th><th>Job</th><th>Action</th></tr></thead>
+          <tbody>
+            {events.map((e) => (
+              <tr key={e.id}>
+                <td className="nowrap">{new Date(e.time).toLocaleString()}</td>
+                <td>{e.agent}</td>
+                <td><span className={`sev ${e.severity}`}>{e.severity}</span></td>
+                <td>{e.source} / <code>{e.rule}</code></td>
+                <td>{e.job ?? ''}</td>
+                <td className="action">{e.action}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {next && <p><button onClick={more}>Load more</button></p>}
     </>
   )
 }

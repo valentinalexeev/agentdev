@@ -112,6 +112,11 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	default:
 		s.Phase = "starting"
 	}
+	// a person resumed an agent the security collector paused (#70): keep the reason, mark it no longer in force
+	if c := meta.FindStatusCondition(s.Conditions, "SecurityPaused"); c != nil && c.Status == metav1.ConditionTrue && !a.Spec.Paused {
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "SecurityPaused", Status: metav1.ConditionFalse,
+			Reason: "Resumed", Message: "resumed after: " + c.Message, ObservedGeneration: a.Generation})
+	}
 	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionTrue,
 		Reason: "Applied", Message: "service and statefulset match the spec", ObservedGeneration: a.Generation})
 	if equalStatus(a.Status, s) {
@@ -125,7 +130,16 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {
-	return x.Phase == y.Phase && x.Ready == y.Ready && x.ObservedGeneration == y.ObservedGeneration && len(x.Conditions) == len(y.Conditions)
+	if x.Phase != y.Phase || x.Ready != y.Ready || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
+		return false
+	}
+	for _, c := range y.Conditions {
+		o := meta.FindStatusCondition(x.Conditions, c.Type)
+		if o == nil || o.Status != c.Status || o.Reason != c.Reason {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {

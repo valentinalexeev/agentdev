@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,11 @@ type config struct {
 	Addr      string
 	ForgeURL  string // forge API for the live permission check of writes (#57)
 	AdminGrp  string // OIDC group that may create, delete and always pause agents
+	// security events (#70)
+	DatabaseURL   string // platform Postgres (secret agentdev-api-db); empty: events kept in memory only (dev)
+	DBMigrate     bool   // run schema.sql as the API login (no separate owner role; tests and standalone use)
+	WebhookURL    string // SIEM webhook output; empty: off. Instance config, never in git
+	WebhookSecret string // HMAC-SHA256 key for the webhook signature (Secret, never in git)
 }
 
 func env(k, def string) string {
@@ -39,6 +45,11 @@ func main() {
 		Addr:      env("ADDR", ":8080"),
 		ForgeURL:  os.Getenv("FORGE_URL"),
 		AdminGrp:  env("ADMIN_GROUP", "agentdev-admins"),
+
+		DatabaseURL:   os.Getenv("DATABASE_URL"),
+		DBMigrate:     os.Getenv("DATABASE_MIGRATE") == "true",
+		WebhookURL:    os.Getenv("SECURITY_WEBHOOK_URL"),
+		WebhookSecret: os.Getenv("SECURITY_WEBHOOK_SECRET"),
 	}
 	if cfg.Issuer == "" || cfg.Audience == "" {
 		log.Fatal("OIDC_ISSUER and OIDC_AUDIENCE are required")
@@ -52,13 +63,56 @@ func main() {
 	if err != nil {
 		log.Fatalf("kubernetes: %v", err)
 	}
+	store, err := openStore(ctx, cfg)
+	if err != nil {
+		log.Fatalf("security events: %v", err)
+	}
+	s := &sink{store: store}
+	if cfg.WebhookURL != "" {
+		if cfg.WebhookSecret == "" {
+			log.Fatal("SECURITY_WEBHOOK_URL is set but SECURITY_WEBHOOK_SECRET is empty: refusing to send unsigned events")
+		}
+		s.out = newWebhook(cfg.WebhookURL, []byte(cfg.WebhookSecret))
+		go s.out.Run(ctx)
+	}
+	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	wr := &writer{store: agents, perms: newGiteaPerms(cfg.ForgeURL, os.Getenv("FORGE_API_TOKEN")), adminGroup: cfg.AdminGrp}
-	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, wr), ReadHeaderTimeout: 10 * time.Second,
+	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
 	log.Fatal(srv.ListenAndServe())
+}
+
+func envInt(k string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+		return n
+	}
+	return def
+}
+
+// openStore connects to Postgres and runs the migrations, or falls back to memory when no database is configured.
+func openStore(ctx context.Context, cfg config) (eventStore, error) {
+	if cfg.DatabaseURL == "" {
+		log.Printf("DATABASE_URL not set: security events are kept in memory only (lost on restart)")
+		return newMemStore(), nil
+	}
+	pg, err := newPgStore(ctx, cfg.DatabaseURL, cfg.DBMigrate)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		for {
+			if _, err := pg.Prune(ctx); err != nil {
+				log.Printf("prune security_events: %v", err)
+			}
+			if !sleepCtx(ctx, 24*time.Hour) {
+				return
+			}
+		}
+	}()
+	return pg, nil
 }
 
 // verifier checks a raw bearer token and returns the caller's identity.
@@ -87,9 +141,11 @@ type agent struct {
 	MaxConcurrent int32    `json:"maxConcurrent,omitempty"`
 	ScaleToZero   bool     `json:"scaleToZero"`
 	Paused        bool     `json:"paused"`
+	// SecurityEvents in the last 7 days (#70)
+	SecurityEvents int `json:"securityEvents"`
 }
 
-func routes(verify verifier, agents agentLister, wr *writer) http.Handler {
+func routes(verify verifier, agents agentLister, events eventStore, wr *writer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	mux.Handle("GET /api/me", auth(verify, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,8 +158,21 @@ func routes(verify verifier, agents agentLister, wr *writer) http.Handler {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cannot read agents"})
 			return
 		}
+		// counter badge on the overview (#70): events of the last 7 days per agent
+		if events != nil {
+			counts, err := events.Counts(r.Context(), time.Now().Add(-7*24*time.Hour))
+			if err != nil {
+				log.Printf("count security events: %v", err)
+			}
+			for i := range list {
+				list[i].SecurityEvents = counts[list[i].Name]
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
+	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has
+	// write access to needs the forge permission check of #67 and per-project access from #57: see #57.
+	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))

@@ -118,6 +118,13 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security event | a record of an action that a guardrail stopped |
+| SecurityEvent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SecurityEvent`) that the operator makes for each security event |
+| guardrail | a check in agentdev that stops an action of an agent |
+| job | one issue or one pull request that an agent works on |
+| condition | an entry in the status of a Kubernetes object, for example `SecurityPaused` |
+| SIEM | a security information and event management system that collects security events |
+| webhook | an HTTP request that a service sends to a URL when an event occurs |
+| Postgres | the PostgreSQL database of the instance |
 | setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
 | specification (spec) | the project file, for example `my-project.yaml` |

@@ -10,6 +10,29 @@ export interface Agent {
   maxConcurrent?: number
   scaleToZero?: boolean
   paused?: boolean
+  securityEvents?: number // last 7 days (#70)
+}
+
+export type Severity = 'low' | 'medium' | 'high'
+
+// agentdev.security/v1 (docs/security-model.md, "Event schema")
+export interface SecurityEvent {
+  id: number
+  schema: string
+  time: string
+  agent: string
+  job?: string
+  source: string
+  rule: string
+  severity: Severity
+  action: string
+}
+
+export interface EventFilter {
+  agent?: string
+  severity?: Severity | ''
+  since?: string // RFC 3339 or a duration such as 24h
+  cursor?: string
 }
 
 export interface NewAgent {
@@ -49,6 +72,12 @@ async function call(token: string, method: string, path: string, body?: unknown)
 
 export async function listAgents(token: string): Promise<Agent[]> {
   return (await (await call(token, 'GET', '/api/agents')).json()).agents
+}
+
+export async function listSecurityEvents(token: string, f: EventFilter): Promise<{ events: SecurityEvent[]; next_cursor?: string }> {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+  return (await call(token, 'GET', `/api/security-events?${q}`)).json()
 }
 
 export async function patchAgent(token: string, name: string, patch: AgentPatch): Promise<void> {

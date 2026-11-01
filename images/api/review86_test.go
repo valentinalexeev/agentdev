@@ -68,7 +68,7 @@ func TestDeleteUsesPreconditions(t *testing.T) {
 	_ = e.k.d.Resource(agentsGVR).Namespace("coding-agents").Delete(context.Background(), "alice", deleteNoPre)
 	_, _ = e.k.Create(context.Background(), u)
 	rs := &recStore{agentStore: e.k}
-	h := routes(idVerify, e.k, &writer{store: rs, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"})
+	h := routes(idVerify, e.k, nil, &writer{store: rs, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"})
 	e.h = h
 	if w := e.call("DELETE", "/api/agents/alice", "admin", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("code %d %s", w.Code, w.Body)
@@ -136,7 +136,7 @@ func TestConcurrentDeleteIsNoContent(t *testing.T) {
 	gitea := fakeGitea(t)
 	defer gitea.Close()
 	e := newEnv(t, gitea.URL)
-	e.h = routes(idVerify, e.k, &writer{store: &goneStore{agentStore: e.k}, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"})
+	e.h = routes(idVerify, e.k, nil, &writer{store: &goneStore{agentStore: e.k}, perms: newGiteaPerms(gitea.URL, "svc"), adminGroup: "agentdev-admins"})
 	if w := e.call("DELETE", "/api/agents/alice", "admin", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("a delete that lost the race must still answer 204, got %d %s", w.Code, w.Body)
 	}

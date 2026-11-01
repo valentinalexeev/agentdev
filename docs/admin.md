@@ -306,7 +306,8 @@ NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` mus
 | Endpoint | Gives |
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
-| `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57) |
+| `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). Every signed-in user sees every event for now; restriction to projects with write access is #57 |
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
@@ -494,6 +495,94 @@ NOTE: When you close the browser tab, you also sign out.
 - nginx sends `/api` requests to the API. Because of this, the browser connects only to the web UI and to authentik.
 - The address of the web UI must be a strict redirect URI in the authentik blueprint
   (`manifests/authentik-blueprint-agentdev.yaml`). authentik creates its CORS list from these URIs.
+
+## Security events
+
+A security event is a record of an action that a guardrail stopped. The forge sidecar and the agent loop write each
+security event to the log of the agent pod. The operator reads these logs and makes a SecurityEvent object for each
+event. The API keeps a copy of each event in the platform Postgres for one year. Field reference and SIEM mapping:
+[security-model.md](security-model.md#detecting-and-reporting-bypass-attempts).
+
+### Look at the security events
+
+1. Open the web UI. Refer to *Open the web UI*.
+2. Click **Security**.
+   The web UI shows the security events of the last 7 days, with the newest event first.
+3. To see fewer events, select an agent, a severity or a time in the filters.
+4. To see older events, click **Load more**.
+
+NOTE: The **Security (7 days)** column on the **Agents** page shows the number of events for each agent. Click the
+number to see the events of that agent.
+
+NOTE: You can also use `kubectl -n coding-agents get securityevents` or `GET /api/security-events` (refer to
+*Management API*).
+
+### Resume an agent that the operator paused
+
+The operator pauses an agent when a high severity event occurs. The operator also pauses an agent when one job has
+more than 5 events (`SECURITY_PAUSE_AFTER`). The count starts again for a new pod. The operator also pauses an
+agent when its containers write more than 10 events in one minute (rule `rate-limited`).
+
+WARNING: Do not resume the agent before you read the events and the issue or the pull request of the job. The text
+of the issue can contain a prompt injection.
+
+1. Find the reason for the pause:
+   `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.conditions[?(@.type=="SecurityPaused")].message}'`
+2. Read the events of the agent on the **Security** page.
+3. Read the issue or the pull request of the job.
+4. Resume the agent:
+   `kubectl -n coding-agents patch agent <name> --type merge -p '{"spec":{"paused":false}}'`
+   The agent starts again. The condition `SecurityPaused` changes to `False`.
+
+### Send the security events to a SIEM
+
+The API can send each new event to a webhook URL. The API signs each request with HMAC-SHA256.
+
+WARNING: Do not put the webhook secret in git. Keep the secret only in the instance secrets.
+
+1. Make a random secret, for example: `openssl rand -hex 32`
+2. Write the URL and the secret to the file `.secrets/platform/siem-webhook`:
+   ```
+   SECURITY_WEBHOOK_URL=https://siem.example.com/agentdev
+   SECURITY_WEBHOOK_SECRET=<the secret>
+   ```
+3. Run run.sh step 10: `./run.sh 10`
+   The script puts the file into the Secret `agentdev-api-siem` and starts the API again.
+4. On the SIEM, do a check of each request:
+   - Calculate HMAC-SHA256 with the secret over `<X-Agentdev-Timestamp>.<body>`.
+   - Compare the result with the value in `X-Agentdev-Signature` (`sha256=<hex>`).
+   - Refuse the request if the timestamp is more than 5 minutes old.
+   - Use a constant-time function for the comparison, for example `hmac.compare_digest` in Python or `hmac.Equal`
+     in Go.
+   - Keep the `hash` of each event and refuse a request with a known `hash`.
+
+NOTE: If the SIEM does not answer with a 2xx status, the API tries again 7 times. The time between the tries
+increases from 2 seconds to a maximum of 5 minutes. The event stays in the Postgres table and in the cluster log.
+
+NOTE: The API sends each event one time at most. The API does not send an event again after the last try or after a
+restart. Each agent has a queue of 200 events. When the queue is full, the API does not send the new events of
+that agent and writes the number in its log. Use `GET /api/security-events` to find the events that the SIEM did not
+get.
+
+NOTE: The `source` of an event comes from the container. An event with `untrusted: true` comes from the agent
+container. Claude can write such an event, so do not trust its text.
+
+NOTE: A SIEM can also read `GET /api/security-events` with the `cursor` parameter, or read the cluster logs with the
+filter `AGENTDEV_SECURITY_EVENT`.
+
+### Reference: settings
+
+| Setting | Default | Where |
+|---|---|---|
+| `SECURITY_PAUSE_AFTER` | 5 | `config.env`; Ansible `security.pause_after` |
+| `SECURITY_RETENTION_DAYS` (SecurityEvent objects) | 30 | `config.env`; Ansible `security.retention_days` |
+| `SECURITY_MAX_PER_AGENT` (SecurityEvent objects) | 500 | `config.env`; Ansible `security.max_per_agent` |
+| `SECURITY_RATE_PER_MIN` (events per minute per container) | 10 | `config.env`; Ansible `security.rate_per_min` |
+| `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `config.env`; Ansible `security.rate_burst` |
+| `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env`; `./run.sh 10` writes it to the database |
+
+NOTE: `SECURITY_RETENTION_DAYS` is for the `SecurityEvent` objects in the cluster. `SECURITY_DB_RETENTION_DAYS` is
+for the rows in Postgres. The API cannot change the database retention.
 
 ## GitHub App (registration)
 

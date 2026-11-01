@@ -5,6 +5,10 @@ package main
 import (
 	"flag"
 	"os"
+	"strconv"
+	"time"
+
+	"k8s.io/client-go/kubernetes"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -20,6 +24,13 @@ import (
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
+	}
+	return def
+}
+
+func envInt(k string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
+		return n
 	}
 	return def
 }
@@ -59,6 +70,25 @@ func main() {
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
+		os.Exit(1)
+	}
+	// security events (#70): follow agent pod logs, record SecurityEvents, auto-pause
+	cs, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		log.Error(err, "clientset")
+		os.Exit(1)
+	}
+	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now,
+		C: SecurityConfig{
+			PauseAfter:  envInt("SECURITY_PAUSE_AFTER", 5),
+			Retention:   time.Duration(envInt("SECURITY_RETENTION_DAYS", 30)) * 24 * time.Hour,
+			MaxPerAgent: envInt("SECURITY_MAX_PER_AGENT", 500),
+			RatePerMin:  envInt("SECURITY_RATE_PER_MIN", 10),
+			RateBurst:   envInt("SECURITY_RATE_BURST", 20),
+			Rescan:      15 * time.Second,
+		}}
+	if err := mgr.Add(col); err != nil {
+		log.Error(err, "security collector")
 		os.Exit(1)
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)

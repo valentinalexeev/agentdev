@@ -289,6 +289,85 @@ documented filter on the prefix), receive an HMAC-signed webhook (#70), or poll 
 over TLS, OTLP logs and a per-agent hash chain for tamper evidence follow in #71. Output settings live in
 `instance.yml`, never in git.
 
+**Event schema `agentdev.security/v1` (#70).** One record per refusal. The same fields appear in the log line (the
+emitter's subset), the `SecurityEvent` object (`spec`), the `security_events` table, the `GET /api/security-events`
+items and the webhook body. A new field may be added within v1; renaming, removing or changing the meaning of a field
+makes it v2.
+
+| Field | Type | Set by | Meaning |
+|---|---|---|---|
+| `schema` | string | operator | `agentdev.security/v1` |
+| `id` | int | API | row id in `security_events`, increasing; the paging cursor is based on it |
+| `time` | RFC 3339 | container runtime | when the line was written (the log timestamp, not a value from the agent) |
+| `agent` | string | operator | agent name, from the pod's `agent` label (the `agent` in the line is ignored: the agent could forge it) |
+| `job` | string | emitter | `issue-N` or `pr-N` (any other value is stored empty); missing and empty mean "not known". Informational: Claude can influence it |
+| `source` | string | operator | from the container, not from the line: `forge` for the forge sidecar, `loop` for the agent container; later `egress`, `claude-proxy`, `approvals` |
+| `untrusted` | bool | operator | `true` for every event from the agent container: Claude runs there and can print any line, so its `rule`, `severity`, `job` and `action` are claims. Missing means `false` |
+| `rule` | string | emitter | the guardrail that fired, for example `push-branch`, `protected-path`, `git-config` |
+| `severity` | `low`, `medium`, `high` | emitter | an unknown value is stored as `high` |
+| `action` | string | emitter | the refused action as text, at most 500 characters plus `...` |
+| `pod`, `container` | string | operator | where the line came from |
+| `hash` | hex SHA-256 | operator | over pod UID, container, log timestamp and raw line: the dedupe key end to end |
+
+Log line format (what the emitters print, one line on stdout): `AGENTDEV_SECURITY_EVENT {"source":..,"rule":..,
+"severity":..,"agent":..,"job":..,"action":..}`. The loop always writes `job` (maybe empty); the sidecar leaves it
+out when empty.
+
+Mapping for SIEMs:
+
+| agentdev.security/v1 | OCSF 1.x Detection Finding (class_uid 2004) | ECS 8.x |
+|---|---|---|
+| (constant) | `category_uid` 2 (Findings), `activity_id` 1 (Create) | `event.kind: alert`, `event.category: intrusion_detection`, `event.type: denied` |
+| `hash` | `finding_info.uid` | `event.id` |
+| `time` | `time` | `@timestamp` |
+| `rule` | `finding_info.title`, `rule.name` | `rule.name` |
+| `source` | `metadata.product.feature.name` | `event.module` (`observer.type` for the sidecar) |
+| `severity` | `severity_id` (low 2, medium 3, high 4) and `severity` | `event.severity` (low 21, medium 47, high 73), `log.level` |
+| `agent` | `actor.user.name` | `user.name` (and `agent.name` = `agentdev`) |
+| `job` | `finding_info.related_events` / `unmapped.job` | `labels.job` |
+| `action` | `message` | `message` |
+| `pod`, `container` | `device.hostname`, `unmapped.container` | `orchestrator.resource.name`, `container.name` |
+| `schema` | `metadata.version` (`unmapped.schema`) | `event.dataset: agentdev.security` |
+
+**Collection and auto-pause (#70, implemented).** The operator follows the logs of every container of every agent
+pod (`pods/log`), with runtime timestamps. It keeps the time of the last line read per pod and container in the
+ConfigMap `agentdev-security-positions`, so a restarted operator resumes there; the hash makes a re-read line a no-op.
+It creates a `SecurityEvent` named `<agent>-<hash prefix>`, then pauses the Agent (`spec.paused=true`, condition
+`SecurityPaused` with reason `HighSeverity` or `TooManyEvents`) on a high-severity event or when one run has more than
+`SECURITY_PAUSE_AFTER` (default 5) events. A run is the pod UID plus the job: a new pod (restart, new version) starts
+a new count, an earlier run of the same `issue-N` does not add up, and events without a job share one bucket per pod.
+The count includes the event just created, even when the operator's cache has not seen it yet. Resuming sets the
+condition to `False` (reason `Resumed`) and keeps the message. Objects are pruned hourly: older than 30 days, or beyond
+500 per agent. The API watches the objects and appends them to `security_events` (role separation below).
+Forge comments and notifications to people with write access are not part of #70 (they need #67 and #57).
+
+**Trust in the source.** Claude runs in the agent container and can print an `AGENTDEV_SECURITY_EVENT` line with any
+content. The operator therefore ignores the `source` and `agent` in the line: `source` comes from the container
+(`forge` only for the forge sidecar), `agent` from the pod label, and every agent-container event carries
+`untrusted: true`. A forged line can still create events and pause, but only for the agent's own pod: the agent name
+comes from the label, so a forged `high` event pauses that agent and nothing else. This self-DoS is accepted: a
+paused agent does no work, and a person sees the reason before resuming it.
+
+**Flood protection.** Each pod container has a token bucket (`SECURITY_RATE_PER_MIN`, default 10 per minute, burst
+`SECURITY_RATE_BURST` 20). The first line over the limit becomes one `rate-limited` high event, which pauses the agent;
+further lines are dropped until the bucket refills, and the operator logs the total number dropped every hour. The
+API's webhook output has a bounded queue per agent (200) served round robin by 4 workers, so a flooding agent or a slow
+SIEM endpoint drops only that agent's deliveries (counted per agent); the rows stay in the table.
+
+**Failures and restarts.** When creating an object fails, the operator stops reading that stream without moving the
+position, and the next scan re-reads from the last recorded line; the hash drops the lines already recorded. A
+restarted container keeps its pod UID and name, so the position carries over, but the log API serves only the
+current instance: lines the old instance wrote after the operator's last read are not read again. They remain in the
+cluster log pipeline (the log line is the source of truth); this gap is accepted for #70.
+
+**Postgres roles.** `10-api.sh` creates `agentdev_owner` (no login), which owns the database, `security_events`,
+`security_settings` (the retention, set from `SECURITY_DB_RETENTION_DAYS`) and `security_events_prune()`. The API logs
+in as `agentdev_api`, which has only `INSERT` and `SELECT` on `security_events` and `EXECUTE` on the prune function
+(`images/api/grants.sql`). The prune function is `SECURITY DEFINER`, takes no argument and deletes only rows past the
+stored retention; a trigger refuses `UPDATE` and any `DELETE` inside the retention. A compromised API can therefore
+add and read rows, but cannot truncate, delete, drop the trigger or shorten the retention. The Postgres superuser
+can; tamper evidence against it (hash chain, external copy) is #71.
+
 Each phase's issue includes its signals in its acceptance criteria.
 
 ## Phase 5: deterministic executors (#69)
