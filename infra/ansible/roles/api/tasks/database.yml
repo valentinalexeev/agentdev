@@ -1,0 +1,41 @@
+---
+# Owner/API split (docs/security.md, #70): agentdev_owner (NOLOGIN) owns the database and the objects, the login
+# agentdev_api may only insert, read and call the prune functions (images/api/grants.sql). SQL goes through stdin of
+# psql in the Postgres pod, so the password is never in argv or in the log.
+- name: Check the database password
+  ansible.builtin.assert:
+    that: api_db_password is match('^[0-9a-f]{32,}$')
+    fail_msg: "Secret Manager {{ api_sm_db_password }} must hold a hex password (openssl rand -hex 24)"
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Database roles and the database agentdev
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ api_db_pod }}", --,
+           psql, -U, postgres, -v, ON_ERROR_STOP=1, -q]
+    stdin: |
+      SELECT 'CREATE ROLE agentdev_owner NOLOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner')\gexec
+      SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
+      ALTER ROLE agentdev_api PASSWORD '{{ api_db_password }}';
+      SELECT 'CREATE DATABASE agentdev OWNER agentdev_owner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
+      ALTER DATABASE agentdev OWNER TO agentdev_owner;
+  changed_when: false   # idempotent SQL; psql -q gives no reliable change signal
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Schema (as agentdev_owner), retention and grants
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ api_db_pod }}", --,
+           psql, -U, postgres, -d, agentdev, -v, ON_ERROR_STOP=1, -q]
+    stdin: |
+      REASSIGN OWNED BY agentdev_api TO agentdev_owner;
+      SET ROLE agentdev_owner;
+      {{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql') }}
+      UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};
+      RESET ROLE;
+      {{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql') }}
+  changed_when: false
+  when: not ansible_check_mode
+  # no secret here, but -v would print the whole schema and grants
+  no_log: true

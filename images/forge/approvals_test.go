@@ -275,6 +275,43 @@ func TestNoDecisionComments(t *testing.T) {
 	}
 }
 
+// The decision-command check is driver-independent: it applies to the Gitea rules as wired in newServer and to
+// any other driver's comment rules (here a GitHub-style list with its own body check), chaining that check.
+func TestNoDecisionEveryDriver(t *testing.T) {
+	decision, _ := json.Marshal(map[string]string{"body": "/approve 0123456789abcdef"})
+	plain, _ := json.Marshal(map[string]string{"body": "done"})
+	innerCalled := 0
+	other := []rule{
+		mkRule("POST", repoRe+`/issues/[0-9]+/comments`, func(*server, []byte) error { innerCalled++; return nil }),
+		mkRule("POST", repoRe+`/pulls/[0-9]+/comments`, nil),
+		mkRule("POST", repoRe+`/pulls`, nil),
+	}
+	for name, rs := range map[string][]rule{
+		"gitea": newServer(&Config{ForgeURL: "http://forge"}).rules,
+		"other": withCommonChecks(other),
+	} {
+		n := 0
+		for _, r := range rs {
+			if r.method != "POST" || !strings.HasSuffix(r.path.String(), `/comments$`) {
+				continue
+			}
+			n++
+			if r.check == nil || !isPolicy(r.check(nil, decision)) {
+				t.Errorf("%s %s: decision comment not refused", name, r.path)
+			}
+			if err := r.check(nil, plain); err != nil {
+				t.Errorf("%s %s: plain comment refused: %v", name, r.path, err)
+			}
+		}
+		if n == 0 {
+			t.Errorf("%s: no comment rule", name)
+		}
+	}
+	if innerCalled != 1 {
+		t.Errorf("driver's own check called %d times, want 1 (only for the allowed comment)", innerCalled)
+	}
+}
+
 func TestMCPHandshake(t *testing.T) {
 	s, _, _ := approvalSetup(t)
 	h := s.routes()

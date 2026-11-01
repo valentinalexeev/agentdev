@@ -28,13 +28,16 @@
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
-    - name: "Approvals need agentdev-api, which this playbook does not deploy yet (#67): kind only for now"
+    - name: "Approvals need agentdev-api (#67, #115): deployed only when api.oidc_issuer is set"
       ansible.builtin.assert:
-        that: not (approvals.enabled | default(false) | bool)
+        that: >-
+          not (approvals.enabled | default(false) | bool)
+          or ((api.oidc_issuer | default('')) | length > 0)
         fail_msg: >-
-          approvals.enabled: true is not supported on GKE yet. The operator would send every request to
-          agentdev-api-internal, which is not deployed here, so every prompt and protected push would be refused.
-          Set approvals.enabled: false (docs/admin.md, Turn on approvals).
+          approvals.enabled: true needs the management API. The operator sends every request to
+          agentdev-api-internal, which this playbook deploys only when api.oidc_issuer is set; without it every
+          prompt and protected push would be refused. Set api.oidc_issuer, or approvals.enabled: false
+          (docs/admin.md, Turn on approvals).
         quiet: true
 
     - name: Check the kube context exists
@@ -145,6 +148,11 @@
     - name: Postgres + ContextForge, then mcp-sync per project (#51)
       ansible.builtin.include_role: {name: platform}
 
+    # Management API (#46, #104): needs an OIDC provider, so it runs only when instance.yml sets api.oidc_issuer.
+    - name: Management API (database roles, Secrets, Deployment)
+      ansible.builtin.include_role: {name: api}
+      when: (api.oidc_issuer | default('')) | length > 0
+
     - name: Agent operator (#47); it renders every agent's StatefulSet
       kubernetes.core.k8s:
         <<: *k8s
@@ -228,7 +236,7 @@
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
     # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
     # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl); same
-    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The API itself is not deployed here yet (#105).
+    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The role api reads it (#104).
     - name: Read the SIEM output secrets (optional)
       ansible.builtin.shell: |
         if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then

@@ -35,7 +35,7 @@ sm_security_siem: security-siem          # optional: SIEM output secrets as KEY=
 #                                   and optionally agent-<name>-claude
 # security events (#70): auto-pause and SecurityEvent retention (operator). Webhook output settings
 # (security.siem.{webhook_url, syslog_addr, syslog_server_name, otlp_url, otlp_server_name} in instance.yml,
-# secret values in the Secret Manager secret sm_security_siem) fill the Secret agentdev-api-siem (#71).
+# secret values in the Secret Manager secret sm_security_siem) fill the Secret agentdev-api-siem (roles/api, #71).
 security:
   pause_after: 5                    # more than N events in one job pause the agent
   retention_days: 30                # SecurityEvent objects; the API's Postgres table keeps the history
@@ -51,6 +51,9 @@ mcp_projects: []
 # MCP tool metadata and outputs reach the model, so list trusted servers only. Empty: no server is registered.
 mcp_allowed_hosts: []
 approvals:                          # #67: agents ask a project member on the forge (docs/security-model.md)
-  enabled: false                    # must stay false on GKE: the playbook does not deploy agentdev-api yet (kind only)
+  enabled: false                    # on GKE needs the API too (api.oidc_issuer set, #115); deploy.yml checks it
   timeout_minutes: 30               # no decision in this time: denied (expired)
   retention_days: 90                # Approval objects; decisions stay in the audit log
+# Management API (#104), optional: deployed only when api.oidc_issuer is set. Keys: oidc_issuer (https, required),
+# oidc_discovery_url, oidc_audience (agentdev), forge_url, db_retention_days (365). Defaults: roles/api/defaults.
+api: {}
