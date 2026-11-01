@@ -35,6 +35,11 @@
         OIDC_DISCOVERY_URL: "{{ api_oidc_discovery_url }}"
         OIDC_AUDIENCE: "{{ api_oidc_audience }}"
         FORGE_URL: "{{ api_forge_url }}"
+        # same switch as the operator (deploy.yml), so the API and the operator agree on approvals (#67)
+        APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
+        APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
+        USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+        USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
       replace: []
   register: api_applied
 
@@ -65,3 +70,9 @@
         OIDC_ISSUER: "{{ api_oidc_issuer }}"
       replace: []
   when: api_ui | bool
+
+- name: Wait for the web UI
+  ansible.builtin.command: >-
+    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-ui --timeout=120s
+  changed_when: false
+  when: api_ui | bool and not ansible_check_mode
