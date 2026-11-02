@@ -12,8 +12,8 @@ output "image_registry" {
 }
 
 output "webhook_ip" {
-  description = "Static IP for the webhook router Ingress; point a DNS name at it and use https://<name>/ as the GitHub App webhook URL."
-  value       = google_compute_global_address.webhook.address
+  description = "Static IP for the public entry point; point the DNS names at it and use https://<name>/ as the GitHub App webhook URL. null without public_hosts (#169)."
+  value       = one(google_compute_global_address.webhook[*].address)
 }
 
 output "automation_service_account" {
@@ -31,7 +31,7 @@ output "github_actions_auth" {
 output "ingress" {
   description = "Names for instance.yml `ingress` (Ansible role ingress, #120): copy them as they are."
   value = {
-    static_ip_name  = google_compute_global_address.webhook.name
+    static_ip_name  = try(google_compute_global_address.webhook[0].name, "")
     certificate     = try(google_compute_managed_ssl_certificate.public[0].name, "")
     ssl_policy      = try(google_compute_ssl_policy.public[0].name, "")
     security_policy = try(google_compute_security_policy.public[0].name, "")
