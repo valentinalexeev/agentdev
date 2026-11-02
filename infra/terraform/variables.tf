@@ -126,3 +126,46 @@ variable "public_max_request_bytes" {
   type        = number
   default     = 5000000
 }
+
+# Node boot disks (#170). Size defaults to the GKE default (100 GB); type defaults to pd-standard (owner decision on
+# PR #191), so a pool created with the GKE default pd-balanced is replaced once. Changing any of these replaces the
+# node pool (nodes are recreated; agents resume from their PVCs).
+variable "system_disk_size_gb" {
+  description = "Boot disk size (GB) of system pool nodes. They hold only images and ephemeral pod data; 30 is enough. Changing it replaces the pool."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.system_disk_size_gb >= 10
+    error_message = "system_disk_size_gb must be at least 10 (GKE minimum)."
+  }
+}
+
+variable "system_disk_type" {
+  description = "Boot disk type of system pool nodes: pd-standard, pd-balanced or pd-ssd. Changing it replaces the pool."
+  type        = string
+  default     = "pd-standard"
+  validation {
+    condition     = contains(["pd-standard", "pd-balanced", "pd-ssd"], var.system_disk_type)
+    error_message = "system_disk_type must be pd-standard, pd-balanced or pd-ssd."
+  }
+}
+
+variable "agent_disk_size_gb" {
+  description = "Boot disk size (GB) of agent pool nodes (worker image plus gVisor overhead; 50 is enough). Changing it replaces the pool."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.agent_disk_size_gb >= 10
+    error_message = "agent_disk_size_gb must be at least 10 (GKE minimum)."
+  }
+}
+
+variable "agent_disk_type" {
+  description = "Boot disk type of agent pool nodes: pd-standard, pd-balanced or pd-ssd. Changing it replaces the pool."
+  type        = string
+  default     = "pd-standard"
+  validation {
+    condition     = contains(["pd-standard", "pd-balanced", "pd-ssd"], var.agent_disk_type)
+    error_message = "agent_disk_type must be pd-standard, pd-balanced or pd-ssd."
+  }
+}

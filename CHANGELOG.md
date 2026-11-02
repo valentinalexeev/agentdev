@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform: node boot disk variables `system_disk_size_gb`, `system_disk_type`, `agent_disk_size_gb`,
+  `agent_disk_type` (#170). Size defaults to 100 GB (the GKE default); smaller disks (30 GB system, 50 GB agents) are
+  enough, since nodes hold only images and ephemeral pod data. Changing one replaces that node pool; re-run the
+  Ansible playbook afterwards (it waits for the operator and agents, which resume from their PVCs). The deployment
+  template has commented pass-through lines.
 - Labels on all resources (#184): Terraform input `labels` (default `{}`), merged over `service = "agentdev"`, on
   every resource through the module's provider `default_labels`, plus the cluster and node pool `resource_labels`
   and the budget notification channels' `user_labels`; the bootstrap has the same input (project, state bucket).
@@ -22,6 +27,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
   `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
   node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
+
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
@@ -66,6 +72,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
+  on PR #191), about 6 EUR a month less per node. **BREAKING:** on existing clusters the boot disk type change recreates
+  both node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-apply the Terraform module `infra/terraform`, then re-run
+  the Ansible playbook `infra/ansible/deploy.yml` (all roles). To keep the current pools, set `system_disk_type` and
+  `agent_disk_type` to `pd-balanced`. Released in a MINOR version as a one-off by owner decision on PR #191 (option 3):
+  the only cost is a short downtime with no data loss.
 - Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
   no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
   (`SCALE_TO_ZERO`), the Agent CRD (`scaleToZero` is optional with default `true`; Go type `*bool`), `POST

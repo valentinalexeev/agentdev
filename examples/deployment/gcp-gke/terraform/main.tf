@@ -30,6 +30,11 @@ module "agentdev" {
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
 
+  # node boot disks (agentdev #170): uncomment with a ref= that contains #170; changing one replaces the pool
+  # system_disk_size_gb = var.system_disk_size_gb
+  # system_disk_type    = var.system_disk_type
+  # agent_disk_size_gb  = var.agent_disk_size_gb
+  # agent_disk_type     = var.agent_disk_type
   # labels on all resources (agentdev #184): uncomment with a ref= that contains #184
   # labels = var.labels
   # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
@@ -80,6 +85,22 @@ variable "create_artifact_registry" {
   description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
   type        = bool
   default     = true
+}
+variable "system_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "system_disk_type" {
+  type    = string
+  default = "pd-standard"
+}
+variable "agent_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "agent_disk_type" {
+  type    = string
+  default = "pd-standard"
 }
 variable "labels" {
   description = "Labels on all resources (agentdev #184); service = \"agentdev\" is added. environment: dev, stage or prod."

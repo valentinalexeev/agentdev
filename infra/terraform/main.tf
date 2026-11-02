@@ -151,6 +151,8 @@ resource "google_container_node_pool" "system" {
   }
   node_config {
     machine_type    = var.system_machine_type
+    disk_size_gb    = var.system_disk_size_gb
+    disk_type       = var.system_disk_type
     resource_labels = local.labels         # #184
     spot            = var.system_pool_spot # #171, default false: on-demand
     service_account = google_service_account.nodes.email
@@ -180,6 +182,8 @@ resource "google_container_node_pool" "agents" {
     machine_type    = var.agent_machine_type
     resource_labels = local.labels # #184
     spot            = var.agent_pool_spot
+    disk_size_gb    = var.agent_disk_size_gb
+    disk_type       = var.agent_disk_type
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     image_type      = "COS_CONTAINERD"

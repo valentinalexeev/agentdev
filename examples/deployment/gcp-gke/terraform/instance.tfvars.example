@@ -10,5 +10,9 @@ budget_amount_usd  = 150     # in budget_currency
 # public_hosts       = ["agentdev.example.com", "auth.example.com"]   # agentdev #120; DNS A record -> terraform output webhook_ip
 # cloud_armor        = false
 # create_artifact_registry = false   # agentdev #157: images come from GHCR
+# system_disk_size_gb = 30              # agentdev #170: node boot disks; changing one replaces the node pool
+# system_disk_type    = "pd-standard"   # default; "pd-balanced" keeps a pre-#170 pool unchanged
+# agent_disk_size_gb  = 50
+# agent_disk_type     = "pd-standard"
 labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
