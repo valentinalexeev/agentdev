@@ -15,6 +15,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
 ### Fixed
+- Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
+  `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
+  a month). A `moved` block keeps the same IP for instances with `public_hosts` (no plan change). On an instance
+  without `public_hosts`, the next apply destroys only the address; `webhook_ip` is then `null` and
+  `ingress.static_ip_name` is empty. kind is not affected (no static IP there).
 - Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
   its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
   in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
@@ -44,6 +49,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   narrowed to read access, or a Gitea read token) whether a stopped agent has new work, and starts only those agents.
   The playbook refuses scale to zero with neither webhooks nor the wake poll ("scale_to_zero needs webhooks or
   wake_poll_seconds"). Gitea on GKE: put a read-only token in Secret Manager `router-poll-forge-token`.
+- Terraform bootstrap: the state bucket aborts incomplete multipart uploads after one day (#185).
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to
   `1.0.0-rc.1` until v1.0.0. Deployments pin exact versions, so they are not affected.
