@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -53,13 +52,9 @@ func main() {
 
 	ns := env("AGENTS_NS", "coding-agents")
 	execNS := os.Getenv("EXEC_NS") // deterministic executors (#69); empty: off
-	namespaces := map[string]cache.Config{ns: {}}
-	if execNS != "" {
-		namespaces[execNS] = cache.Config{}
-	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
-		Cache:                  cache.Options{DefaultNamespaces: namespaces}, // agents (and executors) namespace only
+		Cache:                  cacheOptions(ns, execNS), // per kind: agents namespace, executor kinds in EXEC_NS (#161)
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: ":8081", // one replica, no leader election (add a Lease Role first if that changes)
 	})
@@ -132,7 +127,7 @@ func main() {
 				Storage:    env("EXECUTOR_PLAN_STORAGE", "1Gi"),
 				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute,
 				// executor egress (#135): proxy URL and the hosts every executor may reach
-				EgressProxy: os.Getenv("EXECUTOR_EGRESS_PROXY"),
+				EgressProxy:     os.Getenv("EXECUTOR_EGRESS_PROXY"),
 				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
 				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
 			EgressLogs: kubeSinceLogs(cs)}
@@ -143,7 +138,9 @@ func main() {
 		log.Info("deterministic executors on", "namespace", execNS)
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
+	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
+	// deploy.yml) fails on kind and GKE alike instead of passing before the crash loop
+	_ = mgr.AddReadyzCheck("readyz", cacheSynced(mgr.GetCache()))
 	log.Info("agentdev-operator starting", "namespace", ns)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "run")

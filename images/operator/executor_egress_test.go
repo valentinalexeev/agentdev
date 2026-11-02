@@ -362,7 +362,8 @@ func TestExecutorEgressManifest(t *testing.T) {
 			t.Errorf("executor-egress rule without destination or ports: %+v", r)
 		}
 		for _, p := range r.To {
-			if p.IPBlock != nil && p.IPBlock.CIDR != "169.254.169.254/32" && p.IPBlock.CIDR != "169.254.169.252/32" {
+			if p.IPBlock != nil && p.IPBlock.CIDR != "169.254.169.254/32" && p.IPBlock.CIDR != "169.254.169.252/32" &&
+				!(p.IPBlock.CIDR == nodeLocalDNSIP && isDNSOnly(r)) {
 				t.Errorf("executor-egress allows IP block %v", p.IPBlock)
 			}
 		}

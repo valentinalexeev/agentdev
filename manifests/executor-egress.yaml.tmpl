@@ -119,7 +119,11 @@ spec:
   podSelector: {matchLabels: {app: executor-egress-proxy}}
   policyTypes: [Egress]
   egress:
-  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+  # DNS only (port 53): kube-dns, and the NodeLocal DNSCache (GKE, #163): its pods and its link-local address
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
 ---
 # default deny for executor pods: DNS, the proxy, the in-cluster forge, the GKE metadata server; nothing else
@@ -130,7 +134,11 @@ spec:
   podSelector: {matchLabels: {app: agentdev-executor}}
   policyTypes: [Egress]
   egress:
-  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+  # DNS only (port 53): kube-dns, and the NodeLocal DNSCache (GKE, #163): its pods and its link-local address
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
   - to: [{podSelector: {matchLabels: {app: executor-egress-proxy}}}]
     ports: [{port: 3128}]

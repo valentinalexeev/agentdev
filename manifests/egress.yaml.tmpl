@@ -122,7 +122,11 @@ spec:
   podSelector: {matchLabels: {app: egress-proxy}}
   policyTypes: [Egress]
   egress:
-  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+  # DNS only (port 53): kube-dns, and the NodeLocal DNSCache (GKE, #163): its pods and its link-local address
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
 ---
 apiVersion: networking.k8s.io/v1
@@ -132,7 +136,11 @@ spec:
   podSelector: {matchExpressions: [{key: app, operator: In, values: [coding-agent, agent-chat]}]}   # agents and chat sessions (#118)
   policyTypes: [Egress]
   egress:
-  - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
+  # DNS only (port 53): kube-dns, and the NodeLocal DNSCache (GKE, #163): its pods and its link-local address
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
   - to: [{podSelector: {matchLabels: {app: egress-proxy}}}]
     ports: [{port: 3128}]
