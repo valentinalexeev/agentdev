@@ -39,6 +39,10 @@ forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
 scale_to_zero: false                # stop idle agents, start on events (#35); per agent: agents[].scale_to_zero
+# agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
+# "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
+agent_storage_class: agentdev-agent
+agent_state_storage: 10Gi
 idle_seconds: 900                   # cluster-wide (the operator's); per-agent idle time is not in the Agent spec yet
 botboard_url: ""                    # agents report work to botboard (#26), e.g. http://botboard.<tailnet>; empty = off
 
