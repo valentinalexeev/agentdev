@@ -147,6 +147,9 @@ fi
 
 # ---------------------------------------------------------------- egress (R10, phase 2)
 if section egress; then
+  # #163: DNS works under agent-egress (NodeLocal DNSCache on GKE answers on the node, not from the kube-dns pods)
+  kexec agent getent hosts "egress-proxy.$AGENTS_NS.svc.cluster.local" >/dev/null 2>&1
+  check $? "agent: resolves the egress proxy name (DNS allowed, incl. NodeLocal DNSCache)" "lookup of egress-proxy.$AGENTS_NS.svc.cluster.local failed"
   for c in agent forge; do
     code=$(probe "$c" http://169.254.169.254/computeMetadata/v1/ direct "Metadata-Flavor: Google")
     [ "$code" != 200 ]; check $? "$c: metadata server is blocked (direct)" "HTTP $code"
