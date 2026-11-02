@@ -15,6 +15,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
 ### Fixed
+- Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
+  can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
 - Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
   waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not
   sync the mirror (GitHub forge, rc.1) and no agent job started. The forge sidecar's git and the executor checkout now
