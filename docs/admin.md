@@ -234,6 +234,31 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
 
+## Spot system pool (GKE)
+
+The system pool runs the router, the operator, the UI and the proxies. On GKE it can run on Spot VMs to cut its cost
+by about 60-70%. Spot is off by default.
+
+### Run the system pool on Spot VMs
+
+1. In the deployment repository, set `system_pool_spot = true` (Terraform) and pass it to the module.
+2. Run `terraform plan` and `terraform apply`. The system pool is replaced: the platform is down until the new nodes
+   are ready.
+3. Run the Ansible playbook again. It waits until the operator and the agents are ready.
+
+### What happens when Google reclaims a node
+
+1. Google gives the node about 30 seconds of notice, then stops it.
+2. The router, the operator, the UI and the proxies are down until the pool has a new node, usually about a minute.
+   If the zone has no Spot capacity, the gap is longer.
+3. Webhooks sent in the gap are lost. Each agent finds its issues at the next poll (`poll_seconds`).
+4. Agents keep their state on their PVCs. A job that needs the Claude proxy or the egress proxy during the gap fails
+   and is retried at the next poll.
+
+NOTE: The platform components have one replica each, so no PodDisruptionBudget is set: a budget with one replica
+blocks node upgrades, and a Spot preemption does not respect it. The router has a readiness probe, so the Service
+sends traffic only to a ready pod.
+
 ## Agent dashboard (botboard)
 
 Botboard ([source](https://github.com/valentinalexeev/botboard), `ghcr.io/valentinalexeev/botboard`) shows the work

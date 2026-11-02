@@ -29,6 +29,9 @@ module "agentdev" {
 
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
+
+  # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
+  # system_pool_spot = var.system_pool_spot
 }
 
 variable "project_id" { type = string }
@@ -75,6 +78,11 @@ variable "create_artifact_registry" {
   description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
   type        = bool
   default     = true
+}
+variable "system_pool_spot" {
+  description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
+  type        = bool
+  default     = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

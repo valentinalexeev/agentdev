@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform: `system_pool_spot` (default `false`, no change for existing instances) runs the system pool on Spot VMs,
+  about 60-70% cheaper (#171). When a node is reclaimed, router, operator and proxies are down for about a minute;
+  missed webhooks are covered by polling, agents keep their state on PVCs. Switching it replaces the system pool.
+  Docs: `docs/admin.md` "Run the system pool on Spot VMs"; the deployment template has a commented pass-through.
 - Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
   `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
   node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
