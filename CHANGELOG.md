@@ -11,6 +11,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   about 60-70% cheaper (#171). When a node is reclaimed, router, operator and proxies are down for about a minute;
   missed webhooks are covered by polling, agents keep their state on PVCs. Switching it replaces the system pool.
   Docs: `docs/admin.md` "Run the system pool on Spot VMs"; the deployment template has a commented pass-through.
+- Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
+  `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
+  node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
@@ -43,6 +46,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Operator: one volume per agent instead of two (#173). The `state` PVC now also holds the Claude state
+  (`/home/node/.claude` is its `claude` subPath); the separate `claude` PVC is gone. The PVC uses the agent StorageClass
+  and size: operator env `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` (default `10Gi`), Ansible
+  `agent_storage_class` (default `agentdev-agent`, a `pd-standard` class that `deploy.yml` creates) and
+  `agent_state_storage`, `config.env` on kind (empty class: the cluster default). On GKE this halves the disks per
+  agent and uses the cheapest disk type. Upgrading from 1.0.0-rc: the operator sees an agent StatefulSet in the old
+  layout, deletes it and its old PVCs, and makes it again. Agents lose their local Claude sessions and clones; open
+  branches and PRs stay on the forge. Upgrade while the agents are idle.
 - Terraform bootstrap: the state bucket aborts incomplete multipart uploads after one day (#185).
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to

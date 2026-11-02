@@ -1,0 +1,17 @@
+# Infracost project configuration (#183). Pins the Terraform projects instead of autodetect.
+# The Infracost Cloud GitHub App and the CLI read this file. No API key here, ever.
+# Usage profiles: infra/infracost/*.yml, see infra/infracost/README.md.
+version: 0.1
+
+projects:
+  - path: infra/terraform
+    name: agentdev-infra
+    terraform_var_files:
+      - example.tfvars
+    usage_file: infra/infracost/usage-2-3-agents.yml
+
+  - path: infra/terraform/bootstrap
+    name: agentdev-bootstrap
+    terraform_var_files:
+      - example.tfvars
+    usage_file: infra/infracost/usage-2-3-agents.yml
