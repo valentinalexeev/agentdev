@@ -138,6 +138,108 @@ endpoint on the collector. Its data feeds dashboards about agent behaviour (tool
 It never feeds a limit, a pause or a credential decision, because the model can send OTLP to the same endpoint.
 `OTEL_LOG_USER_PROMPTS` and tool content logging stay off.
 
+## UI options for visualization and control
+
+Requested by the owner on #196. A UI either **visualizes** (reads metrics, spans or reports) or also **controls**
+(sets a budget, pauses an agent, stops a run). Under D1 a control action is valid only if it ends as a change that
+`claude-proxy` or the operator enforces: today the `claude-proxy-budgets` ConfigMap (per-agent limits, D2 units
+after this ADR), the planned `claude-proxy-prices` ConfigMap, and the operator pause (#93). A UI that keeps budgets
+in its own store is a second control point and conflicts with D1. Product facts checked on 2026-11-02.
+
+### U1. Grafana on the D4 metrics
+
+- **Shows:** everything D4 exports: units and USD per agent, project and model, cache-read share, budget used vs
+  limit, 5 h / 7 d utilization, refusals. Top jobs only through a JSON/Infinity data source on `GET /status`, as
+  the job id is not a metric label (D4). Ready-made dashboards exist for the GenAI metric names (OpenLIT and
+  agentgateway ship Grafana dashboard JSON), but our `agentdev.*` metrics need the dashboard planned in D5.
+- **Control:** visualize only. Grafana alerting can notify (budget at 80 %, utilization near the pause
+  threshold); it does not change the proxy.
+- **Fit with D1:** full; it only reads.
+- **Footprint:** kind: Grafana plus Prometheus from D5, off by default. GKE: Managed Service for Prometheus plus
+  either a self-hosted Grafana pod (about 100 to 250 MiB) or Grafana Cloud. Managed Prometheus bills per sample
+  ingested; with about 20 series per agent at 60 s the cost is cents per month for small instances.
+- **Security:** no prompt content (D4). Grafana needs login (SSO or a strong admin password from Secret Manager)
+  and must not be public without it. No new egress except to Grafana Cloud if chosen.
+
+### U2. OTel-native LLM observability tools
+
+They ingest the D4 OTLP spans (and optionally D7 Claude Code telemetry) and show per-request and per-job cost,
+traces and sessions. None of them can enforce our budget, so all are visualize-only under D1.
+
+| Tool | Licence, self-hosting | Footprint | Notes |
+| --- | --- | --- | --- |
+| Langfuse | MIT core (some enterprise add-ons need a licence key); acquired by ClickHouse in January 2026, licence stated unchanged | web + worker, Postgres, ClickHouse, Redis or Valkey, object storage (S3 API) | Strongest trace and cost UI; heaviest stack (against #168) |
+| Arize Phoenix | Elastic License 2.0 (source-available, limits offering it as a hosted service) | one container, SQLite or Postgres | Lightest; fine for an operator's own use |
+| OpenLIT | Apache 2.0 | app + ClickHouse (Docker Compose or Helm) | Cost tracking with custom pricing, ships Grafana dashboards, lists Claude Code integration |
+| Helicone | Apache 2.0 platform | web, worker, jawn, Supabase, ClickHouse, MinIO | Built as a proxy (base-URL swap); acquired by Mintlify in 2026, hosted product reported in maintenance mode |
+
+- **Fit with D1:** fine as OTLP targets of `TELEMETRY_OTLP_URL`. Helicone in proxy mode would sit in the request
+  path and is rejected for the same reasons as an external gateway.
+- **Footprint and cost:** Phoenix about one small pod; Langfuse, OpenLIT and Helicone need ClickHouse, so roughly
+  1 to 3 GiB RAM and a persistent disk, which on GKE means an always-on node share (tens of USD per month). Their
+  SaaS tiers avoid that but add egress.
+- **Security:** D4 sends no prompt content, so spans hold model, tokens, cost, agent and job id only. D7 data must
+  keep `OTEL_LOG_USER_PROMPTS` off; with it on, prompts contain repository code and issue text (possible PII and
+  secrets). A SaaS target adds egress from the cluster and a new data processor, which the NetworkPolicy and
+  `docs/security.md` must list.
+
+### U3. Gateway admin UIs
+
+- **LiteLLM admin UI:** spend per key, team, user and tag, request logs with cost, and budgets and rate limits per
+  virtual key or team. Budgets, virtual keys, spend logs and the UI are in the open-source core and need Postgres;
+  SSO, audit logs and project-level management are Enterprise. **Controls**, but only for traffic that uses
+  LiteLLM keys.
+- **agentgateway admin UI** (port 15000, no authentication by default, OIDC possible when attached to a gateway):
+  cost dashboard by model, provider and user from a per-request database and a price catalog, configuration view,
+  and a playground. It enforces token and spend limits from its own configuration, so it **controls** its own
+  policies.
+- **Envoy AI Gateway:** configured through Kubernetes resources; we found no built-in cost UI. Visualization goes
+  through its metrics in Grafana; control means editing the rate-limit resources.
+- **Fit with D1:** conflict. Each gateway keeps its own budget state and sits in the request path; none handles
+  the subscription OAuth credential and the 5 h / 7 d windows (see "Alternatives rejected"). Usable only if a
+  later ADR replaces the proxy.
+- **Footprint:** LiteLLM: proxy plus Postgres (plus Redis for shared limits). agentgateway: one binary with SQLite.
+  Envoy AI Gateway: Envoy Gateway control plane plus data plane.
+- **Security:** request logs can store prompts unless switched off; admin UIs must not be exposed without auth.
+
+### U4. Anthropic Console usage and cost views
+
+- **Shows:** the Usage page (tokens by model, API key, workspace, date) and Cost page (USD); a Claude Code page
+  with per-user spend and productivity; the same data through the Usage and Cost Analytics API (beta) and the
+  Claude Code Analytics API with an Admin API key. This is the authoritative bill for API-key billing.
+- **Control:** workspace spend limits for API organizations (the automatic "Claude Code" workspace). Subscription
+  plans have their controls in the claude.ai admin console, not per agentdev agent.
+- **Fit with D1:** complementary. It sees the organization, not agents or jobs, unless each agent has its own key
+  or workspace. A workspace limit is a hard upper bound outside the cluster, a good second fuse behind the proxy.
+- **Footprint:** none in the cluster. Pulling the Analytics API into agentdev would need an Admin API key in
+  Secret Manager, which is a high-value credential; we do not propose it now.
+- **Security:** no new egress; no prompt content in these reports.
+
+### U5. Extend the agentdev web UI (`images/ui`)
+
+- **Shows:** today the agent list shows the token budget (`formatBudget`, from `GET /status` through the API,
+  `images/api/budget.go`). Extend it to units and USD (D2, open decision 2), the 5 h / 7 d utilization and pause
+  state, and a cost-per-job view from the D3 fields, linked to the issue or PR.
+- **Control:** yes, within D1: edit the per-agent limit in `claude-proxy-budgets` (and the prices in
+  `claude-proxy-prices`) through the API, and pause or resume an agent through the operator. The proxy stays the
+  enforcer; the UI only writes its configuration.
+- **Footprint:** none new; the UI and API already run.
+- **Security:** a budget edit is a privileged write. It needs the owner role in the existing UI auth, the RBAC
+  permission for the API ServiceAccount to patch only those two ConfigMaps (by `resourceNames`), the same value
+  pattern as D2 checked in the API and again in the proxy, and a security event for each change. Agents have no
+  path to it. No prompt data and no new egress.
+
+### Recommendation
+
+1. **U5** as the primary place to see and control cost: it is the only option that controls without breaking D1
+   and adds no component.
+2. **U1** Grafana as the standard dashboard and alerting layer (D5 already plans it), off by default.
+3. **U4** Anthropic Console as the billing truth and, for API-key instances, a workspace spend limit as an outer
+   fuse. Document it; no integration.
+4. **U2** documented as optional OTLP targets (Phoenix for a light setup, Langfuse or OpenLIT for full traces),
+   not bundled.
+5. **U3** not adopted; revisit with the gateway alternative.
+
 ## Consequences
 
 - **Breaking (0.x, MINOR):** the budget quantity changes from tokens to units. `CLAUDE_BUDGET_TOKENS` is replaced
@@ -178,3 +280,6 @@ Asked in the issue with default proposals:
 2. Show estimated USD in the UI by default (proposed: only when prices are configured), or units only.
 3. Default `JOB_TIMEOUT` of 3600 s (proposed) or another value.
 4. Telemetry stack on kind off by default (proposed) or on, for the demo.
+5. UIs (see "UI options"): (a) U5 agentdev UI with budget editing plus U1 Grafana, U4 and U2 documented
+   (proposed); (b) U5 read-only, budgets stay in Ansible/Terraform only; (c) also bundle one trace UI
+   (Phoenix or Langfuse) as an optional step.
