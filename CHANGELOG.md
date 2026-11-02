@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
+- Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
+  waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not
+  sync the mirror (GitHub forge, rc.1) and no agent job started. The forge sidecar's git and the executor checkout now
+  pass `-c http.proxyAuthMethod=basic`. The Squid ACLs are unchanged. Git errors from the sidecar now also redact the
+  proxy credential from `HTTPS_PROXY`.
 - DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
   so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
   Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
