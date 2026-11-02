@@ -1,0 +1,36 @@
+# Infracost usage profile: 2 to 3 agents, the case of the cost guide in infra/terraform/README.md (#183).
+# Values are monthly. A deployment repo can copy this file and change the numbers. No secrets here.
+version: 0.1
+
+resource_usage:
+  # system pool: one e2-standard-2 on-demand node, all month (730 h), 100 GB pd-standard boot disk.
+  google_container_node_pool.system:
+    nodes: 1
+
+  # agents pool: Spot e2-standard-4, scales to zero. 2 to 3 agents fit on one node.
+  # Infracost has no hours key for node pools and ignores fractional nodes, so this is the upper
+  # bound: one Spot node all month. Real use (~180 h/month) costs about a quarter of the estimate.
+  google_container_node_pool.agents:
+    nodes: 1
+
+  # Cloud NAT: both nodes behind it. Egress to GitHub, Anthropic and image registries.
+  google_compute_router_nat.nat:
+    assigned_vms: 2
+    monthly_data_processed_gb: 20
+
+  # Artifact Registry: images come from ghcr.io (#28), so this repository stays almost empty.
+  google_artifact_registry_repository.images[0]:
+    storage_gb: 5
+    monthly_egress_data_transfer_gb: 0
+
+  # Secret Manager: one version per secret, read at pod start.
+  google_secret_manager_secret.platform[*]:
+    active_secret_versions: 1
+    monthly_access_operations: 500
+
+  # bootstrap: Terraform state bucket, a few MB.
+  google_storage_bucket.tfstate:
+    storage_gb: 1
+    monthly_class_a_operations: 1000
+    monthly_class_b_operations: 5000
+    monthly_egress_data_transfer_gb: 0

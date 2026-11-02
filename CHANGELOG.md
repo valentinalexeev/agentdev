@@ -7,6 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
+  `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
+  node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
