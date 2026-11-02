@@ -88,7 +88,7 @@ variable "system_disk_size_gb" {
 }
 variable "system_disk_type" {
   type    = string
-  default = "pd-balanced"
+  default = "pd-standard"
 }
 variable "agent_disk_size_gb" {
   type    = number
@@ -96,7 +96,7 @@ variable "agent_disk_size_gb" {
 }
 variable "agent_disk_type" {
   type    = string
-  default = "pd-balanced"
+  default = "pd-standard"
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

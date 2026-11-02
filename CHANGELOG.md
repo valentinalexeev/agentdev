@@ -8,10 +8,17 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Added
 - Terraform: node boot disk variables `system_disk_size_gb`, `system_disk_type`, `agent_disk_size_gb`,
-  `agent_disk_type` (#170). Defaults are the GKE defaults (100 GB `pd-balanced`), so existing node pools do not
-  change. Nodes hold only images and ephemeral pod data: 30 GB (system) and 50 GB (agents) `pd-standard` save about
-  7 EUR a month per node. Changing one replaces that node pool; re-run the Ansible playbook afterwards (it waits for
-  the operator and agents, which resume from their PVCs). The deployment template has commented pass-through lines.
+  `agent_disk_type` (#170). Size defaults to 100 GB (the GKE default); smaller disks (30 GB system, 50 GB agents) are
+  enough, since nodes hold only images and ephemeral pod data. Changing one replaces that node pool; re-run the
+  Ansible playbook afterwards (it waits for the operator and agents, which resume from their PVCs). The deployment
+  template has commented pass-through lines.
+
+### Changed
+- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
+  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
+  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
+  `agent_disk_type` to `pd-balanced`.
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
