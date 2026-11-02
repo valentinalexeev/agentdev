@@ -90,7 +90,7 @@ func TestEgressManifest(t *testing.T) {
 			t.Error("agent-egress has a rule without a destination")
 		}
 		for _, p := range r.To {
-			if p.IPBlock != nil {
+			if p.IPBlock != nil && !(p.IPBlock.CIDR == nodeLocalDNSIP && isDNSOnly(r)) { // NodeLocal DNSCache, port 53 (#163)
 				t.Errorf("agent-egress allows an IP block %v", p.IPBlock)
 			}
 		}
