@@ -973,10 +973,10 @@ mkdir -p /work/home
 git init -q /work/src
 cd /work/src
 auth=$(printf '%s:%s' "$GIT_USER" "$FORGE_TOKEN" | base64 | tr -d '\n')
-git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
+git -c http.extraHeader="Authorization: Basic $auth" -c http.proxyAuthMethod=basic -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
   fetch -q --no-tags --depth 200 -- "$REPO_URL" "$REF"
 if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
-  git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
+  git -c http.extraHeader="Authorization: Basic $auth" -c http.proxyAuthMethod=basic -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
     fetch -q --no-tags --unshallow -- "$REPO_URL" "$REF"
 fi
 git -c advice.detachedHead=false checkout -q --detach "$COMMIT"

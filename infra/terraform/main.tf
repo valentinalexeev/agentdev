@@ -1,8 +1,11 @@
 locals {
-  apis = [
+  apis = concat(
+    var.create_artifact_registry ? ["artifactregistry.googleapis.com"] : [],
+    local.base_apis,
+  )
+  base_apis = [
     "compute.googleapis.com",
     "container.googleapis.com",
-    "artifactregistry.googleapis.com",
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -79,13 +82,13 @@ resource "google_service_account" "nodes" {
 }
 
 resource "google_project_iam_member" "nodes" {
-  for_each = toset([
+  for_each = toset(concat([
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/monitoring.viewer",
     "roles/stackdriver.resourceMetadata.writer",
-    "roles/artifactregistry.reader",
-  ])
+    ], var.create_artifact_registry ? ["roles/artifactregistry.reader"] : []
+  ))
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.nodes.email}"
@@ -187,7 +190,13 @@ resource "google_container_node_pool" "agents" {
 }
 
 # ---------- images and secrets ----------
+moved {
+  from = google_artifact_registry_repository.images
+  to   = google_artifact_registry_repository.images[0]
+}
+
 resource "google_artifact_registry_repository" "images" {
+  count         = var.create_artifact_registry ? 1 : 0
   location      = var.region
   repository_id = "agentdev"
   format        = "DOCKER"
