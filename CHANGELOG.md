@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform: `system_pool_spot` (default `false`, no change for existing instances) runs the system pool on Spot VMs,
+  about 60-70% cheaper (#171). When a node is reclaimed, router, operator and proxies are down for about a minute;
+  missed webhooks are covered by polling, agents keep their state on PVCs. Switching it replaces the system pool.
+  Docs: `docs/admin.md` "Run the system pool on Spot VMs"; the deployment template has a commented pass-through.
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The

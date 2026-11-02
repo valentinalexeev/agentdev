@@ -11,5 +11,6 @@ github_repository  = "my-org/my-agentdev-deploy" # the deployment repo, not this
 # budget_alert_emails  = ["ops@example.com"]
 # agent_pool_max_nodes = 3
 # agent_pool_spot      = true
+# system_pool_spot     = false   # #171: Spot for the system pool; short platform gaps on preemption
 # public_hosts         = ["agentdev.example.com"]   # public HTTPS entry point (#120); DNS A record -> webhook_ip
 # cloud_armor          = false
