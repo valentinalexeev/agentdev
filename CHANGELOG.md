@@ -58,7 +58,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   both node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
   their PVCs); re-apply the Terraform module `infra/terraform`, then re-run
   the Ansible playbook `infra/ansible/deploy.yml` (all roles). To keep the current pools, set `system_disk_type` and
-  `agent_disk_type` to `pd-balanced`.
+  `agent_disk_type` to `pd-balanced`. Released in a MINOR version as a one-off by owner decision on PR #191 (option 3):
+  the only cost is a short downtime with no data loss.
 - Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
   no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
   (`SCALE_TO_ZERO`), the Agent CRD (`scaleToZero` is optional with default `true`; Go type `*bool`), `POST
