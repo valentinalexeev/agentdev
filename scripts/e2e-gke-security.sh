@@ -13,7 +13,11 @@
 #
 # Usage:
 #   scripts/e2e-gke-security.sh [--kind] [--context CTX] [--agent NAME] [--host UI_HOST] [--webhook-host HOST]
+#                               [--auth-host HOST] [--ingress gateway|external]
 #                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]] [--only LIST]
+#   --ingress     gateway (default): the GKE Gateway of the role ingress. external (#160): your own reverse proxy
+#                 publishes the hosts (ingress.mode external); the Gateway-only checks (redirect, SSL policy) are MANUAL
+#   --auth-host   the authentik login host (ingress.auth_host): the sso section checks the issuer it publishes
 #   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github
 # Environment (optional):
 #   E2E_READER_TOKEN  OIDC access token of a person WITHOUT write access to the agent's repo (API permission check)
@@ -24,7 +28,7 @@
 #   SC2016: single-quoted snippets expand inside the container, not here.
 set -uo pipefail
 
-KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GH_TIMEOUT=30 ONLY=""
+KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GH_TIMEOUT=30 ONLY="" AUTH_HOST="" INGRESS=gateway
 AGENTS_NS="${AGENTS_NS:-coding-agents}" PLATFORM_NS="${PLATFORM_NS:-agentdev-platform}" EXEC_NS="${EXEC_NS:-agentdev-executors}"
 PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}"
 
@@ -36,6 +40,8 @@ while [ $# -gt 0 ]; do
     --agent) AGENT="$2"; shift ;;
     --host) HOST="$2"; shift ;;
     --webhook-host) WEBHOOK_HOST="$2"; shift ;;
+    --auth-host) AUTH_HOST="$2"; shift ;;
+    --ingress) INGRESS="$2"; shift ;;
     --github) GH_REPO="$2"; shift ;;
     --owner) GH_OWNER="$2"; shift ;;
     --github-timeout) GH_TIMEOUT="$2"; shift ;;
@@ -48,6 +54,7 @@ done
 if [ -z "$CTX" ]; then
   if $KIND; then CTX=kind-agentdev; else CTX=$(kubectl config current-context 2>/dev/null || true); fi
 fi
+case "$INGRESS" in gateway|external) ;; *) echo "--ingress must be gateway or external" >&2; exit 2 ;; esac
 [ -n "$CTX" ] || { echo "no kubectl context (use --context)" >&2; exit 2; }
 case "$CTX" in kind-*) $KIND || echo "note: context $CTX looks like kind; add --kind to skip the GKE-only checks" ;; esac
 
@@ -288,13 +295,23 @@ fi
 if section https; then
   if [ -z "$HOST" ]; then skip "public HTTPS checks (no --host)"
   else
-    loc=$(curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "http://$HOST/")
-    case "$loc" in 301\ https://*|308\ https://*) pass "http://$HOST redirects to HTTPS";; *) fail "http://$HOST does not redirect to HTTPS ($loc)";; esac
+    if [ "$INGRESS" = external ]; then
+      manual "external ingress: make sure that your reverse proxy redirects http://$HOST to https:// (or does not listen on port 80)"
+    else
+      loc=$(curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "http://$HOST/")
+      case "$loc" in 301\ https://*|308\ https://*) pass "http://$HOST redirects to HTTPS";; *) fail "http://$HOST does not redirect to HTTPS ($loc)";; esac
+    fi
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$HOST/")
+    reached "$code"; check $? "https://$HOST/ answers ($INGRESS ingress)" "HTTP $code"
     hsts=$(curl -s -D - -o /dev/null -m 10 "https://$HOST/" | tr -d '\r' | grep -i '^strict-transport-security:')
     echo "$hsts" | grep -qi 'max-age=31536000' && echo "$hsts" | grep -qi includesubdomains
     check $? "HSTS max-age=31536000; includeSubDomains on https://$HOST (R68)" "${hsts:-no header}"
-    curl -s -o /dev/null -m 10 --tls-max 1.1 "https://$HOST/" 2>/dev/null
-    [ $? != 0 ]; check $? "TLS 1.1 is refused (SSL policy MODERN)"
+    if [ "$INGRESS" = external ]; then
+      manual "external ingress: the TLS settings are those of your reverse proxy (TLS 1.2 or higher is recommended)"
+    else
+      curl -s -o /dev/null -m 10 --tls-max 1.1 "https://$HOST/" 2>/dev/null
+      [ $? != 0 ]; check $? "TLS 1.1 is refused (SSL policy MODERN)"
+    fi
     for p in /status /healthz /internal/approvals/x/y; do
       code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$HOST$p")
       [ "$code" = 404 ]; check $? "https://$HOST$p is not exposed (404)" "HTTP $code"
@@ -337,6 +354,18 @@ fi
 if section sso; then
   if k -n "$PLATFORM_NS" get secret authentik-sso >/dev/null 2>&1; then pass "company SSO source is configured (Secret authentik-sso)"
   else skip "company SSO not configured (no Secret authentik-sso in $PLATFORM_NS)"; fi
+  if [ -n "$AUTH_HOST" ]; then
+    # the issuer authentik publishes is built from Host and X-Forwarded-Proto: a wrong proxy gives http:// or another host
+    want="https://$AUTH_HOST/application/o/agentdev/"
+    iss=$(curl -s -m 10 "${want}.well-known/openid-configuration" | sed -n 's/.*"issuer"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ "$iss" = "$want" ]; check $? "authentik publishes the issuer $want ($INGRESS ingress: Host and X-Forwarded-Proto)" "issuer: ${iss:-none}"
+    if [ -n "$HOST" ]; then
+      auth=$(curl -s -m 10 "${want}.well-known/openid-configuration" | sed -n 's/.*"authorization_endpoint"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -G "$auth" --data-urlencode client_id=agentdev \
+        --data-urlencode response_type=code --data-urlencode scope=openid --data-urlencode "redirect_uri=https://$HOST/callback")
+      reached "$code"; check $? "authentik accepts the UI callback https://$HOST/callback" "HTTP $code"
+    fi
+  else skip "issuer check (no --auth-host)"; fi
   manual "SSO domain restriction: sign in with an account outside the Workspace domain (expect refused) and with an account outside the admin group (expect no agentdev-admins); use a private window, do not change real users"
 fi
 

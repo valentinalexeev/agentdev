@@ -7,6 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do
+  not change). With `external`, your own reverse proxy (for example a tailnet ingress) publishes the hosts: the
+  playbook makes no Gateway, HTTPRoute or managed certificate, and Terraform `public_hosts` can stay empty (no static
+  IP). `ingress.host`, `webhook_host` and `auth_host` still give the authentik issuer, the UI callback and webhooks,
+  so sign-in and approvals work. Opt-in `ingress.forwarder` (`namespace`, `pod_selector`, `cidrs`) adds
+  NetworkPolicies that let the forwarder reach `agentdev-ui:8080`, `webhook-router:8080` and `authentik-server`;
+  without it default-deny stays. `authentik_trusted_proxy_cidrs` is now a documented, validated instance value.
+  `scripts/e2e-gke-security.sh` has `--ingress external` and `--auth-host` (issuer and callback checks). Docs:
+  `docs/admin.md` "Use an external ingress" (headers `Host`, `X-Forwarded-Proto`, `X-Forwarded-For`).
 - Terraform: node boot disk variables `system_disk_size_gb`, `system_disk_type`, `agent_disk_size_gb`,
   `agent_disk_type` (#170). Size defaults to 100 GB (the GKE default); smaller disks (30 GB system, 50 GB agents) are
   enough, since nodes hold only images and ephemeral pod data. Changing one replaces that node pool; re-run the

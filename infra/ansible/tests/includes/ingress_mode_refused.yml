@@ -1,0 +1,16 @@
+---
+# One refused ingress setting for tests/ingress_external.yml (included per case, so each one is checked).
+- name: Refuse ingress {{ bad_ingress }}
+  block:
+    - name: Try it
+      ansible.builtin.include_tasks: ../../roles/ingress/tasks/checks.yml
+      vars:
+        ingress: "{{ bad_ingress }}"
+    - name: Not reached
+      ansible.builtin.fail:
+        msg: invalid ingress settings accepted
+  rescue:
+    - name: Refused as expected
+      ansible.builtin.assert:
+        that: ansible_failed_task.name in ['Check the ingress mode and hosts', 'Check the forwarder settings']
+        quiet: true

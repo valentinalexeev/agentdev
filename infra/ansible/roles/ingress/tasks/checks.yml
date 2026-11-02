@@ -1,0 +1,27 @@
+---
+# Checks of ingress.mode, the hosts and ingress.forwarder (#160). Also used by tests/ingress_external.yml.
+- name: Check the ingress mode and hosts
+  ansible.builtin.assert:
+    that:
+      - ingress_mode in ['gateway', 'external']
+      - ingress_host is match(ingress_dns_re)
+      - ingress_webhook_host is match(ingress_dns_re)
+      - ingress_auth_host | length == 0 or ingress_auth_host is match(ingress_dns_re)
+    fail_msg: >-
+      ingress.mode must be gateway or external, and ingress.host (also ingress.webhook_host and ingress.auth_host
+      when set) must be plain DNS names (example.vars.yml)
+    quiet: true
+
+- name: Check the forwarder settings
+  ansible.builtin.assert:
+    that:
+      - ingress_forwarder is mapping
+      - ingress_forwarder.keys() | difference(['namespace', 'pod_selector', 'cidrs']) | length == 0
+      - (ingress_forwarder.namespace | default('')) | length == 0 or ingress_forwarder.namespace is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+      - ingress_forwarder.pod_selector | default({}) is mapping
+      - (ingress_forwarder.pod_selector | default({})) | length == 0 or (ingress_forwarder.namespace | default('')) | length > 0
+      - ingress_forwarder.cidrs | default([]) is sequence and ingress_forwarder.cidrs | default([]) is not string
+      - (ingress_forwarder.cidrs | default([])) | map('string') | reject('match', ingress_cidr_re) | list | length == 0
+    fail_msg: >-
+      ingress.forwarder: keys namespace, pod_selector (needs namespace) and cidrs (a list of IPv4 CIDRs, a.b.c.d/n)
+    quiet: true

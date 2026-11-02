@@ -138,6 +138,15 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | sync | one run of `scripts/mcp-sync.sh` |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
 | web UI | the agentdev management user interface |
+| Gateway | the GKE Gateway (a Google Cloud load balancer) that the Ansible role `ingress` makes in `ingress.mode: gateway` |
+| reverse proxy | a server outside the cluster that receives HTTPS requests and sends them to a Service in the cluster |
+| external ingress | `ingress.mode: external`: a reverse proxy that you operate publishes the hosts, not the Gateway |
+| forwarder | the pods or the address range from which a reverse proxy sends requests into the cluster (`ingress.forwarder`) |
+| tailnet | a private Tailscale network |
+| NetworkPolicy | the Kubernetes object that controls which pods and addresses can connect to a pod |
+| CIDR range | a range of IP addresses in the form `a.b.c.d/n`, for example `100.64.0.0/10` |
+| issuer | the URL that identifies the OIDC provider (authentik) in a token |
+| header | a named value in an HTTP request or response, for example `Host` |
 | subscription | one Claude login (a Claude credential Secret). Agents that use the same Secret use the same subscription |
 | usage window | a period in which Claude counts the use of a subscription: 5 hours or 7 days |
 | usage limit | a percent of a usage window. When the use is more, agents start no new runs |
@@ -169,6 +178,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | edit | change the text of a forge comment after you wrote it |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
 | merge | add the changes of a pull request to the main branch |
+| publish | make a Service of the cluster available on a public or tailnet URL |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
 | register | record a webhook, an agent or an App in the system that uses it |

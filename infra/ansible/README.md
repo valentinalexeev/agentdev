@@ -85,6 +85,15 @@ that is with `api.oidc_issuer`), port 80 redirects. HSTS on every HTTPS response
 when the cluster does not serve the Gateway API (Terraform `gateway_api_config`). Render test:
 `tests/ingress_render.yml`. The `api` role now also applies `manifests/ui.yaml.tmpl` (`api.ui: false` skips it).
 
+`ingress.mode` (#160): `gateway` (default) as above, or `external` when your own reverse proxy (for example a tailnet
+ingress) publishes the hosts. With `external` the role makes no Gateway, HTTPRoute or certificate, and Terraform
+needs no `public_hosts` (no static IP). `ingress.host`, `webhook_host` and `auth_host` still give the authentik
+issuer, the UI callback and webhooks; `ingress.host` is required. `ingress.forwarder` (`namespace`, `pod_selector`
+in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-forwarder`,
+`webhook-router-from-forwarder` and `authentik-from-forwarder`; without it they are removed and default-deny stays.
+Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
+Test: `tests/ingress_external.yml`.
+
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
 ```bash

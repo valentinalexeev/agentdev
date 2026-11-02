@@ -34,6 +34,10 @@ scripts/e2e-gke-security.sh --context <gke context> --host <ui host> --webhook-h
   --github <owner>/<repo> --owner <your GitHub login>
 ```
 
+If your own reverse proxy publishes the instance (`ingress.mode: external`, #160), add `--ingress external`. Add
+`--auth-host <auth host>` to make sure that authentik publishes the correct issuer and accepts the UI callback.
+In external mode, the script does not examine the HTTP redirect and the TLS version. It shows them as `MANUAL`.
+
 The GitHub check (#2) takes up to 30 minutes for each step. To change this time, use `--github-timeout <minutes>`.
 To do only some sections, use `--only egress,claude`.
 
