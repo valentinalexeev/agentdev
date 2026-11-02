@@ -302,16 +302,26 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 ### Deploy the platform namespace
 
 1. Optional: in `config.env`, set `CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE` and `CF_ADMIN_EMAIL`.
-2. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres and ContextForge.
+2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
+   Separate the paths with spaces.
+3. Run run.sh step 08: `./run.sh 08`
+   The script deploys the namespace `agentdev-platform` with Postgres.
+   If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
+
+NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
+the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
 
 ### Deploy the platform namespace on GKE
 
-The playbook deploys Postgres and ContextForge in `agentdev-platform` on each run. It makes the passwords and keys
-on the first run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+The playbook deploys Postgres in `agentdev-platform` on each run. It deploys ContextForge only if `mcp_projects` is
+not empty. ContextForge requests 100m CPU and 512 MiB memory. The playbook makes the passwords and keys on the first
+run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+
+If `mcp_projects` is empty, the playbook removes ContextForge and the MCP token secrets of the agents. The ContextForge
+database stays in Postgres. To keep ContextForge without `mcp_projects`, set `platform_contextforge_enabled: true`.
 
 1. In the deployment repository, put the project specifications in a directory, for example `projects/`.
 2. In `ansible/instance.yml`, list the specifications:
