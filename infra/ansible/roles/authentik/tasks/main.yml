@@ -13,9 +13,10 @@
       - authentik_trusted_proxy_cidrs is sequence and authentik_trusted_proxy_cidrs is not string
       - authentik_trusted_proxy_cidrs | length > 0
       - authentik_trusted_proxy_cidrs | map('string') | reject('match', '^[0-9a-f.:]+/[0-9]{1,3}$') | list | length == 0
+      - authentik_trusted_proxy_allow_wide | bool or authentik_trusted_proxy_cidrs | map('string') | select('match', '^[0-9.]+/[0-7]$|^[0-9a-f:]+/([0-9]|1[0-5])$') | list | length == 0
     fail_msg: >-
       authentik.version (YYYY.M.P), authentik.admin_email, ingress.auth_host (a plain DNS name),
-      authentik_trusted_proxy_cidrs (a list of CIDRs): example.vars.yml
+      authentik_trusted_proxy_cidrs (a list of CIDRs, not wider than /8 unless authentik_trusted_proxy_allow_wide: true): example.vars.yml
     quiet: true
 
 - name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)

@@ -16,6 +16,9 @@ authentik_sm_keys: [pg-authentik, authentik-secret-key, authentik-admin]
 # Instance value (#160): with ingress.mode external, add the source range of your reverse proxy, for example a tailnet
 # 100.64.0.0/10. The proxy must set X-Forwarded-Proto, X-Forwarded-For and Host (docs/admin.md, External ingress).
 authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+# ranges shorter than /8 (IPv4) or /16 (IPv6), for example 0.0.0.0/0, are refused unless this is true (#198 review):
+# authentik would trust a forged X-Forwarded-For from any client
+authentik_trusted_proxy_allow_wide: false
 authentik_db_pod: platform-db-0
 # break-glass (docs/admin.md): akadmin is added to agentdev-admins once; add only, never removed by the playbook
 authentik_breakglass_admin_group: true

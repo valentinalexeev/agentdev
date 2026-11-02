@@ -111,6 +111,8 @@
         - {mode: external, host: agentdev.example.com, forwarder: {pod_selector: {app: x}}}   # selector without namespace
         - {mode: external, host: agentdev.example.com, forwarder: {namespace: "Bad_NS"}}
         - {mode: external, host: agentdev.example.com, forwarder: {name: x}}                  # unknown key
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: [0.0.0.0/0]}}        # every address, no opt-in
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: [10.0.0.0/7]}}       # wider than /8
       loop_control: {loop_var: bad_ingress}
 
     - name: Read the role tasks

@@ -1134,7 +1134,10 @@ router, the paths `/status`, `/register` and `/idle` become available outside th
 
 NOTE: Without `ingress.forwarder`, the playbook applies no forwarder NetworkPolicy, and the default-deny policy of
 the platform namespace stops the reverse proxy. A reverse proxy in the cluster that uses a namespace or a pod
-selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs`.
+selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs`. The playbook refuses a range that
+is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarder_allow_wide_cidrs: true`. The
+playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
+`authentik_trusted_proxy_allow_wide: true`.
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
