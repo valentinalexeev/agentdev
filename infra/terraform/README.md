@@ -8,8 +8,8 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 |---|---|
 | VPC, subnet, Cloud NAT | private nodes; egress narrowed later by #6 |
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
-| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI |
-| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes` |
+| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
+| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-standard`) |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
