@@ -6,6 +6,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
+  can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
+
 ### Changed
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to

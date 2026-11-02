@@ -17,6 +17,7 @@ resource "google_project_iam_member" "automation" {
     "roles/secretmanager.admin",
     "roles/iam.serviceAccountUser",
     "roles/iam.serviceAccountAdmin",
+    "roles/iam.workloadIdentityPoolViewer", # refresh of the GitHub Actions WIF pool/provider
     "roles/resourcemanager.projectIamAdmin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/monitoring.notificationChannelEditor",
