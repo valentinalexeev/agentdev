@@ -72,21 +72,22 @@ var (
 
 // ExecConfig holds the operator-wide executor settings (env on the operator, see main.go).
 type ExecConfig struct {
-	NS          string        // executors, runs and Jobs (EXEC_NS)
-	AgentsNS    string        // Approvals and SecurityEvents (AGENTS_NS), where the API watches them
-	HelperImage string        // the operator's own image: hash-plan and verify-plan (OPERATOR_IMAGE)
-	GitImage    string        // checkout: the forge sidecar image (git, sh)
-	PullPolicy  string        //
-	ForgeURL    string        // Gitea base URL (API and git)
-	GitHubAPI   string        // GitHub REST base (default https://api.github.com)
-	GitHubURL   string        // GitHub git base (default https://github.com)
-	Poll        time.Duration // EXECUTOR_POLL_SECONDS
-	Lookback    time.Duration // merged PRs older than this are never planned (and never before the Executor existed)
-	Retention   time.Duration // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
-	Storage     string        // plan volume size
-	ApplyStart  time.Duration // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
-	EgressProxy string        // executor egress proxy URL (#135, EXECUTOR_EGRESS_PROXY); empty: Jobs get no proxy env
-	EgressHosts []string      // hosts every executor may reach (EXECUTOR_EGRESS_HOSTS), plus spec.egressHosts
+	NS          string            // executors, runs and Jobs (EXEC_NS)
+	AgentsNS    string            // Approvals and SecurityEvents (AGENTS_NS), where the API watches them
+	HelperImage string            // the operator's own image: hash-plan and verify-plan (OPERATOR_IMAGE)
+	GitImage    string            // checkout: the forge sidecar image (git, sh)
+	PullPolicy  string            //
+	ForgeURL    string            // Gitea base URL (API and git)
+	GitHubAPI   string            // GitHub REST base (default https://api.github.com)
+	GitHubURL   string            // GitHub git base (default https://github.com)
+	Poll        time.Duration     // EXECUTOR_POLL_SECONDS
+	Lookback    time.Duration     // merged PRs older than this are never planned (and never before the Executor existed)
+	Retention   time.Duration     // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
+	Storage     string            // plan volume size
+	CostLabels  map[string]string // COST_LABELS (#184) on Jobs and their pods
+	ApplyStart  time.Duration     // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
+	EgressProxy string            // executor egress proxy URL (#135, EXECUTOR_EGRESS_PROXY); empty: Jobs get no proxy env
+	EgressHosts []string          // hosts every executor may reach (EXECUTOR_EGRESS_HOSTS), plus spec.egressHosts
 	// refusal events: one per run, host and window; at most EgressMaxEvents hosts per run and window, then one
 	// rate-limited event (SECURITY_RATE_BURST, default 20; window 10 minutes)
 	EgressMaxEvents int
@@ -908,7 +909,7 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	if r.Spec.Stage != "pr" {
 		planVol = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: planVolumeName(e, r.Spec.Commit), ReadOnly: apply}}
 	}
-	labels := map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}
+	labels := withCostLabels(map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}, p.C.CostLabels)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: r.Name, Namespace: p.C.NS, Labels: labels},
 		Spec: batchv1.JobSpec{

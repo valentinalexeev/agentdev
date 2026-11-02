@@ -7,6 +7,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Labels on all resources (#184): Terraform input `labels` (default `{}`), merged over `service = "agentdev"`, on
+  every resource through the module's provider `default_labels`, plus the cluster and node pool `resource_labels`
+  and the budget notification channels' `user_labels`; the bootstrap has the same input (project, state bucket).
+  Keys and values are checked against the GCP rules, `environment` must be `dev`, `stage` or `prod`. Ansible
+  `agentdev_labels` (same check) labels the `coding-agents`, `agentdev-platform` and `agentdev-executors`
+  namespaces, and the operator (`COST_LABELS`) labels agent StatefulSets and pods and executor Jobs and pods; kind
+  sets `COST_LABELS` in `config.env`. The next plan of an existing instance shows in-place label updates only. The
+  deployment template sets `environment = "prod"` (commented pass-through until its `ref=` contains #184).
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The

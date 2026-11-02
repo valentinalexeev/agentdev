@@ -29,6 +29,9 @@ module "agentdev" {
 
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
+
+  # labels on all resources (agentdev #184): uncomment with a ref= that contains #184
+  # labels = var.labels
 }
 
 variable "project_id" { type = string }
@@ -75,6 +78,11 @@ variable "create_artifact_registry" {
   description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
   type        = bool
   default     = true
+}
+variable "labels" {
+  description = "Labels on all resources (agentdev #184); service = \"agentdev\" is added. environment: dev, stage or prod."
+  type        = map(string)
+  default     = { environment = "prod" }
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

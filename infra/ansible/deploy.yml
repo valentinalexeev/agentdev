@@ -32,6 +32,18 @@
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
+    # Labels (#184): GCP and Kubernetes rules, the same as Terraform's labels validation. They reach a manifest
+    # value (COST_LABELS), so check them before any task uses them.
+    - name: Labels are valid (lower-case keys and values, environment dev/stage/prod)
+      ansible.builtin.assert:
+        that:
+          - agentdev_effective_labels is mapping
+          - agentdev_effective_labels.keys() | select('match', '^[a-z][a-z0-9_-]{0,62}$') | list | length == agentdev_effective_labels | length
+          - agentdev_effective_labels.values() | map('string') | select('match', '^[a-z0-9_-]{0,63}$') | list | length == agentdev_effective_labels | length
+          - agentdev_effective_labels.environment | default('prod') in ['dev', 'stage', 'prod']
+        fail_msg: "agentdev_labels: keys ^[a-z][a-z0-9_-]{0,62}$, values ^[a-z0-9_-]{0,63}$, environment dev, stage or prod."
+        quiet: true
+
     # Executor names and environments become parts of shell commands and object names below: check them before any
     # task uses them, with the same rules as the operator's validExecutor and the CRD (#69, review of #116).
     - name: Executors are valid (names, environments, image by digest, one executor per environment)
@@ -93,7 +105,7 @@
     - name: Namespace
       kubernetes.core.k8s:
         <<: *k8s
-        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}"}}
+        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ agentdev_effective_labels }}"}}
 
     - name: RuntimeClass gvisor (GKE Sandbox ships it as gvisor already; ensure it exists)
       kubernetes.core.k8s:
@@ -279,7 +291,7 @@
     - name: Platform namespace
       kubernetes.core.k8s:
         <<: *k8s
-        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}"}}
+        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}", labels: "{{ agentdev_effective_labels }}"}}
 
     - name: Postgres + ContextForge, then mcp-sync per project (#51)
       ansible.builtin.include_role: {name: platform}
@@ -316,6 +328,7 @@
           values:
             PLATFORM_NS: "{{ platform_ns }}"
             AGENTS_NS: "{{ agents_ns }}"
+            COST_LABELS: "{{ agentdev_effective_labels.items() | map('join', '=') | join(',') }}"
             OPERATOR_IMAGE: "{{ operator_image }}"
             WORKER_IMAGE: "{{ worker_image }}"
             FORGE_IMAGE: "{{ forge_image }}"
@@ -347,6 +360,11 @@
 
     # Executor egress (#135): default deny for executor Jobs plus the executor proxy (same template as 12-operator.sh).
     # The operator writes each Executor's credential and hosts into Secret executor-egress-proxy.
+    - name: Executors namespace labels (#184); the operator manifest creates the namespace
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ exec_ns }}", labels: "{{ agentdev_effective_labels }}"}}
+
     - name: Executor egress allow-list (#135) - proxy and executor NetworkPolicy
       kubernetes.core.k8s:
         <<: *k8s

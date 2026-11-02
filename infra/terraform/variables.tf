@@ -48,6 +48,20 @@ variable "agent_pool_spot" {
   default     = true
 }
 
+variable "labels" {
+  description = "Labels on every resource (#184), merged over service = \"agentdev\". Set environment to dev, stage or prod. GCP rules: lower-case keys and values."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z][a-z0-9_-]{0,62}$", k)) && can(regex("^[a-z0-9_-]{0,63}$", v))])
+    error_message = "labels: keys must match ^[a-z][a-z0-9_-]{0,62}$ and values ^[a-z0-9_-]{0,63}$ (GCP label rules, lower case)."
+  }
+  validation {
+    condition     = !contains(keys(var.labels), "environment") || contains(["dev", "stage", "prod"], lookup(var.labels, "environment", ""))
+    error_message = "labels.environment must be dev, stage or prod."
+  }
+}
+
 variable "budget_amount_usd" {
   description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."
   type        = number

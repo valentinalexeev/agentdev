@@ -78,6 +78,7 @@ func main() {
 		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
 		EgressProxy:     os.Getenv("EGRESS_PROXY"),
 		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
+		CostLabels:      parseCostLabels(os.Getenv("COST_LABELS")),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
@@ -118,7 +119,7 @@ func main() {
 			os.Exit(1)
 		}
 		ex := &ExecutorPoller{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), Logs: kubePodLogs(cs), Now: time.Now,
-			C: ExecConfig{NS: execNS, AgentsNS: ns, HelperImage: env("OPERATOR_IMAGE", "ghcr.io/valentinalexeev/agentdev-operator:latest"),
+			C: ExecConfig{NS: execNS, AgentsNS: ns, CostLabels: parseCostLabels(os.Getenv("COST_LABELS")), HelperImage: env("OPERATOR_IMAGE", "ghcr.io/valentinalexeev/agentdev-operator:latest"),
 				GitImage: env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"), PullPolicy: env("IMAGE_PULL_POLICY", "IfNotPresent"),
 				ForgeURL: os.Getenv("FORGE_URL"), GitHubAPI: os.Getenv("GITHUB_API_URL"), GitHubURL: os.Getenv("GITHUB_URL"),
 				Poll:       time.Duration(envInt("EXECUTOR_POLL_SECONDS", 60)) * time.Second,

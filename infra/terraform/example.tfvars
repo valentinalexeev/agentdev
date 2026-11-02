@@ -13,3 +13,4 @@ github_repository  = "my-org/my-agentdev-deploy" # the deployment repo, not this
 # agent_pool_spot      = true
 # public_hosts         = ["agentdev.example.com"]   # public HTTPS entry point (#120); DNS A record -> webhook_ip
 # cloud_armor          = false
+# labels               = { environment = "prod" }   # #184: service = "agentdev" is added; dev, stage or prod

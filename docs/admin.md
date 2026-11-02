@@ -115,6 +115,7 @@ Agents read the forge at this interval when webhooks do not operate.
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
+| Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 
 ## Claude proxy and token budget
 
@@ -186,6 +187,28 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
+
+## Labels
+
+agentdev labels its cloud resources and Kubernetes objects with `service` and `environment`, so the billing export
+and GKE cost allocation split costs per instance, and the Infracost tagging policy passes. GCP labels are lower case.
+
+### Set the labels of an instance
+
+1. In Terraform (`instance.tfvars` of the deployment repository): `labels = { environment = "prod" }`. Use `dev`,
+   `stage` or `prod`. `service = "agentdev"` is added by the module; set it in `labels` to override it.
+2. In Ansible (`instance.yml`): `agentdev_labels: {environment: prod}`, the same values as Terraform.
+3. For the bootstrap (`bootstrap.tfvars`): the same `labels`.
+4. Run `terraform plan`. Expect in-place updates only, then apply and run the playbook.
+
+| Where | Labels |
+|---|---|
+| Terraform module | every resource with a `labels` field (provider `default_labels`), the cluster (`resource_labels`, also on the node VMs and disks), both node pools, the budget notification channels (`user_labels`) |
+| Bootstrap | the project and the state bucket |
+| Kubernetes | the namespaces `coding-agents`, `agentdev-platform` and `agentdev-executors`; agent StatefulSets and pods; executor Jobs and pods (operator `COST_LABELS`) |
+
+NOTE: The `labels` field of a notification channel is its configuration (`email_address`), not resource labels. A tag
+scanner that reads it reports a false positive.
 
 ## Agent dashboard (botboard)
 
