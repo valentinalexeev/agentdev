@@ -44,6 +44,10 @@ wake_poll_seconds: 300              # the router checks the forge for work of st
 # zero and wake_poll_seconds 0 the playbook refuses to run without them (agents would stop and never start again).
 webhooks_enabled: "{{ ((ingress | default({})).webhook_host | default((ingress | default({})).host | default(''))) | length > 0 }}"
 sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-only token of the wake poll (optional)
+# agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
+# "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
+agent_storage_class: agentdev-agent
+agent_state_storage: 10Gi
 idle_seconds: 900                   # cluster-wide (the operator's); per-agent idle time is not in the Agent spec yet
 botboard_url: ""                    # agents report work to botboard (#26), e.g. http://botboard.<tailnet>; empty = off
 

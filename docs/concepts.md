@@ -97,7 +97,8 @@ with nobody attached, or after 8 hours at most.
 ## Sandboxing
 
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account
-token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so restarts do not redo work.
+token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume (one PVC per agent; `~/.claude` is a
+directory of it, #173), so restarts do not redo work.
 
 **Security model.** An agent is an autonomous developer: it has to build and test the code it writes, and a test
 runner can start any program. So the security boundary is the pod, not the list of tools Claude may use:

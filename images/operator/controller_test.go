@@ -81,7 +81,7 @@ func TestCreatesChildrenFromSpec(t *testing.T) {
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "alice" {
 		t.Errorf("owner reference missing: %v", s.OwnerReferences)
 	}
-	if *s.Spec.Template.Spec.RuntimeClassName != "gvisor" || len(s.Spec.VolumeClaimTemplates) != 2 {
+	if *s.Spec.Template.Spec.RuntimeClassName != "gvisor" || len(s.Spec.VolumeClaimTemplates) != 1 {
 		t.Errorf("sandbox/volumes not rendered")
 	}
 	var svc corev1.Service
@@ -285,6 +285,9 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 	mounts := func(c *corev1.Container) map[string]string {
 		m := map[string]string{}
 		for _, v := range c.VolumeMounts {
+			if v.SubPath != "" { // ~/.claude is a directory of the state volume (#173)
+				continue
+			}
 			m[v.Name] = v.MountPath
 		}
 		return m
