@@ -251,7 +251,7 @@ NOTE: The pause stops at the reset time of the usage window. The agents then con
 | Condition | Result |
 |---|---|
 | You assign two issues at the same time | The agent works on the two issues at the same time (up to the limit of the agent), in two pull requests. |
-| The agent has zero pods (scale to zero) | An assignment or a comment starts the agent, usually in some seconds. |
+| The agent has zero pods (scale to zero, the default) | An assignment or a comment starts the agent. With webhooks, the agent starts in 1 to 2 minutes. Without webhooks, the router finds the work in at most 5 minutes (`wake_poll_seconds`), and then the agent starts. |
 | You write a comment while the agent makes a correction | The agent reads the comment in the next pass. No comment is lost. |
 | Webhooks do not operate | Agents continue to read the forge at intervals, but more slowly. |
 

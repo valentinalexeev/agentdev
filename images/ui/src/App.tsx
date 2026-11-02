@@ -385,7 +385,7 @@ function EditForm({ agent, busy, onSave, onCancel }: {
   agent: Agent; busy: boolean; onSave: (p: { maxConcurrent: number; scaleToZero: boolean }) => void; onCancel: () => void
 }) {
   const [max, setMax] = useState(String(agent.maxConcurrent ?? 2))
-  const [stz, setStz] = useState(agent.scaleToZero ?? false)
+  const [stz, setStz] = useState(agent.scaleToZero ?? true)
   const err = maxConcurrentError(Number(max))
   return (
     <form className="inline" onSubmit={(e) => { e.preventDefault(); if (!err) onSave({ maxConcurrent: Number(max), scaleToZero: stz }) }}>
@@ -403,7 +403,7 @@ function EditForm({ agent, busy, onSave, onCancel }: {
 }
 
 function CreateForm({ busy, onCreate, onCancel }: { busy: boolean; onCreate: (a: NewAgent) => void; onCancel: () => void }) {
-  const [a, setA] = useState<NewAgent>({ name: '', repo: '', forge: 'gitea', maxConcurrent: 2, scaleToZero: false })
+  const [a, setA] = useState<NewAgent>({ name: '', repo: '', forge: 'gitea', maxConcurrent: 2, scaleToZero: true })
   const [touched, setTouched] = useState(false)
   const errors = [nameError(a.name), repoError(a.repo), maxConcurrentError(a.maxConcurrent)].filter(Boolean)
   return (

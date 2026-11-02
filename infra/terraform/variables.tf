@@ -61,6 +61,11 @@ variable "labels" {
     error_message = "labels.environment must be dev, stage or prod."
   }
 }
+variable "system_pool_spot" {
+  description = "Use Spot VMs for the system pool (about 60-70% cheaper). When Google reclaims the node, router, operator and proxies are down for about a minute; polling (poll_seconds) picks up missed webhooks. Changing it replaces the pool."
+  type        = bool
+  default     = false
+}
 
 variable "budget_amount_usd" {
   description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."

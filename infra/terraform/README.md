@@ -8,7 +8,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 |---|---|
 | VPC, subnet, Cloud NAT | private nodes; egress narrowed later by #6 |
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
-| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand: router, operator, UI |
+| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI |
 | `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes` |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
@@ -58,6 +58,12 @@ Another region: change `region`/`zone` in the deployment's `instance.tfvars`.
   `gcloud config set auth/impersonate_service_account <automation SA>`.
 
 ## Cost (rough guide)
+
+Spot system pool (#171): `system_pool_spot = true` cuts the system pool cost by about 60-70% (about 15 EUR a month
+on `e2-medium`). When Google reclaims the node (at most 30 s notice), the router, operator, UI and proxies are down
+until the pool has a new node and the pods are rescheduled, usually about a minute; longer if the zone has no Spot
+capacity. Webhooks sent in that gap are lost; agents still pick up their issues at the next poll (`poll_seconds`).
+Agents keep their state on PVCs. Switching the variable replaces the node pool.
 
 GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
 

@@ -319,7 +319,7 @@ func (w *writer) patch(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, http.StatusOK, fromAgentObject(*out))
 }
 
-// POST /api/agents: {name, repo, forge?, maxConcurrent?, scaleToZero?, claudeSecret?}. The Secrets agent-<name> and
+// POST /api/agents: {name, repo, forge?, maxConcurrent?, scaleToZero? (default true, #181), claudeSecret?}. The Secrets agent-<name> and
 // the Claude Secret must exist already; the API does not read Secrets (no RBAC on them).
 func (w *writer) create(rw http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(ctxIdentity{}).(*identity)
@@ -336,7 +336,7 @@ func (w *writer) create(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Agent = name
-	st := agentState{Forge: "gitea", MaxConcurrent: 2, ClaudeSecret: "claude-shared"}
+	st := agentState{Forge: "gitea", MaxConcurrent: 2, ClaudeSecret: "claude-shared", ScaleToZero: true} // #181: scale to zero by default
 	for k := range m {
 		switch k {
 		case "name":

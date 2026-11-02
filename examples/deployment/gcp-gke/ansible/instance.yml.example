@@ -5,6 +5,11 @@ image_tag: "0.1.0"                # same release as terraform/main.tf ref=v0.1.0
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+  # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
+# Scale to zero is on by default (#181): an idle agent stops after idle_seconds, and the router starts it on a webhook
+# or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
+# scale_to_zero: false
+# wake_poll_seconds: 300
 agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels; service: agentdev is added
 # project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
 mcp_projects: []

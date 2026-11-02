@@ -32,6 +32,8 @@ module "agentdev" {
 
   # labels on all resources (agentdev #184): uncomment with a ref= that contains #184
   # labels = var.labels
+  # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
+  # system_pool_spot = var.system_pool_spot
 }
 
 variable "project_id" { type = string }
@@ -83,6 +85,11 @@ variable "labels" {
   description = "Labels on all resources (agentdev #184); service = \"agentdev\" is added. environment: dev, stage or prod."
   type        = map(string)
   default     = { environment = "prod" }
+}
+variable "system_pool_spot" {
+  description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
+  type        = bool
+  default     = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's
