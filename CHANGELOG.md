@@ -54,9 +54,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Changed
 - Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
-  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
-  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
-  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
+  on PR #191), about 6 EUR a month less per node. **BREAKING:** on existing clusters the boot disk type change recreates
+  both node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-apply the Terraform module `infra/terraform`, then re-run
+  the Ansible playbook `infra/ansible/deploy.yml` (all roles). To keep the current pools, set `system_disk_type` and
   `agent_disk_type` to `pd-balanced`.
 - Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
   no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
