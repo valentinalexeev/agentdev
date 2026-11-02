@@ -39,6 +39,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Operator: one volume per agent instead of two (#173). The `state` PVC now also holds the Claude state
+  (`/home/node/.claude` is its `claude` subPath); the separate `claude` PVC is gone. The PVC uses the agent StorageClass
+  and size: operator env `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` (default `10Gi`), Ansible
+  `agent_storage_class` (default `agentdev-agent`, a `pd-standard` class that `deploy.yml` creates) and
+  `agent_state_storage`, `config.env` on kind (empty class: the cluster default). On GKE this halves the disks per
+  agent and uses the cheapest disk type. Upgrading from 1.0.0-rc: the operator sees an agent StatefulSet in the old
+  layout, deletes it and its old PVCs, and makes it again. Agents lose their local Claude sessions and clones; open
+  branches and PRs stay on the forge. Upgrade while the agents are idle.
 - Terraform bootstrap: the state bucket aborts incomplete multipart uploads after one day (#185).
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to
