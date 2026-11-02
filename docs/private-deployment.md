@@ -69,6 +69,12 @@ CAUTION: The bootstrap makes a project and links billing. The owner of the billi
 2. Go to `terraform/` in the deployment repository.
 3. Run `terraform init -backend-config="bucket=<project_id>-tfstate"`
 4. Run `terraform plan -var-file=instance.tfvars -out plan.bin`
+
+   NOTE: If the billing account is not in USD, set `budget_currency` (for example `"EUR"`) in `instance.tfvars`.
+   Otherwise the budget fails with `400 Request contains an invalid argument` and no detail, after all other
+   resources are made. With user credentials (ADC), the budget can also fail with a 403
+   `billingbudgets.googleapis.com requires a quota project`. Then set a quota project before plan and apply:
+   `export GOOGLE_CLOUD_QUOTA_PROJECT=<project_id> GOOGLE_USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT=<project_id>`
 5. Examine the plan. For the costs, refer to `infra/terraform/README.md`.
 6. Run `terraform apply plan.bin` (the owner does this step the first time).
 7. Show the values: `terraform output ingress`, `terraform output webhook_ip` and

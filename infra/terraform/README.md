@@ -15,7 +15,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | Static IP | public entry point: GKE Gateway of the Ansible role `ingress` (#120) |
 | Managed certificate, SSL policy | only with `public_hosts`: Google-managed certificate for those names, TLS 1.2+ `MODERN` (#120) |
 | Cloud Armor (optional) | `cloud_armor = true`: deny bodies over `public_max_request_bytes`, `cloud_armor_requests_per_minute` per IP |
-| Billing budget | $150/month, alerts at 50/90/100% (alerts only; it does not stop spending) |
+| Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending) |
 | Automation SA | `agentdev-automation`, least-privilege roles; GitHub Actions on `main` reach it through Workload Identity Federation (no key) |
 
 ## First run (owner, once)

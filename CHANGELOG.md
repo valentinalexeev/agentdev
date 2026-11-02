@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
+  its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
+  in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
+
 ### Changed
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to
