@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
+  waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not
+  sync the mirror (GitHub forge, rc.1) and no agent job started. The forge sidecar's git and the executor checkout now
+  pass `-c http.proxyAuthMethod=basic`. The Squid ACLs are unchanged. Git errors from the sidecar now also redact the
+  proxy credential from `HTTPS_PROXY`.
+
 ### Removed
 - Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
   (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under
