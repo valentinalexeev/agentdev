@@ -506,6 +506,11 @@
       no_log: true
       when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
 
+    - name: Scale to zero on Gitea has a wake poll token or webhooks (#190)
+      ansible.builtin.include_tasks: tasks/wake_source.yml
+      vars: {wake_poll_token: "{{ router_poll_token.stdout | default('') }}"}
+      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
+
     - name: Wake poll credential (Secret webhook-router-poll, router pod only)
       kubernetes.core.k8s:
         <<: *k8s

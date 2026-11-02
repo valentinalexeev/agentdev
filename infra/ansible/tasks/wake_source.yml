@@ -10,3 +10,16 @@
       scale_to_zero needs webhooks or wake_poll_seconds: set wake_poll_seconds above 0 (default 300), set up
       webhooks (ingress.webhook_host), or turn scale to zero off (scale_to_zero: false, or agents[].scale_to_zero: false).
     quiet: true
+# Gitea (#190 review): the wake poll needs the read-only token router-poll-forge-token. deploy.yml passes what it read
+# as wake_poll_token; without it and without webhooks the poll runs with no credential and stopped agents never wake.
+- name: Scale to zero on Gitea without webhooks has a wake poll token
+  ansible.builtin.assert:
+    that: >-
+      (webhooks_enabled | bool) or (wake_poll_token | length > 0)
+      or (agents | map(attribute='scale_to_zero', default=scale_to_zero) | map('bool') | select | list | length == 0)
+    fail_msg: >-
+      scale_to_zero on Gitea without webhooks needs the wake poll token: fill the Secret Manager entry
+      {{ sm_router_poll_token }} with a read-only Gitea token, set up webhooks (ingress.webhook_host), or turn
+      scale to zero off (scale_to_zero: false, or agents[].scale_to_zero: false).
+    quiet: true
+  when: wake_poll_token is defined and forge_kind == 'gitea' and (wake_poll_seconds | int) > 0

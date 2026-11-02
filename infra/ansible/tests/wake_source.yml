@@ -54,6 +54,24 @@
           ansible.builtin.assert:
             that: "'scale_to_zero needs webhooks or wake_poll_seconds' in ansible_failed_result.msg"
 
+    - name: Gitea accepted with a poll token, or with webhooks and no token
+      ansible.builtin.include_tasks: ../tasks/wake_source.yml
+      vars: {forge_kind: gitea, wake_poll_token: "{{ item.token }}", ingress: "{{ item.ingress }}"}
+      loop: [{token: ro-token, ingress: {}}, {token: "", ingress: {host: agentdev.example.com}}]
+
+    - name: Gitea refused with scale to zero, no webhooks and an empty poll token (#190)
+      block:
+        - name: Try it
+          ansible.builtin.include_tasks: ../tasks/wake_source.yml
+          vars: {forge_kind: gitea, wake_poll_token: ""}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: gitea scale to zero without a poll token accepted
+      rescue:
+        - name: Refused as expected, naming the secret
+          ansible.builtin.assert:
+            that: "'needs the wake poll token' in ansible_failed_result.msg and 'router-poll-forge-token' in ansible_failed_result.msg"
+
     - name: The router template and the playbook set the wake poll values (kind/GKE parity)
       ansible.builtin.assert:
         that:
