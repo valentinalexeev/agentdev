@@ -7,10 +7,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
-<<<<<<< HEAD
 - Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
   can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
-=======
 - DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
   so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
   Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
