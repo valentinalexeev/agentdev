@@ -143,6 +143,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Approvals on GKE (#67): `deploy.yml` now accepts `approvals.enabled: true` when `api.oidc_issuer` is set (so
   agentdev-api is deployed); before, the assert refused approvals on GKE. Docs: `docs/admin.md`, "Turn on approvals".
 
+### Fixed
+- Operator crash loop with `EXEC_NS` set (#161): the cache listed and watched Agents, Services and StatefulSets in
+  `EXEC_NS` too, where its Role does not allow it, so the caches never synced. The cache is now scoped per kind
+  (agent kinds in the agents namespace, Executor, ExecutorRun, Job and PVC in `EXEC_NS`, Pods in both); RBAC is
+  unchanged. `/readyz` now waits for the cache sync, so `rollout status` (kind `./run.sh 12` and `deploy.yml` alike)
+  fails on a missing permission instead of passing before the crash. A unit test checks the cache against the Roles
+  in `manifests/operator.yaml.tmpl`.
+
 ### Changed
 - Approvals are on by default on GKE (#67): `approvals.enabled` defaults to `true`. **BREAKING** for a GKE instance
   without `api.oidc_issuer`: `deploy.yml` now stops; set `api.oidc_issuer`, or `approvals.enabled: false`. kind keeps
