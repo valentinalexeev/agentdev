@@ -7,8 +7,17 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
+<<<<<<< HEAD
 - Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
   can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
+=======
+- DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
+  so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
+  Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
+  `executor-egress`, `executor-egress-proxy-dns`) now also allows port 53 to the `node-local-dns` pods in
+  `kube-system` and to `169.254.20.10/32`. Port 53 only, so no other egress opens; on kind the rule is unused.
+  `TestDNSPoliciesAllowNodeLocalDNS` fails for any policy with a kube-dns rule and no node-local rule;
+  `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
@@ -137,6 +146,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Docs: `docs/admin.md` "Public HTTPS entry point (GKE)", kind parity with port-forward. New risks R66 to R68.
 - Approvals on GKE (#67): `deploy.yml` now accepts `approvals.enabled: true` when `api.oidc_issuer` is set (so
   agentdev-api is deployed); before, the assert refused approvals on GKE. Docs: `docs/admin.md`, "Turn on approvals".
+
+### Fixed
+- Operator crash loop with `EXEC_NS` set (#161): the cache listed and watched Agents, Services and StatefulSets in
+  `EXEC_NS` too, where its Role does not allow it, so the caches never synced. The cache is now scoped per kind
+  (agent kinds in the agents namespace, Executor, ExecutorRun, Job and PVC in `EXEC_NS`, Pods in both); RBAC is
+  unchanged. `/readyz` now waits for the cache sync, so `rollout status` (kind `./run.sh 12` and `deploy.yml` alike)
+  fails on a missing permission instead of passing before the crash. A unit test checks the cache against the Roles
+  in `manifests/operator.yaml.tmpl`.
 
 ### Changed
 - Approvals are on by default on GKE (#67): `approvals.enabled` defaults to `true`. **BREAKING** for a GKE instance

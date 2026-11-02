@@ -213,6 +213,20 @@ membership of `agentdev-admins` by a script.
    The agent pushes a follow-up commit.
 9. Do the end-to-end security checks of [e2e-security.md](e2e-security.md) (#123) on the instance.
 
+### Troubleshooting: the forge sidecar flaps, "github unreachable"
+
+Symptom: `agent-<name>-0` switches between `Running` and `CrashLoopBackOff`. The forge sidecar log shows
+`github unreachable`, the agent container exits with `the forge sidecar gave no valid identity`. In an agent pod,
+every name fails: `curl: (5) Could not resolve proxy: egress-proxy.coding-agents.svc.cluster.local`.
+
+Cause: the cluster has NodeLocal DNSCache (GKE `addonsConfig.dnsCacheConfig.enabled`, a `node-local-dns`
+DaemonSet in `kube-system`). It answers DNS on the node, so a policy that allows DNS only to the `kube-dns` pods
+blocks every lookup. Releases before 1.0.0-rc.2 had this gap (#163).
+
+Fix: upgrade agentdev. Every agentdev egress policy allows DNS (port 53 only) to `kube-dns`, to the `node-local-dns`
+pods and to `169.254.20.10/32`. Check: `kubectl -n coding-agents get networkpolicy agent-egress -o yaml | grep node-local-dns`.
+`scripts/e2e-gke-security.sh --only egress` also checks that an agent pod resolves the egress proxy name.
+
 ## Make a backup
 
 The state of the instance is in four places. Make a backup of each.
