@@ -242,11 +242,16 @@ and GKE cost allocation split costs per instance, and the Infracost tagging poli
 
 ### Set the labels of an instance
 
-1. In Terraform (`instance.tfvars` of the deployment repository): `labels = { environment = "prod" }`. Use `dev`,
-   `stage` or `prod`. `service = "agentdev"` is added by the module; set it in `labels` to override it.
-2. In Ansible (`instance.yml`): `agentdev_labels: {environment: prod}`, the same values as Terraform.
-3. For the bootstrap (`bootstrap.tfvars`): the same `labels`.
-4. Run `terraform plan`. Expect in-place updates only, then apply and run the playbook.
+1. In `terraform/instance.tfvars` of the deployment repository, set `labels = { environment = "prod" }`.
+   Use `dev`, `stage` or `prod`. The module adds `service = "agentdev"`.
+2. In `ansible/instance.yml`, set `agentdev_labels: {environment: prod}`. Use the same values as in Terraform.
+3. In `bootstrap.tfvars`, set the same `labels`.
+4. Run `terraform plan`.
+   Make sure that the plan shows only in-place updates.
+5. Run `terraform apply`.
+6. Run the Ansible playbook.
+
+NOTE: To change the `service` label, set `service` in `labels`.
 
 | Where | Labels |
 |---|---|
