@@ -261,6 +261,7 @@ NOTE: To change the `service` label, set `service` in `labels`.
 
 NOTE: The `labels` field of a notification channel is its configuration (`email_address`), not resource labels. A tag
 scanner that reads it reports a false positive.
+
 ## Spot system pool (GKE)
 
 The system pool runs the router, the operator, the UI and the proxies. On GKE it can run on Spot VMs to cut its cost
