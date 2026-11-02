@@ -6,10 +6,23 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
+  the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
+  the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
+  `image_registry` output is `null` then. Switching an existing deployment to `false` destroys the (unused) repo;
+  the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
+  (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
+
 ### Fixed
 - Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
   its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
   in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
+- Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
+  waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not
+  sync the mirror (GitHub forge, rc.1) and no agent job started. The forge sidecar's git and the executor checkout now
+  pass `-c http.proxyAuthMethod=basic`. The Squid ACLs are unchanged. Git errors from the sidecar now also redact the
+  proxy credential from `HTTPS_PROXY`.
 - DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
   so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
   Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
