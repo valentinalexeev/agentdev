@@ -7,11 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
-<<<<<<< HEAD
 - Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
   its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
   in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
-=======
 - DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
   so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
   Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
