@@ -49,9 +49,19 @@ variable "agent_pool_spot" {
 }
 
 variable "budget_amount_usd" {
-  description = "Monthly billing budget; alerts at 50/90/100%. The budget alerts, it does not stop spending."
+  description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."
   type        = number
   default     = 150
+}
+
+variable "budget_currency" {
+  description = "ISO 4217 currency of the budget. Must equal the billing account currency, else the Budgets API answers 400 with no detail."
+  type        = string
+  default     = "USD"
+  validation {
+    condition     = can(regex("^[A-Z]{3}$", var.budget_currency))
+    error_message = "budget_currency must be a 3-letter ISO 4217 code such as USD or EUR."
+  }
 }
 
 variable "billing_account_id" {

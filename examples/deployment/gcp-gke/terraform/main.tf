@@ -19,6 +19,7 @@ module "agentdev" {
   github_repository  = var.github_repository
 
   budget_amount_usd    = var.budget_amount_usd
+  budget_currency      = var.budget_currency
   budget_alert_emails  = var.budget_alert_emails
   agent_pool_max_nodes = var.agent_pool_max_nodes
 
@@ -41,6 +42,11 @@ variable "github_repository" {
 variable "budget_amount_usd" {
   type    = number
   default = 150
+}
+variable "budget_currency" {
+  description = "Currency of the billing account (USD, EUR, ...); budget_amount_usd is in this currency."
+  type        = string
+  default     = "USD"
 }
 variable "budget_alert_emails" {
   type    = list(string)

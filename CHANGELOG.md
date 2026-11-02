@@ -15,6 +15,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
 ### Fixed
+- Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
+  its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
+  in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
 - Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
   can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
 - Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
