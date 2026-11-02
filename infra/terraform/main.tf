@@ -110,6 +110,8 @@ resource "google_container_cluster" "this" {
   subnetwork          = google_compute_subnetwork.nodes.id
   deletion_protection = true
 
+  resource_labels = local.labels # #184: also on the node VMs and their boot disks
+
   # Node pools are managed separately below.
   remove_default_node_pool = true
   initial_node_count       = 1
@@ -149,6 +151,7 @@ resource "google_container_node_pool" "system" {
   }
   node_config {
     machine_type    = var.system_machine_type
+    resource_labels = local.labels         # #184
     spot            = var.system_pool_spot # #171, default false: on-demand
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -175,6 +178,7 @@ resource "google_container_node_pool" "agents" {
   }
   node_config {
     machine_type    = var.agent_machine_type
+    resource_labels = local.labels # #184
     spot            = var.agent_pool_spot
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
@@ -256,5 +260,6 @@ resource "google_monitoring_notification_channel" "budget" {
   for_each     = toset(var.budget_alert_emails)
   display_name = "budget ${each.value}"
   type         = "email"
-  labels       = { email_address = each.value }
+  labels       = { email_address = each.value } # channel configuration, not resource labels
+  user_labels  = local.labels                   # #184
 }

@@ -36,7 +36,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if maxc == 0 {
 		maxc = 2
 	}
-	labels := map[string]string{"app": "coding-agent", "agent": n}
+	labels := withCostLabels(map[string]string{"app": "coding-agent", "agent": n}, r.D.CostLabels)
 
 	if s.Labels == nil {
 		s.Labels = map[string]string{}

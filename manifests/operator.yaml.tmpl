@@ -87,6 +87,7 @@ spec:
         image: ${OPERATOR_IMAGE}
         env:   # cluster-wide agent defaults, as 06-agents.sh takes them from config.env
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: COST_LABELS, value: "${COST_LABELS}"}   # #184: service/environment on agent and executor pods
         - {name: WORKER_IMAGE, value: "${WORKER_IMAGE}"}
         - {name: FORGE_IMAGE, value: "${FORGE_IMAGE}"}
         - {name: IMAGE_PULL_POLICY, value: "${IMAGE_PULL_POLICY}"}

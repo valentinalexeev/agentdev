@@ -30,6 +30,8 @@ module "agentdev" {
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
 
+  # labels on all resources (agentdev #184): uncomment with a ref= that contains #184
+  # labels = var.labels
   # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
   # system_pool_spot = var.system_pool_spot
 }
@@ -78,6 +80,11 @@ variable "create_artifact_registry" {
   description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
   type        = bool
   default     = true
+}
+variable "labels" {
+  description = "Labels on all resources (agentdev #184); service = \"agentdev\" is added. environment: dev, stage or prod."
+  type        = map(string)
+  default     = { environment = "prod" }
 }
 variable "system_pool_spot" {
   description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."

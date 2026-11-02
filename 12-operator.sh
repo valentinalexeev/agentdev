@@ -9,6 +9,9 @@ source "$(dirname "$0")/lib.sh"
 need envsubst
 k create namespace "${PLATFORM_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
+# labels (#184), as the GKE playbook sets them: COST_LABELS="k=v,k=v" from config.env
+label_ns() { [[ -z "${COST_LABELS}" ]] || k label --overwrite namespace "$@" ${COST_LABELS//,/ } >/dev/null; }
+label_ns "${PLATFORM_NS}" "${AGENTS_NS}"
 
 log "Image ${OPERATOR_IMAGE}"
 if [[ "${OPERATOR_IMAGE}" == agentdev-operator:* ]]; then
@@ -29,7 +32,7 @@ if [[ -z "${BOTBOARD_URL}" ]] && k -n "${BOTBOARD_NS}" get svc botboard >/dev/nu
 fi
 EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agents' HTTPS_PROXY (#65, 06-agents.sh deploys it)
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
-PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
+COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
   FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" BOTBOARD_URL="${BOTBOARD_URL}" POLL_SECONDS="${POLL_SECONDS}" IDLE_SECONDS="${IDLE_SECONDS}" \
   AGENT_STORAGE_CLASS="${AGENT_STORAGE_CLASS:-}" AGENT_STATE_STORAGE="${AGENT_STATE_STORAGE:-10Gi}" \
@@ -42,6 +45,7 @@ PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
+label_ns "${EXEC_NS}"   # created by the operator manifest
 # executor egress (#135): default deny for executor Jobs, the executor proxy, and (kind) 80/443 for the proxy
 EXEC_NS="${EXEC_NS}" FORGE_NS="${FORGE_NS}" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
   envsubst '${EXEC_NS} ${FORGE_NS} ${EGRESS_PROXY_IMAGE}' < "${SPIKE_DIR}/manifests/executor-egress.yaml.tmpl" | k apply -f - >/dev/null

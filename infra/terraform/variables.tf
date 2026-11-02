@@ -48,6 +48,19 @@ variable "agent_pool_spot" {
   default     = true
 }
 
+variable "labels" {
+  description = "Labels on every resource (#184), merged over service = \"agentdev\". Set environment to dev, stage or prod. GCP rules: lower-case keys and values."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z][a-z0-9_-]{0,62}$", k)) && can(regex("^[a-z0-9_-]{0,63}$", v))])
+    error_message = "labels: keys must match ^[a-z][a-z0-9_-]{0,62}$ and values ^[a-z0-9_-]{0,63}$ (GCP label rules, lower case)."
+  }
+  validation {
+    condition     = !contains(keys(var.labels), "environment") || contains(["dev", "stage", "prod"], lookup(var.labels, "environment", ""))
+    error_message = "labels.environment must be dev, stage or prod."
+  }
+}
 variable "system_pool_spot" {
   description = "Use Spot VMs for the system pool (about 60-70% cheaper). When Google reclaims the node, router, operator and proxies are down for about a minute; polling (poll_seconds) picks up missed webhooks. Changing it replaces the pool."
   type        = bool

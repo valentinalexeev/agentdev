@@ -10,6 +10,7 @@ agents:
 # or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
 # scale_to_zero: false
 # wake_poll_seconds: 300
+agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels; service: agentdev is added
 # project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
 mcp_projects: []
 # trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R51)
