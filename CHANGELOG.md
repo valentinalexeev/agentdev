@@ -17,6 +17,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
+### Changed
+- Ansible and `./run.sh 08`: ContextForge (Deployment, Service, Secret, NetworkPolicy) is deployed only when a project
+  uses MCP: `mcp_projects` on GKE, the new `MCP_PROJECTS` in `config.env` on kind (#172). With an empty list the
+  playbook and the step remove ContextForge and the agents' `agent-<name>-mcp` Secrets; Postgres and the `contextforge`
+  database stay, so adding a project later brings it back with the same data. This frees the 100m CPU / 512Mi it
+  requested on instances without MCP projects; nothing used it there (mcp-sync only runs for listed projects).
+  `platform_contextforge_enabled: true` keeps the old behaviour. `./run.sh 08` now also runs `scripts/mcp-sync.sh`
+  for each spec in `MCP_PROJECTS`.
+
 ### Fixed
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
   `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR

@@ -1,0 +1,58 @@
+# ContextForge only with MCP projects (#172): platform_contextforge_enabled follows mcp_projects, and the documents the
+# role applies without it keep Postgres and drop every ContextForge object (all named contextforge).
+# Run: ansible-playbook infra/ansible/tests/platform_contextforge.yml
+- name: ContextForge switch of the platform role (#172)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    platform_render:
+      src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
+      values: {PLATFORM_NS: agentdev-platform, AGENTS_NS: coding-agents, SERVICE_CIDR: 10.30.0.0/20, POSTGRES_IMAGE: pg,
+               CONTEXTFORGE_IMAGE: cf, CF_ADMIN_EMAIL: a@b.c, PG_ADMIN_PASSWORD: x, PG_CF_PASSWORD: x,
+               PG_AGENTDEV_PASSWORD: x, PG_AUTHENTIK_PASSWORD: x, CF_JWT_SECRET: x, CF_ENC_SECRET: x,
+               CF_ADMIN_PASSWORD: x, CF_DEFAULT_USER_PASSWORD: x, CF_BASIC_AUTH_PASSWORD: x}
+      replace: []
+    platform_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+    # same expression as roles/platform/tasks/main.yml
+    applied: >-
+      {{ platform_docs if platform_contextforge_enabled | bool
+         else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list }}
+    names: "{{ applied | map(attribute='kind') | zip(applied | map(attribute='metadata.name')) | map('join', '/') | list }}"
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/platform/defaults/main.yml
+
+    - name: The role uses the same filter
+      ansible.builtin.assert:
+        that: "\"rejectattr('metadata.name', 'equalto', 'contextforge')\" in lookup('ansible.builtin.file', '../roles/platform/tasks/main.yml')"
+
+    - name: Without MCP projects
+      vars: {mcp_projects: []}
+      ansible.builtin.assert:
+        that:
+          - not platform_contextforge_enabled | bool
+          - "'StatefulSet/platform-db' in names"
+          - "'NetworkPolicy/platform-db' in names"
+          - names | select('search', '/contextforge$') | list | length == 0
+        fail_msg: "{{ names }}"
+
+    - name: With one MCP project
+      vars: {mcp_projects: [/tmp/web.yaml]}
+      ansible.builtin.assert:
+        that:
+          - platform_contextforge_enabled | bool
+          - names | select('search', '/contextforge$') | list | sort
+            == ['Deployment/contextforge', 'NetworkPolicy/contextforge', 'Secret/contextforge', 'Service/contextforge']
+        fail_msg: "{{ names }}"
+
+    # instance.yml is passed with -e, which wins over the role defaults; set_fact does too
+    - name: Explicit override
+      ansible.builtin.set_fact: {platform_contextforge_enabled: true}
+
+    - name: The override keeps ContextForge without projects
+      vars: {mcp_projects: []}
+      ansible.builtin.assert:
+        that: names | select('search', '/contextforge$') | list | length == 4

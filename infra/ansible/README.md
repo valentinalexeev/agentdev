@@ -34,6 +34,9 @@ then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the op
 `curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
 not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
+ContextForge is deployed only when `mcp_projects` is not empty (#172); with an empty list the role removes it and the
+agents' `agent-<name>-mcp` Secrets (Postgres and the `contextforge` database stay). `platform_contextforge_enabled: true`
+keeps it without projects.
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`
 (must match the Terraform `services` range, `roles/platform/defaults/main.yml`).
 On a first `--check` run the platform secrets do not exist yet, so the diff shows empty passwords; the real run

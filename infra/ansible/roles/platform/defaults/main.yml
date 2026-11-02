@@ -2,6 +2,9 @@
 # Platform namespace on GKE (#51): Postgres + ContextForge, the same manifests/platform.yaml.tmpl as ./run.sh 08.
 platform_postgres_image: postgres:17.11
 platform_contextforge_image: ghcr.io/ibm/mcp-context-forge:v1.1.0
+# ContextForge runs only when a project uses MCP (#172): it requests 100m CPU / 512Mi. false removes it (Postgres stays).
+# Set true to keep it without mcp_projects (for example while specs are synced by hand).
+platform_contextforge_enabled: "{{ mcp_projects | length > 0 }}"
 platform_cf_admin_email: admin@agentdev.dev
 # ContextForge may only call MCP servers in the cluster Service range (SSRF guard); infra/terraform uses 10.30.0.0/20
 platform_service_cidr: 10.30.0.0/20
