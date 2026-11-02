@@ -18,3 +18,14 @@ ingress_gateway_name: agentdev-public
 ingress_gateway_class: gke-l7-global-external-managed
 # Google Front End and health check source ranges (Google documentation "Firewall rules" of the external ALB)
 ingress_gfe_ranges: [35.191.0.0/16, 130.211.0.0/22]
+# who publishes the hosts (#160): gateway (this role's GKE Gateway) or external (your own reverse proxy, no Gateway)
+ingress_mode: "{{ (ingress | default({})).mode | default('gateway') }}"
+# opt-in NetworkPolicies for an external forwarder (#160): {namespace, pod_selector, cidrs}. Empty: default-deny stays.
+ingress_forwarder: "{{ (ingress | default({})).forwarder | default({}) }}"
+ingress_forwarder_on: >-
+  {{ ingress_forwarder is mapping and ((ingress_forwarder.namespace | default('')) | length > 0
+     or (ingress_forwarder.cidrs | default([])) | length > 0) }}
+ingress_dns_re: '^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+# forwarder CIDRs shorter than /8 (for example 0.0.0.0/0, every address) are refused unless this is true (#198 review)
+ingress_forwarder_allow_wide_cidrs: "{{ (ingress | default({})).forwarder_allow_wide_cidrs | default(false) }}"
+ingress_cidr_re: '^(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(\.(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}/([0-9]|[12][0-9]|3[0-2])$'

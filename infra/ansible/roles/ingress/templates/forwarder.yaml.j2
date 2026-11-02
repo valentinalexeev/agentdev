@@ -1,0 +1,57 @@
+{# External forwarder (#160): opt-in NetworkPolicies that let one named forwarder (a namespace, a pod selector in it,
+   or CIDRs) reach the Services a reverse proxy outside the Gateway publishes. Rendered by tasks/main.yml, which
+   applies them only with ingress.forwarder and removes them without it. They only add an allow rule: the
+   default-deny of the platform namespace and the other policies stay. #}
+{% set fwd = ingress_forwarder if ingress_forwarder is mapping else {} %}
+{% set peers = [] %}
+{% if (fwd.namespace | default('')) | length > 0 %}
+{%   set peer = {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': fwd.namespace}}} %}
+{%   if (fwd.pod_selector | default({})) | length > 0 %}
+{%     set peer = peer | combine({'podSelector': {'matchLabels': fwd.pod_selector}}) %}
+{%   endif %}
+{%   set _ = peers.append(peer) %}
+{% endif %}
+{% for cidr in fwd.cidrs | default([]) %}
+{%   set _ = peers.append({'ipBlock': {'cidr': cidr | string}}) %}
+{% endfor %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agentdev-ui-from-forwarder, namespace: {{ platform_ns }}, labels: {app.kubernetes.io/part-of: agentdev}}
+spec:
+  podSelector: {matchLabels: {app: agentdev-ui}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: {{ peers | to_json }}
+    ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: webhook-router-from-forwarder, namespace: {{ agents_ns }}, labels: {app.kubernetes.io/part-of: agentdev}}
+spec:
+  podSelector: {matchLabels: {app: webhook-router}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: {{ peers | to_json }}
+    ports: [{port: 8080}]
+  # the router stays reachable for its in-cluster clients: once a policy selects a pod, Kubernetes denies all other
+  # traffic. Agents and the operator register and report idle; the Gitea forge sends webhooks; the kubelet probes.
+  - from:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ agents_ns }}}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ platform_ns }}}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: forge}}}
+{% if ingress_mode == 'gateway' %}
+{%   for cidr in ingress_gfe_ranges %}
+    - {ipBlock: {cidr: {{ cidr }}}}
+{%   endfor %}
+{% endif %}
+    ports: [{port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: authentik-from-forwarder, namespace: {{ platform_ns }}, labels: {app.kubernetes.io/part-of: agentdev}}
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/name: authentik, app.kubernetes.io/component: server}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: {{ peers | to_json }}
+    ports: [{port: 9000}]

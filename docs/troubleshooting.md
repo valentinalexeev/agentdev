@@ -77,6 +77,9 @@
 |---|---|---|
 | The authentik login page shows again after each login. | The port-forward uses http. The session cookies are only for https. | 1. Start the port-forward to port `443`. 2. Use https://localhost:9443/. |
 | The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
+| External ingress: the authentik login page goes to `http://` or to the Service name. | The reverse proxy does not send `X-Forwarded-Proto` or the public `Host`, or its address is not in `authentik_trusted_proxy_cidrs`. | 1. Set the headers `Host`, `X-Forwarded-Proto: https` and `X-Forwarded-For` on the reverse proxy. 2. Add its source range to `authentik_trusted_proxy_cidrs`. 3. Run the playbook again. Refer to *Use an external ingress* in the administration guide. |
+| External ingress: the reverse proxy gets a timeout from `agentdev-ui` or `authentik-server`. | The default-deny NetworkPolicy of the platform namespace stops the reverse proxy. `ingress.forwarder` is not set, or it does not select the reverse proxy. | 1. Set `ingress.forwarder` (`namespace`, `pod_selector` or `cidrs`). 2. Run the playbook again. 3. Examine the policies: `kubectl -n agentdev-platform get networkpolicy agentdev-ui-from-forwarder -o yaml`. |
+| The playbook stops at "Check the ingress mode and hosts". | `ingress.mode` is not `gateway` or `external`, or `ingress.host` is not set or is not a plain DNS name. | Correct the `ingress` values in `instance.yml`. |
 | In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
 
 ## Approvals

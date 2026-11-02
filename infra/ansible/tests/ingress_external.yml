@@ -1,0 +1,130 @@
+# Render and validation checks (#160): ingress.mode gateway (default) and external, and the opt-in NetworkPolicies of
+# an external forwarder. With external the role makes no Gateway, the hosts still give the authentik issuer, the UI
+# callback and the webhook URL; without ingress.forwarder no forwarder policy is applied (default-deny stays).
+# Run: ansible-playbook infra/ansible/tests/ingress_external.yml
+- name: External ingress and forwarder policies (#160)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    kube_context: none
+    ingress:
+      mode: external
+      host: agentdev.example.com
+      webhook_host: hooks.example.com
+      auth_host: auth.example.com
+      forwarder: {namespace: tailscale, pod_selector: {app: ts-ingress}, cidrs: [100.64.0.0/10]}
+  tasks:
+    - name: Load the defaults (group_vars, roles authentik, api and ingress)
+      ansible.builtin.include_vars: "{{ item }}"
+      loop: [../group_vars/all.yml, ../roles/authentik/defaults/main.yml, ../roles/api/defaults/main.yml,
+             ../roles/ingress/defaults/main.yml]
+
+    - name: The default mode is gateway (current instances do not change)
+      ansible.builtin.assert:
+        that:
+          - ingress_mode == 'gateway'
+          - not (ingress_forwarder_on | bool)
+        quiet: true
+      vars:
+        ingress: {host: agentdev.example.com, certificate: c1}
+
+    - name: With external the hosts still drive the issuer, the UI callback and webhooks
+      ansible.builtin.assert:
+        that:
+          - ingress_mode == 'external'
+          - authentik_enabled | bool
+          - api_effective_issuer == 'https://auth.example.com/application/o/agentdev/'
+          - authentik_ui_callback == 'https://agentdev.example.com/callback'
+          - webhooks_enabled | bool
+          - ingress_webhook_host == 'hooks.example.com'
+          - ingress_forwarder_on | bool
+        quiet: true
+
+    - name: The external mode passes the checks without a certificate
+      ansible.builtin.include_tasks: ../roles/ingress/tasks/checks.yml
+
+    - name: Render the forwarder policies (namespace, pod selector and CIDR)
+      ansible.builtin.set_fact:
+        fwd: "{{ lookup('ansible.builtin.template', '../roles/ingress/templates/forwarder.yaml.j2') | from_yaml_all | list }}"
+
+    - name: Check the forwarder policies
+      vars:
+        ui: "{{ fwd | selectattr('metadata.name', 'equalto', 'agentdev-ui-from-forwarder') | first }}"
+        hook: "{{ fwd | selectattr('metadata.name', 'equalto', 'webhook-router-from-forwarder') | first }}"
+        ak: "{{ fwd | selectattr('metadata.name', 'equalto', 'authentik-from-forwarder') | first }}"
+        peer_ns: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tailscale}}, podSelector: {matchLabels: {app: ts-ingress}}}
+        peer_ip: {ipBlock: {cidr: 100.64.0.0/10}}
+        p8080: [{port: 8080}]
+        p9000: [{port: 9000}]
+      ansible.builtin.assert:
+        that:
+          - fwd | map(attribute='kind') | unique | list == ['NetworkPolicy']
+          - ui.metadata.namespace == 'agentdev-platform' and ui.spec.podSelector.matchLabels.app == 'agentdev-ui'
+          - ui.spec.ingress[0].from == [peer_ns, peer_ip]
+          - ui.spec.ingress[0].ports == p8080
+          - hook.metadata.namespace == 'coding-agents' and hook.spec.podSelector.matchLabels.app == 'webhook-router'
+          - hook.spec.ingress[0].from == [peer_ns, peer_ip]
+          - hook.spec.ingress[0].ports == p8080
+          # in-cluster clients keep the router; no Google Front End range in external mode
+          - hook.spec.ingress[1].from | selectattr('ipBlock', 'defined') | list == []
+          - hook.spec.ingress[1].from | map(attribute='namespaceSelector.matchLabels') | map('dict2items') | flatten
+            | map(attribute='value') | sort == ['agentdev-platform', 'coding-agents', 'forge']
+          - ak.spec.podSelector.matchLabels['app.kubernetes.io/component'] == 'server'
+          - ak.spec.ingress[0].from == [peer_ns, peer_ip]
+          - ak.spec.ingress[0].ports == p9000
+        quiet: true
+
+    - name: A namespace alone selects every pod in it; CIDRs alone work too
+      vars:
+        tpl: ../roles/ingress/templates/forwarder.yaml.j2
+        ns_only: "{{ lookup('ansible.builtin.template', tpl, template_vars={'ingress_forwarder': {'namespace': 'ingress'}}) | from_yaml_all | first }}"
+        ip_only: "{{ lookup('ansible.builtin.template', tpl, template_vars={'ingress_forwarder': {'cidrs': ['10.8.0.0/16']}}) | from_yaml_all | first }}"
+        want_ns: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress}}}]
+        want_ip: [{ipBlock: {cidr: 10.8.0.0/16}}]
+      ansible.builtin.assert:
+        that:
+          - ns_only.spec.ingress[0].from == want_ns
+          - ip_only.spec.ingress[0].from == want_ip
+        quiet: true
+
+    - name: In gateway mode the router policy keeps the Google Front End ranges
+      vars:
+        gw_hook: >-
+          {{ lookup('ansible.builtin.template', '../roles/ingress/templates/forwarder.yaml.j2',
+             template_vars={'ingress_mode': 'gateway'}) | from_yaml_all | selectattr('metadata.name', 'equalto',
+             'webhook-router-from-forwarder') | first }}
+      ansible.builtin.assert:
+        that: gw_hook.spec.ingress[1].from | selectattr('ipBlock', 'defined') | map(attribute='ipBlock.cidr') | list == ingress_gfe_ranges
+        quiet: true
+
+    - name: Refuse invalid settings
+      ansible.builtin.include_tasks: includes/ingress_mode_refused.yml
+      loop:
+        - {mode: ingress, host: agentdev.example.com}                       # unknown mode
+        - {mode: external}                                                   # external needs the hosts
+        - {mode: external, host: "https://agentdev.example.com"}             # not a plain DNS name
+        - {mode: external, host: agentdev.example.com, auth_host: "a b"}
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: [100.64.0.0]}}   # no prefix length
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: "100.64.0.0/10"}}   # not a list
+        - {mode: external, host: agentdev.example.com, forwarder: {pod_selector: {app: x}}}   # selector without namespace
+        - {mode: external, host: agentdev.example.com, forwarder: {namespace: "Bad_NS"}}
+        - {mode: external, host: agentdev.example.com, forwarder: {name: x}}                  # unknown key
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: [0.0.0.0/0]}}        # every address, no opt-in
+        - {mode: external, host: agentdev.example.com, forwarder: {cidrs: [10.0.0.0/7]}}       # wider than /8
+      loop_control: {loop_var: bad_ingress}
+
+    - name: Read the role tasks
+      ansible.builtin.set_fact:
+        role_tasks: "{{ lookup('ansible.builtin.file', '../roles/ingress/tasks/main.yml') | from_yaml }}"
+
+    - name: The Gateway runs only in gateway mode; the forwarder policies are removed without ingress.forwarder
+      vars:
+        gw_task: "{{ role_tasks | selectattr('name', 'equalto', 'Public HTTPS entry point (Gateway)') | first }}"
+        np_task: "{{ role_tasks | selectattr('name', 'equalto', 'NetworkPolicies for the external forwarder') | first }}"
+      ansible.builtin.assert:
+        that:
+          - gw_task.when == "ingress_mode == 'gateway'"
+          - "'absent' in np_task['kubernetes.core.k8s'].state and 'ingress_forwarder_on' in np_task['kubernetes.core.k8s'].state"
+        quiet: true

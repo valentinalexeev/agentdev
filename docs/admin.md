@@ -1086,6 +1086,62 @@ On `kind`, no load balancer is installed. Use a port-forward. The paths are the 
 
 NOTE: On `kind`, no TLS, HSTS or Cloud Armor applies. Do not make a `kind` cluster public.
 
+### Use an external ingress
+
+Use this procedure when a reverse proxy that you operate publishes the instance, for example a tailnet ingress
+(#160). The playbook then makes no Gateway, no HTTPRoute and no certificate. Terraform needs no `public_hosts` and
+no static IP address. The hosts still give the authentik issuer, the callback of the web UI and the webhook URL.
+
+WARNING: Publish only the paths in the table below. If the reverse proxy sends all paths of `webhook-router` to the
+router, the paths `/status`, `/register` and `/idle` become available outside the cluster.
+
+| Public URL | Service (namespace, port) | Notes |
+|---|---|---|
+| `https://<ingress.host>/` | `agentdev-ui` (`agentdev-platform`, 8080) | The web UI and its `/api` calls. |
+| `https://<ingress.webhook_host>/hook` | `webhook-router` (`coding-agents`, 8080) | Only the path prefix `/hook`. |
+| `https://<ingress.auth_host>/` | `authentik-server` (`agentdev-platform`, 80, pod port 9000) | The authentik login and issuer. |
+
+1. In `ansible/instance.yml`, set the mode and the hosts:
+
+   ```yaml
+   ingress:
+     mode: external                     # default: gateway
+     host: agentdev.example.com         # the web UI
+     webhook_host: hooks.example.com    # optional, default: host
+     auth_host: auth.example.com        # authentik
+     forwarder:                         # optional: who can connect to the Services
+       namespace: tailscale             # the namespace of the reverse proxy pods
+       pod_selector: {app: ts-ingress}  # optional, only with namespace
+       # cidrs: [100.64.0.0/10]         # or the source addresses of the reverse proxy
+   ```
+
+2. Add the source range of the reverse proxy to the trusted proxy ranges of authentik. Keep the default ranges:
+
+   ```yaml
+   authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
+   ```
+
+3. Set the reverse proxy so that each request to authentik has these headers:
+   - `Host`: the public host (`ingress.auth_host`), not the Service name.
+   - `X-Forwarded-Proto`: `https`.
+   - `X-Forwarded-For`: the IP address of the client.
+4. Set `github_app.public_url` to `https://<ingress.webhook_host>`.
+5. Run the playbook. The playbook shows the URLs and the Services to publish.
+6. Make sure that the issuer is correct:
+   `curl -s https://auth.example.com/application/o/agentdev/.well-known/openid-configuration`
+   The value of `issuer` is `https://auth.example.com/application/o/agentdev/`.
+7. Do the e2e checks with `--ingress external` (`docs/e2e-security.md`).
+
+NOTE: Without `ingress.forwarder`, the playbook applies no forwarder NetworkPolicy, and the default-deny policy of
+the platform namespace stops the reverse proxy. A reverse proxy in the cluster that uses a namespace or a pod
+selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs`. The playbook refuses a range that
+is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarder_allow_wide_cidrs: true`. The
+playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
+`authentik_trusted_proxy_allow_wide: true`.
+
+NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
+balancer ranges.
+
 ### Reference: the public entry point
 
 | Control | Where | Value |

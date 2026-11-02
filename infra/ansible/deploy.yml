@@ -319,10 +319,11 @@
       when: api_effective_issuer | length > 0
 
     # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
-    # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host.
-    - name: Public HTTPS entry point (Gateway)
+    # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host
+    # or ingress.mode. ingress.mode external (#160): no Gateway; your own reverse proxy publishes the hosts.
+    - name: Public entry point (Gateway, or external ingress)
       ansible.builtin.include_role: {name: ingress}
-      when: (ingress.host | default('')) | length > 0
+      when: (ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined
 
     # one disk per agent (#173): the cheapest GCE disk type; created only when the class is not the cluster default
     - name: "Agent StorageClass (pd-standard, #173)"

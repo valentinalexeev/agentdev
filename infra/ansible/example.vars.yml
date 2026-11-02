@@ -14,11 +14,18 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
+#   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate
 #   host: agentdev.example.com              # web UI (DNS A record -> terraform output webhook_ip)
 #   webhook_host: hooks.example.com         # optional, default host; GitHub App webhook https://<this>/hook
 #   auth_host: auth.example.com             # authentik login (#114): deploys authentik, the API/UI issuer defaults to it
 #   certificate: agentdev-public-1a2b3c4d   # managed certificate name
 #   security_policy: agentdev-public        # only with Terraform cloud_armor = true
+#   forwarder:                              # optional (#160): who may reach agentdev-ui, webhook-router, authentik
+#     namespace: tailscale                  #   the reverse proxy's namespace
+#     pod_selector: {app: ts-ingress}       #   optional, in that namespace
+#     cidrs: [100.64.0.0/10]                #   or its source addresses
+# authentik trusts X-Forwarded-* only from these ranges (#160): add your reverse proxy's range, keep the defaults
+# authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
 # Optional company SSO for authentik (#122, docs/admin.md "Sign in with Google Workspace"). The IdP certificate goes
 # into the Secret Manager secret authentik-sso-idp-cert (README.md). Members of admin_group become agentdev admins;
 # nothing else changes the members of agentdev-admins.
