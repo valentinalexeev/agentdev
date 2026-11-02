@@ -13,12 +13,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Ansible playbook afterwards (it waits for the operator and agents, which resume from their PVCs). The deployment
   template has commented pass-through lines.
 
-### Changed
-- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
-  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
-  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
-  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
-  `agent_disk_type` to `pd-balanced`.
+- Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
+  `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
+  node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
+
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
@@ -26,6 +24,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
+### Changed
+- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
+  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
+  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
+  `agent_disk_type` to `pd-balanced`.
 ### Fixed
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
   `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
@@ -51,6 +55,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Operator: one volume per agent instead of two (#173). The `state` PVC now also holds the Claude state
+  (`/home/node/.claude` is its `claude` subPath); the separate `claude` PVC is gone. The PVC uses the agent StorageClass
+  and size: operator env `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` (default `10Gi`), Ansible
+  `agent_storage_class` (default `agentdev-agent`, a `pd-standard` class that `deploy.yml` creates) and
+  `agent_state_storage`, `config.env` on kind (empty class: the cluster default). On GKE this halves the disks per
+  agent and uses the cheapest disk type. Upgrading from 1.0.0-rc: the operator sees an agent StatefulSet in the old
+  layout, deletes it and its old PVCs, and makes it again. Agents lose their local Claude sessions and clones; open
+  branches and PRs stay on the forge. Upgrade while the agents are idle.
 - Terraform bootstrap: the state bucket aborts incomplete multipart uploads after one day (#185).
 - Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
   still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to

@@ -66,7 +66,7 @@ the GKE default `pd-balanced` costs about 10). Nodes hold only images and epheme
 the nodes (a few minutes without router and operator for the system pool), then re-run the Ansible playbook, which
 waits for the operator and the agents; agents resume from their PVCs.
 
-GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
+GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
 
 ## Not here
 
