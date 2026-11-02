@@ -35,11 +35,16 @@
     platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
   no_log: true
 
+# ContextForge (Secret, Deployment, Service, NetworkPolicy, all named contextforge) only when
+# platform_contextforge_enabled (default: mcp_projects is not empty, #172). Postgres always: the API uses it.
 - name: Postgres, ContextForge and their NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
-    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+    definition: >-
+      {{ platform_docs if platform_contextforge_enabled | bool
+         else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list }}
   vars:
+    platform_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
     platform_render:
       src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
       values:
@@ -66,12 +71,50 @@
 - name: Wait for Postgres and ContextForge
   ansible.builtin.command: >-
     kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status {{ item }} --timeout=600s
-  loop: [statefulset/platform-db, deployment/contextforge]
+  loop: "{{ ['statefulset/platform-db'] + (['deployment/contextforge'] if platform_contextforge_enabled | bool else []) }}"
   changed_when: false
   when: not ansible_check_mode
 
+# No MCP projects (#172): remove ContextForge (its four objects are all named contextforge) and the
+# agents' MCP token Secrets that point to it. Its database stays in Postgres for a later re-enable.
+- name: Remove ContextForge when it is not enabled
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: absent
+    api_version: "{{ item.api }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ platform_ns }}"
+    name: contextforge
+  loop:
+    - {api: apps/v1, kind: Deployment}
+    - {api: v1, kind: Service}
+    - {api: v1, kind: Secret}
+    - {api: networking.k8s.io/v1, kind: NetworkPolicy}
+  loop_control: {label: "{{ item.kind }}/contextforge"}
+  when: not platform_contextforge_enabled | bool
+
+- name: Find MCP token Secrets of the agents (made by mcp-sync)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Secret
+    namespace: "{{ agents_ns }}"
+    label_selectors: [agentdev/mcp-project]
+  register: platform_mcp_secrets
+  when: not platform_contextforge_enabled | bool
+  no_log: true
+
+- name: Remove the MCP token Secrets of the agents
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: absent
+    kind: Secret
+    namespace: "{{ agents_ns }}"
+    name: "{{ item }}"
+  loop: "{{ platform_mcp_secrets.resources | default([]) | map(attribute='metadata.name') | list }}"
+  when: not platform_contextforge_enabled | bool
+
 - name: MCP sync for each project spec
-  when: mcp_projects | length > 0 and not ansible_check_mode
+  when: mcp_projects | length > 0 and platform_contextforge_enabled | bool and not ansible_check_mode
   block:
     - name: Admin password file for mcp-sync (0600, removed below)
       ansible.builtin.tempfile: {state: file, suffix: .cf}

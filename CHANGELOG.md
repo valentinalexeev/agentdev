@@ -12,7 +12,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   enough, since nodes hold only images and ephemeral pod data. Changing one replaces that node pool; re-run the
   Ansible playbook afterwards (it waits for the operator and agents, which resume from their PVCs). The deployment
   template has commented pass-through lines.
-
+- Labels on all resources (#184): Terraform input `labels` (default `{}`), merged over `service = "agentdev"`, on
+  every resource through the module's provider `default_labels`, plus the cluster and node pool `resource_labels`
+  and the budget notification channels' `user_labels`; the bootstrap has the same input (project, state bucket).
+  Keys and values are checked against the GCP rules, `environment` must be `dev`, `stage` or `prod`. Ansible
+  `agentdev_labels` (same check) labels the `coding-agents`, `agentdev-platform` and `agentdev-executors`
+  namespaces, and the operator (`COST_LABELS`) labels agent StatefulSets and pods and executor Jobs and pods; kind
+  sets `COST_LABELS` in `config.env`. The next plan of an existing instance shows in-place label updates only. The
+  deployment template sets `environment = "prod"` (commented pass-through until its `ref=` contains #184).
 - Terraform: `system_pool_spot` (default `false`, no change for existing instances) runs the system pool on Spot VMs,
   about 60-70% cheaper (#171). When a node is reclaimed, router, operator and proxies are down for about a minute;
   missed webhooks are covered by polling, agents keep their state on PVCs. Switching it replaces the system pool.
@@ -27,6 +34,18 @@ While the version is `0.x`, breaking changes bump MINOR.
   `image_registry` output is `null` then. Switching an existing deployment to `false` destroys the (unused) repo;
   the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
+
+### Changed
+- Ansible and `./run.sh 08`: ContextForge (Deployment, Service, Secret, NetworkPolicy) is deployed only when a project
+  uses MCP: `mcp_projects` on GKE, the new `MCP_PROJECTS` in `config.env` on kind (#172). With an empty list the
+  playbook and the step remove ContextForge and the agents' `agent-<name>-mcp` Secrets; Postgres and the `contextforge`
+  database stay, so adding a project later brings it back with the same data. This frees the 100m CPU / 512Mi it
+  requested on instances without MCP projects; nothing used it there (mcp-sync only runs for listed projects).
+  `platform_contextforge_enabled: true` keeps the old behaviour. `./run.sh 08` now also runs `scripts/mcp-sync.sh`
+  for each spec in `MCP_PROJECTS`.
+  **BREAKING for kind only:** a kind instance that synced MCP specs with `scripts/bootstrap-project.sh` loses
+  ContextForge and the agents' MCP Secrets on the next `./run.sh 08` until those specs are listed in `MCP_PROJECTS`.
+  Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when

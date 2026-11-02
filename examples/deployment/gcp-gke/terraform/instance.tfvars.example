@@ -14,4 +14,5 @@ budget_amount_usd  = 150     # in budget_currency
 # system_disk_type    = "pd-standard"   # default; "pd-balanced" keeps a pre-#170 pool unchanged
 # agent_disk_size_gb  = 50
 # agent_disk_type     = "pd-standard"
+labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
