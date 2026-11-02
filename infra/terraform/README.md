@@ -8,8 +8,8 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 |---|---|
 | VPC, subnet, Cloud NAT | private nodes; egress narrowed later by #6 |
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
-| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand: router, operator, UI |
-| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes` |
+| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand: router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-balanced`, the GKE default) |
+| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-balanced`) |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
@@ -57,6 +57,12 @@ Another region: change `region`/`zone` in the deployment's `instance.tfvars`.
   `gcloud config set auth/impersonate_service_account <automation SA>`.
 
 ## Cost (rough guide)
+
+Node boot disks (#170): each node gets a 100 GB `pd-balanced` disk by default (about 10 EUR a month per node).
+Nodes hold only images and ephemeral pod data, so `system_disk_size_gb = 30`, `agent_disk_size_gb = 50` and
+`pd-standard` for both are enough. Changing a disk variable **replaces the node pool**: `terraform apply` recreates
+the nodes (a few minutes without router and operator for the system pool), then re-run the Ansible playbook, which
+waits for the operator and the agents; agents resume from their PVCs.
 
 GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
 

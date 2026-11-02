@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform: node boot disk variables `system_disk_size_gb`, `system_disk_type`, `agent_disk_size_gb`,
+  `agent_disk_type` (#170). Defaults are the GKE defaults (100 GB `pd-balanced`), so existing node pools do not
+  change. Nodes hold only images and ephemeral pod data: 30 GB (system) and 50 GB (agents) `pd-standard` save about
+  7 EUR a month per node. Changing one replaces that node pool; re-run the Ansible playbook afterwards (it waits for
+  the operator and agents, which resume from their PVCs). The deployment template has commented pass-through lines.
 - Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
   the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
   the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The

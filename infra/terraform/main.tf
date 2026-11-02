@@ -149,6 +149,8 @@ resource "google_container_node_pool" "system" {
   }
   node_config {
     machine_type    = var.system_machine_type
+    disk_size_gb    = var.system_disk_size_gb
+    disk_type       = var.system_disk_type
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     workload_metadata_config { mode = "GKE_METADATA" }
@@ -175,6 +177,8 @@ resource "google_container_node_pool" "agents" {
   node_config {
     machine_type    = var.agent_machine_type
     spot            = var.agent_pool_spot
+    disk_size_gb    = var.agent_disk_size_gb
+    disk_type       = var.agent_disk_type
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     image_type      = "COS_CONTAINERD"

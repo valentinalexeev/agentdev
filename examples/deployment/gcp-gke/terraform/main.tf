@@ -29,6 +29,12 @@ module "agentdev" {
 
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
+
+  # node boot disks (agentdev #170): uncomment with a ref= that contains #170; changing one replaces the pool
+  # system_disk_size_gb = var.system_disk_size_gb
+  # system_disk_type    = var.system_disk_type
+  # agent_disk_size_gb  = var.agent_disk_size_gb
+  # agent_disk_type     = var.agent_disk_type
 }
 
 variable "project_id" { type = string }
@@ -75,6 +81,22 @@ variable "create_artifact_registry" {
   description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
   type        = bool
   default     = true
+}
+variable "system_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "system_disk_type" {
+  type    = string
+  default = "pd-balanced"
+}
+variable "agent_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "agent_disk_type" {
+  type    = string
+  default = "pd-balanced"
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's
