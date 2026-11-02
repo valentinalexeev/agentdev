@@ -25,6 +25,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   requested on instances without MCP projects; nothing used it there (mcp-sync only runs for listed projects).
   `platform_contextforge_enabled: true` keeps the old behaviour. `./run.sh 08` now also runs `scripts/mcp-sync.sh`
   for each spec in `MCP_PROJECTS`.
+  **BREAKING for kind only:** a kind instance that synced MCP specs with `scripts/bootstrap-project.sh` loses
+  ContextForge and the agents' MCP Secrets on the next `./run.sh 08` until those specs are listed in `MCP_PROJECTS`.
+  Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
