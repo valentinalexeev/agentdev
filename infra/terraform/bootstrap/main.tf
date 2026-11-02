@@ -84,6 +84,10 @@ resource "google_storage_bucket" "tfstate" {
     condition { num_newer_versions = 20 }
     action { type = "Delete" }
   }
+  lifecycle_rule {
+    condition { age = 1 }
+    action { type = "AbortIncompleteMultipartUpload" }
+  }
   depends_on = [google_project_service.bootstrap, google_project.this]
 }
 
