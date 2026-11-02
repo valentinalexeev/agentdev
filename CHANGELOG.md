@@ -15,6 +15,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
 ### Fixed
+- Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
+  `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
+  a month). A `moved` block keeps the same IP for instances with `public_hosts` (no plan change). On an instance
+  without `public_hosts`, the next apply destroys only the address; `webhook_ip` is then `null` and
+  `ingress.static_ip_name` is empty. kind is not affected (no static IP there).
 - Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
   its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
   in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.

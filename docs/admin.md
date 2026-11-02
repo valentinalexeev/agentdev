@@ -928,7 +928,8 @@ Do this task after the first installation on GKE.
 3. Optional: to add Cloud Armor, add `cloud_armor = true`.
    Cloud Armor refuses large requests and limits the requests of each client IP address.
 4. Apply Terraform (the owner does this step).
-   Terraform makes the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+   Terraform makes the static IP address, the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+   Without `public_hosts`, Terraform does not make the static IP address, and `webhook_ip` is empty.
 5. Show the values: `terraform output ingress` and `terraform output webhook_ip`.
 6. In your DNS zone, make an `A` record for each name. Use the address from `webhook_ip`.
 7. In `ansible/instance.yml`, add the `ingress` values from step 5:

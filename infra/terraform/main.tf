@@ -69,10 +69,18 @@ resource "google_compute_router_nat" "nat" {
 }
 
 # Public entry point (#120): the GKE Gateway of the Ansible role ingress uses it by name (webhook router for the
-# GitHub App, #2, and the web UI with its /api proxy). The name stays for existing instances.
+# GitHub App, #2, and the web UI with its /api proxy). The name stays for existing instances. Only with public_hosts
+# (#169): without them nothing uses the address, and an unused reserved IP is billed.
 resource "google_compute_global_address" "webhook" {
+  count      = length(var.public_hosts) > 0 ? 1 : 0
   name       = "agentdev-webhook"
   depends_on = [google_project_service.apis]
+}
+
+# #169: the address was not counted before. Instances with public_hosts keep the same IP.
+moved {
+  from = google_compute_global_address.webhook
+  to   = google_compute_global_address.webhook[0]
 }
 
 # ---------- GKE ----------
