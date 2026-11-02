@@ -99,6 +99,7 @@ variable "agent_disk_size_gb" {
 variable "agent_disk_type" {
   type    = string
   default = "pd-standard"
+}
 variable "system_pool_spot" {
   description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
   type        = bool

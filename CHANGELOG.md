@@ -28,12 +28,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
   (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
 
-### Changed
-- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
-  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
-  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
-  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
-  `agent_disk_type` to `pd-balanced`.
 ### Fixed
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
   `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
@@ -59,6 +53,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
+  on PR #191), about 6 EUR a month less per node. **Existing clusters:** changing the boot disk type recreates the
+  node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-run the Ansible playbook afterwards. To keep the current pools, set `system_disk_type` and
+  `agent_disk_type` to `pd-balanced`.
 - Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
   no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
   (`SCALE_TO_ZERO`), the Agent CRD (`scaleToZero` is optional with default `true`; Go type `*bool`), `POST
