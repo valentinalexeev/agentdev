@@ -8,8 +8,8 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 |---|---|
 | VPC, subnet, Cloud NAT | private nodes; egress narrowed later by #6 |
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
-| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand: router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
-| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-standard`) |
+| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI |
+| `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes` |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
@@ -65,6 +65,11 @@ the GKE default `pd-balanced` costs about 10). Nodes hold only images and epheme
 `system_disk_type = "pd-balanced"` and `agent_disk_type = "pd-balanced"`. Changing a disk variable **replaces the node pool**: `terraform apply` recreates
 the nodes (a few minutes without router and operator for the system pool), then re-run the Ansible playbook, which
 waits for the operator and the agents; agents resume from their PVCs.
+Spot system pool (#171): `system_pool_spot = true` cuts the system pool cost by about 60-70% (about 15 EUR a month
+on `e2-medium`). When Google reclaims the node (at most 30 s notice), the router, operator, UI and proxies are down
+until the pool has a new node and the pods are rescheduled, usually about a minute; longer if the zone has no Spot
+capacity. Webhooks sent in that gap are lost; agents still pick up their issues at the next poll (`poll_seconds`).
+Agents keep their state on PVCs. Switching the variable replaces the node pool.
 
 GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
 

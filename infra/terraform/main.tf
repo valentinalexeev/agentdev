@@ -138,7 +138,7 @@ resource "google_container_cluster" "this" {
   depends_on = [google_project_service.apis]
 }
 
-# Always-on pool for platform components (router, operator, UI). Small and on-demand.
+# Always-on pool for platform components (router, operator, UI). Small; on-demand unless system_pool_spot.
 resource "google_container_node_pool" "system" {
   name     = "system"
   cluster  = google_container_cluster.this.id
@@ -151,6 +151,7 @@ resource "google_container_node_pool" "system" {
     machine_type    = var.system_machine_type
     disk_size_gb    = var.system_disk_size_gb
     disk_type       = var.system_disk_type
+    spot            = var.system_pool_spot # #171, default false: on-demand
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     workload_metadata_config { mode = "GKE_METADATA" }

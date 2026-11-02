@@ -14,11 +14,16 @@
 //   - A webhook for a person with no live agent: the router looks up stopped agents (annotations agentdev/user,
 //     agentdev/repos, agentdev/forge) and scales the matching one to 1. Nothing is buffered: a starting agent
 //     polls the forge first, so the event's work is found anyway.
+//   - Wake poll (#181), for instances without webhooks: every WAKE_POLL_SECONDS the router asks the forge, with a
+//     read-only credential of its own, whether a stopped agent has new work (an open issue given to it, or one of its
+//     open PRs, changed since it stopped) and scales only those agents to 1, as the webhook path does.
 //   The router keeps no list of stopped agents; Kubernetes is the source of truth, so a router restart loses nothing.
 //
 // Env: PORT (8080), FORGE_SECRETS ("gitea=<secret>,github=<secret>"), REGISTER_TOKEN (agents -> router),
 //      REGISTRATION_TTL_SECONDS (300), K8S_NAMESPACE (agents namespace; scaling is off without it),
-//      K8S_API_URL (default: in-cluster API with the pod's service account).
+//      K8S_API_URL (default: in-cluster API with the pod's service account),
+//      WAKE_POLL_SECONDS (0 = off), GITEA_URL, GITHUB_API_URL (https://api.github.com), FORGE_POLL_DIR (files of the
+//      read-only poll credential: gitea-token, or github-app-id, private-key.pem and optional github-installation-id).
 'use strict';
 const http = require('node:http');
 const crypto = require('node:crypto');
@@ -30,7 +35,8 @@ const forgeSecrets = Object.fromEntries((process.env.FORGE_SECRETS || '').split(
   .map((kv) => { const i = kv.indexOf('='); return [kv.slice(0, i), kv.slice(i + 1)]; }));
 
 const log = (m) => console.log(`${new Date().toISOString().slice(11, 19)} router: ${m}`);
-const stats = { delivered: 0, rejected: 0, unrouted: 0, forwarded: 0, forwardErrors: 0, scaledUp: 0, scaledDown: 0, scaleErrors: 0 };
+const stats = { delivered: 0, rejected: 0, unrouted: 0, forwarded: 0, forwardErrors: 0, scaledUp: 0, scaledDown: 0, scaleErrors: 0,
+  polls: 0, polledUp: 0, pollErrors: 0 };
 
 // agent name -> { agent, forge, user, repos: Set, url, token, seen }
 const registry = new Map();
@@ -133,21 +139,100 @@ async function scalable() {
   }).filter((s) => s.enabled);
 }
 const waking = new Map();   // sts name -> time scaled up (no double scale-ups while the pod starts)
-async function wakeStopped(forge, repo, who) {
-  if (!ns) return [];
-  // Every opted-in agent that is not live is a candidate, whatever its replica count: an agent being scaled down
-  // (replicas already 0 or pod terminating) must come back for this event. scaleTo(1) is idempotent.
-  const liveNames = new Set(live().map((r) => `agent-${r.agent}`));
-  // a blocked agent (#27) is never started by events; the idle path below may still stop it
-  const todo = (await scalable()).filter((s) => !s.blocked && !liveNames.has(s.name) && s.forge === forge && s.repos.includes(repo)
-    && who.has(s.user) && Date.now() - (waking.get(s.name) || 0) >= 120e3);
+const stoppedAt = new Map(); // sts name -> time the router stopped it (idle); the wake poll looks for changes after it
+// start these stopped agents (the one way up for both the webhook and the poll path)
+async function start(todo, why) {
   const results = await Promise.allSettled(todo.map((s) => scaleTo(s.name, 1).then(() => {
-    waking.set(s.name, Date.now()); stats.scaledUp++;
-    log(`scaled ${s.name} -> 1 (${forge} event for ${s.user} in ${repo})`); return s.name;
+    waking.set(s.name, Date.now()); stoppedAt.delete(s.name); stats.scaledUp++;
+    log(`scaled ${s.name} -> 1 (${why(s)})`); return s.name;
   })));
   results.filter((r) => r.status === 'rejected').forEach((r) => { stats.scaleErrors++; log(r.reason.message); });
   return results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
 }
+// opted-in agents that may be started now: not blocked (#27), not live, not started in the last 2 minutes
+async function startable() {
+  const liveNames = new Set(live().map((r) => `agent-${r.agent}`));
+  return (await scalable()).filter((s) => !s.blocked && !liveNames.has(s.name) && Date.now() - (waking.get(s.name) || 0) >= 120e3);
+}
+async function wakeStopped(forge, repo, who) {
+  if (!ns) return [];
+  // Every opted-in agent that is not live is a candidate, whatever its replica count: an agent being scaled down
+  // (replicas already 0 or pod terminating) must come back for this event. scaleTo(1) is idempotent.
+  const todo = (await startable()).filter((s) => s.forge === forge && s.repos.includes(repo) && who.has(s.user));
+  return start(todo, (s) => `${forge} event for ${s.user} in ${repo}`);
+}
+
+// ---------- wake poll (#181): scale to zero without webhooks ----------
+const pollMs = Number(process.env.WAKE_POLL_SECONDS || 0) * 1000;
+const pollDir = process.env.FORGE_POLL_DIR || '/var/run/agentdev/forge-poll';
+const giteaUrl = (process.env.GITEA_URL || '').replace(/\/+$/, '');
+const githubApi = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
+const startedAt = Date.now();
+const readCred = (f) => { try { return require('node:fs').readFileSync(`${pollDir}/${f}`, 'utf8').trim(); } catch { return ''; } };
+async function getJSON(url, headers) {
+  const r = await fetch(url, { headers: { accept: 'application/json', ...headers }, redirect: 'error', signal: AbortSignal.timeout(15e3) });
+  if (!r.ok) throw new Error(`GET ${new URL(url).pathname}: HTTP ${r.status}`);
+  return r.json();
+}
+// GitHub App (#2): a JWT, then an installation token narrowed to one repo and to read access
+const b64url = (b) => Buffer.from(b).toString('base64url');
+function appJwt(appId, key) {
+  const now = Math.floor(Date.now() / 1000);
+  const data = `${b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64url(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId }))}`;
+  return `${data}.${crypto.createSign('RSA-SHA256').update(data).sign(key, 'base64url')}`;
+}
+async function githubToken(repo) {
+  const appId = readCred('github-app-id'); const key = readCred('private-key.pem');
+  if (!/^[1-9][0-9]{0,15}$/.test(appId) || !key) throw new Error('wake poll: no GitHub App credential');
+  const jwt = { authorization: `Bearer ${appJwt(appId, key)}`, 'x-github-api-version': '2022-11-28' };
+  let id = readCred('github-installation-id');
+  if (!/^[1-9][0-9]{0,15}$/.test(id)) id = String((await getJSON(`${githubApi}/repos/${repo}/installation`, jwt)).id);
+  const r = await fetch(`${githubApi}/app/installations/${id}/access_tokens`, { method: 'POST', redirect: 'error',
+    headers: { ...jwt, accept: 'application/json', 'content-type': 'application/json' }, signal: AbortSignal.timeout(15e3),
+    body: JSON.stringify({ repositories: [repo.split('/')[1]], permissions: { issues: 'read', pull_requests: 'read', metadata: 'read' } }) });
+  if (!r.ok) throw new Error(`wake poll: installation token: HTTP ${r.status}`);
+  return (await r.json()).token;
+}
+// Does this stopped agent have work in repo changed after `since` (ms)? Same rules as the agent loop: on Gitea issues
+// assigned to it, on GitHub issues labelled agent:<name>; its PRs are the open ones from branches agent/<name>/...
+async function hasWork(s, repo, since) {
+  const iso = new Date(since).toISOString();
+  const after = (x) => Date.parse(x.updated_at) > since;
+  const mine = (p) => ((p.head && p.head.ref) || '').startsWith(`agent/${s.user}/`) && after(p);
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) return false;
+  if (s.forge === 'github') {
+    const h = { authorization: `Bearer ${await githubToken(repo)}`, 'x-github-api-version': '2022-11-28' };
+    const q = new URLSearchParams({ state: 'open', labels: `agent:${s.user}`, since: iso, per_page: '20' });
+    if ((await getJSON(`${githubApi}/repos/${repo}/issues?${q}`, h)).some(after)) return true;
+    return (await getJSON(`${githubApi}/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=50`, h)).some(mine);
+  }
+  const tok = readCred('gitea-token');
+  if (!giteaUrl || !tok) throw new Error('wake poll: no GITEA_URL or gitea-token');
+  const h = { authorization: `token ${tok}` };
+  const q = new URLSearchParams({ state: 'open', type: 'issues', assigned_by: s.user, since: iso, limit: '20' });
+  if ((await getJSON(`${giteaUrl}/api/v1/repos/${repo}/issues?${q}`, h)).some(after)) return true;
+  return (await getJSON(`${giteaUrl}/api/v1/repos/${repo}/pulls?state=open&sort=recentupdate&limit=50`, h)).some(mine);
+}
+let polling = false;
+async function pollOnce() {
+  if (!ns || polling) return [];
+  polling = true; stats.polls++;
+  try {
+    // only agents that are really down (replicas 0); after a router restart the stop time is unknown: look back one
+    // poll interval before the start (an agent stops only when it found no work, so older changes were seen)
+    const todo = [];
+    for (const s of (await startable()).filter((x) => x.replicas === 0)) {
+      const since = stoppedAt.get(s.name) || (startedAt - pollMs);
+      for (const repo of s.repos) {
+        try { if (await hasWork(s, repo, since)) { todo.push(s); break; } } catch (e) { stats.pollErrors++; log(`wake poll ${s.name}: ${e.message}`); }
+      }
+    }
+    const started = await start(todo, () => 'wake poll: new work on the forge');
+    stats.polledUp += started.length;
+    return started;
+  } catch (e) { stats.pollErrors++; log(`wake poll: ${e.message}`); return []; } finally { polling = false; }
+}
+if (pollMs > 0) setInterval(pollOnce, pollMs).unref();
 
 function readBody(req, limit, cb) {
   const chunks = []; let size = 0;
@@ -191,7 +276,7 @@ http.createServer((req, res) => {
       if (!s) return json(res, 200, { stopped: false, reason: 'scale-to-zero not enabled' });
       if (woken()) return json(res, 200, { stopped: false, reason: 'woken since idle' });   // a wake during the lookup
       registry.delete(b.agent);   // from here on, events for it scale it up again (wakeStopped)
-      await scaleTo(name, 0); waking.delete(name); stats.scaledDown++;
+      await scaleTo(name, 0); waking.delete(name); stoppedAt.set(name, Date.now()); stats.scaledDown++;
       log(`scaled ${name} -> 0 (idle)`);
       return json(res, 200, { stopped: true });
     })().catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 500, { error: 'scale failed' }); }));
@@ -223,6 +308,6 @@ http.createServer((req, res) => {
   }
 
   json(res, 404, { error: 'not found' });
-}).listen(port, () => log(`listening on :${port}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}`));
+}).listen(port, () => log(`listening on :${port}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}; wake poll: ${pollMs && ns ? `every ${pollMs / 1000}s` : 'off'}`));
 // never die on a stray async error: log it (an exit would drop every registration and delivery in flight)
 process.on('unhandledRejection', (e) => log(`unhandled: ${e && e.message}`));

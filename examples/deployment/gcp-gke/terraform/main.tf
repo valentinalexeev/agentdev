@@ -35,6 +35,8 @@ module "agentdev" {
   # system_disk_type    = var.system_disk_type
   # agent_disk_size_gb  = var.agent_disk_size_gb
   # agent_disk_type     = var.agent_disk_type
+  # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
+  # system_pool_spot = var.system_pool_spot
 }
 
 variable "project_id" { type = string }
@@ -97,6 +99,10 @@ variable "agent_disk_size_gb" {
 variable "agent_disk_type" {
   type    = string
   default = "pd-standard"
+variable "system_pool_spot" {
+  description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
+  type        = bool
+  default     = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

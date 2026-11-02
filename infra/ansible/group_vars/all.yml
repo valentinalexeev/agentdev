@@ -38,7 +38,12 @@ forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
-scale_to_zero: false                # stop idle agents, start on events (#35); per agent: agents[].scale_to_zero
+scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
+wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
+# webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
+# zero and wake_poll_seconds 0 the playbook refuses to run without them (agents would stop and never start again).
+webhooks_enabled: "{{ ((ingress | default({})).webhook_host | default((ingress | default({})).host | default(''))) | length > 0 }}"
+sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-only token of the wake poll (optional)
 # agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
 # "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
 agent_storage_class: agentdev-agent

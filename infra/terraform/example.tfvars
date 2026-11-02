@@ -15,5 +15,6 @@ github_repository  = "my-org/my-agentdev-deploy" # the deployment repo, not this
 # system_disk_type     = "pd-standard"   # default; "pd-balanced" keeps a pre-#170 pool
 # agent_disk_size_gb   = 50
 # agent_disk_type      = "pd-standard"
+# system_pool_spot     = false   # #171: Spot for the system pool; short platform gaps on preemption
 # public_hosts         = ["agentdev.example.com"]   # public HTTPS entry point (#120); DNS A record -> webhook_ip
 # cloud_armor          = false

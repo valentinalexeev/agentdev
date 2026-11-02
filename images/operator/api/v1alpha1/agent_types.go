@@ -43,8 +43,10 @@ type AgentSpec struct {
 	// +kubebuilder:default=2
 	MaxConcurrent int32 `json:"maxConcurrent,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
+	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
+	// +kubebuilder:default=true
 	// +optional
-	ScaleToZero bool `json:"scaleToZero,omitempty"`
+	ScaleToZero *bool `json:"scaleToZero,omitempty"`
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
@@ -89,3 +91,7 @@ type AgentList struct {
 }
 
 func init() { SchemeBuilder.Register(&Agent{}, &AgentList{}) }
+
+// ScalesToZero reports whether the agent stops when idle: true unless scaleToZero is explicitly false (#181). The CRD
+// default sets the field on new objects; this covers objects read without it (tests, older API servers).
+func (s AgentSpec) ScalesToZero() bool { return s.ScaleToZero == nil || *s.ScaleToZero }
