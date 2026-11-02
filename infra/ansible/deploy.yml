@@ -68,6 +68,9 @@
           (docs/admin.md, Turn on approvals).
         quiet: true
 
+    - name: Scale to zero has a wake source (#181)
+      ansible.builtin.include_tasks: tasks/wake_source.yml
+
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
       changed_when: false
@@ -126,6 +129,9 @@
             REGISTER_TOKEN: "{{ register_token }}"
             ROUTER_IMAGE: "{{ router_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
+            WAKE_POLL_SECONDS: "{{ wake_poll_seconds | int }}"
+            GITEA_URL: "{{ forge_url if forge_kind == 'gitea' else '' }}"
+            GITHUB_API_URL: "{{ forge_url if forge_kind == 'github' else 'https://api.github.com' }}"
           replace: []
       no_log: true
 
@@ -484,6 +490,34 @@
                          {'FORGE_TOKEN': agent_secrets.results[idx].stdout_lines[0]}) }}
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
+      no_log: true
+
+    # Wake poll (#181): the router's read-only forge credential. GitHub: the App (the router narrows its installation
+    # tokens to read access); Gitea: the optional Secret Manager entry router-poll-forge-token (a read-only token).
+    - name: Gitea read-only token of the wake poll (optional)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if gcloud secrets describe {{ sm_router_poll_token }} --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets versions access latest --secret {{ sm_router_poll_token }} --project {{ gcp_project }}
+        fi
+      args: {executable: /bin/bash}
+      register: router_poll_token
+      changed_when: false
+      no_log: true
+      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
+
+    - name: Wake poll credential (Secret webhook-router-poll, router pod only)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: "{{ 'present' if (wake_poll_seconds | int) > 0 else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: webhook-router-poll, namespace: "{{ agents_ns }}"}
+          stringData: >-
+            {{ {'github-app-id': github_app.app_id | string, 'private-key.pem': github_app_key.stdout,
+                'github-installation-id': github_app.installation_id | default('') | string}
+               if forge_kind == 'github' else {'gitea-token': router_poll_token.stdout | default('')} }}
       no_log: true
 
     # ---------- Claude credential proxy (#66, same template as 06-agents.sh) ----------

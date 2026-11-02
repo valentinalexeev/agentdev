@@ -278,6 +278,33 @@ func TestCreateSpec(t *testing.T) {
 	}
 }
 
+// #181: scale to zero is the default; an explicit false is kept, and the overview reads a missing field as true.
+func TestCreateScaleToZeroDefault(t *testing.T) {
+	gitea := fakeGitea(t)
+	defer gitea.Close()
+	e := newEnv(t, gitea.URL)
+	if w := e.call("POST", "/api/agents", "admin", `{"name":"bob","repo":"owner/x"}`); w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if s := e.spec(t, "bob"); s["scaleToZero"] != true {
+		t.Errorf("default scaleToZero: %v", s["scaleToZero"])
+	}
+	if w := e.call("POST", "/api/agents", "admin", `{"name":"carl","repo":"owner/x","scaleToZero":false}`); w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if s := e.spec(t, "carl"); s["scaleToZero"] != false {
+		t.Errorf("explicit false: %v", s["scaleToZero"])
+	}
+	without := unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "x"}, "spec": map[string]any{"repo": "o/r"}}}
+	if !fromAgentObject(without).ScaleToZero {
+		t.Error("an Agent without scaleToZero is shown as off")
+	}
+	without.Object["spec"].(map[string]any)["scaleToZero"] = false
+	if fromAgentObject(without).ScaleToZero {
+		t.Error("scaleToZero false is shown as on")
+	}
+}
+
 func TestAuditLine(t *testing.T) {
 	gitea := fakeGitea(t)
 	defer gitea.Close()

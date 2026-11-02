@@ -165,15 +165,44 @@ agent from inside the cluster.
 
 ## Scale to zero
 
-With scale to zero, the router stops an agent that has no work, and starts it when an event occurs. Scale to zero is
-off by default.
+With scale to zero, the router stops an agent that has no work, and starts it again when there is new work. Scale to
+zero is on by default (#181). On GKE, the agent node pool goes to zero nodes when no agent runs.
 
-### Turn on scale to zero
+The router starts a stopped agent when:
 
-1. On `kind`: set `SCALE_TO_ZERO=true`.
-   On GKE: set `agents[].scale_to_zero` for each agent.
-2. Optional: set `IDLE_SECONDS` (the default is 900).
-3. Deploy again.
+- A webhook for the agent arrives.
+- The wake poll finds new work for the agent. Every `wake_poll_seconds` (default 300), the router reads the open
+  issues and PRs of each stopped agent on the forge. This works without webhooks.
+
+NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
+1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
+
+### Settings
+
+| Setting | `kind` (`config.env`) | GKE (`instance.yml`) | Default |
+|---|---|---|---|
+| Scale to zero, all agents | `SCALE_TO_ZERO` | `scale_to_zero` | `true` |
+| Scale to zero, one agent | (not available) | `agents[].scale_to_zero` | the value for all agents |
+| Idle time before the stop | `IDLE_SECONDS` | `idle_seconds` | `900` |
+| Interval of the wake poll; `0` = off | `WAKE_POLL_SECONDS` | `wake_poll_seconds` | `300` |
+
+The wake poll uses a read-only forge credential in the Secret `webhook-router-poll`. Only the router pod reads it.
+
+- GitHub: the router uses the GitHub App. It asks for installation tokens with read access only.
+- Gitea on `kind`: `06-agents.sh` makes the account `agentdev-router` (read access to the repository) and its token.
+- Gitea on GKE: put a read-only token (scopes `read:repository`, `read:issue`) in the Secret Manager entry
+  `router-poll-forge-token`.
+
+CAUTION: If you set `wake_poll_seconds: 0`, agents start again only on a webhook. The playbook stops with the error
+"scale_to_zero needs webhooks or wake_poll_seconds" when an agent scales to zero and there are no webhooks
+(`ingress.webhook_host` or `ingress.host` is not set).
+
+### Keep an agent running
+
+1. On `kind`: set `SCALE_TO_ZERO=false` (all agents).
+   On GKE: set `scale_to_zero: false` for the agent in `agents`, or for all agents.
+   In the web UI: clear **Scale to zero** for the agent.
+2. Deploy again.
 
 ### Examine the state of scale to zero
 

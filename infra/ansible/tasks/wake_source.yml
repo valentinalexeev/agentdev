@@ -1,0 +1,12 @@
+---
+# Scale to zero is the default (#181). A stopped agent starts again only on a webhook or on the router's wake poll
+# (wake_poll_seconds); with neither it would stop and never start again. Used by deploy.yml and tests/wake_source.yml.
+- name: Scale to zero has a wake source (webhooks or wake_poll_seconds)
+  ansible.builtin.assert:
+    that: >-
+      (wake_poll_seconds | int) > 0 or (webhooks_enabled | bool)
+      or (agents | map(attribute='scale_to_zero', default=scale_to_zero) | map('bool') | select | list | length == 0)
+    fail_msg: >-
+      scale_to_zero needs webhooks or wake_poll_seconds: set wake_poll_seconds above 0 (default 300), set up
+      webhooks (ingress.webhook_host), or turn scale to zero off (scale_to_zero: false, or agents[].scale_to_zero: false).
+    quiet: true

@@ -47,7 +47,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if s.Annotations == nil {
 		s.Annotations = map[string]string{}
 	}
-	s.Annotations["agentdev/scale-to-zero"] = strconv.FormatBool(a.Spec.ScaleToZero)
+	s.Annotations["agentdev/scale-to-zero"] = strconv.FormatBool(a.Spec.ScalesToZero())
 	s.Annotations["agentdev/user"] = n
 	s.Annotations["agentdev/repos"] = a.Spec.Repo
 	s.Annotations["agentdev/forge"] = forge
@@ -124,7 +124,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)), env("APPROVALS", r.D.approvals()),
+			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},

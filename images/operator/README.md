@@ -14,7 +14,7 @@ spec:
   forge: gitea                  # default; github later (#2)
   forgeSecret: agent-carol      # default agent-<name>, agent-*: FORGE_TOKEN (+ WAKE_TOKEN, REGISTER_TOKEN)
   maxConcurrent: 2              # default 2, 1..8; memory limit is (1 + maxConcurrent) Gi
-  scaleToZero: false            # stop when idle; the router then owns replicas (#35); resuming starts it once
+  scaleToZero: true             # default true (#181): stop when idle, the router then owns replicas (#35); false keeps it up
   paused: false                 # true: 0 replicas, state kept
 ```
 

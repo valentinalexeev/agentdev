@@ -92,8 +92,10 @@ spec:
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
               scaleToZero:
-                description: Stop when idle, woken by the router (#35). The router
-                  then owns replicas; resuming a paused agent starts it once.
+                default: true
+                description: |-
+                  Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
+                  Default true (#181): an Agent without the field scales to zero; set false to keep it running.
                 type: boolean
             required:
             - claudeSecret
