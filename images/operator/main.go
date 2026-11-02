@@ -62,7 +62,7 @@ func main() {
 		log.Error(err, "manager")
 		os.Exit(1)
 	}
-	r := &AgentReconciler{Client: mgr.GetClient(), D: Defaults{
+	r := &AgentReconciler{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), D: Defaults{
 		WorkerImage:     env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
 		ForgeImage:      env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
 		PullPolicy:      env("IMAGE_PULL_POLICY", "IfNotPresent"),
@@ -79,6 +79,8 @@ func main() {
 		EgressProxy:     os.Getenv("EGRESS_PROXY"),
 		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
 		CostLabels:      parseCostLabels(os.Getenv("COST_LABELS")),
+		StorageClass:    os.Getenv("AGENT_STORAGE_CLASS"), // #173; empty: cluster default
+		StateStorage:    env("AGENT_STATE_STORAGE", "10Gi"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

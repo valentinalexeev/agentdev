@@ -318,6 +318,21 @@
       ansible.builtin.include_role: {name: ingress}
       when: (ingress.host | default('')) | length > 0
 
+    # one disk per agent (#173): the cheapest GCE disk type; created only when the class is not the cluster default
+    - name: "Agent StorageClass (pd-standard, #173)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata: {name: "{{ agent_storage_class }}", labels: {app.kubernetes.io/part-of: agentdev}}
+          provisioner: pd.csi.storage.gke.io
+          parameters: {type: pd-standard}
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+          allowVolumeExpansion: true
+      when: agent_storage_class | length > 0
+
     - name: Agent operator (#47); it renders every agent's StatefulSet
       kubernetes.core.k8s:
         <<: *k8s
@@ -339,6 +354,8 @@
             BOTBOARD_URL: "{{ botboard_url }}"
             POLL_SECONDS: "{{ poll_seconds }}"
             IDLE_SECONDS: "{{ idle_seconds }}"
+            AGENT_STORAGE_CLASS: "{{ agent_storage_class }}"
+            AGENT_STATE_STORAGE: "{{ agent_state_storage }}"
             EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"

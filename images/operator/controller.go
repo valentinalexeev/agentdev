@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -32,16 +35,21 @@ type Defaults struct {
 	ClaudeProxyURL string
 	// CostLabels (#184): service/environment on the StatefulSet and the pod (COST_LABELS); never override own labels
 	CostLabels map[string]string
+	// agent volume (#173): StorageClass (empty: cluster default) and size of the one state claim
+	StorageClass, StateStorage string
 }
 
 type AgentReconciler struct {
 	client.Client
-	D Defaults
+	// Direct reads PVCs uncached (the cache holds PVCs of EXEC_NS only); nil: the client
+	Direct client.Reader
+	D      Defaults
 }
 
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
 
 // Reconcile makes the agent's Service and StatefulSet match its spec. Children carry an owner reference, so deleting
 // the Agent removes them (Kubernetes garbage collection); the state volume is kept (StatefulSet PVC retention) so a
@@ -69,6 +77,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return controllerutil.SetControllerReference(&a, svc, r.Scheme())
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
+	}
+
+	if wait, err := r.relayout(ctx, &a); err != nil || wait {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
@@ -102,6 +114,49 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	return ctrl.Result{}, r.updateStatus(ctx, &a, sts)
+}
+
+// relayout moves an agent to the current volume layout (#173). volumeClaimTemplates are immutable, so a StatefulSet
+// in another layout (the two claims state and claude of 1.0.0-rc, or another StorageClass) is deleted with its pod
+// and its old claims; the next reconcile creates it again with one new claim. The agent's local state is lost (open
+// branches stay on the forge). wait: not done yet, reconcile again later.
+func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool, err error) {
+	key := types.NamespacedName{Namespace: a.Namespace, Name: "agent-" + a.Name}
+	var sts appsv1.StatefulSet
+	switch err := r.Get(ctx, key, &sts); {
+	case apierrors.IsNotFound(err):
+	case err != nil:
+		return false, err
+	case sts.DeletionTimestamp != nil:
+		return true, nil
+	case len(sts.Spec.VolumeClaimTemplates) == 0 || sameLayout(sts.Spec.VolumeClaimTemplates, r.D.claimTemplates()):
+		return false, nil
+	default:
+		log.FromContext(ctx).Info("volume layout changed: recreating the statefulset and its volumes", "agent", a.Name)
+		if err := r.Delete(ctx, &sts, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return false, err
+		}
+		for _, c := range sts.Spec.VolumeClaimTemplates {
+			pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: c.Name + "-" + key.Name + "-0", Namespace: a.Namespace}}
+			if err := r.Delete(ctx, pvc); client.IgnoreNotFound(err) != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+	// no StatefulSet: wait until the old claims are gone, so the new pod does not get a volume that is being deleted
+	reader := r.Direct
+	if reader == nil {
+		reader = r.Client
+	}
+	var pvc corev1.PersistentVolumeClaim
+	switch err := reader.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: "state-" + key.Name + "-0"}, &pvc); {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return pvc.DeletionTimestamp != nil, nil
 }
 
 func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet) error {

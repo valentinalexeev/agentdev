@@ -91,6 +91,22 @@ Agents read the forge at this interval when webhooks do not operate.
 1. On `kind`: set `POLL_SECONDS`. On GKE: set `poll_seconds`.
 2. Deploy again.
 
+### Set the agent volume
+
+Each agent has one volume (PVC `state-agent-<name>-0`). The volume keeps the clones, the cursors and the Claude
+state (`/home/node/.claude` is the `claude` directory of the volume).
+
+1. On `kind`: set `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` in `config.env`, then `./run.sh 12`.
+   On GKE: set `agent_storage_class` and `agent_state_storage` in `instance.yml`, then deploy.
+2. A new size applies to new agents only. To make the volume of an agent larger, edit its PVC.
+
+NOTE: On GKE, Ansible creates the StorageClass `agentdev-agent` (`pd-standard`, the cheapest disk type). GCE bills each
+disk at 10 GB or more, so the default size is 10Gi. On `kind`, the class is empty: the cluster default (`standard`).
+
+CAUTION: When the StorageClass or the volume layout changes, the operator deletes the StatefulSet and the volumes of
+each agent and makes them again. The agent loses its local state. Open branches stay on the forge. Do this change
+only when the agents have no job.
+
 ### Find the security events of an agent
 
 1. Run this command:
@@ -116,6 +132,8 @@ Agents read the forge at this interval when webhooks do not operate.
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
+| Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
+| Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
 ## Claude proxy and token budget
 
