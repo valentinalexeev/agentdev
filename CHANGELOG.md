@@ -6,6 +6,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
+  the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
+  the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
+  `image_registry` output is `null` then. Switching an existing deployment to `false` destroys the (unused) repo;
+  the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
+  (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
+
 ### Fixed
 - Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
   waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not

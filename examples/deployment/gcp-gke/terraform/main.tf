@@ -25,6 +25,9 @@ module "agentdev" {
   # public HTTPS entry point (agentdev #120): uncomment with a ref= that contains #120
   # public_hosts = var.public_hosts
   # cloud_armor  = var.cloud_armor
+
+  # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
+  # create_artifact_registry = var.create_artifact_registry
 }
 
 variable "project_id" { type = string }
@@ -61,6 +64,11 @@ variable "public_hosts" {
 variable "cloud_armor" {
   type    = bool
   default = false
+}
+variable "create_artifact_registry" {
+  description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
+  type        = bool
+  default     = true
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

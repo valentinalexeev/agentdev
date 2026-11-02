@@ -18,6 +18,12 @@ variable "cluster_name" {
   default = "agentdev"
 }
 
+variable "create_artifact_registry" {
+  description = "Create the Artifact Registry Docker repo, its API and IAM roles. The Ansible roles pull images from GHCR (image_registry), so false is enough unless you mirror images yourself."
+  type        = bool
+  default     = true
+}
+
 variable "system_machine_type" {
   description = "Node type for the always-on system pool (router, forge connector, operator, management UI)."
   type        = string
