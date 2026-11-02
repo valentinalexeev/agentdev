@@ -42,6 +42,16 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
 
 ### Changed
+- Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
+  no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
+  (`SCALE_TO_ZERO`), the Agent CRD (`scaleToZero` is optional with default `true`; Go type `*bool`), `POST
+  /api/agents` and the web UI. An explicit `false` (`agents[].scale_to_zero: false`, `scaleToZero: false`) keeps an
+  agent running. Existing Agent objects without the field scale to zero after the upgrade.
+- The router has a wake poll for instances without webhooks (#181): every `wake_poll_seconds` / `WAKE_POLL_SECONDS`
+  (default 300, `0` = off) it asks the forge with a read-only credential (Secret `webhook-router-poll`: the GitHub App
+  narrowed to read access, or a Gitea read token) whether a stopped agent has new work, and starts only those agents.
+  The playbook refuses scale to zero with neither webhooks nor the wake poll ("scale_to_zero needs webhooks or
+  wake_poll_seconds"). Gitea on GKE: put a read-only token in Secret Manager `router-poll-forge-token`.
 - Operator: one volume per agent instead of two (#173). The `state` PVC now also holds the Claude state
   (`/home/node/.claude` is its `claude` subPath); the separate `claude` PVC is gone. The PVC uses the agent StorageClass
   and size: operator env `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` (default `10Gi`), Ansible

@@ -61,6 +61,10 @@ merge, deploys the agents and waits until each one posts a readiness report (for
 session with a fresh clone of the project; detach with Ctrl-b d and `scripts/agent-chat.sh attach` re-attaches from any
 terminal with cluster access. The session can read and file issues but not push; it ends after 30 min unattended.
 
+**Scale to zero (default, #181).** An agent with no work for 15 minutes stops; on GKE its node goes away too. The router
+starts it again on a webhook, or when its wake poll (every 5 minutes) finds new work on the forge. Set
+`SCALE_TO_ZERO=false` (kind) or `scale_to_zero: false` (GKE) to keep agents running (docs/admin.md, Scale to zero).
+
 **MVP limits.** Polling (20 s), not webhooks. No merge, no CI gate: you review and merge.
 
 ---

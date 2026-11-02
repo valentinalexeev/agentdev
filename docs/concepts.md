@@ -53,9 +53,19 @@ an agent: agents re-read state from the forge API. If webhooks fail, agents stil
 
 ## Scale to zero
 
-Optional per agent (`SCALE_TO_ZERO`, #35). An agent with no work for `IDLE_SECONDS` (default 15 min) asks the
-router to stop it. When an event for a stopped agent arrives, the router starts it again, and it picks the work up
-from the forge. The router refuses to stop an agent that was woken since it became idle, so work is not cut off.
+On by default for every agent (#35, default since #181); `scaleToZero: false` on an agent keeps it running. An
+agent with no work for `IDLE_SECONDS` (default 15 min) asks the router to stop it. On GKE the agent node pool then
+goes to zero nodes when no agent runs. The router refuses to stop an agent that was woken since it became idle, so
+work is not cut off.
+
+A stopped agent starts again in two ways, and it then picks the work up from the forge:
+
+- **Webhook:** an event for the agent arrives at the router.
+- **Wake poll:** every `wake_poll_seconds` (default 300 s) the router asks the forge, with a read-only credential,
+  whether a stopped agent has new work (an issue given to it, or new activity on one of its PRs). This path needs no
+  public webhook URL.
+
+The first answer of a stopped agent takes longer: the pod (and on GKE a node) must start first.
 
 ## Agent dashboard (botboard)
 

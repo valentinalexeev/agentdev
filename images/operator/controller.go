@@ -96,7 +96,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		switch {
 		case a.Spec.Paused || blocked:
 			sts.Spec.Replicas = ptr.To[int32](0)
-		case creating || wasPaused || !a.Spec.ScaleToZero || current == nil:
+		case creating || wasPaused || !a.Spec.ScalesToZero() || current == nil:
 			// resume starts the agent once; with scale-to-zero it stops again when idle
 			sts.Spec.Replicas = ptr.To[int32](1)
 		default: // scale-to-zero and existing: the router owns replicas
