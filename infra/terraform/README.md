@@ -88,8 +88,17 @@ The Billing Budgets API needs a quota project. The example `deploy.yml` sets `GO
 Migration: if your deployment repository has the workaround resource
 `google_billing_account_iam_member.ci_budgets`, do one of these before the upgrade, else the plan shows two grants:
 
-- Delete the resource block and add `removed { from = google_billing_account_iam_member.ci_budgets  lifecycle { destroy = false } }`
-  (template `main.tf`). Terraform forgets the old address, and the module creates the same grant again.
+- Delete the resource block and add this block (as in the template `main.tf`) for one apply. Terraform forgets the
+  old address without a destroy, and the module creates the same grant again:
+
+  ```hcl
+  removed {
+    from = google_billing_account_iam_member.ci_budgets
+    lifecycle {
+      destroy = false
+    }
+  }
+  ```
 - Or move the state to the module address:
   `terraform state rm google_billing_account_iam_member.ci_budgets`, then
   `terraform import 'module.agentdev.google_billing_account_iam_member.automation_budgets[0]' "<billing_account_id> roles/billing.costsManager serviceAccount:<automation_service_account>"`.
