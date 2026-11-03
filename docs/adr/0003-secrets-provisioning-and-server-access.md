@@ -1,8 +1,8 @@
 # ADR 0003: Secrets provisioning, dependency caches and server access
 
 - **Status:** proposed (owner decisions open in the issues, see "Open decisions")
-- **Issues:** secrets store (TBD), registry caches (TBD), SSH CA and Ansible executor (TBD), probe catalogue and
-  observability tools (TBD); related #64 (forge sidecar), #65 (egress), #66 (credential proxy), #67 (approvals),
+- **Issues:** #202 (secrets store), #203 (registry caches), #204 (SSH CA and Ansible executor), #205 (probe
+  catalogue and observability tools), #206 (harness guide for agents); related #64 (forge sidecar), #65 (egress), #66 (credential proxy), #67 (approvals),
   #69 (executors), #135 (executor egress), #14 (MCP), #26 (remote control), #157 and #168 (idle cost)
 - **Date:** 2026-11-03
 
@@ -151,6 +151,8 @@ Probe, snapshot and log output is **untrusted input** for the model and never re
 - New risk register entries in `docs/security.md`: secrets in log and probe output reaching the model (accepted
   residual after redaction); CA signing key compromise (mitigated: KMS, short lifetimes, KRL); `env` mode secrets
   readable by the model (accepted per secret, opt-in).
+- Agents must learn these channels exist, or they will look for keys and SSH: #206 generates a read-only harness
+  guide per agent (capabilities, executors, probes, caches) from the operator's view.
 - The R48 residual (GitHub App key in each sidecar) can be removed by moving installation-token minting into the
   broker.
 
