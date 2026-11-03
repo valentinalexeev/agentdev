@@ -37,3 +37,8 @@ output "ingress" {
     security_policy = try(google_compute_security_policy.public[0].name, "")
   }
 }
+
+output "budget" {
+  description = "Name of the billing budget; null when create_budget is false (#199)."
+  value       = one(google_billing_budget.monthly[*].name)
+}

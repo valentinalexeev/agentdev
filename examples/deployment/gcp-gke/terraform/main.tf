@@ -39,7 +39,17 @@ module "agentdev" {
   # labels = var.labels
   # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
   # system_pool_spot = var.system_pool_spot
+  # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
+  # create_budget = var.create_budget
 }
+
+# Migration (agentdev #199): if this repository has the workaround resource
+# google_billing_account_iam_member.ci_budgets, delete that resource block and keep this block for one apply.
+# Terraform forgets the old address without a destroy; the module then creates the same grant at its own address.
+# removed {
+#   from = google_billing_account_iam_member.ci_budgets
+#   lifecycle { destroy = false }
+# }
 
 variable "project_id" { type = string }
 variable "region" { type = string }
@@ -61,6 +71,11 @@ variable "budget_currency" {
 variable "budget_alert_emails" {
   type    = list(string)
   default = []
+}
+variable "create_budget" {
+  description = "false = no billing budget and no billing IAM for the automation account (agentdev #199)."
+  type        = bool
+  default     = true
 }
 variable "agent_pool_max_nodes" {
   type    = number

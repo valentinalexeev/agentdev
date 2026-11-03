@@ -133,6 +133,8 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | sidecar | a second container in the agent pod |
 | Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
+| billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
+| quota project | the Google Cloud project that a Google API charges for a request |
 | token budget | the number of Claude tokens that one agent can use in 24 hours |
 | specification (spec) | the project file, for example `my-project.yaml` |
 | sync | one run of `scripts/mcp-sync.sh` |
