@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
+  `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
+  the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
+  `scripts/release-lines.sh` (`list`, `check`, `forward`) and the `Release lines` workflow. Deployments still pin a tag.
 - Terraform `create_budget` (default `true`, #199). With `false`, the module makes no billing budget, no budget
   notification channels and no billing IAM. New output `budget` (null when `false`). The template passes it through.
 - External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do

@@ -1,0 +1,35 @@
+name: Release lines
+
+# ADR 0004: every line contains every lower one (release/X.Y -> ... -> main -> next/X.0).
+#   push to a line          report pending forward merges as warnings (main does not go red for a pending hop)
+#   PR chore/release-* into a line   fail if a lower line is not merged into the PR head
+on:
+  push:
+    branches: [main, "release/**", "next/**"]
+  pull_request:
+    branches: [main, "release/**", "next/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lines-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Lines
+        run: scripts/release-lines.sh list
+      - name: Ancestry (report)
+        if: github.event_name == 'push'
+        run: scripts/release-lines.sh check
+      - name: Ancestry (release PR)
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'chore/release-')
+        env:
+          BASE: ${{ github.base_ref }}
+        run: scripts/release-lines.sh check --strict "$BASE" HEAD
