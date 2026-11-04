@@ -31,20 +31,27 @@ spec:
   podSelector: {matchLabels: {app: webhook-router}}
   policyTypes: [Ingress]
   ingress:
+  # the forwarder reaches only the public port: webhook deliveries (#214)
   - from: {{ peers | to_json }}
     ports: [{port: 8080}]
   # the router stays reachable for its in-cluster clients: once a policy selects a pod, Kubernetes denies all other
-  # traffic. Agents and the operator register and report idle; the Gitea forge sends webhooks; the kubelet probes.
+  # traffic. Agents (forge sidecar) register and report idle, platform callers read /status: the internal port only.
   - from:
     - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ agents_ns }}}}}
     - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ platform_ns }}}}}
+    ports: [{port: 8081}]
+  # the in-cluster Gitea forge sends webhooks: the public port only
+  - from:
     - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: forge}}}
+    ports: [{port: 8080}]
 {% if ingress_mode == 'gateway' %}
+  # Google Front Ends: deliveries on 8080, the load balancer health check (/healthz) on 8081 (HealthCheckPolicy)
+  - from:
 {%   for cidr in ingress_gfe_ranges %}
     - {ipBlock: {cidr: {{ cidr }}}}
 {%   endfor %}
+    ports: [{port: 8080}, {port: 8081}]
 {% endif %}
-    ports: [{port: 8080}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

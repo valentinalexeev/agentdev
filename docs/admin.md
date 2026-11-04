@@ -1092,13 +1092,14 @@ Use this procedure when a reverse proxy that you operate publishes the instance,
 (#160). The playbook then makes no Gateway, no HTTPRoute and no certificate. Terraform needs no `public_hosts` and
 no static IP address. The hosts still give the authentik issuer, the callback of the web UI and the webhook URL.
 
-WARNING: Publish only the paths in the table below. If the reverse proxy sends all paths of `webhook-router` to the
-router, the paths `/status`, `/register` and `/idle` become available outside the cluster.
+WARNING: Publish only the paths in the table below. Send only the path prefix `/hook` of the webhook host to the
+public port 8080 of `webhook-router`. Never publish the internal port 8081. The public port answers 404 for all
+other paths (#214), but a proxy that publishes only `/hook` also keeps scanners away from the router.
 
 | Public URL | Service (namespace, port) | Notes |
 |---|---|---|
 | `https://<ingress.host>/` | `agentdev-ui` (`agentdev-platform`, 8080) | The web UI and its `/api` calls. |
-| `https://<ingress.webhook_host>/hook` | `webhook-router` (`coding-agents`, 8080) | Only the path prefix `/hook`. |
+| `https://<ingress.webhook_host>/hook` | `webhook-router` (`coding-agents`, 8080) | Only the path prefix `/hook`. Not the internal port 8081. If your proxy has a health check, use `POST /hook` (the answer 401 shows that the router operates). |
 | `https://<ingress.auth_host>/` | `authentik-server` (`agentdev-platform`, 80, pod port 9000) | The authentik login and issuer. |
 
 1. In `ansible/instance.yml`, set the mode and the hosts:
@@ -1828,13 +1829,16 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
    ```bash
    kubectl -n coding-agents exec deploy/webhook-router -- node -e \
-     "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"
+     "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"
    ```
 
 ### Reference: the router
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
+- The router has two ports (#214). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and `POST /`)
+  and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
+  `/register` and `/idle` to the agents, the probes and the operators of the instance. Publish only the public port.
 - For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
   URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The

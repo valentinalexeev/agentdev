@@ -129,6 +129,23 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
+  webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
+  public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
+  publish) serves only webhook deliveries (`POST /` and `POST /hook...`) and answers 404 for anything else; the new
+  `INTERNAL_PORT` (8081) serves `/healthz`, `/status`, `/register`, `/idle` and deliveries for in-cluster callers.
+  The Service `webhook-router` exposes both ports (`http`, `internal`); readiness and the new liveness probe, the GKE
+  load balancer health check (HealthCheckPolicy) and the agents' `ROUTER_URL` (operator) use 8081. NetworkPolicies:
+  `agent-egress` allows the router on 8081 only; `webhook-router-from-forwarder` lets the forwarder and the Gitea
+  forge reach 8080 only, agents and the platform namespace 8081 only, the Google Front Ends 8080 and 8081.
+  `scripts/e2e-gke-security.sh` checks the webhook host also without `--host` (with `--ingress external` too) and
+  asserts 404 for `/status`, `/healthz`, `/internal/x`, `/register` and `/idle` there.
+  **BREAKING (minor):** anything outside the release that called the router's `/status`, `/healthz`, `/register` or
+  `/idle` on port 8080 gets 404. Migration: use port 8081, for example
+  `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"`;
+  a reverse proxy health check on the webhook host must use an in-cluster check on 8081 or a `POST /hook` probe.
+  Upgrade the router, operator and agents together (same `image_tag`, as always): an agent pod that the old
+  operator made registers on 8080 and polls only until the operator restarts it with the new `ROUTER_URL`.
 - Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
   their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
   in-cluster forge and the GKE metadata server for Workload Identity). The proxy (`executor-egress-proxy`, Squid,

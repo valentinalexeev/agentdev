@@ -144,8 +144,8 @@ spec:
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
   - to: [{podSelector: {matchLabels: {app: egress-proxy}}}]
     ports: [{port: 3128}]
-  - to: [{podSelector: {matchLabels: {app: webhook-router}}}]   # registration
-    ports: [{port: 8080}]
+  - to: [{podSelector: {matchLabels: {app: webhook-router}}}]   # registration and idle: the internal port (#214)
+    ports: [{port: 8081}]
   - to: [{podSelector: {matchLabels: {app: claude-proxy}}}]   # model calls through the credential proxy (#66), direct
     ports: [{port: 8080}]
   # in-cluster Gitea (kind). NetworkPolicy cannot tell containers apart: the agent container reaches it too (it holds

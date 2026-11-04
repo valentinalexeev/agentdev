@@ -48,7 +48,8 @@ before(async () => {
     });
   }).listen(K8S);
   router = spawn(process.execPath, [path.join(__dirname, '..', 'router.js')], { stdio: 'ignore',
-    env: { ...process.env, PORT, FORGE_SECRETS: `gitea=${SECRET}`, REGISTER_TOKEN: REG, K8S_NAMESPACE: NS, K8S_API_URL: `http://127.0.0.1:${K8S}` } });
+    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT,   // every call here goes to the internal port (#214)
+    FORGE_SECRETS: `gitea=${SECRET}`, REGISTER_TOKEN: REG, K8S_NAMESPACE: NS, K8S_API_URL: `http://127.0.0.1:${K8S}` } });
   for (let i = 0; i < 50; i++) { try { await req('GET', '/healthz'); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
 });
 after(() => { router.kill(); k8s.close(); });
