@@ -7,6 +7,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform `create_budget` (default `true`, #199). With `false`, the module makes no billing budget, no budget
+  notification channels and no billing IAM. New output `budget` (null when `false`). The template passes it through.
 - External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do
   not change). With `external`, your own reverse proxy (for example a tailnet ingress) publishes the hosts: the
   playbook makes no Gateway, HTTPRoute or managed certificate, and Terraform `public_hosts` can stay empty (no static
@@ -57,6 +59,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
+  account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
+  identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
+  (normally the owner); CI cannot grant it. The template `deploy.yml` sets the quota project
+  (`GOOGLE_BILLING_PROJECT`, `USER_PROJECT_OVERRIDE`, `GOOGLE_CLOUD_QUOTA_PROJECT`). A deployment with the workaround
+  `google_billing_account_iam_member.ci_budgets` adds a `removed` block or imports it: see `infra/terraform/README.md`.
+  A `moved` block keeps the existing budget.
 - Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
   `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
   a month). A `moved` block keeps the same IP for instances with `public_hosts` (no plan change). On an instance
