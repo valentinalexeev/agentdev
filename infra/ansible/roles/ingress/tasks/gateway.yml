@@ -56,7 +56,9 @@
 - name: Stop when the cluster has no Gateway API
   ansible.builtin.assert:
     that: ingress_gateway_crd.resources | length > 0
-    fail_msg: "The cluster does not serve the Gateway API: apply infra/terraform (gateway_api_config) first"
+    fail_msg: >-
+      ingress.mode gateway needs the Gateway API, and the cluster does not serve it. Set Terraform public_hosts (and do
+      not set gateway_enabled = false, #208), apply infra/terraform, then run again. Or use ingress.mode external.
     quiet: true
   when: not ansible_check_mode
 
