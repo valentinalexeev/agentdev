@@ -49,3 +49,7 @@ jobs:
           [ -z "${extra:-}" ] && [ "$p1" = "$(git rev-parse "origin/$BASE")" ] && [ "$p2" = "$(git rev-parse "origin/$lower")" ] \
             || { echo "::error::head is not a single merge of origin/$lower into origin/$BASE"; exit 1; }
           git -c user.name=ci -c user.email=ci@invalid checkout -q --detach "origin/$BASE"
+          git -c user.name=ci -c user.email=ci@invalid merge -q --no-ff --no-edit "origin/$lower" \
+            || { echo "::error::conflict: owner approval needed"; exit 1; }
+          [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$HEAD_SHA^{tree}")" ] \
+            || { echo "::error::tree differs from a mechanical merge (resolved or edited): owner approval needed"; exit 1; }
