@@ -40,6 +40,8 @@ case "$cmd" in
     rc=0
     for ((i = 0; i + 1 < ${#L[@]}; i++)); do
       lo="${L[i]}" hi="${L[i + 1]}"
+      # with BASE, only the pairs up to BASE matter: a pending hop above it must not block a release PR
+      if [ -n "$base" ] && [ "$lo" = "$base" ]; then break; fi
       if git merge-base --is-ancestor "$remote/$lo" "$remote/$hi"; then
         echo "ok   $lo is in $hi"
       else
