@@ -71,13 +71,21 @@ Run on a real GKE cluster made from the template, at the release candidate image
 
 ## 6. Cut the release
 
-1. Branch `release/X.Y.Z` from `main`.
+Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-release-lines.md).
+
+1. Select the line branch. For a new minor (`X.Y.0`), branch `release/X.Y` from `main` at the scope freeze if it
+   does not exist yet. For a patch (`X.Y.Z`, Z > 0), use the existing `release/X.Y`; patches never get a branch.
+   Check that every lower line is merged in: `scripts/release-lines.sh check --strict release/X.Y origin/release/X.Y`.
+   Then branch `chore/release-X.Y.Z` from `release/X.Y`.
 2. In `CHANGELOG.md`, move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]`.
 3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
    point in `examples/deployment/gcp-gke/terraform/main.tf` (`public_hosts`, `cloud_armor` and `output "ingress"`),
    so the template matches `private-deployment.md`, which needs `public_hosts` and `terraform output ingress`.
-4. Commit `chore(release): vX.Y.Z`, open the PR with this checklist, and request the owner's review.
-5. After the owner merges, the owner (or the bot on explicit permission) pushes the tag:
-   `git tag vX.Y.Z <merge commit> && git push origin vX.Y.Z`
+4. Commit `chore(release): vX.Y.Z`, open the PR into `release/X.Y` with this checklist, and request the owner's
+   review. The `Release lines` workflow fails the PR if a lower line is not merged in.
+5. After the owner merges, the owner (or the bot on explicit permission) pushes the tag on that merge commit:
+   `git tag vX.Y.Z <merge commit on release/X.Y> && git push origin vX.Y.Z`.
+   For a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`.
 6. Check that `images.yml` publishes the images at `X.Y.Z`, then make the GitHub release with the CHANGELOG section.
 7. Upgrade the reference private deployment by its normal PR flow.
+8. Merge the line forward, one PR per hop up to the highest line: `scripts/release-lines.sh forward release/X.Y`.
