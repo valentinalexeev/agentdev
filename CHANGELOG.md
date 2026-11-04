@@ -7,6 +7,12 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Terraform cluster add-on inputs (#208): `gateway_enabled` (GKE load balancer and Gateway API; `false` only with an
+  empty `public_hosts`, for deployments with an external ingress), `enable_managed_prometheus`,
+  `enable_filestore_csi` and `monitoring_components` (default `null`: the GKE list). The defaults are what a new
+  cluster has, so existing instances show no change. A deployment can now shrink the system pool without patching
+  the module. Cloud Logging stays fixed: it carries the security events. Docs: `docs/admin.md` "Make the system pool
+  smaller"; the deployment template has commented pass-through lines. Re-run: Terraform module only.
 - External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do
   not change). With `external`, your own reverse proxy (for example a tailnet ingress) publishes the hosts: the
   playbook makes no Gateway, HTTPRoute or managed certificate, and Terraform `public_hosts` can stay empty (no static

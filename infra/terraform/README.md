@@ -77,3 +77,10 @@ GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2
 ## Not here
 
 Installing agentdev onto the cluster is phase 2 (Ansible, `infra/ansible/`). For the public HTTPS entry point (#120), set `public_hosts`, point DNS `A` records at `webhook_ip` and copy `terraform output ingress` into `instance.yml` (`docs/admin.md`, "Public HTTPS entry point (GKE)").
+
+## Cluster add-ons (#208)
+
+`gateway_enabled`, `enable_managed_prometheus`, `enable_filestore_csi` and `monitoring_components` switch GKE add-ons
+that agentdev does not always use. The defaults keep what GKE gives a new cluster, so an existing plan shows no
+change. Cloud Logging is not an input: it holds the security events. How to use them: `docs/admin.md`, "Make the
+system pool smaller".

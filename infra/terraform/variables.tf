@@ -67,6 +67,40 @@ variable "system_pool_spot" {
   default     = false
 }
 
+# Cluster add-ons (#208). Each input has the value a cluster had before the input existed, so a plan on an existing
+# instance shows no change. Every add-on costs CPU and memory on the system pool nodes.
+variable "gateway_enabled" {
+  description = "Keep the GKE load balancer controller and the Gateway API channel. Needed when public_hosts is set (ingress.mode gateway). Set false when your own proxy publishes the hosts (ingress.mode external)."
+  type        = bool
+  default     = true
+  validation {
+    condition     = var.gateway_enabled || length(var.public_hosts) == 0
+    error_message = "gateway_enabled = false needs an empty public_hosts: the Gateway and the managed certificate need the GKE load balancer."
+  }
+}
+
+variable "enable_managed_prometheus" {
+  description = "Google Managed Service for Prometheus on the cluster (operator and a collector on every node). agentdev does not use it."
+  type        = bool
+  default     = true
+}
+
+variable "enable_filestore_csi" {
+  description = "Filestore CSI driver add-on (a pod on every node and a controller). agentdev uses persistent disks only."
+  type        = bool
+  default     = true
+}
+
+variable "monitoring_components" {
+  description = "GKE monitoring components, for example [\"SYSTEM_COMPONENTS\"]. null keeps the GKE default list, which includes POD, DAEMONSET, DEPLOYMENT and STATEFULSET (they run kube-state-metrics). Cloud Logging is not an input: it carries the security events (#70)."
+  type        = list(string)
+  default     = null
+  validation {
+    condition     = var.monitoring_components == null || contains(coalesce(var.monitoring_components, []), "SYSTEM_COMPONENTS")
+    error_message = "monitoring_components must include SYSTEM_COMPONENTS (GKE requires it)."
+  }
+}
+
 variable "budget_amount_usd" {
   description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."
   type        = number

@@ -287,6 +287,24 @@ NOTE: The platform components have one replica each, so no PodDisruptionBudget i
 blocks node upgrades, and a Spot preemption does not respect it. The router has a readiness probe, so the Service
 sends traffic only to a ready pod.
 
+### Make the system pool smaller
+
+GKE add-ons use CPU and memory on the system nodes. You can switch off the add-ons that agentdev does not use (#208).
+
+WARNING: Do not switch off Cloud Logging. The security events are in Cloud Logging (`security-model.md`).
+
+1. In the deployment repository, set the Terraform inputs you want and pass them to the module:
+   - `enable_managed_prometheus = false`
+   - `enable_filestore_csi = false`
+   - `monitoring_components = ["SYSTEM_COMPONENTS"]`
+   - `gateway_enabled = false` (only with `ingress.mode: external` and an empty `public_hosts`)
+2. Run `terraform plan`. The plan must show changes to the cluster only. No node pool is replaced.
+3. Run `terraform apply`. GKE removes the add-on pods from the nodes.
+4. Run `kubectl top nodes` and `kubectl describe nodes`. Compare the CPU requests with the node size.
+
+NOTE: `gateway_enabled = false` with a `public_hosts` value is refused by Terraform. The managed certificate and the
+Gateway need the GKE load balancer.
+
 ## Agent dashboard (botboard)
 
 Botboard ([source](https://github.com/valentinalexeev/botboard), `ghcr.io/valentinalexeev/botboard`) shows the work

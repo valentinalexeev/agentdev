@@ -16,3 +16,8 @@ budget_amount_usd  = 150     # in budget_currency
 # agent_disk_type     = "pd-standard"
 labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
+# Cluster add-ons (agentdev #208), to fit the platform on fewer or smaller system nodes. Keep Cloud Logging as it is.
+# gateway_enabled           = false             # only with ingress.mode external and no public_hosts
+# enable_managed_prometheus = false
+# enable_filestore_csi      = false
+# monitoring_components     = ["SYSTEM_COMPONENTS"]
