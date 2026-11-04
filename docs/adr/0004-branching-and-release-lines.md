@@ -5,7 +5,7 @@ Status: accepted (owner, "go as proposed", 2026-11-04)
 ## Context
 
 agentdev follows strict SemVer (`CLAUDE.md` §7) and plans work in milestones (`1.0.0`, `1.0.1`, `1.1.0` ... `2.0.0`).
-Until now there was one branch, `main`, and no tag. Work from several milestones merged into `main` in whatever
+Until now there was one branch, `main`, and no release tag (only the prerelease tags `v1.0.0-rc.1` to `rc.5`, all on `main`). Work from several milestones merged into `main` in whatever
 order it was ready: the 1.1.0 items #169, #170, #171, #172, #183 and #184 merged on 2026-11-02, between 1.0.0 work.
 That is fine before the first release, but after `v1.0.0` it would mean a 1.0 fix can only ship together with
 unrelated 1.1 features.
@@ -83,7 +83,9 @@ request re-creates the branch from the last tag.
 
 1. Move the 1.1.0 items already on `main` (#169, #170, #171, #172, #183, #184) to milestone 1.0.0. They are additive and
    mostly default-off; 1.0.0 is not released, so the kind-only BREAKING note of #172 becomes part of 1.0.0.
-2. Cut `release/1.0` from `main`. The open 1.0.0 items (#214, #125, #123, #55) finish on `release/1.0` and merge
+2. Cut `release/1.0` from `main`. The existing `v1.0.0-rc.1` ... `rc.5` tags stay where they are: they are ancestors of
+   `release/1.0`, so they belong to the 1.0 line and are not moved or re-tagged. Further release candidates
+   (`v1.0.0-rc.N`) are tagged on `release/1.0` like any other `vX.Y.Z*` tag. The open 1.0.0 items (#214, #125, #123, #55) finish on `release/1.0` and merge
    forward. `main` becomes 1.1.
 3. #210 (`feat(terraform)!`, milestone 1.3.0) is breaking: after 1.0.0 it is either made opt-in without `!` (stays
    1.3.0) or moved to 2.0.0 on `next/2.0`.

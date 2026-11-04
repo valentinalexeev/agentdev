@@ -6,7 +6,8 @@
 #                                                   check every adjacent pair; with BASE and REF, also that every
 #                                                   line below BASE is an ancestor of REF (release PR check)
 #   scripts/release-lines.sh forward LOWER          merge LOWER into the next line up on a merge/ branch and push it
-# Lines are read from the remote (default origin, override with REMOTE=...). check exits 1 on a pending
+# Lines are read from the remote (default origin, override with REMOTE=...); forward fetches first and needs a clean
+# tree, DRY_RUN=1 merges locally without pushing. check exits 1 on a pending
 # forward merge only with --strict; without it, it prints warnings and exits 0.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -34,7 +35,8 @@ case "$cmd" in
     strict=0
     if [ "${1:-}" = "--strict" ]; then strict=1; shift; fi
     base="${1:-}" ref="${2:-}"
-    mapfile -t L < <(lines)
+    L=()
+    while IFS= read -r l; do L+=("$l"); done < <(lines) # no mapfile: macOS ships bash 3.2
     rc=0
     for ((i = 0; i + 1 < ${#L[@]}; i++)); do
       lo="${L[i]}" hi="${L[i + 1]}"
@@ -62,7 +64,13 @@ case "$cmd" in
     ;;
   forward)
     lo="${1:?usage: forward LOWER}"
-    mapfile -t L < <(lines)
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+      echo "forward: working tree is not clean" >&2
+      exit 1
+    fi
+    git fetch --prune "$remote"
+    L=()
+    while IFS= read -r l; do L+=("$l"); done < <(lines)
     hi=""
     for ((i = 0; i + 1 < ${#L[@]}; i++)); do
       if [ "${L[i]}" = "$lo" ]; then hi="${L[i + 1]}"; fi
@@ -77,6 +85,10 @@ case "$cmd" in
     if ! git merge --no-ff --no-edit -m "chore(merge): $lo into $hi" "$remote/$lo"; then
       echo "conflict: resolve on $branch, commit, push, and open the PR into $hi (owner approval needed)" >&2
       exit 2
+    fi
+    if [ -n "${DRY_RUN:-}" ]; then
+      echo "DRY_RUN: merged locally on $branch, not pushed"
+      exit 0
     fi
     git push -u "$remote" "$branch"
     echo "open a PR $branch -> $hi; a conflict-free hop with green CI may be merged by the bot (ADR 0004)"
