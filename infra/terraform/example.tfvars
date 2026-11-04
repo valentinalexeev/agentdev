@@ -16,10 +16,10 @@ github_repository  = "my-org/my-agentdev-deploy" # the deployment repo, not this
 # agent_disk_size_gb   = 50
 # agent_disk_type      = "pd-standard"
 # system_pool_spot     = false   # #171: Spot for the system pool; short platform gaps on preemption
-# gateway_enabled           = true    # #208: false with an empty public_hosts drops the GKE load balancer and Gateway API
-# enable_managed_prometheus = true    # #208: agentdev does not use it
-# enable_filestore_csi      = true    # #208: agentdev uses persistent disks only
-# monitoring_components     = null    # #208: ["SYSTEM_COMPONENTS"] drops kube-state-metrics; null = GKE default
+# gateway_enabled           = null    # #208: null = on only with public_hosts; true keeps the load balancer anyway
+# enable_managed_prometheus = false   # #208: agentdev does not use it
+# enable_filestore_csi      = false   # #208: agentdev uses persistent disks only
+# monitoring_components     = ["SYSTEM_COMPONENTS"]   # #208: null = the GKE default list (adds kube-state-metrics)
 # public_hosts         = ["agentdev.example.com"]   # public HTTPS entry point (#120); DNS A record -> webhook_ip
 # cloud_armor          = false
 # labels               = { environment = "prod" }   # #184: service = "agentdev" is added; dev, stage or prod
