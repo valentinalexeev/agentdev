@@ -78,7 +78,7 @@ AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="${FORGE_SECRETS}" REGISTER_TOKEN="${REGI
   < "${SPIKE_DIR}/manifests/router.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/webhook-router >/dev/null   # pick up a rebuilt local image
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
-ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
+ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080 (webhooks), :8081 (internal, #214)"
 
 log "Claude credential proxy (#66)"
 # the only pod with the Claude credentials; each agent gets a key (HMAC of its name) that is worth nothing elsewhere
@@ -191,7 +191,7 @@ ok "webhook -> ${url}"
 # registrations are refreshed every 60 s; show who the router knows right now
 sleep 5
 k -n "${AGENTS_NS}" exec deploy/webhook-router -- node -e \
-  "require('http').get('http://localhost:8080/status',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log('  router knows: '+JSON.parse(b).agents.map(a=>a.agent).join(', ')))})"
+  "require('http').get('http://localhost:8081/status',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log('  router knows: '+JSON.parse(b).agents.map(a=>a.agent).join(', ')))})"
 record "agents running under gVisor: ${AGENTS}"
 k -n "${AGENTS_NS}" get pods -l app=coding-agent
 echo

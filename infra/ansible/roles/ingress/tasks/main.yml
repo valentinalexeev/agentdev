@@ -15,7 +15,7 @@
   ansible.builtin.debug:
     msg: >-
       ingress.mode external: publish https://{{ ingress_host }}/ (agentdev-ui.{{ platform_ns }}:8080),
-      https://{{ ingress_webhook_host }}/hook (webhook-router.{{ agents_ns }}:8080){{
+      https://{{ ingress_webhook_host }}/hook only (webhook-router.{{ agents_ns }}:8080, never the internal port 8081){{
       (' and https://' ~ ingress_auth_host ~ '/ (authentik-server.' ~ platform_ns ~ ':80)') if ingress_auth | bool else '' }}
       through your own reverse proxy (docs/admin.md, External ingress).
   when: ingress_mode == 'external'

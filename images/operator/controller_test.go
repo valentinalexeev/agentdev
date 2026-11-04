@@ -270,6 +270,11 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 			t.Errorf("forge container lacks %s", k)
 		}
 	}
+	for _, e := range fg.Env { // registration and idle go to the router's internal port (#214)
+		if e.Name == "ROUTER_URL" && e.Value != "http://webhook-router.coding-agents.svc.cluster.local:8081" {
+			t.Errorf("ROUTER_URL = %q, want the internal port 8081", e.Value)
+		}
+	}
 	if fg.Image != "forge:dev" || len(fg.Ports) != 1 || fg.Ports[0].Name != "webhook" || len(ag.Ports) != 0 {
 		t.Errorf("forge image/ports: %s %v / agent %v", fg.Image, fg.Ports, ag.Ports)
 	}

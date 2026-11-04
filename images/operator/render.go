@@ -130,7 +130,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// no forge, wake or register token here: those are only in the forge container below (#64)
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
-			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
+			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
@@ -153,7 +153,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
-			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
+			env("ROUTER_URL", routerURL(ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
@@ -263,4 +263,10 @@ func (r *AgentReconciler) usageReports() string {
 		return "off"
 	}
 	return "on"
+}
+
+// routerURL is the router's internal port (#214): registration and idle calls. Its public port 8080 serves only
+// webhook deliveries.
+func routerURL(ns string) string {
+	return fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8081", ns)
 }

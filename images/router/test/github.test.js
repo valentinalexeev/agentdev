@@ -26,7 +26,8 @@ const bot = { login: 'my-agentdev[bot]' };
 
 before(async () => {
   router = spawn(process.execPath, [path.join(__dirname, '..', 'router.js')], {
-    env: { ...process.env, PORT, FORGE_SECRETS: `github=${SECRET}`, REGISTER_TOKEN: REG }, stdio: 'ignore' });
+    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT,   // every call here goes to the internal port (#214)
+    FORGE_SECRETS: `github=${SECRET}`, REGISTER_TOKEN: REG }, stdio: 'ignore' });
   for (const [name, port] of [['alice', 18181], ['bob', 18182]]) {
     servers.push(http.createServer((q, s) => { wakes[name]++; q.resume(); s.writeHead(204).end(); }).listen(port));
   }

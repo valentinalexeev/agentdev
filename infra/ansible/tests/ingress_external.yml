@@ -57,6 +57,7 @@
         peer_ns: {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tailscale}}, podSelector: {matchLabels: {app: ts-ingress}}}
         peer_ip: {ipBlock: {cidr: 100.64.0.0/10}}
         p8080: [{port: 8080}]
+        p8081: [{port: 8081}]
         p9000: [{port: 9000}]
       ansible.builtin.assert:
         that:
@@ -67,10 +68,16 @@
           - hook.metadata.namespace == 'coding-agents' and hook.spec.podSelector.matchLabels.app == 'webhook-router'
           - hook.spec.ingress[0].from == [peer_ns, peer_ip]
           - hook.spec.ingress[0].ports == p8080
-          # in-cluster clients keep the router; no Google Front End range in external mode
-          - hook.spec.ingress[1].from | selectattr('ipBlock', 'defined') | list == []
+          # in-cluster clients keep the router: agents and platform on the internal port only, the Gitea forge on the
+          # public port only (#214); no Google Front End range in external mode
+          - hook.spec.ingress | length == 3
+          - hook.spec.ingress[1:] | map(attribute='from') | flatten | selectattr('ipBlock', 'defined') | list == []
           - hook.spec.ingress[1].from | map(attribute='namespaceSelector.matchLabels') | map('dict2items') | flatten
-            | map(attribute='value') | sort == ['agentdev-platform', 'coding-agents', 'forge']
+            | map(attribute='value') | sort == ['agentdev-platform', 'coding-agents']
+          - hook.spec.ingress[1].ports == p8081
+          - hook.spec.ingress[2].from | map(attribute='namespaceSelector.matchLabels') | map('dict2items') | flatten
+            | map(attribute='value') | list == ['forge']
+          - hook.spec.ingress[2].ports == p8080
           - ak.spec.podSelector.matchLabels['app.kubernetes.io/component'] == 'server'
           - ak.spec.ingress[0].from == [peer_ns, peer_ip]
           - ak.spec.ingress[0].ports == p9000
@@ -96,7 +103,10 @@
              template_vars={'ingress_mode': 'gateway'}) | from_yaml_all | selectattr('metadata.name', 'equalto',
              'webhook-router-from-forwarder') | first }}
       ansible.builtin.assert:
-        that: gw_hook.spec.ingress[1].from | selectattr('ipBlock', 'defined') | map(attribute='ipBlock.cidr') | list == ingress_gfe_ranges
+        that:
+          - gw_hook.spec.ingress[3].from | map(attribute='ipBlock.cidr') | list == ingress_gfe_ranges
+          # deliveries and the load balancer health check (/healthz on the internal port, #214)
+          - gw_hook.spec.ingress[3].ports | map(attribute='port') | list == [8080, 8081]
         quiet: true
 
     - name: Refuse invalid settings
