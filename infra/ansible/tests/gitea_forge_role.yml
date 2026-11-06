@@ -1,0 +1,63 @@
+---
+# The role gitea_forge (#106, was 05-forge.sh): kind.yml --tags forge runs only that role, every write is guarded by a
+# read (idempotent), the password and tokens are under no_log, and the wrapper calls kind.yml.
+# Run: ansible-playbook infra/ansible/tests/gitea_forge_role.yml
+- name: Role gitea_forge (#106)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: List the tasks of the forge tag
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../kind.yml", --tags, forge, --list-tasks]
+      register: forge_tasks
+      changed_when: false
+
+    - name: Only the gitea_forge role runs under the tag
+      ansible.builtin.assert:
+        that:
+          - "'Gitea forge, owner and agent accounts' in forge_tasks.stdout"
+          - "'Kind cluster with gVisor' not in forge_tasks.stdout"
+          - "'Checks of the warm pool' not in forge_tasks.stdout"
+        quiet: true
+
+    - name: Read the role
+      ansible.builtin.set_fact:
+        forge_main: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/gitea_forge/tasks/main.yml') | from_yaml }}"
+        forge_agent: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/gitea_forge/tasks/agent.yml') | from_yaml }}"
+        forge_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/gitea_forge/defaults/main.yml') | from_yaml }}"
+
+    - name: Writes are guarded, secrets are under no_log, the password comes from the environment
+      ansible.builtin.assert:
+        that:
+          - (forge_main | selectattr('name', 'search', '^Owner account') | first).when is defined
+          - (forge_main | selectattr('name', 'search', '^Owner account') | first).no_log
+          - (forge_main | selectattr('name', 'search', '^Create and seed') | first).when == 'gitea_forge_repo_info.status == 404'
+          - (forge_main | selectattr('name', 'search', '^Replace the branch protection') | first).when is defined
+          - (forge_agent | selectattr('name', 'search', '^Mint and store') | first).when is defined
+          - mint.block | rejectattr('name', 'eq', 'Secrets directory') | map(attribute='no_log') | list == [true, true]
+          - (forge_agent | selectattr('name', 'search', '^Write collaborator') | first).when == 'gitea_forge_collab.status == 404'
+          - "'lookup(' in forge_defaults.gitea_forge_admin_password"
+        quiet: true
+      vars:
+        mint: "{{ forge_agent | selectattr('name', 'search', '^Mint and store') | first }}"
+
+    - name: Forge users are parsed from the gitea admin user list output
+      ansible.builtin.assert:
+        that:
+          - "sample | regex_findall('(?m)^\\d+\\s+(\\S+)') == ['owner', 'alice']"
+        quiet: true
+      vars:
+        sample: |
+          ID   Username Email                Is Active Is Admin 2FA
+          1    owner    owner@agents.local   true      true     false
+          2    alice    alice@agents.local   true      false    false
+
+    - name: The wrapper prints the deprecation notice, calls kind.yml and keeps the password out of -e
+      ansible.builtin.assert:
+        that:
+          - "'deprecated 05 forge' in wrapper"
+          - "'kind.yml\" --tags forge' in wrapper"
+          - "'gitea_forge_admin_password' not in wrapper"
+        quiet: true
+      vars:
+        wrapper: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../05-forge.sh') }}"

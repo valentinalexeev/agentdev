@@ -101,6 +101,18 @@ spec:
                 maxLength: 100
                 pattern: ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$
                 type: string
+              egressHosts:
+                description: |-
+                  EgressHosts: the hosts the Job may reach through the executor egress proxy (#135), in addition to the
+                  cluster-wide defaults (EXECUTOR_EGRESS_HOSTS) and the forge's git host. Squid dstdomain form: "example.com" is
+                  that name only, ".example.com" the domain and every subdomain. Every other connection is refused and recorded
+                  as a SecurityEvent (source egress). Read by every run; not part of the approved spec hash.
+                items:
+                  maxLength: 253
+                  pattern: ^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$
+                  type: string
+                maxItems: 64
+                type: array
               environment:
                 description: |-
                   Environment this executor changes, for example prod. One executor per environment (owner decision on #69):

@@ -1,0 +1,20 @@
+---
+# Gitea as the MVP forge on kind (#106, was 05-forge.sh): Gitea in the cluster, the owner account, one account per
+# agent with a token, a seeded repo and branch protection. GKE uses GitHub (#2), so deploy.yml has no forge role.
+gitea_forge_context: kind-agentdev
+gitea_forge_ns: forge
+gitea_forge_manifest: "{{ playbook_dir }}/../../manifests/gitea.yaml"
+gitea_forge_seed_dir: "{{ playbook_dir }}/../../seed"
+# agent tokens go here, one file per agent, mode 600 (gitignored)
+gitea_forge_secrets_dir: "{{ playbook_dir }}/../../.secrets"
+gitea_forge_url: http://localhost:3000
+gitea_forge_admin_user: owner
+# from the environment (never from -e, so it is not in the process list)
+gitea_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
+gitea_forge_repo: owner/playground
+gitea_forge_agents: [alice, bob]
+gitea_forge_branch: main
+# substituted into the webhook allow-list of the manifest
+gitea_forge_agents_ns: coding-agents
+gitea_forge_service_cidr: 10.96.0.0/16
+gitea_forge_timeout: 300

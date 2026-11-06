@@ -9,19 +9,20 @@ resource "google_service_account" "automation" {
 
 # Scoped to what the configuration manages; no Owner/Editor.
 resource "google_project_iam_member" "automation" {
-  for_each = toset([
+  for_each = toset(concat([
     "roles/container.admin",
     "roles/compute.networkAdmin",
     "roles/compute.securityAdmin",
-    "roles/artifactregistry.admin",
     "roles/secretmanager.admin",
     "roles/iam.serviceAccountUser",
     "roles/iam.serviceAccountAdmin",
+    "roles/iam.workloadIdentityPoolViewer", # refresh of the GitHub Actions WIF pool/provider
     "roles/resourcemanager.projectIamAdmin",
     "roles/serviceusage.serviceUsageAdmin",
     "roles/monitoring.notificationChannelEditor",
     "roles/storage.objectAdmin", # Terraform state bucket
-  ])
+    ], var.create_artifact_registry ? ["roles/artifactregistry.admin"] : []
+  ))
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.automation.email}"

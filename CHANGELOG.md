@@ -6,6 +6,181 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Feedback runs get background (#223): the prompt now has the issue the PR resolves, the PR description and the
+  latest earlier thread items as Background (context only, not answered), apart from the New feedback the run
+  replies to. Both parts are fenced as untrusted. The size is capped by the new worker environment variables
+  `FEEDBACK_CONTEXT_ITEMS` (default 20 thread items) and `FEEDBACK_CONTEXT_CHARS` (default 12000 characters, `0`
+  turns it off). From round 2 on an agent no longer loses the original requirement or earlier review decisions.
+- Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
+  `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
+  the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
+  `scripts/release-lines.sh` (`list`, `check`, `forward`) and the `Release lines` workflow. Deployments still pin a tag.
+- Terraform `create_budget` (default `true`, #199). With `false`, the module makes no billing budget, no budget
+  notification channels and no billing IAM. New output `budget` (null when `false`). The template passes it through.
+- External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do
+  not change). With `external`, your own reverse proxy (for example a tailnet ingress) publishes the hosts: the
+  playbook makes no Gateway, HTTPRoute or managed certificate, and Terraform `public_hosts` can stay empty (no static
+  IP). `ingress.host`, `webhook_host` and `auth_host` still give the authentik issuer, the UI callback and webhooks,
+  so sign-in and approvals work. Opt-in `ingress.forwarder` (`namespace`, `pod_selector`, `cidrs`) adds
+  NetworkPolicies that let the forwarder reach `agentdev-ui:8080`, `webhook-router:8080` and `authentik-server`;
+  without it default-deny stays. `authentik_trusted_proxy_cidrs` is now a documented, validated instance value.
+  `scripts/e2e-gke-security.sh` has `--ingress external` and `--auth-host` (issuer and callback checks). Docs:
+  `docs/admin.md` "Use an external ingress" (headers `Host`, `X-Forwarded-Proto`, `X-Forwarded-For`).
+- Terraform: node boot disk variables `system_disk_size_gb`, `system_disk_type`, `agent_disk_size_gb`,
+  `agent_disk_type` (#170). Size defaults to 100 GB (the GKE default); smaller disks (30 GB system, 50 GB agents) are
+  enough, since nodes hold only images and ephemeral pod data. Changing one replaces that node pool; re-run the
+  Ansible playbook afterwards (it waits for the operator and agents, which resume from their PVCs). The deployment
+  template has commented pass-through lines.
+- Labels on all resources (#184): Terraform input `labels` (default `{}`), merged over `service = "agentdev"`, on
+  every resource through the module's provider `default_labels`, plus the cluster and node pool `resource_labels`
+  and the budget notification channels' `user_labels`; the bootstrap has the same input (project, state bucket).
+  Keys and values are checked against the GCP rules, `environment` must be `dev`, `stage` or `prod`. Ansible
+  `agentdev_labels` (same check) labels the `coding-agents`, `agentdev-platform` and `agentdev-executors`
+  namespaces, and the operator (`COST_LABELS`) labels agent StatefulSets and pods and executor Jobs and pods; kind
+  sets `COST_LABELS` in `config.env`. The next plan of an existing instance shows in-place label updates only. The
+  deployment template sets `environment = "prod"` (commented pass-through until its `ref=` contains #184).
+- Terraform: `system_pool_spot` (default `false`, no change for existing instances) runs the system pool on Spot VMs,
+  about 60-70% cheaper (#171). When a node is reclaimed, router, operator and proxies are down for about a minute;
+  missed webhooks are covered by polling, agents keep their state on PVCs. Switching it replaces the system pool.
+  Docs: `docs/admin.md` "Run the system pool on Spot VMs"; the deployment template has a commented pass-through.
+- Infracost configuration (#183): `infracost.yml` pins the projects `infra/terraform` and
+  `infra/terraform/bootstrap`; usage profile `infra/infracost/usage-2-3-agents.yml` for 2 to 3 agents (Spot agent
+  node, system node, NAT egress, registry, secrets, state bucket) matches the cost guide. See `infra/infracost/README.md`.
+
+- Terraform: `create_artifact_registry` (default `true`, no change for existing deployments). Set it to `false` to skip
+  the Artifact Registry repo, its API and the `artifactregistry` roles of the node and automation service accounts;
+  the Ansible roles pull images from GHCR, so a deployment that does not mirror images needs none of them. The
+  `image_registry` output is `null` then. Switching an existing deployment to `false` destroys the (unused) repo;
+  the API stays enabled (`disable_on_destroy = false`), which is harmless. The deployment template
+  (`examples/deployment/gcp-gke`) has a commented `create_artifact_registry` line and pass-through.
+
+### Changed
+- Ansible and `./run.sh 08`: ContextForge (Deployment, Service, Secret, NetworkPolicy) is deployed only when a project
+  uses MCP: `mcp_projects` on GKE, the new `MCP_PROJECTS` in `config.env` on kind (#172). With an empty list the
+  playbook and the step remove ContextForge and the agents' `agent-<name>-mcp` Secrets; Postgres and the `contextforge`
+  database stay, so adding a project later brings it back with the same data. This frees the 100m CPU / 512Mi it
+  requested on instances without MCP projects; nothing used it there (mcp-sync only runs for listed projects).
+  `platform_contextforge_enabled: true` keeps the old behaviour. `./run.sh 08` now also runs `scripts/mcp-sync.sh`
+  for each spec in `MCP_PROJECTS`.
+  **BREAKING for kind only:** a kind instance that synced MCP specs with `scripts/bootstrap-project.sh` loses
+  ContextForge and the agents' MCP Secrets on the next `./run.sh 08` until those specs are listed in `MCP_PROJECTS`.
+  Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
+
+### Fixed
+- The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
+  account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
+  identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
+  (normally the owner); CI cannot grant it. The template `deploy.yml` sets the quota project
+  (`GOOGLE_BILLING_PROJECT`, `USER_PROJECT_OVERRIDE`, `GOOGLE_CLOUD_QUOTA_PROJECT`). A deployment with the workaround
+  `google_billing_account_iam_member.ci_budgets` adds a `removed` block or imports it: see `infra/terraform/README.md`.
+  A `moved` block keeps the existing budget.
+- Terraform: the global static IP (`google_compute_global_address.webhook`, `agentdev-webhook`) is created only when
+  `public_hosts` is set (#169). Without `public_hosts` nothing used it, but the reserved IP was billed (about 7 EUR
+  a month). A `moved` block keeps the same IP for instances with `public_hosts` (no plan change). On an instance
+  without `public_hosts`, the next apply destroys only the address; `webhook_ip` is then `null` and
+  `ingress.static_ip_name` is empty. kind is not affected (no static IP there).
+- Terraform: the billing budget no longer hardcodes `USD`. The new variable `budget_currency` (default `USD`) sets
+  its currency, so `terraform apply` works on billing accounts in other currencies; `budget_amount_usd` is an amount
+  in that currency (#159). The private deployment guide notes the ADC quota project for the Budgets API.
+- Terraform: the automation service account now has `roles/iam.workloadIdentityPoolViewer`, so CI `terraform plan`
+  can refresh the GitHub Actions Workload Identity pool and provider instead of failing with 403 (#179).
+- Git through the egress proxy never sent `Proxy-Authorization` (#162): git's default `http.proxyAuthMethod=anyauth`
+  waits for a 407 challenge, but Squid matches the header and answers 403 at once, so the forge sidecar could not
+  sync the mirror (GitHub forge, rc.1) and no agent job started. The forge sidecar's git and the executor checkout now
+  pass `-c http.proxyAuthMethod=basic`. The Squid ACLs are unchanged. Git errors from the sidecar now also redact the
+  proxy credential from `HTTPS_PROXY`.
+- DNS on clusters with NodeLocal DNSCache (#163, GKE). The egress policies allowed DNS only to the `kube-dns` pods,
+  so on GKE with NodeLocal DNSCache no name resolved and agent pods flapped (forge sidecar: `github unreachable`).
+  Every policy with a DNS rule (`agent-egress`, which also covers chat sessions, `egress-proxy-dns`, `claude-proxy`,
+  `executor-egress`, `executor-egress-proxy-dns`) now also allows port 53 to the `node-local-dns` pods in
+  `kube-system` and to `169.254.20.10/32`. Port 53 only, so no other egress opens; on kind the rule is unused.
+  `TestDNSPoliciesAllowNodeLocalDNS` fails for any policy with a kube-dns rule and no node-local rule;
+  `scripts/e2e-gke-security.sh` checks that an agent pod resolves the egress proxy name.
+
+### Changed
+- Terraform: node boot disks default to `pd-standard` instead of the GKE default `pd-balanced` (#170, owner decision
+  on PR #191), about 6 EUR a month less per node. **BREAKING:** on existing clusters the boot disk type change recreates
+  both node pools on the next apply (system pool: router, operator and UI down for a few minutes; agents resume from
+  their PVCs); re-apply the Terraform module `infra/terraform`, then re-run
+  the Ansible playbook `infra/ansible/deploy.yml` (all roles). To keep the current pools, set `system_disk_type` and
+  `agent_disk_type` to `pd-balanced`. Released in a MINOR version as a one-off by owner decision on PR #191 (option 3):
+  the only cost is a short downtime with no data loss.
+- Scale to zero is the default (#181). Idle agents stop after `IDLE_SECONDS` (900) on kind and GKE, so an idle agent
+  no longer keeps a gVisor node up. Defaults are now `true` in Ansible (`scale_to_zero`), `config.env`
+  (`SCALE_TO_ZERO`), the Agent CRD (`scaleToZero` is optional with default `true`; Go type `*bool`), `POST
+  /api/agents` and the web UI. An explicit `false` (`agents[].scale_to_zero: false`, `scaleToZero: false`) keeps an
+  agent running. Existing Agent objects without the field scale to zero after the upgrade.
+- The router has a wake poll for instances without webhooks (#181): every `wake_poll_seconds` / `WAKE_POLL_SECONDS`
+  (default 300, `0` = off) it asks the forge with a read-only credential (Secret `webhook-router-poll`: the GitHub App
+  narrowed to read access, or a Gitea read token) whether a stopped agent has new work, and starts only those agents.
+  The playbook refuses scale to zero with neither webhooks nor the wake poll ("scale_to_zero needs webhooks or
+  wake_poll_seconds"). Gitea on GKE: put a read-only token in Secret Manager `router-poll-forge-token`.
+- Operator: one volume per agent instead of two (#173). The `state` PVC now also holds the Claude state
+  (`/home/node/.claude` is its `claude` subPath); the separate `claude` PVC is gone. The PVC uses the agent StorageClass
+  and size: operator env `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` (default `10Gi`), Ansible
+  `agent_storage_class` (default `agentdev-agent`, a `pd-standard` class that `deploy.yml` creates) and
+  `agent_state_storage`, `config.env` on kind (empty class: the cluster default). On GKE this halves the disks per
+  agent and uses the cheapest disk type. Upgrading from 1.0.0-rc: the operator sees an agent StatefulSet in the old
+  layout, deletes it and its old PVCs, and makes it again. Agents lose their local Claude sessions and clones; open
+  branches and PRs stay on the forge. Upgrade while the agents are idle.
+- Terraform bootstrap: the state bucket aborts incomplete multipart uploads after one day (#185).
+- Images: prerelease tags (`vX.Y.Z-rc.N`) no longer move `:latest`. They push only `:X.Y.Z-rc.N`. A final `vX.Y.Z`
+  still pushes `:X.Y.Z`, `:X.Y` and `:latest`. Note: `v1.0.0-rc.1` was cut before this fix, so `:latest` points to
+  `1.0.0-rc.1` until v1.0.0. Deployments pin exact versions, so they are not affected.
+
+### Removed
+- Dead code, infra area (#132). **BREAKING (minor):** `config.env` no longer defines `GITHUB_BOT`; nothing read it
+  (the bot identity comes from `GITHUB_BOT_ENV`). Also removed compiled `.pyc` files that were committed under
+  `seed/` although `seed/.gitignore` excludes them.
+- Tracked Python bytecode (`seed/**/__pycache__/*.pyc`, committed in bee146e before `.gitignore` covered it; ignore
+  rules never untrack files). The root `.gitignore` now also has `*.py[cod]`, and the new
+  `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
+
+### Security
+- Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
+  webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
+  public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
+  publish) serves only webhook deliveries (`POST /` and `POST /hook...`) and answers 404 for anything else; the new
+  `INTERNAL_PORT` (8081) serves `/healthz`, `/status`, `/register`, `/idle` and deliveries for in-cluster callers.
+  The Service `webhook-router` exposes both ports (`http`, `internal`); readiness and the new liveness probe, the GKE
+  load balancer health check (HealthCheckPolicy) and the agents' `ROUTER_URL` (operator) use 8081. NetworkPolicies:
+  `agent-egress` allows the router on 8081 only; `webhook-router-from-forwarder` lets the forwarder and the Gitea
+  forge reach 8080 only, agents and the platform namespace 8081 only, the Google Front Ends 8080 and 8081.
+  `scripts/e2e-gke-security.sh` checks the webhook host also without `--host` (with `--ingress external` too) and
+  asserts 404 for `/status`, `/healthz`, `/internal/x`, `/register` and `/idle` there.
+  **BREAKING (minor):** anything outside the release that called the router's `/status`, `/healthz`, `/register` or
+  `/idle` on port 8080 gets 404. Migration: use port 8081, for example
+  `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"`;
+  a reverse proxy health check on the webhook host must use an in-cluster check on 8081 or a `POST /hook` probe.
+  Upgrade the router, operator and agents together (same `image_tag`, as always): an agent pod that the old
+  operator made registers on 8080 and polls only until the operator restarts it with the new `ROUTER_URL`.
+- Executor egress allow-list (#135, 1.0.0 gate, R81, new R97). Executor Jobs (#69) could connect to any host. Now
+  their pods are default deny (NetworkPolicy `executor-egress` in `EXEC_NS`: DNS, the new executor egress proxy, the
+  in-cluster forge and the GKE metadata server for Workload Identity). The proxy (`executor-egress-proxy`, Squid,
+  same image as the agents' proxy) allows each executor only `EXECUTOR_EGRESS_HOSTS` (default
+  `registry.terraform.io releases.hashicorp.com`), its forge's git host and the new field `spec.egressHosts`
+  (Ansible `executors[].egress_hosts`). The operator generates a proxy credential per executor and the Squid rules in
+  Secret `executor-egress-proxy`; the proxy reloads them without a restart. On GKE an FQDNNetworkPolicy limits the
+  proxy to the hosts of all executors; on kind `executor-egress-proxy-web` allows 80/443. Each refused request is a
+  SecurityEvent of the executor (source `egress`, rule `egress-host`). Same templates for kind (`./run.sh 12`) and
+  GKE (`deploy.yml`). Operator RBAC in `EXEC_NS`: create Secrets, get/update `executor-egress-proxy`.
+  Refusals are aggregated: one event per executor run, host and 10-minute window, at most `SECURITY_RATE_BURST`
+  (default 20) hosts per run and window, then one rate-limited event; the rest are counted as dropped.
+  **BREAKING:** existing executors that use cloud APIs stop working (their plan fails with refused hosts) until they
+  declare those hosts. To upgrade: before you roll out this release, add the hosts to each such executor, Ansible
+  `executors[].egress_hosts` (or `spec.egressHosts` on the Executor), for example `oauth2.googleapis.com`,
+  `storage.googleapis.com`, then run the playbook (GKE) or `./run.sh 12` (kind). Docs: admin.md
+  ("Add a host for an executor"), security-model.md phase 5, security.md R25, R81, R97.
+- Interactive sessions (#118, follow-up of #66, R11): `scripts/agent-chat.sh` no longer mounts a Claude Secret
+  (`CLAUDE_SECRET`, default `claude-shared`) in the session pod. The session calls `claude-proxy`
+  (`ANTHROPIC_BASE_URL`) with the proxy key of one agent of the project (`CHAT_AGENT`, default the first agent in the
+  project file), so the budget and the usage count for that agent. The NetworkPolicies `agent-egress`, `egress-proxy`
+  and `claude-proxy` now also select `app=agent-chat`: the session cannot reach `api.anthropic.com` directly and uses
+  `egress-proxy` for other hosts. Same manifests on `kind` and GKE. **BREAKING:** `CLAUDE_SECRET` is removed;
+  `REMOTE_CONTROL=true` is refused (it needs a claude.ai login in the pod); sessions need `CLAUDE_PROXY=true`.
+  To apply: run `./run.sh 06` (kind) or the playbook (GKE) to update the NetworkPolicies, then start new sessions.
+
 ### Deprecated
 - Shell deployment steps (#106): `run.sh` and the numbered steps move to one Ansible rollout for kind and GKE, one
   step per PR. New playbook `infra/ansible/kind.yml` with the role `kind_cluster`; step 01 (`01-cluster.sh`) is now a
@@ -29,6 +204,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   workspace, warm pool to 0, optional headless Claude turn). Changed: the claim has the fixed name
   `agentdev-sandbox-test` (was `spike-<time>`), so a second run reuses it and changes nothing, and the warm pool and
   sandbox are restored also after a failed check. GKE does not change.
+- Step 05 (#106): `05-forge.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags forge` (new role
+  `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
+  `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
+  when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
 - Step 04 (#106): `04-coder.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags coder` (new role
   `coder`, `kubernetes.core.helm` like `deploy.yml`). Same result (Postgres, Coder via Helm, template `spike-gvisor`
   with 30m auto-stop, workspace `spike` under gVisor, stop drops the pod and keeps the home PVC, start keeps the home
@@ -36,6 +215,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   environment (not `-e`), and the workspace is started again also after a failed check. GKE does not change.
 
 ### Added
+- authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
+  blueprints (`manifests/authentik-blueprint-*.yaml` only) as `./run.sh 09`, the database login `pg-authentik` of the
+  platform role, and the new Secret Manager secrets `platform-authentik-secret-key` and `platform-authentik-admin`
+  (generated once). It runs before the API when `ingress.auth_host` is set (or `authentik.enabled: true`). Then
+  `api.oidc_issuer` defaults to `https://<auth_host>/application/o/agentdev/` and the discovery URL to the in-cluster
+  service; an explicit `api.oidc_issuer` still wins. The Gateway gets the route `https://<auth_host>/` to authentik
+  (HSTS, Cloud Armor when set, NetworkPolicy from the load balancer only). The blueprint's UI redirect URI comes from
+  `AGENTDEV_UI_CALLBACK` (`https://<ingress.host>/callback` on GKE; kind keeps the localhost default). Break-glass:
+  the playbook adds `akadmin` to `agentdev-admins` once (add only) and fails without an active superuser. Risks R94,
+  R95. Tests: `tests/authentik_render.yml` (kind/GKE Secret keys, blueprint set, no `users:`, issuer defaults,
+  Gateway route). To apply: add the login host to Terraform `public_hosts` and its DNS record, set
+  `ingress.auth_host` in `instance.yml`, and remove `api.oidc_issuer` if it pointed at the same authentik. Docs:
+  `docs/admin.md` (Deploy authentik on GKE, Keep a break-glass admin), `docs/private-deployment.md`.
 - Terraform bootstrap for an existing GCP project (#144): `create_project = false` skips creating the project and the
   billing link and makes only the bootstrap APIs and the state bucket. `billing_account_id` is required only when the
   project is created. The default (`true`) is unchanged.
@@ -81,6 +273,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Docs: `docs/admin.md` "Public HTTPS entry point (GKE)", kind parity with port-forward. New risks R66 to R68.
 - Approvals on GKE (#67): `deploy.yml` now accepts `approvals.enabled: true` when `api.oidc_issuer` is set (so
   agentdev-api is deployed); before, the assert refused approvals on GKE. Docs: `docs/admin.md`, "Turn on approvals".
+
+### Fixed
+- Operator crash loop with `EXEC_NS` set (#161): the cache listed and watched Agents, Services and StatefulSets in
+  `EXEC_NS` too, where its Role does not allow it, so the caches never synced. The cache is now scoped per kind
+  (agent kinds in the agents namespace, Executor, ExecutorRun, Job and PVC in `EXEC_NS`, Pods in both); RBAC is
+  unchanged. `/readyz` now waits for the cache sync, so `rollout status` (kind `./run.sh 12` and `deploy.yml` alike)
+  fails on a missing permission instead of passing before the crash. A unit test checks the cache against the Roles
+  in `manifests/operator.yaml.tmpl`.
 
 ### Changed
 - Approvals are on by default on GKE (#67): `approvals.enabled` defaults to `true`. **BREAKING** for a GKE instance

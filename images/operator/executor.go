@@ -30,6 +30,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -71,19 +72,26 @@ var (
 
 // ExecConfig holds the operator-wide executor settings (env on the operator, see main.go).
 type ExecConfig struct {
-	NS          string        // executors, runs and Jobs (EXEC_NS)
-	AgentsNS    string        // Approvals and SecurityEvents (AGENTS_NS), where the API watches them
-	HelperImage string        // the operator's own image: hash-plan and verify-plan (OPERATOR_IMAGE)
-	GitImage    string        // checkout: the forge sidecar image (git, sh)
-	PullPolicy  string        //
-	ForgeURL    string        // Gitea base URL (API and git)
-	GitHubAPI   string        // GitHub REST base (default https://api.github.com)
-	GitHubURL   string        // GitHub git base (default https://github.com)
-	Poll        time.Duration // EXECUTOR_POLL_SECONDS
-	Lookback    time.Duration // merged PRs older than this are never planned (and never before the Executor existed)
-	Retention   time.Duration // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
-	Storage     string        // plan volume size
-	ApplyStart  time.Duration // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
+	NS          string            // executors, runs and Jobs (EXEC_NS)
+	AgentsNS    string            // Approvals and SecurityEvents (AGENTS_NS), where the API watches them
+	HelperImage string            // the operator's own image: hash-plan and verify-plan (OPERATOR_IMAGE)
+	GitImage    string            // checkout: the forge sidecar image (git, sh)
+	PullPolicy  string            //
+	ForgeURL    string            // Gitea base URL (API and git)
+	GitHubAPI   string            // GitHub REST base (default https://api.github.com)
+	GitHubURL   string            // GitHub git base (default https://github.com)
+	Poll        time.Duration     // EXECUTOR_POLL_SECONDS
+	Lookback    time.Duration     // merged PRs older than this are never planned (and never before the Executor existed)
+	Retention   time.Duration     // finished ExecutorRuns (and their Jobs and plan volumes) older than this are deleted
+	Storage     string            // plan volume size
+	CostLabels  map[string]string // COST_LABELS (#184) on Jobs and their pods
+	ApplyStart  time.Duration     // an allowed apply starts at most this long after the decision (EXECUTOR_APPLY_START_MINUTES)
+	EgressProxy string            // executor egress proxy URL (#135, EXECUTOR_EGRESS_PROXY); empty: Jobs get no proxy env
+	EgressHosts []string          // hosts every executor may reach (EXECUTOR_EGRESS_HOSTS), plus spec.egressHosts
+	// refusal events: one per run, host and window; at most EgressMaxEvents hosts per run and window, then one
+	// rate-limited event (SECURITY_RATE_BURST, default 20; window 10 minutes)
+	EgressMaxEvents int
+	EgressWindow    time.Duration
 }
 
 // podLogs returns at most limit bytes of a container's log.
@@ -109,6 +117,13 @@ type ExecutorPoller struct {
 	Now    func() time.Time
 	// Forge builds the forge client of an executor from its token; replaced in tests.
 	Forge func(e *v1.Executor, token string) (forgeAPI, error)
+	// EgressLogs reads the executor egress proxy's log (#135); nil: refusals are not collected.
+	EgressLogs  sinceLogs
+	egressSince map[types.UID]time.Time // proxy pod -> time of the last log line read
+	egressAgg   map[string]*egressAgg   // executor/Job -> refusals of the current window (flood protection)
+	// EgressDropped counts refusal lines not recorded as their own event (repeat of a host in the window, or over
+	// the cap); logged after each pass.
+	EgressDropped atomic.Int64
 }
 
 func (p *ExecutorPoller) defaultForge(e *v1.Executor, token string) (forgeAPI, error) {
@@ -154,6 +169,11 @@ func (p *ExecutorPoller) PollAll(ctx context.Context) {
 		return
 	}
 	owner := envOwners(list.Items)
+	// before any Job starts: the proxy must know the executor's credential and hosts (#135)
+	if err := p.syncEgress(ctx, list.Items, owner); err != nil {
+		log.FromContext(ctx).Error(err, "sync executor egress proxy")
+	}
+	p.collectEgress(ctx, list.Items)
 	for i := range list.Items {
 		e := &list.Items[i]
 		if o := owner[e.Spec.Environment]; o != e.Name {
@@ -362,7 +382,7 @@ func (p *ExecutorPoller) createRun(ctx context.Context, e *v1.Executor, spec v1.
 func (p *ExecutorPoller) syncRun(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun) error {
 	// the spec is checked again: an ExecutorRun is only ever written by this operator, but never trust it blindly
 	if !shaRE.MatchString(r.Spec.Commit) || r.Spec.PR < 1 || r.Spec.Executor != e.Name {
-		return p.finish(ctx, e, f, r, "Failed", "invalid run spec", false)
+		return p.finish(ctx, e, r, "Failed", "invalid run spec", false)
 	}
 	switch r.Status.Phase {
 	case "", "Pending":
@@ -384,12 +404,12 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 	if r.Spec.Stage == "apply" {
 		switch {
 		case !hashRE.MatchString(r.Spec.PlanHash):
-			return p.finish(ctx, e, f, r, "Failed", "apply run without a plan hash", true)
+			return p.finish(ctx, e, r, "Failed", "apply run without a plan hash", true)
 		case !hashRE.MatchString(r.Spec.SpecHash) || r.Spec.SpecHash != specHash(e):
 			// the Executor (image, commands, credentials, ...) changed after the approval: not what was approved
-			return p.finish(ctx, e, f, r, "Failed", "executor spec changed since the approval", true)
+			return p.finish(ctx, e, r, "Failed", "executor spec changed since the approval", true)
 		case r.Spec.NotAfter == nil || p.Now().After(r.Spec.NotAfter.Time):
-			return p.finish(ctx, e, f, r, "Failed", "apply not started within the start window after the decision", true)
+			return p.finish(ctx, e, r, "Failed", "apply not started within the start window after the decision", true)
 		}
 	}
 	if r.Spec.Stage == "merge" {
@@ -442,7 +462,7 @@ func (p *ExecutorPoller) collect(ctx context.Context, e *v1.Executor, f forgeAPI
 	var job batchv1.Job
 	if err := p.Direct.Get(ctx, types.NamespacedName{Namespace: p.C.NS, Name: r.Name}, &job); err != nil {
 		if apierrors.IsNotFound(err) {
-			return p.finish(ctx, e, f, r, "Failed", "job disappeared", true)
+			return p.finish(ctx, e, r, "Failed", "job disappeared", true)
 		}
 		return err
 	}
@@ -538,7 +558,7 @@ func (p *ExecutorPoller) report(ctx context.Context, e *v1.Executor, f forgeAPI,
 			log.FromContext(ctx).Error(err, "set status")
 		}
 	}
-	if err := p.finish(ctx, e, f, r, phase, msg, false); err != nil {
+	if err := p.finish(ctx, e, r, phase, msg, false); err != nil {
 		return err
 	}
 	rule := "executor.plan"
@@ -562,7 +582,7 @@ func quoteOutput(out string) string {
 	return "<details><summary>output</summary>\n\n```text\n" + strings.Join(lines, "\n") + "\n```\n</details>"
 }
 
-func (p *ExecutorPoller) finish(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun, phase, msg string, refused bool) error {
+func (p *ExecutorPoller) finish(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun, phase, msg string, refused bool) error {
 	now := metav1.NewTime(p.Now())
 	r.Status.Phase, r.Status.Message, r.Status.FinishedAt = phase, msg, &now
 	if err := p.Status().Update(ctx, r); err != nil {
@@ -832,13 +852,10 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	if r.Spec.Stage != "pr" {
 		ref = "refs/heads/" + branchOf(e) // merge and apply: only commits on the protected branch
 	}
-	gitBase := strings.TrimRight(p.C.ForgeURL, "/")
+	gitBase := p.gitBase(e)
 	gitUser := "token"
 	if forgeOf(e) == "github" {
-		gitBase, gitUser = strings.TrimRight(p.C.GitHubURL, "/"), "x-access-token"
-		if gitBase == "" {
-			gitBase = "https://github.com"
-		}
+		gitUser = "x-access-token"
 	}
 	env := func(k, v string) corev1.EnvVar { return corev1.EnvVar{Name: k, Value: v} }
 	common := []corev1.EnvVar{env("COMMIT", r.Spec.Commit), env("ENVIRONMENT", e.Spec.Environment), env("PLAN_FILE", planFile),
@@ -857,17 +874,18 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	checkout := corev1.Container{
 		Name: "checkout", Image: p.C.GitImage, ImagePullPolicy: corev1.PullPolicy(p.C.PullPolicy),
 		Command: []string{"/bin/sh", "-c", checkoutScript},
-		Env: []corev1.EnvVar{env("REPO_URL", gitBase+"/"+e.Spec.Repo+".git"), env("REF", ref), env("COMMIT", r.Spec.Commit),
+		Env: append([]corev1.EnvVar{env("REPO_URL", gitBase+"/"+e.Spec.Repo+".git"), env("REF", ref), env("COMMIT", r.Spec.Commit),
 			env("GIT_USER", gitUser), env("HOME", "/tmp"), env("GIT_TERMINAL_PROMPT", "0"), env("GIT_CONFIG_NOSYSTEM", "1"),
 			{Name: "FORGE_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: e.Spec.ForgeSecret}, Key: "FORGE_TOKEN"}}}},
+			p.egressEnv(e)...),
 		VolumeMounts:    []corev1.VolumeMount{{Name: "work", MountPath: workDir}, {Name: "tmp", MountPath: "/tmp"}},
 		SecurityContext: restricted(1000, true),
 		Resources:       res("50m", "128Mi", "1", "512Mi"),
 	}
 	tool := corev1.Container{
 		Name: "tool", Image: e.Spec.Image, ImagePullPolicy: corev1.PullIfNotPresent, Command: cmd, WorkingDir: toolDir,
-		Env: common, VolumeMounts: mounts, SecurityContext: restricted(1000, false), Resources: res("100m", "256Mi", "2", "2Gi"),
+		Env: append(common, p.egressEnv(e)...), VolumeMounts: mounts, SecurityContext: restricted(1000, false), Resources: res("100m", "256Mi", "2", "2Gi"),
 	}
 	if creds.SecretName != "" {
 		tool.EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: creds.SecretName}}}}
@@ -891,7 +909,7 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	if r.Spec.Stage != "pr" {
 		planVol = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: planVolumeName(e, r.Spec.Commit), ReadOnly: apply}}
 	}
-	labels := map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}
+	labels := withCostLabels(map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}, p.C.CostLabels)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: r.Name, Namespace: p.C.NS, Labels: labels},
 		Spec: batchv1.JobSpec{
@@ -925,6 +943,17 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	}
 }
 
+// gitBase is the git base URL of the executor's forge.
+func (p *ExecutorPoller) gitBase(e *v1.Executor) string {
+	if forgeOf(e) == "github" {
+		if b := strings.TrimRight(p.C.GitHubURL, "/"); b != "" {
+			return b
+		}
+		return "https://github.com"
+	}
+	return strings.TrimRight(p.C.ForgeURL, "/")
+}
+
 func res(cpuReq, memReq, cpuLim, memLim string) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpuReq), corev1.ResourceMemory: resource.MustParse(memReq)},
@@ -945,10 +974,10 @@ mkdir -p /work/home
 git init -q /work/src
 cd /work/src
 auth=$(printf '%s:%s' "$GIT_USER" "$FORGE_TOKEN" | base64 | tr -d '\n')
-git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
+git -c http.extraHeader="Authorization: Basic $auth" -c http.proxyAuthMethod=basic -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
   fetch -q --no-tags --depth 200 -- "$REPO_URL" "$REF"
 if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
-  git -c http.extraHeader="Authorization: Basic $auth" -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
+  git -c http.extraHeader="Authorization: Basic $auth" -c http.proxyAuthMethod=basic -c protocol.allow=never -c protocol.https.allow=always -c protocol.http.allow=always \
     fetch -q --no-tags --unshallow -- "$REPO_URL" "$REF"
 fi
 git -c advice.detachedHead=false checkout -q --detach "$COMMIT"

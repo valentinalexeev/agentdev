@@ -46,6 +46,9 @@
           - redirect.spec.hostnames | sort == ['agentdev.example.com', 'hooks.example.com']
           - gw.spec.addresses[0].value == 'agentdev-webhook'
           - gw.spec.listeners[0].tls.options['networking.gke.io/pre-shared-certs'] == 'c1'
+          # the load balancer health check uses the router's internal port (/healthz is not on the public port, #214)
+          - (with_armor | selectattr('kind', 'equalto', 'HealthCheckPolicy') | selectattr('metadata.name', 'equalto',
+             'webhook-router') | first).spec.default.config.httpHealthCheck.port == 8081
           - with_armor | selectattr('kind', 'equalto', 'GCPBackendPolicy') | list | length == 2
           - plain | selectattr('kind', 'equalto', 'GCPBackendPolicy') | list | length == 0
           - plain | selectattr('kind', 'equalto', 'HTTPRoute') | map(attribute='metadata.name') | sort == ['agentdev-https-redirect', 'agentdev-webhook']

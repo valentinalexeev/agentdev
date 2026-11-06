@@ -9,6 +9,9 @@ source "$(dirname "$0")/lib.sh"
 need envsubst
 k create namespace "${PLATFORM_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
+# labels (#184), as the GKE playbook sets them: COST_LABELS="k=v,k=v" from config.env
+label_ns() { [[ -z "${COST_LABELS}" ]] || k label --overwrite namespace "$@" ${COST_LABELS//,/ } >/dev/null; }
+label_ns "${PLATFORM_NS}" "${AGENTS_NS}"
 
 log "Image ${OPERATOR_IMAGE}"
 if [[ "${OPERATOR_IMAGE}" == agentdev-operator:* ]]; then
@@ -29,19 +32,27 @@ if [[ -z "${BOTBOARD_URL}" ]] && k -n "${BOTBOARD_NS}" get svc botboard >/dev/nu
 fi
 EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agents' HTTPS_PROXY (#65, 06-agents.sh deploys it)
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
-PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
+COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
   FORGE_ADMIN_USER="${FORGE_ADMIN_USER}" BOTBOARD_URL="${BOTBOARD_URL}" POLL_SECONDS="${POLL_SECONDS}" IDLE_SECONDS="${IDLE_SECONDS}" \
+  AGENT_STORAGE_CLASS="${AGENT_STORAGE_CLASS:-}" AGENT_STATE_STORAGE="${AGENT_STATE_STORAGE:-10Gi}" \
   SECURITY_PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}" SECURITY_RETENTION_DAYS="${SECURITY_RETENTION_DAYS:-30}" SECURITY_MAX_PER_AGENT="${SECURITY_MAX_PER_AGENT:-500}" \
   EGRESS_PROXY="${EGRESS_PROXY}" \
   SECURITY_RATE_PER_MIN="${SECURITY_RATE_PER_MIN:-10}" SECURITY_RATE_BURST="${SECURITY_RATE_BURST:-20}" APPROVAL_RETENTION_DAYS="${APPROVAL_RETENTION_DAYS:-90}" \
   APPROVALS="${APPROVALS:-false}" APPROVAL_TIMEOUT_MINUTES="${APPROVAL_TIMEOUT_MINUTES:-30}" \
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
-  EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" \
+  EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
+label_ns "${EXEC_NS}"   # created by the operator manifest
+# executor egress (#135): default deny for executor Jobs, the executor proxy, and (kind) 80/443 for the proxy
+EXEC_NS="${EXEC_NS}" FORGE_NS="${FORGE_NS}" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
+  envsubst '${EXEC_NS} ${FORGE_NS} ${EGRESS_PROXY_IMAGE}' < "${SPIKE_DIR}/manifests/executor-egress.yaml.tmpl" | k apply -f - >/dev/null
+EXEC_NS="${EXEC_NS}" envsubst '${EXEC_NS}' < "${SPIKE_DIR}/manifests/executor-egress-web.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-operator --timeout=120s >/dev/null || die "operator did not become ready"
 ok "agentdev-operator ready"
+k -n "${EXEC_NS}" rollout status deploy/executor-egress-proxy --timeout=180s >/dev/null || die "executor egress proxy did not become ready"
+ok "executor-egress-proxy up; executors may reach: ${EXECUTOR_EGRESS_HOSTS} plus their spec.egressHosts"
 record "agentdev operator up in ${PLATFORM_NS}, watching Agents in ${AGENTS_NS}"

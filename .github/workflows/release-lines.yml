@@ -1,0 +1,55 @@
+name: Release lines
+
+# ADR 0004: every line contains every lower one (release/X.Y -> ... -> main -> next/X.0).
+#   push to a line          report pending forward merges as warnings (main does not go red for a pending hop)
+#   PR chore/release-* into a line   fail if a lower line is not merged into the PR head
+on:
+  push:
+    branches: [main, "release/**", "next/**"]
+  pull_request:
+    branches: [main, "release/**", "next/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lines-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Lines
+        run: scripts/release-lines.sh list
+      - name: Ancestry (report)
+        if: github.event_name == 'push'
+        run: scripts/release-lines.sh check
+      - name: Ancestry (release PR)
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'chore/release-')
+        env:
+          BASE: ${{ github.base_ref }}
+        run: scripts/release-lines.sh check --strict "$BASE" HEAD
+      - name: Mechanical forward merge (merge/ PR)
+        # passes only if the head is ONE merge commit of the next-lower line into BASE, with the tree git produces
+        # unaided; a resolved conflict or any extra commit fails it and so needs the normal owner approval
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'merge/')
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          lower=$(scripts/release-lines.sh list | grep -B1 -x "$BASE" | head -n1)
+          [ -n "$lower" ] && [ "$lower" != "$BASE" ] || { echo "::error::no line below $BASE"; exit 1; }
+          [ "$(git rev-list --count "origin/$BASE..$HEAD_SHA")" -ge 1 ]
+          read -r _ p1 p2 extra < <(git rev-list --parents -n1 "$HEAD_SHA")
+          [ -z "${extra:-}" ] && [ "$p1" = "$(git rev-parse "origin/$BASE")" ] && [ "$p2" = "$(git rev-parse "origin/$lower")" ] \
+            || { echo "::error::head is not a single merge of origin/$lower into origin/$BASE"; exit 1; }
+          git -c user.name=ci -c user.email=ci@invalid checkout -q --detach "origin/$BASE"
+          git -c user.name=ci -c user.email=ci@invalid merge -q --no-ff --no-edit "origin/$lower" \
+            || { echo "::error::conflict: owner approval needed"; exit 1; }
+          [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$HEAD_SHA^{tree}")" ] \
+            || { echo "::error::tree differs from a mechanical merge (resolved or edited): owner approval needed"; exit 1; }

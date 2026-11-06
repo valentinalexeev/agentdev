@@ -63,12 +63,24 @@ CAUTION: The bootstrap makes a project and links billing. The owner of the billi
 1. In `terraform/instance.tfvars`, set the public DNS names:
 
    ```hcl
-   public_hosts = ["agentdev.example.com"]
+   public_hosts = ["agentdev.example.com", "auth.example.com"]   # the UI and the authentik login
    ```
 
 2. Go to `terraform/` in the deployment repository.
 3. Run `terraform init -backend-config="bucket=<project_id>-tfstate"`
 4. Run `terraform plan -var-file=instance.tfvars -out plan.bin`
+
+   NOTE: If the billing account is not in USD, set `budget_currency` (for example `"EUR"`) in `instance.tfvars`.
+   Otherwise the budget fails with `400 Request contains an invalid argument` and no detail, after all other
+   resources are made. With user credentials (ADC), the budget can also fail with a 403
+   `billingbudgets.googleapis.com requires a quota project`. Then set a quota project before plan and apply:
+   `export GOOGLE_CLOUD_QUOTA_PROJECT=<project_id> USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT=<project_id>`
+   The example `deploy.yml` sets these variables for CI (#199).
+
+   CAUTION: The first apply gives the automation account the role `roles/billing.costsManager` on the billing
+   account, so that CI can read the budget. The identity of the first apply must have
+   `billing.accounts.setIamPolicy` on the billing account. Usually this is the owner. CI cannot give this role to
+   itself. If you do not want a budget, set `create_budget = false`. Then Terraform makes no budget and no billing IAM.
 5. Examine the plan. For the costs, refer to `infra/terraform/README.md`.
 6. Run `terraform apply plan.bin` (the owner does this step the first time).
 7. Show the values: `terraform output ingress`, `terraform output webhook_ip` and
@@ -137,22 +149,23 @@ NOTE: The full list, with the secrets that the playbook makes on the first run, 
 
 ## Set up Google Workspace sign-in
 
-The API accepts tokens from authentik. authentik signs people in through Google Workspace and puts the groups and the
-`forge_login` claim into the token. The Workspace source and the group sync are in PR #134 (#122). Until that PR is
-merged and released, use the procedure in that PR.
+The API accepts tokens from authentik. The playbook deploys authentik on `https://<ingress.auth_host>/` (#114).
+authentik signs people in through Google Workspace and puts the groups and the `forge_login` claim into the token.
 
-1. In the Google Cloud console of the instance project, make an OAuth client of type **Web application**. Use the
-   redirect URL that PR #134 gives for the authentik Workspace source.
-2. Put the client secret in Secret Manager, with the name that PR #134 gives.
-3. In Google Workspace, make the group for agentdev admins (for example `agentdev-admins@example.com`).
-4. Set the SSO values in `ansible/instance.yml` as PR #134 gives, and set `api.oidc_issuer` to the authentik issuer:
+1. In `ansible/instance.yml`, set the login host. The playbook then sets the API and UI issuer to
+   `https://auth.example.com/application/o/agentdev/`. Do not set `api.oidc_issuer`.
 
    ```yaml
-   api:
-     oidc_issuer: https://auth.example.com/application/o/agentdev/
+   ingress:
+     host: agentdev.example.com
+     auth_host: auth.example.com
    ```
 
-5. Make sure that `forge_login` is the **GitHub login** of the person, from a stable and unique attribute. Refer to
+2. In Google Workspace, make the group for agentdev admins (for example `agentdev-admins@example.com`).
+3. Make the Workspace SAML app and set `authentik.sso`. Refer to
+   [Administration, "Sign in with Google Workspace"](admin.md#sign-in-with-google-workspace).
+
+4. Make sure that `forge_login` is the **GitHub login** of the person, from a stable and unique attribute. Refer to
    [Administration, "Map people to forge users"](admin.md#map-people-to-forge-users).
 
 WARNING: Do not let users edit `forge_login`. A person with a wrong `forge_login` can act as that GitHub user.
@@ -176,13 +189,14 @@ agentdev has two types of admin. The authentik administrator (`akadmin`) control
 WARNING: Do not remove the last way to log in as an administrator. Keep `akadmin` with a strong password and MFA,
 and keep it as the break-glass account. Do not delete it or change it to a Workspace-only login.
 
-1. Log in to authentik as `akadmin`. Refer to
-   [Administration, "Log in to authentik for the first time"](admin.md#log-in-to-authentik-for-the-first-time).
+1. Log in to authentik on `https://<auth_host>/` as `akadmin`. The first password is in Secret Manager
+   `platform-authentik-admin`. Refer to
+   [Administration, "Keep a break-glass admin"](admin.md#keep-a-break-glass-admin).
 2. Change the password and add MFA.
 3. Keep the new password and the MFA recovery codes in the password manager of the owner.
 4. Log in to the agentdev UI one time with your Workspace account.
    authentik makes your user.
-5. Make sure that you are a member of `agentdev-admins`: by the Workspace group sync (PR #134), or by hand. Refer to
+5. Make sure that you are a member of `agentdev-admins`: by the Workspace group sync, or by hand. Refer to
    [Administration, "Give a person admin rights for agents"](admin.md#give-a-person-admin-rights-for-agents).
 6. Log out of the UI and log in again.
    The new token has the group.
@@ -210,6 +224,20 @@ membership of `agentdev-admins` by a script.
 8. Write a review comment on the pull request.
    The agent pushes a follow-up commit.
 9. Do the end-to-end security checks of [e2e-security.md](e2e-security.md) (#123) on the instance.
+
+### Troubleshooting: the forge sidecar flaps, "github unreachable"
+
+Symptom: `agent-<name>-0` switches between `Running` and `CrashLoopBackOff`. The forge sidecar log shows
+`github unreachable`, the agent container exits with `the forge sidecar gave no valid identity`. In an agent pod,
+every name fails: `curl: (5) Could not resolve proxy: egress-proxy.coding-agents.svc.cluster.local`.
+
+Cause: the cluster has NodeLocal DNSCache (GKE `addonsConfig.dnsCacheConfig.enabled`, a `node-local-dns`
+DaemonSet in `kube-system`). It answers DNS on the node, so a policy that allows DNS only to the `kube-dns` pods
+blocks every lookup. Releases before 1.0.0-rc.2 had this gap (#163).
+
+Fix: upgrade agentdev. Every agentdev egress policy allows DNS (port 53 only) to `kube-dns`, to the `node-local-dns`
+pods and to `169.254.20.10/32`. Check: `kubectl -n coding-agents get networkpolicy agent-egress -o yaml | grep node-local-dns`.
+`scripts/e2e-gke-security.sh --only egress` also checks that an agent pod resolves the egress proxy name.
 
 ## Make a backup
 

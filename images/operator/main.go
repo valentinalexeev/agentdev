@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -13,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -52,13 +52,9 @@ func main() {
 
 	ns := env("AGENTS_NS", "coding-agents")
 	execNS := os.Getenv("EXEC_NS") // deterministic executors (#69); empty: off
-	namespaces := map[string]cache.Config{ns: {}}
-	if execNS != "" {
-		namespaces[execNS] = cache.Config{}
-	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
-		Cache:                  cache.Options{DefaultNamespaces: namespaces}, // agents (and executors) namespace only
+		Cache:                  cacheOptions(ns, execNS), // per kind: agents namespace, executor kinds in EXEC_NS (#161)
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: ":8081", // one replica, no leader election (add a Lease Role first if that changes)
 	})
@@ -66,7 +62,7 @@ func main() {
 		log.Error(err, "manager")
 		os.Exit(1)
 	}
-	r := &AgentReconciler{Client: mgr.GetClient(), D: Defaults{
+	r := &AgentReconciler{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), D: Defaults{
 		WorkerImage:     env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
 		ForgeImage:      env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
 		PullPolicy:      env("IMAGE_PULL_POLICY", "IfNotPresent"),
@@ -82,6 +78,9 @@ func main() {
 		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
 		EgressProxy:     os.Getenv("EGRESS_PROXY"),
 		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
+		CostLabels:      parseCostLabels(os.Getenv("COST_LABELS")),
+		StorageClass:    os.Getenv("AGENT_STORAGE_CLASS"), // #173; empty: cluster default
+		StateStorage:    env("AGENT_STATE_STORAGE", "10Gi"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
@@ -122,14 +121,19 @@ func main() {
 			os.Exit(1)
 		}
 		ex := &ExecutorPoller{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), Logs: kubePodLogs(cs), Now: time.Now,
-			C: ExecConfig{NS: execNS, AgentsNS: ns, HelperImage: env("OPERATOR_IMAGE", "ghcr.io/valentinalexeev/agentdev-operator:latest"),
+			C: ExecConfig{NS: execNS, AgentsNS: ns, CostLabels: parseCostLabels(os.Getenv("COST_LABELS")), HelperImage: env("OPERATOR_IMAGE", "ghcr.io/valentinalexeev/agentdev-operator:latest"),
 				GitImage: env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"), PullPolicy: env("IMAGE_PULL_POLICY", "IfNotPresent"),
 				ForgeURL: os.Getenv("FORGE_URL"), GitHubAPI: os.Getenv("GITHUB_API_URL"), GitHubURL: os.Getenv("GITHUB_URL"),
 				Poll:       time.Duration(envInt("EXECUTOR_POLL_SECONDS", 60)) * time.Second,
 				Lookback:   time.Duration(envInt("EXECUTOR_LOOKBACK_HOURS", 24)) * time.Hour,
 				Retention:  time.Duration(envInt("EXECUTOR_RETENTION_DAYS", 30)) * 24 * time.Hour,
 				Storage:    env("EXECUTOR_PLAN_STORAGE", "1Gi"),
-				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute}}
+				ApplyStart: time.Duration(envInt("EXECUTOR_APPLY_START_MINUTES", 30)) * time.Minute,
+				// executor egress (#135): proxy URL and the hosts every executor may reach
+				EgressProxy:     os.Getenv("EXECUTOR_EGRESS_PROXY"),
+				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
+				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
+			EgressLogs: kubeSinceLogs(cs)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)
@@ -137,7 +141,9 @@ func main() {
 		log.Info("deterministic executors on", "namespace", execNS)
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
+	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
+	// deploy.yml) fails on kind and GKE alike instead of passing before the crash loop
+	_ = mgr.AddReadyzCheck("readyz", cacheSynced(mgr.GetCache()))
 	log.Info("agentdev-operator starting", "namespace", ns)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "run")

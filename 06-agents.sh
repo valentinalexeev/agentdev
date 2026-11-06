@@ -44,13 +44,41 @@ fi
 REGISTER_TOKEN=$(secret_file "${SPIKE_DIR}/.secrets/router-register.token")
 
 log "Webhook router"
+# Wake poll (#181): with scale to zero on, the router also asks the forge every WAKE_POLL_SECONDS whether a stopped
+# agent has new work, so agents start again without webhooks (GitHub on kind has none). Its credential reads only:
+# Gitea: the account agentdev-router, read collaborator, token read:repository,read:issue; GitHub: the App, whose
+# installation tokens the router narrows to read access. Secret webhook-router-poll, router pod only.
+if [[ "${SCALE_TO_ZERO}" == true && "${WAKE_POLL_SECONDS}" -gt 0 ]]; then
+  if [[ "${FORGE_KIND}" == github ]]; then
+    k -n "${AGENTS_NS}" create secret generic webhook-router-poll --from-file=github-app-id="${gh_app}/app-id" \
+        --from-file=private-key.pem="${gh_app}/private-key.pem" --from-literal=github-installation-id="${GITHUB_INSTALLATION_ID}" \
+        --dry-run=client -o yaml | k apply -f - >/dev/null
+  else
+    gitea_cli() { k -n "${FORGE_NS}" exec deploy/gitea -- gitea "$@" 2>/dev/null; }
+    # shellcheck source=lib-forge.sh
+    source "${SPIKE_DIR}/lib-forge.sh"
+    forge_mkuser agentdev-router "$(openssl rand -hex 12)Aa1!" || die "cannot create forge user agentdev-router"
+    ga PUT "/repos/${REPO}/collaborators/agentdev-router" '{"permission":"read"}' >/dev/null || die "cannot add agentdev-router to ${REPO}"
+    tf="${SPIKE_DIR}/.secrets/router-poll.token"
+    if [[ ! -s "${tf}" ]]; then
+      gitea_cli admin user generate-access-token --username agentdev-router --token-name "wake-poll-$(date +%s)" \
+        --scopes read:repository,read:issue --raw | tr -d '\r\n' > "${tf}"
+      chmod 600 "${tf}"
+    fi
+    k -n "${AGENTS_NS}" create secret generic webhook-router-poll --from-file=gitea-token="${tf}" \
+      --dry-run=client -o yaml | k apply -f - >/dev/null
+  fi
+else
+  k -n "${AGENTS_NS}" delete secret webhook-router-poll --ignore-not-found >/dev/null
+fi
 AGENTS_NS="${AGENTS_NS}" FORGE_SECRETS="${FORGE_SECRETS}" REGISTER_TOKEN="${REGISTER_TOKEN}" \
-  ROUTER_IMAGE="${ROUTER_IMAGE}" IMAGE_PULL_POLICY=Never \
-  envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_IMAGE} ${IMAGE_PULL_POLICY}' \
+  ROUTER_IMAGE="${ROUTER_IMAGE}" IMAGE_PULL_POLICY=Never WAKE_POLL_SECONDS="${WAKE_POLL_SECONDS}" \
+  GITEA_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" GITHUB_API_URL=https://api.github.com \
+  envsubst '${AGENTS_NS} ${FORGE_SECRETS} ${REGISTER_TOKEN} ${ROUTER_IMAGE} ${IMAGE_PULL_POLICY} ${WAKE_POLL_SECONDS} ${GITEA_URL} ${GITHUB_API_URL}' \
   < "${SPIKE_DIR}/manifests/router.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/webhook-router >/dev/null   # pick up a rebuilt local image
 k -n "${AGENTS_NS}" rollout status deploy/webhook-router --timeout=180s >/dev/null
-ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080"
+ok "router up: http://webhook-router.${AGENTS_NS}.svc.cluster.local:8080 (webhooks), :8081 (internal, #214)"
 
 log "Claude credential proxy (#66)"
 # the only pod with the Claude credentials; each agent gets a key (HMAC of its name) that is worth nothing elsewhere
@@ -163,7 +191,7 @@ ok "webhook -> ${url}"
 # registrations are refreshed every 60 s; show who the router knows right now
 sleep 5
 k -n "${AGENTS_NS}" exec deploy/webhook-router -- node -e \
-  "require('http').get('http://localhost:8080/status',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log('  router knows: '+JSON.parse(b).agents.map(a=>a.agent).join(', ')))})"
+  "require('http').get('http://localhost:8081/status',r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>console.log('  router knows: '+JSON.parse(b).agents.map(a=>a.agent).join(', ')))})"
 record "agents running under gVisor: ${AGENTS}"
 k -n "${AGENTS_NS}" get pods -l app=coding-agent
 echo

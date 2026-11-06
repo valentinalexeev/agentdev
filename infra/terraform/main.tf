@@ -1,8 +1,11 @@
 locals {
-  apis = [
+  apis = concat(
+    var.create_artifact_registry ? ["artifactregistry.googleapis.com"] : [],
+    local.base_apis,
+  )
+  base_apis = [
     "compute.googleapis.com",
     "container.googleapis.com",
-    "artifactregistry.googleapis.com",
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
@@ -66,10 +69,18 @@ resource "google_compute_router_nat" "nat" {
 }
 
 # Public entry point (#120): the GKE Gateway of the Ansible role ingress uses it by name (webhook router for the
-# GitHub App, #2, and the web UI with its /api proxy). The name stays for existing instances.
+# GitHub App, #2, and the web UI with its /api proxy). The name stays for existing instances. Only with public_hosts
+# (#169): without them nothing uses the address, and an unused reserved IP is billed.
 resource "google_compute_global_address" "webhook" {
+  count      = length(var.public_hosts) > 0 ? 1 : 0
   name       = "agentdev-webhook"
   depends_on = [google_project_service.apis]
+}
+
+# #169: the address was not counted before. Instances with public_hosts keep the same IP.
+moved {
+  from = google_compute_global_address.webhook
+  to   = google_compute_global_address.webhook[0]
 }
 
 # ---------- GKE ----------
@@ -79,13 +90,13 @@ resource "google_service_account" "nodes" {
 }
 
 resource "google_project_iam_member" "nodes" {
-  for_each = toset([
+  for_each = toset(concat([
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/monitoring.viewer",
     "roles/stackdriver.resourceMetadata.writer",
-    "roles/artifactregistry.reader",
-  ])
+    ], var.create_artifact_registry ? ["roles/artifactregistry.reader"] : []
+  ))
   project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.nodes.email}"
@@ -98,6 +109,8 @@ resource "google_container_cluster" "this" {
   network             = google_compute_network.vpc.id
   subnetwork          = google_compute_subnetwork.nodes.id
   deletion_protection = true
+
+  resource_labels = local.labels # #184: also on the node VMs and their boot disks
 
   # Node pools are managed separately below.
   remove_default_node_pool = true
@@ -127,7 +140,7 @@ resource "google_container_cluster" "this" {
   depends_on = [google_project_service.apis]
 }
 
-# Always-on pool for platform components (router, operator, UI). Small and on-demand.
+# Always-on pool for platform components (router, operator, UI). Small; on-demand unless system_pool_spot.
 resource "google_container_node_pool" "system" {
   name     = "system"
   cluster  = google_container_cluster.this.id
@@ -138,6 +151,10 @@ resource "google_container_node_pool" "system" {
   }
   node_config {
     machine_type    = var.system_machine_type
+    disk_size_gb    = var.system_disk_size_gb
+    disk_type       = var.system_disk_type
+    resource_labels = local.labels         # #184
+    spot            = var.system_pool_spot # #171, default false: on-demand
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     workload_metadata_config { mode = "GKE_METADATA" }
@@ -163,7 +180,10 @@ resource "google_container_node_pool" "agents" {
   }
   node_config {
     machine_type    = var.agent_machine_type
+    resource_labels = local.labels # #184
     spot            = var.agent_pool_spot
+    disk_size_gb    = var.agent_disk_size_gb
+    disk_type       = var.agent_disk_type
     service_account = google_service_account.nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
     image_type      = "COS_CONTAINERD"
@@ -187,7 +207,13 @@ resource "google_container_node_pool" "agents" {
 }
 
 # ---------- images and secrets ----------
+moved {
+  from = google_artifact_registry_repository.images
+  to   = google_artifact_registry_repository.images[0]
+}
+
 resource "google_artifact_registry_repository" "images" {
+  count         = var.create_artifact_registry ? 1 : 0
   location      = var.region
   repository_id = "agentdev"
   format        = "DOCKER"
@@ -212,7 +238,9 @@ resource "google_secret_manager_secret" "platform" {
 }
 
 # ---------- budget ----------
+# create_budget = false (#199): no budget, no budget channels, no billing IAM.
 resource "google_billing_budget" "monthly" {
+  count           = var.create_budget ? 1 : 0
   billing_account = var.billing_account_id
   display_name    = "agentdev ${var.project_id} monthly"
   budget_filter {
@@ -220,7 +248,7 @@ resource "google_billing_budget" "monthly" {
   }
   amount {
     specified_amount {
-      currency_code = "USD"
+      currency_code = var.budget_currency
       units         = tostring(var.budget_amount_usd)
     }
   }
@@ -235,8 +263,25 @@ resource "google_billing_budget" "monthly" {
 }
 
 resource "google_monitoring_notification_channel" "budget" {
-  for_each     = toset(var.budget_alert_emails)
+  for_each     = var.create_budget ? toset(var.budget_alert_emails) : toset([])
   display_name = "budget ${each.value}"
   type         = "email"
-  labels       = { email_address = each.value }
+  labels       = { email_address = each.value } # channel configuration, not resource labels
+  user_labels  = local.labels                   # #184
+}
+
+# The automation account plans and applies from CI and must read and update the budget (#199).
+# roles/billing.costsManager is the smallest predefined role with billing.budgets.get/update on the billing account.
+# The identity of the first apply needs billing.accounts.setIamPolicy (normally the owner); CI cannot grant it.
+resource "google_billing_account_iam_member" "automation_budgets" {
+  count              = var.create_budget ? 1 : 0
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.costsManager"
+  member             = "serviceAccount:${google_service_account.automation.email}"
+}
+
+# The budget got count in #199; existing state moves without a replace.
+moved {
+  from = google_billing_budget.monthly
+  to   = google_billing_budget.monthly[0]
 }

@@ -34,6 +34,9 @@ then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the op
 `curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
 not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
+ContextForge is deployed only when `mcp_projects` is not empty (#172); with an empty list the role removes it and the
+agents' `agent-<name>-mcp` Secrets (Postgres and the `contextforge` database stay). `platform_contextforge_enabled: true`
+keeps it without projects.
 Overrides: `platform_postgres_image`, `platform_contextforge_image`, `platform_cf_admin_email`, `platform_service_cidr`
 (must match the Terraform `services` range, `roles/platform/defaults/main.yml`).
 On a first `--check` run the platform secrets do not exist yet, so the diff shows empty passwords; the real run
@@ -43,8 +46,8 @@ creates them first. The same holds for the API: a first `--check` without `platf
 from Secret Manager and run after `include_role: platform`.
 
 ## Management API (#104)
-The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; authentik on GKE
-is #114, so any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
+The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
+authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
 `./run.sh 10` it:
 - creates `agentdev_owner` (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies
   `images/api/schema.sql` as the owner, sets the retention (`api.db_retention_days`, default 365) and applies
@@ -61,6 +64,17 @@ With `forge_kind: github` the API checks GitHub permissions and decides approval
 (#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
 API mints only read-only installation tokens.
 
+## authentik (#114)
+The `authentik` role runs after `platform` and before `authentik_sso` and `api` when `ingress.auth_host` is set (or
+`authentik.enabled: true`). Like `./run.sh 09` it makes the database `authentik`, the Secret `authentik` (same keys,
+plus the trusted proxy ranges and `AGENTDEV_UI_CALLBACK`), the ConfigMap `authentik-blueprints` from
+`manifests/authentik-blueprint-*.yaml` (never `manifests/kind/`) and installs the chart (`authentik.version`, default
+the `config.env` version). Secrets: Secret Manager `platform-pg-authentik`, `platform-authentik-secret-key`,
+`platform-authentik-admin` (the first `akadmin` password), generated once. It adds `akadmin` to `agentdev-admins`
+(add only, break-glass) and fails without an active superuser. Then `api.oidc_issuer` defaults to
+`https://<auth_host>/application/o/agentdev/` and `api.oidc_discovery_url` to the in-cluster service. Render test:
+`tests/authentik_render.yml`.
+
 ## Public HTTPS entry point (#120)
 The `ingress` role runs last when `instance.yml` sets `ingress.host`. It applies one GKE Gateway
 (`gke-l7-global-external-managed`) on the Terraform static IP (`ingress.static_ip_name`, default `agentdev-webhook`)
@@ -70,6 +84,15 @@ that is with `api.oidc_issuer`), port 80 redirects. HSTS on every HTTPS response
 (`ingress.security_policy`) on both backends when set. Values come from `terraform output ingress`. The role stops
 when the cluster does not serve the Gateway API (Terraform `gateway_api_config`). Render test:
 `tests/ingress_render.yml`. The `api` role now also applies `manifests/ui.yaml.tmpl` (`api.ui: false` skips it).
+
+`ingress.mode` (#160): `gateway` (default) as above, or `external` when your own reverse proxy (for example a tailnet
+ingress) publishes the hosts. With `external` the role makes no Gateway, HTTPRoute or certificate, and Terraform
+needs no `public_hosts` (no static IP). `ingress.host`, `webhook_host` and `auth_host` still give the authentik
+issuer, the UI callback and webhooks; `ingress.host` is required. `ingress.forwarder` (`namespace`, `pod_selector`
+in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-forwarder`,
+`webhook-router-from-forwarder` and `authentik-from-forwarder`; without it they are removed and default-deny stays.
+Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
+Test: `tests/ingress_external.yml`.
 
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
@@ -94,6 +117,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 04 | `coder` | `coder` |
+| 05 | `forge` | `gitea_forge` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -133,6 +157,16 @@ scale to zero. It takes `coder_context`, `coder_ns`, `coder_url`, `coder_admin_u
 from `CODER_ADMIN_PASSWORD` in the environment, and the login and the Postgres manifest run under `no_log`. A second run
 changes nothing: the template version is named after a content hash of `coder-template/` and is pushed only when that
 version is not active, and an `always` block starts the workspace again after the stop/start check.
+
+```bash
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags forge    # Gitea, accounts, seeded repo
+```
+The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, the owner account, the repo
+`gitea_forge_repo` seeded from `seed/`, one write collaborator per entry of `gitea_forge_agents` with a token in
+`gitea_forge_secrets_dir/<agent>.token` (mode 600), and the branch protection of `gitea_forge_branch`. The owner
+password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
+`no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
+changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

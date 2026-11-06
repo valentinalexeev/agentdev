@@ -88,6 +88,15 @@ type ExecutorSpec struct {
 	// runs code of anyone who can open a PR with the read-only plan credentials (docs/security.md R81, egress #65).
 	// +optional
 	AllowForkPRs bool `json:"allowForkPRs,omitempty"`
+	// EgressHosts: the hosts the Job may reach through the executor egress proxy (#135), in addition to the
+	// cluster-wide defaults (EXECUTOR_EGRESS_HOSTS) and the forge's git host. Squid dstdomain form: "example.com" is
+	// that name only, ".example.com" the domain and every subdomain. Every other connection is refused and recorded
+	// as a SecurityEvent (source egress). Read by every run; not part of the approved spec hash.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:Pattern=`^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:items:MaxLength=253
+	EgressHosts []string `json:"egressHosts,omitempty"`
 }
 
 // ExecutorStatus is written by the operator only.

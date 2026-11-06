@@ -3,8 +3,12 @@
 # Instance values go into instance.yml under `api` (example.vars.yml). The role is skipped without api.oidc_issuer.
 api_image: "{{ image_registry }}/agentdev-api:{{ image_tag }}"
 # OIDC: issuer = the URL users log in through (it is in the tokens); discovery = where the API fetches the keys.
-api_oidc_issuer: "{{ api.oidc_issuer | default('') }}"
-api_oidc_discovery_url: "{{ api.oidc_discovery_url | default(api_oidc_issuer) }}"
+# With authentik on GKE (#114, group_vars authentik_enabled) both default to authentik: the public issuer on
+# ingress.auth_host and the in-cluster discovery URL (same as 10-api.sh). An explicit api.oidc_issuer wins.
+api_oidc_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer | default('')) }}"
+api_oidc_discovery_url: >-
+  {{ api.oidc_discovery_url | default(api.oidc_issuer if api.oidc_issuer is defined
+     else (authentik_default_discovery_url | default('') or api_oidc_issuer)) }}
 api_oidc_audience: "{{ api.oidc_audience | default('agentdev') }}"
 # forge for the live permission check of writes; the API speaks the Gitea API only (images/api/forge.go)
 api_forge_url: "{{ api.forge_url | default(forge_url) }}"

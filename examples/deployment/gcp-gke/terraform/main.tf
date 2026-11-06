@@ -19,13 +19,37 @@ module "agentdev" {
   github_repository  = var.github_repository
 
   budget_amount_usd    = var.budget_amount_usd
+  budget_currency      = var.budget_currency
   budget_alert_emails  = var.budget_alert_emails
   agent_pool_max_nodes = var.agent_pool_max_nodes
 
   # public HTTPS entry point (agentdev #120): uncomment with a ref= that contains #120
   # public_hosts = var.public_hosts
   # cloud_armor  = var.cloud_armor
+
+  # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
+  # create_artifact_registry = var.create_artifact_registry
+
+  # node boot disks (agentdev #170): uncomment with a ref= that contains #170; changing one replaces the pool
+  # system_disk_size_gb = var.system_disk_size_gb
+  # system_disk_type    = var.system_disk_type
+  # agent_disk_size_gb  = var.agent_disk_size_gb
+  # agent_disk_type     = var.agent_disk_type
+  # labels on all resources (agentdev #184): uncomment with a ref= that contains #184
+  # labels = var.labels
+  # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
+  # system_pool_spot = var.system_pool_spot
+  # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
+  # create_budget = var.create_budget
 }
+
+# Migration (agentdev #199): if this repository has the workaround resource
+# google_billing_account_iam_member.ci_budgets, delete that resource block and keep this block for one apply.
+# Terraform forgets the old address without a destroy; the module then creates the same grant at its own address.
+# removed {
+#   from = google_billing_account_iam_member.ci_budgets
+#   lifecycle { destroy = false }
+# }
 
 variable "project_id" { type = string }
 variable "region" { type = string }
@@ -39,9 +63,19 @@ variable "budget_amount_usd" {
   type    = number
   default = 150
 }
+variable "budget_currency" {
+  description = "Currency of the billing account (USD, EUR, ...); budget_amount_usd is in this currency."
+  type        = string
+  default     = "USD"
+}
 variable "budget_alert_emails" {
   type    = list(string)
   default = []
+}
+variable "create_budget" {
+  description = "false = no billing budget and no billing IAM for the automation account (agentdev #199)."
+  type        = bool
+  default     = true
 }
 variable "agent_pool_max_nodes" {
   type    = number
@@ -61,6 +95,37 @@ variable "public_hosts" {
 variable "cloud_armor" {
   type    = bool
   default = false
+}
+variable "create_artifact_registry" {
+  description = "false = no Artifact Registry repo, API or roles; images come from GHCR (agentdev #157)."
+  type        = bool
+  default     = true
+}
+variable "system_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "system_disk_type" {
+  type    = string
+  default = "pd-standard"
+}
+variable "agent_disk_size_gb" {
+  type    = number
+  default = 100
+}
+variable "agent_disk_type" {
+  type    = string
+  default = "pd-standard"
+}
+variable "labels" {
+  description = "Labels on all resources (agentdev #184); service = \"agentdev\" is added. environment: dev, stage or prod."
+  type        = map(string)
+  default     = { environment = "prod" }
+}
+variable "system_pool_spot" {
+  description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
+  type        = bool
+  default     = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

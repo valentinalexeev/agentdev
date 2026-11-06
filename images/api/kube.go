@@ -97,9 +97,14 @@ func fromAgentObject(u unstructured.Unstructured) agent {
 	str := func(f ...string) string { v, _, _ := unstructured.NestedString(u.Object, f...); return v }
 	num := func(f ...string) int64 { v, _, _ := unstructured.NestedInt64(u.Object, f...); return v }
 	flag := func(f ...string) bool { v, _, _ := unstructured.NestedBool(u.Object, f...); return v }
+	// scaleToZero defaults to true (CRD default, #181): only an explicit false is off
+	stz := true
+	if v, ok, _ := unstructured.NestedBool(u.Object, "spec", "scaleToZero"); ok {
+		stz = v
+	}
 	a := agent{Name: u.GetName(), Managed: true, Forge: str("spec", "forge"), Phase: str("status", "phase"),
 		MaxConcurrent: int32(num("spec", "maxConcurrent")), Paused: flag("spec", "paused"),
-		ScaleToZero: flag("spec", "scaleToZero"), Ready: int32(num("status", "ready"))}
+		ScaleToZero: stz, Ready: int32(num("status", "ready"))}
 	if r := str("spec", "repo"); r != "" {
 		a.Repos = []string{r}
 	}

@@ -67,7 +67,10 @@ func (g *gitRepo) remoteURL() string { return g.driver().remoteURL(g.c.Repos[0])
 func (g *gitRepo) run(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
 	base := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
 		"-c", "credential.helper=", "-c", "credential.helper=" + g.c.Self + " credential",
-		"-c", "credential.useHttpPath=false", "-c", "protocol.ext.allow=never", "-c", "http.followRedirects=false"}
+		"-c", "credential.useHttpPath=false", "-c", "protocol.ext.allow=never", "-c", "http.followRedirects=false",
+		// send Proxy-Authorization on the first CONNECT: the default (anyauth) waits for a 407, but the egress proxy
+		// matches the header and answers 403 at once (#162)
+		"-c", "http.proxyAuthMethod=basic"}
 	user, pass, err := g.driver().gitCredential(ctx)
 	if err != nil {
 		return "", fmt.Errorf("git %s: forge credential: %v", args[0], err)
@@ -80,7 +83,7 @@ func (g *gitRepo) run(ctx context.Context, stdin io.Reader, args ...string) (str
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return out.String(), fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(redact(redact(errb.String(), g.c.Token), pass)))
+		return out.String(), fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(redactProxy(redact(redact(errb.String(), g.c.Token), pass))))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
@@ -90,6 +93,17 @@ func redact(s, secret string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, secret, "***")
+}
+
+// redactProxy removes the egress proxy credential (userinfo of HTTPS_PROXY and friends) from git output.
+func redactProxy(s string) string {
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		if u, err := url.Parse(os.Getenv(k)); err == nil && u.User != nil {
+			p, _ := u.User.Password()
+			s = redact(redact(s, u.User.String()), p)
+		}
+	}
+	return s
 }
 
 func (g *gitRepo) git(ctx context.Context, args ...string) (string, error) {

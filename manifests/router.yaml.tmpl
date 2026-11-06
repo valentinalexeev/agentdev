@@ -38,22 +38,36 @@ spec:
     spec:
       serviceAccountName: webhook-router
       automountServiceAccountToken: true   # scaling agent StatefulSets (#35), Role above
-      securityContext: {runAsUser: 1000, runAsNonRoot: true}
+      securityContext: {runAsUser: 1000, runAsNonRoot: true, fsGroup: 1000}   # fsGroup: reads the poll Secret (0440)
       containers:
       - name: router
         image: ${ROUTER_IMAGE}               # ghcr.io/valentinalexeev/agentdev-router:<tag> (#28)
         imagePullPolicy: ${IMAGE_PULL_POLICY}
         envFrom: [{secretRef: {name: webhook-router}}]
-        env: [{name: K8S_NAMESPACE, value: "${AGENTS_NS}"}]
-        ports: [{name: http, containerPort: 8080}]
-        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+        env:
+        - {name: K8S_NAMESPACE, value: "${AGENTS_NS}"}
+        # wake poll (#181): starts a stopped agent that has new work on the forge, for instances without webhooks
+        - {name: WAKE_POLL_SECONDS, value: "${WAKE_POLL_SECONDS}"}
+        - {name: GITEA_URL, value: "${GITEA_URL}"}
+        - {name: GITHUB_API_URL, value: "${GITHUB_API_URL}"}
+        - {name: FORGE_POLL_DIR, value: /var/run/agentdev/forge-poll}
+        volumeMounts: [{name: forge-poll, mountPath: /var/run/agentdev/forge-poll, readOnly: true}]
+        # http: webhook deliveries only (the port a Gateway or reverse proxy publishes); internal: /healthz, /status,
+        # /register, /idle for in-cluster callers (#214)
+        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
+        readinessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 20, failureThreshold: 3}
         resources:
           requests: {cpu: 20m, memory: 32Mi}
           limits:   {cpu: 500m, memory: 128Mi}
+      volumes:
+      # read-only forge credential of the wake poll: gitea-token, or github-app-id, private-key.pem and
+      # github-installation-id. Written by 06-agents.sh (kind) or the playbook (GKE); no Secret = no poll credential.
+      - {name: forge-poll, secret: {secretName: webhook-router-poll, optional: true, defaultMode: 0440}}
 ---
 apiVersion: v1
 kind: Service
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
 spec:
   selector: {app: webhook-router}
-  ports: [{name: http, port: 8080, targetPort: http}]
+  ports: [{name: http, port: 8080, targetPort: http}, {name: internal, port: 8081, targetPort: internal}]

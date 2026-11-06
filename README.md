@@ -47,7 +47,7 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
 | `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent token budget, usage from the response headers |
 | `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
-| `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`) |
+| `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`); runs `infra/ansible/kind.yml --tags forge` (#106) |
 | `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
 | `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
 
@@ -60,6 +60,10 @@ merge, deploys the agents and waits until each one posts a readiness report (for
 **Chat in a project (#38).** `scripts/agent-chat.sh start examples/project.yaml` opens an interactive Claude Code
 session with a fresh clone of the project; detach with Ctrl-b d and `scripts/agent-chat.sh attach` re-attaches from any
 terminal with cluster access. The session can read and file issues but not push; it ends after 30 min unattended.
+
+**Scale to zero (default, #181).** An agent with no work for 15 minutes stops; on GKE its node goes away too. The router
+starts it again on a webhook, or when its wake poll (every 5 minutes) finds new work on the forge. Set
+`SCALE_TO_ZERO=false` (kind) or `scale_to_zero: false` (GKE) to keep agents running (docs/admin.md, Scale to zero).
 
 **MVP limits.** Polling (20 s), not webhooks. No merge, no CI gate: you review and merge.
 

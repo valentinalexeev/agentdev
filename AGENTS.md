@@ -52,7 +52,7 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
    ```
 10. **Verify:**
     - `kubectl -n coding-agents get pods` → `webhook-router` and `agent-<name>-0` Running.
-    - The router lists every agent: `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"`.
+    - The router lists every agent: `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"`.
     - Assign a small test issue to an agent and see it comment and open a PR (polling works even before the
       webhook URL is public).
     - Security: `scripts/e2e-gke-security.sh --host <ui host> --webhook-host <webhook host>` (the owner runs it;

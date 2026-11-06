@@ -1,0 +1,67 @@
+# Render test of the executor egress (#135): ansible-playbook infra/ansible/tests/executor_egress.yml (no cluster).
+# The playbook sets every value of manifests/executor-egress*.yaml.tmpl, executor-egress is default deny, and the
+# GKE FQDN policy of the executor proxy covers the hosts of all executors (same expressions as deploy.yml).
+- name: Executor egress render (#135)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    exec_ns: agentdev-executors
+    egress_proxy_image: img@sha256:0000
+    forge_kind: github
+    executor_egress_hosts: [registry.terraform.io]
+    executors:
+      - {name: tf-prod, egress_hosts: [.googleapis.com, registry.terraform.io]}
+      - {name: tf-dev}
+    want_fqdn:
+      - {name: registry.terraform.io}
+      - {name: github.com}
+      - {name: googleapis.com}
+      - {pattern: "*.googleapis.com"}
+    host_re: '^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$'
+  tasks:
+    - name: Render the executor egress manifest with the playbook's values
+      ansible.builtin.set_fact:
+        docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=r) | from_yaml_all | list }}"
+        web: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=w) | from_yaml }}"
+      vars:
+        r:
+          src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
+          values: {EXEC_NS: "{{ exec_ns }}", FORGE_NS: forge, EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"}
+          replace: []
+        w:
+          src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
+          values: {EXEC_NS: "{{ exec_ns }}"}
+          replace: []
+
+    - name: Check the policies
+      vars:
+        pol: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'executor-egress') | first }}"
+      ansible.builtin.assert:
+        that:
+          - pol.spec.podSelector.matchLabels.app == 'agentdev-executor'
+          - pol.spec.policyTypes == ['Egress']
+          - pol.spec.egress | rejectattr('to', 'defined') | list | length == 0
+          - docs | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.namespace') | list == [exec_ns]
+          - web.metadata.name == 'executor-egress-proxy-web'
+
+    - name: FQDN matches of the executor proxy (same expression as deploy.yml)
+      ansible.builtin.set_fact:
+        got: >-
+          {{ lookup('ansible.builtin.template', '../egress_fqdn.j2', template_vars={'egress_hosts': all_hosts,
+             'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
+      vars:
+        all_hosts: >-
+          {{ (executor_egress_hosts + (['github.com'] if forge_kind == 'github' else [])
+              + (executors | map(attribute='egress_hosts', default=[]) | flatten)) | unique | list }}
+
+    - name: Check the FQDN matches
+      ansible.builtin.assert:
+        that: got == want_fqdn
+        fail_msg: "{{ got | to_json }}"
+
+    - name: The executor host pattern of deploy.yml refuses IP addresses and Squid syntax
+      ansible.builtin.assert:
+        that:
+          - "['.googleapis.com', 'a.b.example'] | reject('match', host_re) | list | length == 0"
+          - "['1.2.3.4', 'all', 'a b.com', 'x.com\nhttp_access allow all', '-x.com'] | select('match', host_re) | list | length == 0"

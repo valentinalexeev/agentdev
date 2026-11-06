@@ -1,38 +1,32 @@
 ---
-# Public HTTPS entry point on GKE (#120): one Gateway (global external Application Load Balancer) on the Terraform
-# static IP, with the Terraform Google-managed certificate and SSL policy. Only two paths are public:
-#   https://<webhook_host>/hook...  -> webhook-router (POST deliveries, HMAC checked by the router)
-#   https://<host>/...              -> agentdev-ui (static app and its /api proxy to the API)
-# The router's /status, /register and /idle and every other Service stay cluster-internal. Port 80 only redirects.
-- name: Check the ingress settings
-  ansible.builtin.assert:
-    that:
-      - ingress_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
-      - ingress_webhook_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
-      - ingress_certificate | length > 0
-      - ingress_hsts_max_age | string is match('^[0-9]+$')
-    fail_msg: >-
-      ingress.host and ingress.webhook_host must be plain DNS names, ingress.certificate the name from
-      `terraform output ingress` (example.vars.yml)
-    quiet: true
+# Public entry point (#120, #160). ingress.mode selects who publishes the public hosts:
+#   gateway  (default) the GKE Gateway of this role (tasks/gateway.yml), with the Terraform static IP and certificate
+#   external a reverse proxy outside this role (for example a tailnet ingress). No Gateway, route or certificate.
+# In both modes ingress.host, webhook_host and auth_host give the public URLs (authentik issuer, UI callback, webhook).
+# Optional in both modes: ingress.forwarder lets a named forwarder reach the published Services (templates/forwarder.yaml.j2).
+- name: Check the ingress settings (mode, hosts, forwarder)
+  ansible.builtin.include_tasks: checks.yml
 
-- name: Is the Gateway API served (Terraform gateway_api_config)?
-  kubernetes.core.k8s_info:
-    context: "{{ kube_context }}"
-    api_version: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    name: gateways.gateway.networking.k8s.io
-  register: ingress_gateway_crd
+- name: Public HTTPS entry point (Gateway)
+  ansible.builtin.include_tasks: gateway.yml
+  when: ingress_mode == 'gateway'
 
-- name: Stop when the cluster has no Gateway API
-  ansible.builtin.assert:
-    that: ingress_gateway_crd.resources | length > 0
-    fail_msg: "The cluster does not serve the Gateway API: apply infra/terraform (gateway_api_config) first"
-    quiet: true
-  when: not ansible_check_mode
+- name: External ingress (no Gateway, route or certificate)
+  ansible.builtin.debug:
+    msg: >-
+      ingress.mode external: publish https://{{ ingress_host }}/ (agentdev-ui.{{ platform_ns }}:8080),
+      https://{{ ingress_webhook_host }}/hook only (webhook-router.{{ agents_ns }}:8080, never the internal port 8081){{
+      (' and https://' ~ ingress_auth_host ~ '/ (authentik-server.' ~ platform_ns ~ ':80)') if ingress_auth | bool else '' }}
+      through your own reverse proxy (docs/admin.md, External ingress).
+  when: ingress_mode == 'external'
 
-- name: Gateway, routes, policies and NetworkPolicy
+# opt-in: without ingress.forwarder the objects are removed, so the default-deny of the platform namespace applies again
+- name: NetworkPolicies for the external forwarder
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
-    definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml_all | list }}"
-  when: ingress_gateway_crd.resources | length > 0
+    state: "{{ 'present' if ingress_forwarder_on | bool and (item.name != 'authentik-from-forwarder' or ingress_auth | bool) else 'absent' }}"
+    definition: "{{ ingress_forwarder_objects | selectattr('metadata.name', 'equalto', item.name) | first }}"
+  loop: "{{ ingress_forwarder_objects | map(attribute='metadata') | list }}"
+  loop_control: {label: "{{ item.name }}"}
+  vars:
+    ingress_forwarder_objects: "{{ lookup('ansible.builtin.template', 'forwarder.yaml.j2') | from_yaml_all | list }}"

@@ -91,6 +91,22 @@ Agents read the forge at this interval when webhooks do not operate.
 1. On `kind`: set `POLL_SECONDS`. On GKE: set `poll_seconds`.
 2. Deploy again.
 
+### Set the agent volume
+
+Each agent has one volume (PVC `state-agent-<name>-0`). The volume keeps the clones, the cursors and the Claude
+state (`/home/node/.claude` is the `claude` directory of the volume).
+
+1. On `kind`: set `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` in `config.env`, then `./run.sh 12`.
+   On GKE: set `agent_storage_class` and `agent_state_storage` in `instance.yml`, then deploy.
+2. A new size applies to new agents only. To make the volume of an agent larger, edit its PVC.
+
+NOTE: On GKE, Ansible creates the StorageClass `agentdev-agent` (`pd-standard`, the cheapest disk type). GCE bills each
+disk at 10 GB or more, so the default size is 10Gi. On `kind`, the class is empty: the cluster default (`standard`).
+
+CAUTION: When the StorageClass or the volume layout changes, the operator deletes the StatefulSet and the volumes of
+each agent and makes them again. The agent loses its local state. Open branches stay on the forge. Do this change
+only when the agents have no job.
+
 ### Find the security events of an agent
 
 1. Run this command:
@@ -115,6 +131,9 @@ Agents read the forge at this interval when webhooks do not operate.
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
+| Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
+| Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
+| Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
 ## Claude proxy and token budget
 
@@ -165,15 +184,44 @@ agent from inside the cluster.
 
 ## Scale to zero
 
-With scale to zero, the router stops an agent that has no work, and starts it when an event occurs. Scale to zero is
-off by default.
+With scale to zero, the router stops an agent that has no work, and starts it again when there is new work. Scale to
+zero is on by default (#181). On GKE, the agent node pool goes to zero nodes when no agent runs.
 
-### Turn on scale to zero
+The router starts a stopped agent when:
 
-1. On `kind`: set `SCALE_TO_ZERO=true`.
-   On GKE: set `agents[].scale_to_zero` for each agent.
-2. Optional: set `IDLE_SECONDS` (the default is 900).
-3. Deploy again.
+- A webhook for the agent arrives.
+- The wake poll finds new work for the agent. Every `wake_poll_seconds` (default 300), the router reads the open
+  issues and PRs of each stopped agent on the forge. This works without webhooks.
+
+NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
+1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
+
+### Settings
+
+| Setting | `kind` (`config.env`) | GKE (`instance.yml`) | Default |
+|---|---|---|---|
+| Scale to zero, all agents | `SCALE_TO_ZERO` | `scale_to_zero` | `true` |
+| Scale to zero, one agent | (not available) | `agents[].scale_to_zero` | the value for all agents |
+| Idle time before the stop | `IDLE_SECONDS` | `idle_seconds` | `900` |
+| Interval of the wake poll; `0` = off | `WAKE_POLL_SECONDS` | `wake_poll_seconds` | `300` |
+
+The wake poll uses a read-only forge credential in the Secret `webhook-router-poll`. Only the router pod reads it.
+
+- GitHub: the router uses the GitHub App. It asks for installation tokens with read access only.
+- Gitea on `kind`: `06-agents.sh` makes the account `agentdev-router` (read access to the repository) and its token.
+- Gitea on GKE: put a read-only token (scopes `read:repository`, `read:issue`) in the Secret Manager entry
+  `router-poll-forge-token`.
+
+CAUTION: If you set `wake_poll_seconds: 0`, agents start again only on a webhook. The playbook stops with the error
+"scale_to_zero needs webhooks or wake_poll_seconds" when an agent scales to zero and there are no webhooks
+(`ingress.webhook_host` or `ingress.host` is not set).
+
+### Keep an agent running
+
+1. On `kind`: set `SCALE_TO_ZERO=false` (all agents).
+   On GKE: set `scale_to_zero: false` for the agent in `agents`, or for all agents.
+   In the web UI: clear **Scale to zero** for the agent.
+2. Deploy again.
 
 ### Examine the state of scale to zero
 
@@ -186,6 +234,58 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
+
+## Labels
+
+agentdev labels its cloud resources and Kubernetes objects with `service` and `environment`, so the billing export
+and GKE cost allocation split costs per instance, and the Infracost tagging policy passes. GCP labels are lower case.
+
+### Set the labels of an instance
+
+1. In `terraform/instance.tfvars` of the deployment repository, set `labels = { environment = "prod" }`.
+   Use `dev`, `stage` or `prod`. The module adds `service = "agentdev"`.
+2. In `ansible/instance.yml`, set `agentdev_labels: {environment: prod}`. Use the same values as in Terraform.
+3. In `bootstrap.tfvars`, set the same `labels`.
+4. Run `terraform plan`.
+   Make sure that the plan shows only in-place updates.
+5. Run `terraform apply`.
+6. Run the Ansible playbook.
+
+NOTE: To change the `service` label, set `service` in `labels`.
+
+| Where | Labels |
+|---|---|
+| Terraform module | every resource with a `labels` field (provider `default_labels`), the cluster (`resource_labels`, also on the node VMs and disks), both node pools, the budget notification channels (`user_labels`) |
+| Bootstrap | the project and the state bucket |
+| Kubernetes | the namespaces `coding-agents`, `agentdev-platform` and `agentdev-executors`; agent StatefulSets and pods; executor Jobs and pods (operator `COST_LABELS`) |
+
+NOTE: The `labels` field of a notification channel is its configuration (`email_address`), not resource labels. A tag
+scanner that reads it reports a false positive.
+
+## Spot system pool (GKE)
+
+The system pool runs the router, the operator, the UI and the proxies. On GKE it can run on Spot VMs to cut its cost
+by about 60-70%. Spot is off by default.
+
+### Run the system pool on Spot VMs
+
+1. In the deployment repository, set `system_pool_spot = true` (Terraform) and pass it to the module.
+2. Run `terraform plan` and `terraform apply`. The system pool is replaced: the platform is down until the new nodes
+   are ready.
+3. Run the Ansible playbook again. It waits until the operator and the agents are ready.
+
+### What happens when Google reclaims a node
+
+1. Google gives the node about 30 seconds of notice, then stops it.
+2. The router, the operator, the UI and the proxies are down until the pool has a new node, usually about a minute.
+   If the zone has no Spot capacity, the gap is longer.
+3. Webhooks sent in the gap are lost. Each agent finds its issues at the next poll (`poll_seconds`).
+4. Agents keep their state on their PVCs. A job that needs the Claude proxy or the egress proxy during the gap fails
+   and is retried at the next poll.
+
+NOTE: The platform components have one replica each, so no PodDisruptionBudget is set: a budget with one replica
+blocks node upgrades, and a Spot preemption does not respect it. The router has a readiness probe, so the Service
+sends traffic only to a ready pod.
 
 ## Agent dashboard (botboard)
 
@@ -200,6 +300,9 @@ of the agents. It shows one card for each issue.
    The script finds botboard and sets `BOTBOARD_URL` on each agent.
 
 ### Open botboard
+
+On GKE, open `https://<auth_host>/` and use the password from
+[Keep a break-glass admin](#keep-a-break-glass-admin). On kind:
 
 1. Start the port-forward: `kubectl -n botboard port-forward svc/botboard 8090:80`
 2. Open http://localhost:8090 in a browser.
@@ -227,16 +330,26 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 ### Deploy the platform namespace
 
 1. Optional: in `config.env`, set `CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE` and `CF_ADMIN_EMAIL`.
-2. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres and ContextForge.
+2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
+   Separate the paths with spaces.
+3. Run run.sh step 08: `./run.sh 08`
+   The script deploys the namespace `agentdev-platform` with Postgres.
+   If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
+
+NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
+the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
 
 ### Deploy the platform namespace on GKE
 
-The playbook deploys Postgres and ContextForge in `agentdev-platform` on each run. It makes the passwords and keys
-on the first run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+The playbook deploys Postgres in `agentdev-platform` on each run. It deploys ContextForge only if `mcp_projects` is
+not empty. ContextForge requests 100m CPU and 512 MiB memory. The playbook makes the passwords and keys on the first
+run and keeps them in Secret Manager as `platform-<key>`, for example `platform-cf-admin`.
+
+If `mcp_projects` is empty, the playbook removes ContextForge and the MCP token secrets of the agents. The ContextForge
+database stays in Postgres. To keep ContextForge without `mcp_projects`, set `platform_contextforge_enabled: true`.
 
 1. In the deployment repository, put the project specifications in a directory, for example `projects/`.
 2. In `ansible/instance.yml`, list the specifications:
@@ -319,7 +432,8 @@ NOTE: The test pod gets the image `curlimages/curl` from Docker Hub. The cluster
 ## Identity (authentik)
 
 authentik is the identity provider of the instance. It is in the namespace `agentdev-platform` and uses the
-database `authentik` on the platform Postgres, with no Redis. On GKE, the playbook does not deploy it yet (#51).
+database `authentik` on the platform Postgres, with no Redis. On GKE, the playbook deploys it (#114). Refer to
+[Deploy authentik on GKE](#deploy-authentik-on-gke).
 
 ### Deploy authentik
 
@@ -328,6 +442,42 @@ Do this task after run.sh step 08.
 1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
 2. Run run.sh step 09: `./run.sh 09`
    The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+
+### Deploy authentik on GKE
+
+The playbook deploys authentik with the same Helm chart, values and blueprints as run.sh step 09 (#114). The role
+`authentik` runs after the platform Postgres and before the API.
+
+1. In Terraform `instance.tfvars`, add the login host to `public_hosts`, for example `auth.example.com`.
+   Apply, and make the DNS `A` record to `webhook_ip`.
+2. In `ansible/instance.yml`, set `ingress.auth_host` to the same name. Optional: `authentik.version` and
+   `authentik.admin_email`.
+3. Run the playbook.
+   The playbook does these steps:
+   - It makes the secrets `platform-authentik-secret-key`, `platform-authentik-admin` and `platform-pg-authentik` in
+     Secret Manager on the first run. It never replaces them.
+   - It makes the database `authentik`, the Secret `authentik` and the ConfigMap `authentik-blueprints` (the files
+     `manifests/authentik-blueprint-*.yaml` only, never `manifests/kind/`).
+   - It installs the chart, adds the route `https://<auth_host>/` to the Gateway, and adds `akadmin` to
+     `agentdev-admins` (add only).
+   - `api.oidc_issuer` becomes `https://<auth_host>/application/o/agentdev/`, and the API reads the keys inside the
+     cluster. The UI client accepts `https://<ingress.host>/callback`.
+
+NOTE: An `api.oidc_issuer` in `instance.yml` overrides the authentik issuer. To use another OIDC provider and no
+authentik, set `authentik.enabled: false`.
+
+### Keep a break-glass admin
+
+`akadmin` is the break-glass admin. authentik makes it at the first start with the password from Secret Manager
+`platform-authentik-admin`. A password that you change in the UI stays: authentik uses the first password only once.
+The playbook adds `akadmin` to `agentdev-admins` with an add-only call. It never removes a member, and it fails when
+authentik has no active superuser.
+
+WARNING: Do not delete `akadmin`, do not deactivate it, and do not remove its password login. Keep its password and
+the MFA recovery codes in the password manager of the owner. If the Workspace source fails, this is the only login.
+
+To read the first password on GKE, without showing it on the screen, copy it to the clipboard:
+`gcloud secrets versions access latest --secret platform-authentik-admin --project <project_id> | pbcopy`
 
 ### Log in to authentik for the first time
 
@@ -412,7 +562,7 @@ NOTE: If the token has neither the claim of the agent's forge nor `forge_login`,
 `.`, `_`, `-`, the API finds no forge user. The person can read, but cannot change agents. Members of
 `agentdev-admins` can pause, add and remove agents without a forge user.
 
-NOTE: On GKE, authentik is not installed by the playbook at this time. Apply
+NOTE: With another OIDC provider (`authentik.enabled: false`), apply
 `manifests/authentik-blueprint-agentdev.yaml` to your authentik instance, or make the scope mapping in the admin
 interface: scope name `forge`, the expression from the blueprint, and add it to the `agentdev` provider.
 
@@ -524,7 +674,8 @@ WARNING: Do not use the stand-in outside kind. Anyone who can open it can sign i
 ### Give a person admin rights for agents
 
 The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
-09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On other instances, the group is empty.
+09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On GKE, the playbook does the same
+(#114).
 
 IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
 set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
@@ -887,7 +1038,8 @@ Do this task after the first installation on GKE.
 3. Optional: to add Cloud Armor, add `cloud_armor = true`.
    Cloud Armor refuses large requests and limits the requests of each client IP address.
 4. Apply Terraform (the owner does this step).
-   Terraform makes the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+   Terraform makes the static IP address, the managed certificate and the SSL policy, and turns on the Gateway API of the cluster.
+   Without `public_hosts`, Terraform does not make the static IP address, and `webhook_ip` is empty.
 5. Show the values: `terraform output ingress` and `terraform output webhook_ip`.
 6. In your DNS zone, make an `A` record for each name. Use the address from `webhook_ip`.
 7. In `ansible/instance.yml`, add the `ingress` values from step 5:
@@ -933,6 +1085,63 @@ On `kind`, no load balancer is installed. Use a port-forward. The paths are the 
 4. Send the request to `http://localhost:8080/hook`.
 
 NOTE: On `kind`, no TLS, HSTS or Cloud Armor applies. Do not make a `kind` cluster public.
+
+### Use an external ingress
+
+Use this procedure when a reverse proxy that you operate publishes the instance, for example a tailnet ingress
+(#160). The playbook then makes no Gateway, no HTTPRoute and no certificate. Terraform needs no `public_hosts` and
+no static IP address. The hosts still give the authentik issuer, the callback of the web UI and the webhook URL.
+
+WARNING: Publish only the paths in the table below. Send only the path prefix `/hook` of the webhook host to the
+public port 8080 of `webhook-router`. Never publish the internal port 8081. The public port answers 404 for all
+other paths (#214), but a proxy that publishes only `/hook` also keeps scanners away from the router.
+
+| Public URL | Service (namespace, port) | Notes |
+|---|---|---|
+| `https://<ingress.host>/` | `agentdev-ui` (`agentdev-platform`, 8080) | The web UI and its `/api` calls. |
+| `https://<ingress.webhook_host>/hook` | `webhook-router` (`coding-agents`, 8080) | Only the path prefix `/hook`. Not the internal port 8081. If your proxy has a health check, use `POST /hook` (the answer 401 shows that the router operates). |
+| `https://<ingress.auth_host>/` | `authentik-server` (`agentdev-platform`, 80, pod port 9000) | The authentik login and issuer. |
+
+1. In `ansible/instance.yml`, set the mode and the hosts:
+
+   ```yaml
+   ingress:
+     mode: external                     # default: gateway
+     host: agentdev.example.com         # the web UI
+     webhook_host: hooks.example.com    # optional, default: host
+     auth_host: auth.example.com        # authentik
+     forwarder:                         # optional: who can connect to the Services
+       namespace: tailscale             # the namespace of the reverse proxy pods
+       pod_selector: {app: ts-ingress}  # optional, only with namespace
+       # cidrs: [100.64.0.0/10]         # or the source addresses of the reverse proxy
+   ```
+
+2. Add the source range of the reverse proxy to the trusted proxy ranges of authentik. Keep the default ranges:
+
+   ```yaml
+   authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
+   ```
+
+3. Set the reverse proxy so that each request to authentik has these headers:
+   - `Host`: the public host (`ingress.auth_host`), not the Service name.
+   - `X-Forwarded-Proto`: `https`.
+   - `X-Forwarded-For`: the IP address of the client.
+4. Set `github_app.public_url` to `https://<ingress.webhook_host>`.
+5. Run the playbook. The playbook shows the URLs and the Services to publish.
+6. Make sure that the issuer is correct:
+   `curl -s https://auth.example.com/application/o/agentdev/.well-known/openid-configuration`
+   The value of `issuer` is `https://auth.example.com/application/o/agentdev/`.
+7. Do the e2e checks with `--ingress external` (`docs/e2e-security.md`).
+
+NOTE: Without `ingress.forwarder`, the playbook applies no forwarder NetworkPolicy, and the default-deny policy of
+the platform namespace stops the reverse proxy. A reverse proxy in the cluster that uses a namespace or a pod
+selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs`. The playbook refuses a range that
+is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarder_allow_wide_cidrs: true`. The
+playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
+`authentik_trusted_proxy_allow_wide: true`.
+
+NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
+balancer ranges.
 
 ### Reference: the public entry point
 
@@ -1273,8 +1482,12 @@ Before you do this task, make sure that you have:
      planCredentials: {secretName: exec-tf-prod-plan}
      applyCredentials: {secretName: exec-tf-prod-apply}
      forgeSecret: exec-tf-prod-forge
+     egressHosts: [oauth2.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com]
    EOF
    ```
+
+   `egressHosts` is the list of hosts that this executor can connect to, in addition to the default list (see
+   [Add a host for an executor](#add-a-host-for-an-executor)). Write the cloud APIs that the tool uses.
 
 3. In the forge, add the branch protection rule for the branch: require the status check `agentdev/trusted-plan`
    and require that the branch is up to date.
@@ -1286,6 +1499,51 @@ Before you do this task, make sure that you have:
 NOTE: With Ansible, put the executors in `executors:` of the instance file
 (`examples/deployment/gcp-gke/ansible/instance.yml.example`). The playbook makes the Secrets, the service accounts
 and the Executor objects.
+
+### Add a host for an executor
+
+The executor Jobs can connect to the internet only through the executor egress proxy (`executor-egress-proxy` in
+the namespace `agentdev-executors`, #135). A NetworkPolicy (`executor-egress`) stops all other connections. The
+Jobs can always use DNS, the in-cluster forge (`kind`) and the GKE metadata server (Workload Identity). Each executor
+can connect only to these hosts:
+
+- The default list for all executors: `EXECUTOR_EGRESS_HOSTS` (Terraform registry and HashiCorp releases).
+- The git host of the forge (`github.com` on GitHub).
+- The hosts in `spec.egressHosts` of the `Executor`.
+
+The proxy refuses all other requests. Each refused request is a security event with the source `egress`, the rule
+`egress-host` and the name of the executor.
+
+Do this task when a plan or an apply fails because a host is refused.
+
+WARNING: Add only a host that you trust. The plan of a pull request runs code that nobody reviewed. That code can
+send data to each host on the list of the executor.
+
+1. Find the refused host. Open the **Security** page of the web UI, or run:
+   `kubectl -n agentdev-executors logs deploy/executor-egress-proxy | grep AGENTDEV_SECURITY_EVENT`
+   The `action` field shows the method, the host and the port.
+2. Add the host:
+   - On `kind`: add the host to `spec.egressHosts` of the `Executor`, for example
+     `kubectl -n agentdev-executors patch executor tf-prod --type=json -p '[{"op":"add","path":"/spec/egressHosts/-","value":"sts.googleapis.com"}]'`.
+     If the list does not exist, use `--type=merge -p '{"spec":{"egressHosts":["sts.googleapis.com"]}}'`.
+   - On GKE: add the host to `egress_hosts` of the executor in `instance.yml`, then run the playbook (open a pull
+     request in the deployment repository). The playbook also adds the host to the FQDN policy of the proxy.
+   - For a host that all executors need: set `EXECUTOR_EGRESS_HOSTS` in `.env` and run `./run.sh 12` (`kind`), or
+     set `executor_egress_hosts` in `instance.yml` (GKE).
+3. Write a dot before the name to also allow all subdomains: `.googleapis.com`. On GKE, the FQDN policy of the
+   proxy allows only one level of subdomains for a dot entry.
+4. Wait one poll (`EXECUTOR_POLL_SECONDS`) and 15 seconds. The operator writes the new list to the Secret
+   `executor-egress-proxy`, and the proxy loads it. The proxy does not start again. Then start the run again: push a
+   new commit to the pull request.
+
+NOTE: A change of `spec.egressHosts` does not change the spec hash. A pending approval stays valid.
+
+NOTE: The operator does not pause an executor because of egress events.
+
+NOTE: If an executor cannot connect to anything (for example, the proxy is not ready), the run fails and the pull
+request shows the failure. The executor never gets a direct connection. To stop the egress limit for a test only,
+delete the NetworkPolicy `executor-egress` (`kubectl -n agentdev-executors delete networkpolicy executor-egress`).
+The next `./run.sh 12` or playbook run makes it again.
 
 ### Find the runs of an executor
 
@@ -1308,6 +1566,9 @@ and the Executor objects.
 | `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
 | `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
 | `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
+| `EXECUTOR_EGRESS_HOSTS` (hosts that all executors can connect to) | `registry.terraform.io releases.hashicorp.com` | `config.env`; Ansible `executor_egress_hosts` |
+| `spec.egressHosts` (more hosts for one executor, maximum 64) | none | `Executor`; Ansible `egress_hosts` of the executor |
+| Executor egress proxy | `http://executor-egress-proxy.agentdev-executors.svc.cluster.local:3128` | operator env `EXECUTOR_EGRESS_PROXY` |
 
 - Each run start and each result is a security event with the source `executor` and the rule `executor.plan`,
   `executor.apply` or `executor.refused`.
@@ -1318,14 +1579,13 @@ and the Executor objects.
   recorded. The Ansible playbook stops before it changes anything if two executors have the same environment.
 - By default the executor plans only pull requests from branches of the same repository. A pull request from a fork
   runs the code of its author with the plan credentials. Set `spec.allowForkPRs: true` only if the plan credentials
-  can read nothing secret (risk R81; egress limits are #65).
+  can read nothing secret (risk R81). The egress allow-list of the executor limits where that code can send data.
 - The approval covers the image digest, the apply command and a SHA-256 of the `Executor` spec (also the
   credentials). If you change the `Executor` after the merge plan, the pending approval no longer applies: the run
   is closed with `executor spec changed`. Merge a new commit to plan again.
 - The executor Job has no Kubernetes API token. It runs in gVisor on the sandbox nodes.
-- The egress allow-list of the agents does not apply to the executors. The executor Jobs do not use the egress proxy,
-  because the tools need the cloud APIs of the environment. An executor Job can connect to all hosts. An allow-list
-  for the executors is planned in #135.
+- The executor Jobs use their own egress proxy and allow-list, not the list of the agents. See
+  [Add a host for an executor](#add-a-host-for-an-executor).
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
 ## Subscription usage limits
@@ -1531,6 +1791,15 @@ At the first start, the script makes the chat account `<project>-chat` of the pr
 - Its token has the scope `read:repository, write:issue`.
 - The token is in `.secrets/<project>-chat.token` and in the Secret `chat-<project>`.
 
+The session pod has no Claude credential (#118):
+
+- Claude Code sends the model calls to `claude-proxy` (`ANTHROPIC_BASE_URL`).
+- The session uses the proxy key of one agent of the project (`CHAT_AGENT`). The budget and the usage of the session
+  count for this agent.
+- The NetworkPolicy `agent-egress` applies to the session pod. The pod cannot connect to `api.anthropic.com`. Other
+  hosts are available only through `egress-proxy`.
+- The session needs the credential proxy (`CLAUDE_PROXY=true` on `kind`, `claude_proxy: true` on GKE).
+
 ### Show the sessions that run
 
 1. Run `kubectl -n coding-agents get jobs -l app=agent-chat`.
@@ -1543,8 +1812,8 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 |---|---|---|
 | `IDLE_SECONDS` | 1800 | The session stops after this time with no person connected. |
 | maximum time | 8 h | `activeDeadlineSeconds` in the template. This applies also while a person is connected. |
-| `CLAUDE_SECRET` | `claude-shared` | The Claude credential of the session. The credential is visible in the session pod. |
-| `REMOTE_CONTROL` | false | Also make the session available to the Claude app (#26). This must have a full claude.ai login: run `/login` in the session. API keys and `claude setup-token` tokens do not operate (inference-only). |
+| `CHAT_AGENT` | the first agent in `agents` of the project file | The agent for the Claude budget and usage of the session. The session uses the proxy key of this agent (`agent-<name>-proxy`). |
+| `REMOTE_CONTROL` | false | Not available. The Claude app (#26) must have a full claude.ai login in the session pod, and the session pod has no Claude credential (#118). The script stops when the value is `true`. |
 | `IMAGE_PULL_POLICY` | Never | Use `IfNotPresent` on a cluster that is not `kind`. |
 
 If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
@@ -1560,13 +1829,16 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
    ```bash
    kubectl -n coding-agents exec deploy/webhook-router -- node -e \
-     "require('http').get('http://localhost:8080/status',r=>r.pipe(process.stdout))"
+     "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"
    ```
 
 ### Reference: the router
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
+- The router has two ports (#214). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and `POST /`)
+  and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
+  `/register` and `/idle` to the agents, the probes and the operators of the instance. Publish only the public port.
 - For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
   URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The
@@ -1623,6 +1895,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Coder workspaces and scale-to-zero check (evaluation) | 04 (`kind.yml --tags coder`) | not used |
+| Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |

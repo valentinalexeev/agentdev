@@ -674,6 +674,9 @@ func TestValidExecutorRejects(t *testing.T) {
 
 func TestCheckoutDeepCommit(t *testing.T) {
 	// a commit deeper than the shallow fetch is found by unshallowing the protected branch, never by fetching the id
+	if strings.Count(checkoutScript, "-c http.proxyAuthMethod=basic") != 2 { // squid answers 403, never 407 (#162)
+		t.Fatal("checkout git does not send Proxy-Authorization preemptively")
+	}
 	if !strings.Contains(checkoutScript, `fetch -q --no-tags --unshallow -- "$REPO_URL" "$REF"`) ||
 		strings.Contains(checkoutScript, `"$REPO_URL" "$COMMIT"`) {
 		t.Fatal("checkout script: " + strings.SplitN(checkoutScript, "\n", 2)[0])

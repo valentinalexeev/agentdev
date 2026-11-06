@@ -58,9 +58,24 @@ rules:
   - ""
   resources:
   - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - ""
+  resourceNames:
+  - executor-egress-proxy
+  resources:
   - secrets
   verbs:
   - get
+  - update
 - apiGroups:
   - ""
   resources:

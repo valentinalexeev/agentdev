@@ -36,7 +36,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if maxc == 0 {
 		maxc = 2
 	}
-	labels := map[string]string{"app": "coding-agent", "agent": n}
+	labels := withCostLabels(map[string]string{"app": "coding-agent", "agent": n}, r.D.CostLabels)
 
 	if s.Labels == nil {
 		s.Labels = map[string]string{}
@@ -47,7 +47,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if s.Annotations == nil {
 		s.Annotations = map[string]string{}
 	}
-	s.Annotations["agentdev/scale-to-zero"] = strconv.FormatBool(a.Spec.ScaleToZero)
+	s.Annotations["agentdev/scale-to-zero"] = strconv.FormatBool(a.Spec.ScalesToZero())
 	s.Annotations["agentdev/user"] = n
 	s.Annotations["agentdev/repos"] = a.Spec.Repo
 	s.Annotations["agentdev/forge"] = forge
@@ -57,13 +57,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	// keep the agent's state volume when the Agent is deleted: re-adding the agent resumes its work
 	s.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
 		WhenDeleted: appsv1.RetainPersistentVolumeClaimRetentionPolicyType, WhenScaled: appsv1.RetainPersistentVolumeClaimRetentionPolicyType}
-	if len(s.Spec.VolumeClaimTemplates) == 0 { // immutable after creation; same claims the earlier template created
-		pvc := func(name, size string) corev1.PersistentVolumeClaim {
-			return corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name},
-				Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(size)}}}}
-		}
-		s.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{pvc("state", "2Gi"), pvc("claude", "256Mi")}
+	if len(s.Spec.VolumeClaimTemplates) == 0 { // immutable after creation: Reconcile recreates a StatefulSet in another layout
+		s.Spec.VolumeClaimTemplates = r.D.claimTemplates()
 	}
 
 	env := func(k, v string) corev1.EnvVar { return corev1.EnvVar{Name: k, Value: v} }
@@ -114,6 +109,18 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	}
 	common := []corev1.EnvVar{env("FORGE_URL", forgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
+	// the kubelet creates a missing subPath directory as root; created here first, it belongs to the agent (uid 1000)
+	p.InitContainers = []corev1.Container{{
+		Name: "state-init", Image: image, ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
+		TerminationMessagePath: corev1.TerminationMessagePathDefault, TerminationMessagePolicy: corev1.TerminationMessageReadFile,
+		Command:      []string{"mkdir", "-p", "/state/claude"},
+		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}},
+		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
+			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
+	}}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -123,14 +130,15 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// no forge, wake or register token here: those are only in the forge container below (#64)
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
-			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScaleToZero)), env("APPROVALS", r.D.approvals()),
+			env("ROUTER_URL", routerURL(ns)),
+			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
 		), r.claudeProxyEnv(n)...),
 		EnvFrom: r.claudeEnvFrom(a),
-		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "claude", MountPath: "/home/node/.claude"},
+		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
+		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
@@ -145,7 +153,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
-			env("ROUTER_URL", fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8080", ns)),
+			env("ROUTER_URL", routerURL(ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
@@ -163,6 +171,36 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// claimTemplates is the agent's volume layout (#173): one claim, state, on the agent StorageClass (empty: the cluster
+// default) with the configured size (default 10Gi: a GCE disk is billed at 10 GB at least).
+func (d Defaults) claimTemplates() []corev1.PersistentVolumeClaim {
+	size := d.StateStorage
+	if size == "" {
+		size = "10Gi"
+	}
+	c := corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "state"},
+		Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(size)}}}}
+	if d.StorageClass != "" {
+		c.Spec.StorageClassName = ptr.To(d.StorageClass)
+	}
+	return []corev1.PersistentVolumeClaim{c}
+}
+
+// sameLayout: the StatefulSet's claims have the names and StorageClass the operator renders now. The size is not
+// compared: a new size applies to new agents (a PVC can grow in place), it is no reason to drop an agent's disk.
+func sameLayout(have, want []corev1.PersistentVolumeClaim) bool {
+	if len(have) != len(want) {
+		return false
+	}
+	for i := range want {
+		if have[i].Name != want[i].Name || ptr.Deref(have[i].Spec.StorageClassName, "") != ptr.Deref(want[i].Spec.StorageClassName, "") {
+			return false
+		}
+	}
+	return true
 }
 
 // proxyEnv points both containers at the egress proxy (#65): the NetworkPolicy lets agent pods reach only the proxy
@@ -225,4 +263,10 @@ func (r *AgentReconciler) usageReports() string {
 		return "off"
 	}
 	return "on"
+}
+
+// routerURL is the router's internal port (#214): registration and idle calls. Its public port 8080 serves only
+// webhook deliveries.
+func routerURL(ns string) string {
+	return fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8081", ns)
 }

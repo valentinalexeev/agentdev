@@ -23,6 +23,8 @@
 | The agent writes a comment, but does not open a pull request. | The Claude call failed (credential, quota). Or the agent made no change. | 1. Read the log of the agent. If the agent made no change, the issue shows "could not produce a change". |
 | The bootstrap issue shows `not ready`. | The check in the list failed (permission to send commits to the forge, tracker, Claude). | 1. Correct that item. 2. Start the agent again. The agent writes a new report only when the result changes. |
 | Agents react only each `POLL_SECONDS`. | Webhooks do not get to the router. Or the agent is not registered. | 1. If the router log shows `rejected delivery (signature)`, make the webhook secrets the same. 2. Make sure that `/status` of the router lists the agent. |
+| A request to `/status` or `/healthz` of the router gives 404. | Since #214, the public port 8080 of the router accepts only webhooks. | 1. Use the internal port 8081, for example `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://localhost:8081/status',r=>r.pipe(process.stdout))"`. |
+| The router pod is not ready, or the load balancer shows the webhook backend as unhealthy. | The probe or the health check uses port 8080. Or a NetworkPolicy blocks port 8081. | 1. Make sure that the probes and the HealthCheckPolicy `webhook-router` use port 8081. 2. Deploy again with the playbook of the same release as `image_tag`. |
 | The router log shows `no agent among [...]`. | The event is about a person who has no agent. | No procedure. This is correct for issues that are not assigned to an agent. |
 | The agent pod shows `OOMKilled`. | The agent has too many items at the same time for its memory limit. | 1. Decrease `MAX_CONCURRENT`, or increase the memory limit. |
 | The agent stopped and does not start again. | Scale to zero is on, and no event for the agent occurred. | 1. Assign an issue or write a comment. 2. Find `scaled ... -> 1` and errors in the router log. |
@@ -66,6 +68,7 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
+| `scripts/mcp-sync.sh` stops with `has mcp: but ContextForge is not deployed`. Or the agents do not get MCP tools. | ContextForge is deployed only for the project specifications in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE). | 1. Add the path of the specification to `MCP_PROJECTS` in `config.env`, or to `mcp_projects` in `ansible/instance.yml`. 2. Run `./run.sh 08` or the playbook again. |
 | On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. The output is hidden (`no_log`). | The specification path is not correct, a server host is not in `mcp_allowed_hosts`, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Make sure that the host of each server in `mcp:` is in `mcp_allowed_hosts`. 3. Install `yq`, `jq` and `curl`. 4. Run the playbook again. 5. To see the error, run `scripts/mcp-sync.sh <spec>` with `KUBECTL`, `MCP_ALLOWED_HOSTS` and `CF_ADMIN_FILE` set. The script does not show tokens. |
 | `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
@@ -76,6 +79,9 @@
 |---|---|---|
 | The authentik login page shows again after each login. | The port-forward uses http. The session cookies are only for https. | 1. Start the port-forward to port `443`. 2. Use https://localhost:9443/. |
 | The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
+| External ingress: the authentik login page goes to `http://` or to the Service name. | The reverse proxy does not send `X-Forwarded-Proto` or the public `Host`, or its address is not in `authentik_trusted_proxy_cidrs`. | 1. Set the headers `Host`, `X-Forwarded-Proto: https` and `X-Forwarded-For` on the reverse proxy. 2. Add its source range to `authentik_trusted_proxy_cidrs`. 3. Run the playbook again. Refer to *Use an external ingress* in the administration guide. |
+| External ingress: the reverse proxy gets a timeout from `agentdev-ui` or `authentik-server`. | The default-deny NetworkPolicy of the platform namespace stops the reverse proxy. `ingress.forwarder` is not set, or it does not select the reverse proxy. | 1. Set `ingress.forwarder` (`namespace`, `pod_selector` or `cidrs`). 2. Run the playbook again. 3. Examine the policies: `kubectl -n agentdev-platform get networkpolicy agentdev-ui-from-forwarder -o yaml`. |
+| The playbook stops at "Check the ingress mode and hosts". | `ingress.mode` is not `gateway` or `external`, or `ingress.host` is not set or is not a plain DNS name. | Correct the `ingress` values in `instance.yml`. |
 | In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
 
 ## Approvals
@@ -124,6 +130,14 @@ To claim a new sandbox, delete the claim of the step: `kubectl --context kind-ag
 | Step 04 stops at `First admin user and login`. | Coder already has a first user with an other password, or `.coder/` holds an old session. | 1. Set `CODER_ADMIN_PASSWORD` to the password of that user. 2. Or remove the session: `rm -rf .coder`. 3. Do run.sh step 04 again. |
 | Step 04 stops at `Workspace agent is connected` or `Workspace runs under gVisor`. | The workspace pod can not start on the sandbox node, or it does not run under gVisor. | 1. Examine the pod: `kubectl --context kind-agentdev -n coder describe pod -l app.kubernetes.io/name=coder-workspace`. 2. Do run.sh step 01 again (it checks gVisor). 3. Do run.sh step 04 again. |
 | Step 04 stops at `No workspace pod is running` or `Home dir is intact after stop and start`. | The stop or the start did not complete in time. | 1. Examine the builds: `coder --global-config .coder list`. 2. Do run.sh step 04 again. The step starts the workspace again also after a failure. |
+
+## Forge (run.sh step 05)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| Step 05 stops at `Gitea answers on http://localhost:3000`. | The kind cluster has no port mapping for 3000, or Gitea did not start. | 1. Examine the pod: `kubectl --context kind-agentdev -n forge get pods,pvc`. 2. If the cluster was made without `manifests/kind-config.yaml`, do run.sh step 01 again. 3. Do run.sh step 05 again. |
+| Step 05 stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Export the password that was used the first time. 2. Do run.sh step 05 again. |
+| An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Do run.sh step 05 again, it mints a new token. |
 
 ## Report a problem that continues
 

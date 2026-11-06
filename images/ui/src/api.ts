@@ -52,12 +52,12 @@ export interface NewAgent {
   scaleToZero: boolean
 }
 
-export type AgentPatch = Partial<Pick<Agent, 'paused' | 'maxConcurrent' | 'scaleToZero'>>
+type AgentPatch = Partial<Pick<Agent, 'paused' | 'maxConcurrent' | 'scaleToZero'>>
 
 export class Unauthorized extends Error {}
 
 // ApiError carries the message of the API. The API decides authorization (#57): the UI shows its answer.
-export class ApiError extends Error {
+class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
     super(message)

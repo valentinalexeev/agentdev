@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -79,7 +81,7 @@ func TestCreatesChildrenFromSpec(t *testing.T) {
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "alice" {
 		t.Errorf("owner reference missing: %v", s.OwnerReferences)
 	}
-	if *s.Spec.Template.Spec.RuntimeClassName != "gvisor" || len(s.Spec.VolumeClaimTemplates) != 2 {
+	if *s.Spec.Template.Spec.RuntimeClassName != "gvisor" || len(s.Spec.VolumeClaimTemplates) != 1 {
 		t.Errorf("sandbox/volumes not rendered")
 	}
 	var svc corev1.Service
@@ -120,7 +122,7 @@ func TestBlockedIsHonoured(t *testing.T) {
 }
 
 func TestScaleToZeroKeepsRouterReplicas(t *testing.T) {
-	r, c := setup(t, agent("dave", func(a *v1.Agent) { a.Spec.ScaleToZero = true }))
+	r, c := setup(t, agent("dave", func(a *v1.Agent) { a.Spec.ScaleToZero = ptr.To(true) }))
 	reconcile(t, r, "dave")
 	s := getSTS(t, c, "dave")
 	s.Spec.Replicas = ptr.To[int32](0) // router stopped it when idle
@@ -132,7 +134,7 @@ func TestScaleToZeroKeepsRouterReplicas(t *testing.T) {
 }
 
 func TestResumeStartsScaleToZeroAgent(t *testing.T) {
-	r, c := setup(t, agent("erin", func(a *v1.Agent) { a.Spec.ScaleToZero = true; a.Spec.Paused = true }))
+	r, c := setup(t, agent("erin", func(a *v1.Agent) { a.Spec.ScaleToZero = ptr.To(true); a.Spec.Paused = true }))
 	reconcile(t, r, "erin")
 	var a v1.Agent
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "erin"}, &a)
@@ -141,6 +143,45 @@ func TestResumeStartsScaleToZeroAgent(t *testing.T) {
 	reconcile(t, r, "erin")
 	if s := getSTS(t, c, "erin"); *s.Spec.Replicas != 1 {
 		t.Fatalf("resumed scale-to-zero agent not started: replicas %d", *s.Spec.Replicas)
+	}
+}
+
+// #181: scale to zero is the default. An Agent without the field renders SCALE_TO_ZERO=true and the router
+// annotation; an explicit false keeps the agent up and the operator owns its replicas.
+func TestScaleToZeroIsTheDefault(t *testing.T) {
+	r, c := setup(t, agent("gus", nil), agent("hana", func(a *v1.Agent) { a.Spec.ScaleToZero = ptr.To(false) }))
+	reconcile(t, r, "gus")
+	reconcile(t, r, "hana")
+	g, h := getSTS(t, c, "gus"), getSTS(t, c, "hana")
+	if envOf(g, "SCALE_TO_ZERO") != "true" || g.Annotations["agentdev/scale-to-zero"] != "true" || *g.Spec.Replicas != 1 {
+		t.Fatalf("agent without scaleToZero: env %q, annotation %q, replicas %d", envOf(g, "SCALE_TO_ZERO"),
+			g.Annotations["agentdev/scale-to-zero"], *g.Spec.Replicas)
+	}
+	if envOf(h, "SCALE_TO_ZERO") != "false" || h.Annotations["agentdev/scale-to-zero"] != "false" {
+		t.Fatalf("scaleToZero false: env %q, annotation %q", envOf(h, "SCALE_TO_ZERO"), h.Annotations["agentdev/scale-to-zero"])
+	}
+	// the router stopped gus: the operator leaves it; hana at 0 by hand comes back (always up)
+	for _, s := range []*appsv1.StatefulSet{g, h} {
+		s.Spec.Replicas = ptr.To[int32](0)
+		_ = c.Update(context.Background(), s)
+	}
+	reconcile(t, r, "gus")
+	reconcile(t, r, "hana")
+	if n := *getSTS(t, c, "gus").Spec.Replicas; n != 0 {
+		t.Fatalf("default agent: operator fought the router: replicas %d", n)
+	}
+	if n := *getSTS(t, c, "hana").Spec.Replicas; n != 1 {
+		t.Fatalf("scaleToZero false: not kept up: replicas %d", n)
+	}
+}
+
+func TestCRDDefaultsScaleToZeroTrue(t *testing.T) {
+	b, err := os.ReadFile("config/crd/agentdev.dev_agents.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?s)scaleToZero:\s*\n\s*default: true\n`).Match(b) {
+		t.Fatal("CRD: scaleToZero has no default true (run controller-gen)")
 	}
 }
 
@@ -229,6 +270,11 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 			t.Errorf("forge container lacks %s", k)
 		}
 	}
+	for _, e := range fg.Env { // registration and idle go to the router's internal port (#214)
+		if e.Name == "ROUTER_URL" && e.Value != "http://webhook-router.coding-agents.svc.cluster.local:8081" {
+			t.Errorf("ROUTER_URL = %q, want the internal port 8081", e.Value)
+		}
+	}
 	if fg.Image != "forge:dev" || len(fg.Ports) != 1 || fg.Ports[0].Name != "webhook" || len(ag.Ports) != 0 {
 		t.Errorf("forge image/ports: %s %v / agent %v", fg.Image, fg.Ports, ag.Ports)
 	}
@@ -244,6 +290,9 @@ func TestForgeSidecarHoldsTheTokens(t *testing.T) {
 	mounts := func(c *corev1.Container) map[string]string {
 		m := map[string]string{}
 		for _, v := range c.VolumeMounts {
+			if v.SubPath != "" { // ~/.claude is a directory of the state volume (#173)
+				continue
+			}
 			m[v.Name] = v.MountPath
 		}
 		return m

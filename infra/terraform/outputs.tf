@@ -7,12 +7,13 @@ output "get_credentials" {
 }
 
 output "image_registry" {
-  value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
+  description = "Artifact Registry path; null when create_artifact_registry is false (images then come from GHCR, the Ansible image_registry)."
+  value       = one(google_artifact_registry_repository.images[*].repository_id) == null ? null : "${var.region}-docker.pkg.dev/${var.project_id}/${one(google_artifact_registry_repository.images[*].repository_id)}"
 }
 
 output "webhook_ip" {
-  description = "Static IP for the webhook router Ingress; point a DNS name at it and use https://<name>/ as the GitHub App webhook URL."
-  value       = google_compute_global_address.webhook.address
+  description = "Static IP for the public entry point; point the DNS names at it and use https://<name>/ as the GitHub App webhook URL. null without public_hosts (#169)."
+  value       = one(google_compute_global_address.webhook[*].address)
 }
 
 output "automation_service_account" {
@@ -30,9 +31,14 @@ output "github_actions_auth" {
 output "ingress" {
   description = "Names for instance.yml `ingress` (Ansible role ingress, #120): copy them as they are."
   value = {
-    static_ip_name  = google_compute_global_address.webhook.name
+    static_ip_name  = try(google_compute_global_address.webhook[0].name, "")
     certificate     = try(google_compute_managed_ssl_certificate.public[0].name, "")
     ssl_policy      = try(google_compute_ssl_policy.public[0].name, "")
     security_policy = try(google_compute_security_policy.public[0].name, "")
   }
+}
+
+output "budget" {
+  description = "Name of the billing budget; null when create_budget is false (#199)."
+  value       = one(google_billing_budget.monthly[*].name)
 }

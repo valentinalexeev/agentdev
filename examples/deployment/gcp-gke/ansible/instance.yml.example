@@ -5,6 +5,12 @@ image_tag: "0.1.0"                # same release as terraform/main.tf ref=v0.1.0
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
+  # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
+# Scale to zero is on by default (#181): an idle agent stops after idle_seconds, and the router starts it on a webhook
+# or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
+# scale_to_zero: false
+# wake_poll_seconds: 300
+agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels; service: agentdev is added
 # project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
 mcp_projects: []
 # trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R51)
@@ -32,7 +38,11 @@ github_app:
 #     plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com     # read-only roles
 #     apply_gsa: exec-tf-prod-apply@my-agentdev.iam.gserviceaccount.com   # write roles of this environment only
 #     allow_fork_prs: false   # true: also plan PRs from forks (runs anyone's code with the plan credentials)
-# Management API (agentdev #104): deployed only with api.oidc_issuer (any OIDC provider until authentik on GKE, #114).
+#     # hosts this executor may reach through the executor egress proxy (#135), besides executor_egress_hosts and
+#     # github.com; everything else is refused and recorded as a security event
+#     egress_hosts: [oauth2.googleapis.com, sts.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com]
+# Management API (agentdev #104): deployed with ingress.auth_host (authentik is the issuer, #114) or an explicit
+# api.oidc_issuer (another OIDC provider; then set authentik.enabled: false).
 # The forge token of the API goes into the Secret Manager secret agentdev-api-forge-token (optional).
 # api:
 #   oidc_issuer: https://auth.example.com/application/o/agentdev/
@@ -46,8 +56,22 @@ github_app:
 # ingress:
 #   host: agentdev.example.com              # web UI
 #   webhook_host: agentdev.example.com      # optional, default host
+#   auth_host: auth.example.com             # authentik login (#114); also in terraform public_hosts
 #   certificate: agentdev-public-1a2b3c4d
 #   security_policy: agentdev-public        # only with cloud_armor = true
+# Or your own reverse proxy, for example a tailnet ingress (agentdev #160): no Gateway, no certificate, and
+# terraform public_hosts can stay empty (no static IP). Publish only the paths in docs/admin.md "Use an external ingress".
+# ingress:
+#   mode: external
+#   host: agentdev.example.com              # web UI -> agentdev-ui.agentdev-platform:8080
+#   webhook_host: hooks.example.com         # /hook only -> webhook-router.coding-agents:8080
+#   auth_host: auth.example.com             # authentik -> authentik-server.agentdev-platform:80
+#   forwarder:                              # NetworkPolicies that let the reverse proxy in (default-deny otherwise)
+#     namespace: tailscale
+#     pod_selector: {app: ts-ingress}       # optional
+#     # cidrs: [100.64.0.0/10]              # a reverse proxy outside the cluster
+# The proxy sets Host, X-Forwarded-Proto and X-Forwarded-For; authentik trusts them only from these ranges:
+# authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
 # usage: {five_hour: 80, weekly: 90}
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.

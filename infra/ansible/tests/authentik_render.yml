@@ -1,0 +1,118 @@
+# Render and parity checks (#114): the role authentik writes the same Secret keys as 09-authentik.sh, mounts only the
+# manifests/authentik-blueprint-*.yaml files, no blueprint sets group members, the API and the UI default to the
+# authentik issuer, and the Gateway routes the login host only when authentik is deployed.
+# Run: ansible-playbook infra/ansible/tests/authentik_render.yml
+- name: The authentik role on GKE (#114)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    image_registry: ghcr.io/example
+    image_tag: v0.0.0
+    forge_url: https://api.github.com
+    sm_security_siem: security-siem
+    platform_sm_prefix: platform-
+    ingress: {host: agentdev.example.com, auth_host: auth.example.com, certificate: c1}
+    authentik_secret: {pg-authentik: aa, authentik-secret-key: bb, authentik-admin: cc}
+    kind_script: "{{ lookup('ansible.builtin.file', repo_root + '/09-authentik.sh') }}"
+    blueprints: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') }}"
+  tasks:
+    - name: Load the defaults (group_vars, roles authentik, api and ingress)
+      ansible.builtin.include_vars: "{{ item }}"
+      loop: [../group_vars/all.yml, ../roles/authentik/defaults/main.yml, ../roles/api/defaults/main.yml,
+             ../roles/ingress/defaults/main.yml]
+
+    - name: Render the Secret authentik
+      ansible.builtin.set_fact:
+        ak_env: "{{ dict(ak_lines | select('search', '=') | map('split', '=', 1)) }}"
+      vars:
+        ak_lines: "{{ lookup('ansible.builtin.template', '../roles/authentik/templates/config.env.j2').splitlines() }}"
+
+    - name: Same keys as 09-authentik.sh (kind/GKE parity), plus the GKE-only proxy and callback settings
+      ansible.builtin.assert:
+        that:
+          - (ak_env.keys() | reject('in', ['AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS', 'AGENTDEV_UI_CALLBACK']) | reject('in', kind_script) | list) == []
+          - ak_env.AUTHENTIK_POSTGRESQL__PASSWORD == 'aa'
+          - ak_env.AUTHENTIK_SECRET_KEY == 'bb'
+          - ak_env.AUTHENTIK_BOOTSTRAP_PASSWORD == 'cc'
+          - ak_env.AGENTDEV_UI_CALLBACK == 'https://agentdev.example.com/callback'
+          - "'AGENTDEV_UI_CALLBACK' in lookup('ansible.builtin.file', repo_root + '/manifests/authentik-blueprint-agentdev.yaml')"
+        quiet: true
+      # every AUTHENTIK_* key the kind script writes is also written here
+    - name: Every key of 09-authentik.sh is written on GKE too
+      ansible.builtin.assert:
+        that: item in ak_env
+        quiet: true
+      loop: "{{ kind_script | regex_findall(\"printf '(AUTHENTIK_[A-Z_]+)=\") | unique }}"
+
+    - name: Blueprints are the top-level files only, none sets group members (R53)
+      ansible.builtin.assert:
+        that:
+          - blueprints | length >= 2
+          - blueprints | select('search', '/kind/') | list == []
+          - query('ansible.builtin.file', *blueprints) | select('search', '(?m)^\s*users:') | list == []
+        quiet: true
+
+    - name: The authentik role is on, and the API and the UI use it as the issuer
+      ansible.builtin.assert:
+        that:
+          - authentik_enabled | bool
+          - api_effective_issuer == 'https://auth.example.com/application/o/agentdev/'
+          - api_oidc_issuer == 'https://auth.example.com/application/o/agentdev/'
+          - api_oidc_discovery_url == 'http://authentik-server.agentdev-platform.svc.cluster.local/application/o/agentdev/'
+          - ingress_ui | bool and ingress_auth | bool
+        quiet: true
+
+
+    - name: Without ingress.auth_host authentik stays off and nothing defaults
+      ansible.builtin.assert:
+        that:
+          - not (authentik_enabled | bool)
+          - api_effective_issuer == ''
+          - not (ingress_auth | bool)
+        quiet: true
+      vars:
+        ingress: {host: agentdev.example.com, certificate: c1}
+
+    - name: Render the Gateway
+      ansible.builtin.set_fact:
+        gw: "{{ lookup('ansible.builtin.template', '../roles/ingress/templates/gateway.yaml.j2') | from_yaml_all | list }}"
+
+    - name: The login host routes to authentik-server only, with HSTS and a load balancer NetworkPolicy
+      vars:
+        route: "{{ gw | selectattr('kind', 'equalto', 'HTTPRoute') | selectattr('metadata.name', 'equalto', 'authentik') | first }}"
+        redirect: "{{ gw | selectattr('metadata.name', 'equalto', 'agentdev-https-redirect') | first }}"
+        np: "{{ gw | selectattr('metadata.name', 'equalto', 'authentik-from-lb') | first }}"
+      ansible.builtin.assert:
+        that:
+          - route.spec.hostnames == ['auth.example.com']
+          - route.spec.rules[0].backendRefs | map(attribute='name') | list == ['authentik-server']
+          - route.spec.rules[0].backendRefs[0].port == 80
+          - route.spec.rules[0].filters[0].responseHeaderModifier.set[0].name == 'Strict-Transport-Security'
+          - "'auth.example.com' in redirect.spec.hostnames"
+          - np.spec.ingress[0].ports | map(attribute='port') | list == [9000]
+        quiet: true
+
+    - name: No authentik route without ingress.auth_host
+      ansible.builtin.assert:
+        that: >-
+          lookup('ansible.builtin.template', '../roles/ingress/templates/gateway.yaml.j2') | from_yaml_all | list
+          | selectattr('metadata.name', 'equalto', 'authentik') | list == []
+        quiet: true
+      vars:
+        ingress: {host: agentdev.example.com, certificate: c1}
+
+    # last: set_fact outranks the include_vars of group_vars (api: {}), as -e @instance.yml does in a real run
+    - name: Set api.oidc_issuer as an instance would
+      ansible.builtin.set_fact:
+        api: {oidc_issuer: "https://idp.example.org/"}
+
+    - name: An explicit api.oidc_issuer still wins (another OIDC provider)
+      ansible.builtin.assert:
+        that:
+          - api_oidc_issuer == 'https://idp.example.org/'
+          - api_oidc_discovery_url == 'https://idp.example.org/'
+          - api_effective_issuer == 'https://idp.example.org/'
+        quiet: true

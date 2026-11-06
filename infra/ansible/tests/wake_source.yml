@@ -1,0 +1,107 @@
+# Check (#181): scale to zero is the default, and the playbook refuses it when no wake source is left (no webhooks,
+# wake_poll_seconds 0). Runs the same task file as deploy.yml.
+# Run: ansible-playbook infra/ansible/tests/wake_source.yml
+- name: Scale to zero needs a wake source (#181)
+  hosts: localhost
+  gather_facts: false
+  vars_files: [../group_vars/all.yml]
+  vars:
+    agents: [{name: alice, user: alice, repos: o/r}, {name: bob, user: bob, repos: o/r, scale_to_zero: false}]
+    router_tmpl: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../manifests/router.yaml.tmpl') }}"
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir + '/../deploy.yml') }}"
+  tasks:
+    - name: Defaults are scale to zero with a 300 s wake poll, and no webhooks without an ingress
+      ansible.builtin.assert:
+        that:
+          - scale_to_zero | bool
+          - wake_poll_seconds | int == 300
+          - not (webhooks_enabled | bool)
+
+    - name: Accepted with the defaults (wake poll)
+      ansible.builtin.include_tasks: ../tasks/wake_source.yml
+
+    - name: Accepted with webhooks and no poll
+      ansible.builtin.include_tasks: ../tasks/wake_source.yml
+      vars: {wake_poll_seconds: 0, ingress: {host: agentdev.example.com}}
+
+    - name: Accepted with no poll when every agent stays up
+      ansible.builtin.include_tasks: ../tasks/wake_source.yml
+      vars: {wake_poll_seconds: 0, scale_to_zero: false}
+
+    - name: Refused with no poll, no webhooks and an agent that scales to zero
+      block:
+        - name: Try it
+          ansible.builtin.include_tasks: ../tasks/wake_source.yml
+          vars: {wake_poll_seconds: 0}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: scale to zero without a wake source accepted
+      rescue:
+        - name: Refused as expected, with the clear message
+          ansible.builtin.assert:
+            that: "'scale_to_zero needs webhooks or wake_poll_seconds' in ansible_failed_result.msg"
+
+    - name: Refused when only one agent opts in (cluster default off)
+      block:
+        - name: Try it
+          ansible.builtin.include_tasks: ../tasks/wake_source.yml
+          vars: {wake_poll_seconds: 0, scale_to_zero: false, agents: [{name: a, user: a, repos: o/r, scale_to_zero: true}]}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: per-agent scale to zero without a wake source accepted
+      rescue:
+        - name: Refused as expected
+          ansible.builtin.assert:
+            that: "'scale_to_zero needs webhooks or wake_poll_seconds' in ansible_failed_result.msg"
+
+    - name: Gitea accepted with a poll token, or with webhooks and no token
+      ansible.builtin.include_tasks: ../tasks/wake_source.yml
+      vars: {forge_kind: gitea, wake_poll_token: "{{ item.token }}", ingress: "{{ item.ingress }}"}
+      loop: [{token: ro-token, ingress: {}}, {token: "", ingress: {host: agentdev.example.com}}]
+
+    - name: Gitea refused with scale to zero, no webhooks and an empty poll token (#190)
+      block:
+        - name: Try it
+          ansible.builtin.include_tasks: ../tasks/wake_source.yml
+          vars: {forge_kind: gitea, wake_poll_token: ""}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: gitea scale to zero without a poll token accepted
+      rescue:
+        - name: Refused as expected, naming the secret
+          ansible.builtin.assert:
+            that: "'needs the wake poll token' in ansible_failed_result.msg and 'router-poll-forge-token' in ansible_failed_result.msg"
+
+    - name: The router template and the playbook set the wake poll values (kind/GKE parity)
+      ansible.builtin.assert:
+        that:
+          - "'${' + item + '}' in router_tmpl"
+          - "item + ':' in deploy"
+      loop: [WAKE_POLL_SECONDS, GITEA_URL, GITHUB_API_URL]
+
+    - name: The router manifest renders with the playbook's values (no ${VAR} left, render.j2 guard)
+      ansible.builtin.set_fact:
+        router_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
+      vars:
+        vars_router:
+          src: "{{ playbook_dir }}/../../../manifests/router.yaml.tmpl"
+          values:
+            AGENTS_NS: coding-agents
+            FORGE_SECRETS: github=x
+            REGISTER_TOKEN: x
+            ROUTER_IMAGE: router:test
+            IMAGE_PULL_POLICY: IfNotPresent
+            WAKE_POLL_SECONDS: "{{ wake_poll_seconds | int }}"
+            GITEA_URL: ""
+            GITHUB_API_URL: "{{ forge_url }}"
+          replace: []
+
+    - name: The router gets the wake poll interval and the read-only credential volume
+      ansible.builtin.assert:
+        that:
+          - (router.env | items2dict(key_name='name', value_name='value')).WAKE_POLL_SECONDS == '300'
+          - (router.env | items2dict(key_name='name', value_name='value')).GITHUB_API_URL == 'https://api.github.com'
+          - (pod.volumes | selectattr('name', 'equalto', 'forge-poll') | first).secret.secretName == 'webhook-router-poll'
+      vars:
+        pod: "{{ (router_docs | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec }}"
+        router: "{{ pod.containers | first }}"

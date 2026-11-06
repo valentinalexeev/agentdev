@@ -18,6 +18,12 @@ variable "cluster_name" {
   default = "agentdev"
 }
 
+variable "create_artifact_registry" {
+  description = "Create the Artifact Registry Docker repo, its API and IAM roles. The Ansible roles pull images from GHCR (image_registry), so false is enough unless you mirror images yourself."
+  type        = bool
+  default     = true
+}
+
 variable "system_machine_type" {
   description = "Node type for the always-on system pool (router, forge connector, operator, management UI)."
   type        = string
@@ -42,10 +48,45 @@ variable "agent_pool_spot" {
   default     = true
 }
 
+variable "labels" {
+  description = "Labels on every resource (#184), merged over service = \"agentdev\". Set environment to dev, stage or prod. GCP rules: lower-case keys and values."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition     = alltrue([for k, v in var.labels : can(regex("^[a-z][a-z0-9_-]{0,62}$", k)) && can(regex("^[a-z0-9_-]{0,63}$", v))])
+    error_message = "labels: keys must match ^[a-z][a-z0-9_-]{0,62}$ and values ^[a-z0-9_-]{0,63}$ (GCP label rules, lower case)."
+  }
+  validation {
+    condition     = !contains(keys(var.labels), "environment") || contains(["dev", "stage", "prod"], lookup(var.labels, "environment", ""))
+    error_message = "labels.environment must be dev, stage or prod."
+  }
+}
+variable "system_pool_spot" {
+  description = "Use Spot VMs for the system pool (about 60-70% cheaper). When Google reclaims the node, router, operator and proxies are down for about a minute; polling (poll_seconds) picks up missed webhooks. Changing it replaces the pool."
+  type        = bool
+  default     = false
+}
+
+variable "create_budget" {
+  description = "Create the monthly billing budget, its notification channels and the roles/billing.costsManager grant for the automation account on billing_account_id (#199). The first apply needs billing.accounts.setIamPolicy on the billing account. false = none of these."
+  type        = bool
+  default     = true
+}
+
 variable "budget_amount_usd" {
-  description = "Monthly billing budget; alerts at 50/90/100%. The budget alerts, it does not stop spending."
+  description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."
   type        = number
   default     = 150
+}
+
+variable "budget_currency" {
+  description = "ISO 4217 currency of the budget. Must equal the billing account currency, else the Budgets API answers 400 with no detail."
+  type        = string
+  default     = "USD"
+  validation {
+    condition     = can(regex("^[A-Z]{3}$", var.budget_currency))
+    error_message = "budget_currency must be a 3-letter ISO 4217 code such as USD or EUR."
+  }
 }
 
 variable "billing_account_id" {
@@ -90,4 +131,47 @@ variable "public_max_request_bytes" {
   description = "Cloud Armor: largest accepted request body (Content-Length) in bytes. The router accepts at most 5 MB."
   type        = number
   default     = 5000000
+}
+
+# Node boot disks (#170). Size defaults to the GKE default (100 GB); type defaults to pd-standard (owner decision on
+# PR #191), so a pool created with the GKE default pd-balanced is replaced once. Changing any of these replaces the
+# node pool (nodes are recreated; agents resume from their PVCs).
+variable "system_disk_size_gb" {
+  description = "Boot disk size (GB) of system pool nodes. They hold only images and ephemeral pod data; 30 is enough. Changing it replaces the pool."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.system_disk_size_gb >= 10
+    error_message = "system_disk_size_gb must be at least 10 (GKE minimum)."
+  }
+}
+
+variable "system_disk_type" {
+  description = "Boot disk type of system pool nodes: pd-standard, pd-balanced or pd-ssd. Changing it replaces the pool."
+  type        = string
+  default     = "pd-standard"
+  validation {
+    condition     = contains(["pd-standard", "pd-balanced", "pd-ssd"], var.system_disk_type)
+    error_message = "system_disk_type must be pd-standard, pd-balanced or pd-ssd."
+  }
+}
+
+variable "agent_disk_size_gb" {
+  description = "Boot disk size (GB) of agent pool nodes (worker image plus gVisor overhead; 50 is enough). Changing it replaces the pool."
+  type        = number
+  default     = 100
+  validation {
+    condition     = var.agent_disk_size_gb >= 10
+    error_message = "agent_disk_size_gb must be at least 10 (GKE minimum)."
+  }
+}
+
+variable "agent_disk_type" {
+  description = "Boot disk type of agent pool nodes: pd-standard, pd-balanced or pd-ssd. Changing it replaces the pool."
+  type        = string
+  default     = "pd-standard"
+  validation {
+    condition     = contains(["pd-standard", "pd-balanced", "pd-ssd"], var.agent_disk_type)
+    error_message = "agent_disk_type must be pd-standard, pd-balanced or pd-ssd."
+  }
 }

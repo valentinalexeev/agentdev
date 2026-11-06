@@ -7,8 +7,13 @@
 #
 # A session is a short-lived Job (manifests/chat.yaml.tmpl) with a fresh clone of the project, under gVisor. It uses the
 # project's chat account: read access plus issues and comments, no push. It ends after IDLE_SECONDS (default 1800)
-# with nobody attached. REMOTE_CONTROL=true also exposes it to the Claude app (#26); that needs a full claude.ai
-# login (/login inside the session): API keys and setup-token tokens are inference-only and are refused.
+# with nobody attached.
+#
+# Claude (#118): the session pod holds no Claude credential. Claude Code calls claude-proxy (ANTHROPIC_BASE_URL) with
+# the proxy key of one agent of the project (CHAT_AGENT, default: the first agent in the spec), so budget and usage
+# count for that agent. The pod falls under agent-egress like an agent pod (no direct path to api.anthropic.com).
+# REMOTE_CONTROL=true (Claude app, #26) needs a full claude.ai login in the pod, which the proxy cannot give: it is
+# refused.
 source "$(dirname "$0")/../lib.sh"
 # shellcheck disable=SC1091
 [[ -f "${SPIKE_DIR}/.env" ]] && { set -a; source "${SPIKE_DIR}/.env"; set +a; }
@@ -54,16 +59,24 @@ case "${1:-}" in
     [[ -s "${tf}" ]] || die "no chat token for ${chat}"
     k -n "${AGENTS_NS}" create secret generic "chat-${project}" --from-file=FORGE_TOKEN="${tf}" \
       --dry-run=client -o yaml | k apply -f - >/dev/null
-    k -n "${AGENTS_NS}" get secret claude-shared >/dev/null 2>&1 || die "no claude-shared secret (run ./run.sh 06 first)"
+    [[ "${CLAUDE_PROXY:-true}" == true ]] || die "chat sessions need the Claude credential proxy (CLAUDE_PROXY=true, #118)"
+    [[ "${REMOTE_CONTROL:-false}" == true ]] && die "REMOTE_CONTROL needs a claude.ai login in the session pod; sessions use claude-proxy (#118)"
+    chat_agent="${CHAT_AGENT:-$(yq -r '.agents[0].name // ""' "${spec}")}"
+    [[ "${chat_agent}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || die "spec: no agent for the session (agents[0].name or CHAT_AGENT)"
+    k -n "${AGENTS_NS}" get secret "agent-${chat_agent}-proxy" >/dev/null 2>&1 \
+      || die "no proxy key agent-${chat_agent}-proxy (run ./run.sh 06 first)"
+    claude_proxy_url="http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"   # same URLs as the operator (12-operator.sh)
+    egress_proxy="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"
     session="chat-${project}-$(date +%H%M%S)"
     board_url="${BOTBOARD_URL:-}"   # report the session to botboard (#26) when it is deployed
     [[ -z "${board_url}" ]] && k -n "${BOTBOARD_NS:-botboard}" get svc botboard >/dev/null 2>&1 && board_url="http://botboard.${BOTBOARD_NS:-botboard}.svc.cluster.local"
     BOTBOARD_URL="${board_url}" CHAT_URL="${CHAT_URL:-}" \
     SESSION="${session}" PROJECT="${project}" AGENTS_NS="${AGENTS_NS}" WORKER_IMAGE="${WORKER_IMAGE}" IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-Never}" \
       FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" CHAT_USER="${chat}" REPO="${REPO}" \
-      IDLE_SECONDS="${IDLE_SECONDS:-1800}" REMOTE_CONTROL="${REMOTE_CONTROL:-false}" CLAUDE_SECRET="${CLAUDE_SECRET:-claude-shared}" \
+      IDLE_SECONDS="${IDLE_SECONDS:-1800}" REMOTE_CONTROL=false CHAT_AGENT="${chat_agent}" \
+      CLAUDE_PROXY_URL="${claude_proxy_url}" EGRESS_PROXY="${egress_proxy}" \
       envsubst < "${SPIKE_DIR}/manifests/chat.yaml.tmpl" | k apply -f - >/dev/null
-    ok "session ${session} started for ${REPO}"
+    ok "session ${session} started for ${REPO} (Claude through claude-proxy as agent ${chat_agent})"
     [[ -t 0 ]] && attach "${session}" || echo "  attach: $0 attach ${session}"
     ;;
   attach)

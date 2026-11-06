@@ -14,6 +14,21 @@ The loop does two things, again and again:
 2. **Feedback:** new comments or reviews from people on the agent's open PRs → a Claude run on that branch,
    a push and a reply.
 
+Each Claude run is a new process: it keeps no memory of the earlier runs. So the prompt of a feedback run has two
+parts, both fenced as untrusted data (#223):
+
+- **Background**, for context only: the issue the PR resolves (the issue the agent opened the PR for, else
+  `Closes #N` in the PR description), the PR description, and the latest earlier thread items (comments, reviews,
+  inline comments and the agent's own replies). The run keeps the decisions in it but does not reply to it.
+- **New feedback**: the comments and reviews since the last handled round (and failing checks on GitHub). The
+  reply to the reviewers covers these items only.
+
+The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread
+items (default 20) and `FEEDBACK_CONTEXT_CHARS` characters in total (default 12000; `0` turns the background off).
+The issue and the PR description get at most a quarter of that each; when the thread is cut, the oldest items go
+first. Resuming the CLI session per PR was not chosen: the input grows with each round, and the replayed transcript
+carries untrusted text from all earlier rounds.
+
 An agent works on several items at once (`MAX_CONCURRENT`, default 2), each in its own git worktree. A failed
 item is retried later with a backoff, not in a tight loop.
 
@@ -53,9 +68,19 @@ an agent: agents re-read state from the forge API. If webhooks fail, agents stil
 
 ## Scale to zero
 
-Optional per agent (`SCALE_TO_ZERO`, #35). An agent with no work for `IDLE_SECONDS` (default 15 min) asks the
-router to stop it. When an event for a stopped agent arrives, the router starts it again, and it picks the work up
-from the forge. The router refuses to stop an agent that was woken since it became idle, so work is not cut off.
+On by default for every agent (#35, default since #181); `scaleToZero: false` on an agent keeps it running. An
+agent with no work for `IDLE_SECONDS` (default 15 min) asks the router to stop it. On GKE the agent node pool then
+goes to zero nodes when no agent runs. The router refuses to stop an agent that was woken since it became idle, so
+work is not cut off.
+
+A stopped agent starts again in two ways, and it then picks the work up from the forge:
+
+- **Webhook:** an event for the agent arrives at the router.
+- **Wake poll:** every `wake_poll_seconds` (default 300 s) the router asks the forge, with a read-only credential,
+  whether a stopped agent has new work (an issue given to it, or new activity on one of its PRs). This path needs no
+  public webhook URL.
+
+The first answer of a stopped agent takes longer: the pod (and on GKE a node) must start first.
 
 ## Agent dashboard (botboard)
 
@@ -79,14 +104,16 @@ many tools an agent sees.
 An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
 task (#38). It runs as a short-lived pod (same image, gVisor) with a fresh clone of the project and a
 **read-only** forge account (`<project>-chat`): it can read code, comment and file issues, but never push. Ideas
-turn into code only through the normal path: an issue, an agent, a PR, your review. Claude runs inside tmux, so a
+turn into code only through the normal path: an issue, an agent, a PR, your review. Like an agent, the session holds
+no Claude credential: it calls the credential proxy with the key of one agent of the project, which pays for it (#118). Claude runs inside tmux, so a
 session survives disconnects and can be re-attached from any terminal with cluster access. It ends after 30 minutes
 with nobody attached, or after 8 hours at most.
 
 ## Sandboxing
 
 Agents run under **gVisor** (a user-space kernel) on a dedicated node pool, without a Kubernetes service account
-token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume, so restarts do not redo work.
+token. Each agent's state (clone, cursors, `~/.claude`) is on its own volume (one PVC per agent; `~/.claude` is a
+directory of it, #173), so restarts do not redo work.
 
 **Security model.** An agent is an autonomous developer: it has to build and test the code it writes, and a test
 runner can start any program. So the security boundary is the pod, not the list of tools Claude may use:

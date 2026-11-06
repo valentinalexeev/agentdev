@@ -32,7 +32,7 @@ project=$(yq -r '.project' "${spec}")
 has_mcp=1; [[ "$(yq -r '.mcp.servers // [] | length' "${spec}")" != 0 ]] || has_mcp=0
 if ! k -n "${PLATFORM_NS}" get svc contextforge >/dev/null 2>&1; then
   [[ ${has_mcp} == 0 ]] && { ok "no mcp.servers in ${spec}: nothing to do"; exit 0; }
-  die "${spec} has mcp: but ContextForge is not deployed: run ./run.sh 08 first"
+  die "${spec} has mcp: but ContextForge is not deployed: add the spec to MCP_PROJECTS and run ./run.sh 08 (mcp_projects on GKE)"
 fi
 # allow-list check, before any change in ContextForge
 if [[ ${has_mcp} == 1 ]]; then

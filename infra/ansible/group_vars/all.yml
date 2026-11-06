@@ -8,6 +8,11 @@ kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
 agents_ns: coding-agents
 platform_ns: agentdev-platform
 
+# Labels (#184), the same as Terraform's `labels`: on the agentdev namespaces and on agent and executor pods (GKE cost
+# allocation). Set environment (dev, stage or prod) in instance.yml; service defaults to agentdev.
+agentdev_labels: {}
+agentdev_effective_labels: "{{ {'service': 'agentdev'} | combine(agentdev_labels) }}"
+
 # Published images (#28). Deployments pin image_tag to a release (vX.Y.Z, strict SemVer).
 image_registry: ghcr.io/valentinalexeev
 worker_image: "{{ image_registry }}/agentdev-worker:{{ image_tag }}"
@@ -38,7 +43,16 @@ forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
-scale_to_zero: false                # stop idle agents, start on events (#35); per agent: agents[].scale_to_zero
+scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
+wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
+# webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
+# zero and wake_poll_seconds 0 the playbook refuses to run without them (agents would stop and never start again).
+webhooks_enabled: "{{ ((ingress | default({})).webhook_host | default((ingress | default({})).host | default(''))) | length > 0 }}"
+sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-only token of the wake poll (optional)
+# agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
+# "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
+agent_storage_class: agentdev-agent
+agent_state_storage: 10Gi
 idle_seconds: 900                   # cluster-wide (the operator's); per-agent idle time is not in the Agent spec yet
 botboard_url: ""                    # agents report work to botboard (#26), e.g. http://botboard.<tailnet>; empty = off
 
@@ -83,7 +97,24 @@ exec_ns: agentdev-executors
 executor_poll_seconds: 60
 executor_retention_days: 30
 executor_apply_start_minutes: 30   # an allowed apply starts at most this long after the decision, else nothing applies
-executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa}]
+executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa, egress_hosts}]
+# Executor egress (#135). Executor Jobs reach the outside only through the executor egress proxy, and it only these
+# hosts plus the forge's git host and each executor's egress_hosts (Squid dstdomain: a leading dot = the domain and
+# its subdomains). Cloud APIs belong to the executor that needs them, for example
+# egress_hosts: [oauth2.googleapis.com, storage.googleapis.com, cloudresourcemanager.googleapis.com].
+executor_egress_hosts: [registry.terraform.io, releases.hashicorp.com]
 # Management API (#104), optional: deployed only when api.oidc_issuer is set. Keys: oidc_issuer (https, required),
 # oidc_discovery_url, oidc_audience (agentdev), forge_url, db_retention_days (365). Defaults: roles/api/defaults.
 api: {}
+# authentik on GKE (#114): deployed by the role authentik when authentik.enabled is true; the default is on when
+# ingress.auth_host (the public login host) is set. Then api.oidc_issuer and api.oidc_discovery_url default to
+# authentik (an explicit api.oidc_issuer still wins, for another OIDC provider).
+authentik_enabled: "{{ (authentik | default({})).enabled | default(((ingress | default({})).auth_host | default('')) | length > 0) | bool }}"
+authentik_default_issuer: >-
+  {{ ('https://' ~ ingress.auth_host ~ '/application/o/agentdev/') if authentik_enabled | bool and
+     ((ingress | default({})).auth_host | default('')) | length > 0 else '' }}
+authentik_default_discovery_url: >-
+  {{ ('http://authentik-server.' ~ platform_ns ~ '.svc.cluster.local/application/o/agentdev/')
+     if authentik_default_issuer | length > 0 else '' }}
+# the issuer the playbook uses (api role, approvals check, ingress UI route)
+api_effective_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer) }}"
