@@ -553,24 +553,48 @@ FEEDBACK_CONTEXT_CHARS="${FEEDBACK_CONTEXT_CHARS:-12000}"
 [[ "${FEEDBACK_CONTEXT_CHARS}" =~ ^[0-9]{1,7}$ ]] || FEEDBACK_CONTEXT_CHARS=12000
 FEEDBACK_CONTEXT_ITEMS=$((10#${FEEDBACK_CONTEXT_ITEMS})); FEEDBACK_CONTEXT_CHARS=$((10#${FEEDBACK_CONTEXT_CHARS}))
 
+# jq: a forge timestamp as Unix seconds. Gitea answers with a local offset (+01:00), GitHub and the cursor with Z, so
+# strings do not compare; an unparsable value gives no output (the item is skipped).
+JQ_EPOCH='def epoch: sub("\\.[0-9]+"; "") | capture("^(?<d>[0-9-]{10}T[0-9:]{8})(?<z>Z|[+-][0-9]{2}:[0-9]{2})$")
+  | ((.d + "Z") | fromdateiso8601) - (if .z == "Z" then 0
+      else ((.z[1:3] | tonumber) * 3600 + (.z[4:6] | tonumber) * 60) * (if .z[0:1] == "+" then 1 else -1 end) end);'
+
+# all_pages <path>: every page of a list call, as one JSON array per line (at most 10 pages, so a huge thread stays
+# bounded; a list sorted oldest first then loses its newest items only past 10 pages)
+all_pages() {
+  local p=1 page
+  while (( p <= 10 )); do
+    page=$(api GET "$1?$(per_page 50)&page=${p}") || return 0
+    printf '%s\n' "${page}"
+    [[ "$(jq 'length' <<<"${page}" 2>/dev/null)" == 50 ]] || return 0
+    p=$((p + 1))
+  done
+}
+
 # earlier_feedback <pr> <since> -> markdown list of the last FEEDBACK_CONTEXT_ITEMS thread items at or before <since>
 # (comments and reviews by anyone, the agent's own replies too), oldest first, in the format of new_feedback
 earlier_feedback() {
-  local pr=$1 since=$2 n=${FEEDBACK_CONTEXT_ITEMS} rv id
+  local pr=$1 since=$2 n=${FEEDBACK_CONTEXT_ITEMS} id head
   (( n > 0 )) || return 0
   {
-    api GET "/repos/${REPO}/issues/${pr}/comments?$(per_page 100)" | jq -c --arg s "${since}" \
-      '.[] | select(.created_at <= $s and ((.body // "") | test("\\S"))) | {t: .created_at, x: "- \(.user.login) commented: \(.body)"}'
-    # only the last n reviews can be in the window: inline comments are fetched for those only (one call each)
-    api GET "/repos/${REPO}/pulls/${pr}/reviews?$(per_page 100)" | jq -c --arg s "${since}" --argjson n "${n}" \
-      '[.[] | select(.submitted_at != null and .submitted_at <= $s)] | sort_by(.submitted_at) | .[-$n:] | .[]' |
-      while read -r rv; do
-        id=$(jq -r .id <<<"${rv}"); [[ "${id}" =~ ^[0-9]{1,15}$ ]] || continue
-        jq -c --arg in "$(api GET "/repos/${REPO}/pulls/${pr}/reviews/${id}/comments" |
-            jq -r '.[] | "  - on `\(.path)` line \(.line // .position // .original_line // .original_position): \(.body)"')" \
-          '{t: .submitted_at, x: ([("- \(.user.login) reviewed (\(.state)): \(.body // "")"), (if $in != "" then $in else empty end)] | join("\n"))}' <<<"${rv}"
+    all_pages "/repos/${REPO}/issues/${pr}/comments" | jq -c --arg s "${since}" "${JQ_EPOCH}"'
+      ($s | epoch) as $c | .[] | select((.body // "") | test("\\S")) | (.created_at | epoch) as $t
+      | select($t <= $c) | {t: $t, x: "- \(.user.login) commented: \(.body)"}'
+    # only the last n reviews can be in the window: inline comments are fetched for those only (one call each).
+    # One jq per review builds the item; the review id is validated before it goes into a path.
+    all_pages "/repos/${REPO}/pulls/${pr}/reviews" | jq -sr --arg s "${since}" --argjson n "${n}" "${JQ_EPOCH}"'
+      ($s | epoch) as $c | [.[][] | select(.submitted_at != null) | (.submitted_at | epoch) as $t | select($t <= $c)
+        | {t: $t, id: (.id | tostring), h: "- \(.user.login) reviewed (\(.state))", b: (.body // "")}]
+      | sort_by(.t) | .[-$n:] | .[] | "\(.id) \(tojson)"' |
+      while read -r id head; do
+        [[ "${id}" =~ ^[0-9]{1,15}$ ]] || continue
+        api GET "/repos/${REPO}/pulls/${pr}/reviews/${id}/comments" | jq -c --argjson r "${head}" '
+          [.[] | "  - on `\(.path)` line \(.line // .position // .original_line // .original_position): \(.body)"] as $in
+          | if ($r.b | test("\\S")) then ["\($r.h): \($r.b)"] + $in
+            elif ($in | length) > 0 then ["\($r.h) with inline comments:"] + $in else empty end
+          | {t: $r.t, x: join("\n")}'
       done
-  } | jq -rs --argjson n "${n}" 'sort_by(.t) | .[-$n:] | .[].x' | sed '/^- [^:]*: *$/d'
+  } | jq -rs --argjson n "${n}" 'sort_by(.t) | .[-$n:] | .[].x'
 }
 
 # linked_issue <pr json> -> the issue number the PR resolves: from the card file issue_job wrote, else "Closes #N"
@@ -585,6 +609,7 @@ linked_issue() {
 
 # clip <text> <max> [tail]: at most max characters, with a marker; "tail" keeps the end (newest thread items)
 clip() {
+  local LC_ALL=C.UTF-8   # count and cut characters, not bytes: a cut never splits a UTF-8 character
   local t=$1 max=$2
   (( ${#t} <= max )) && { printf '%s' "${t}"; return; }
   (( max > 40 )) || { printf '%s' "${t:0:max}"; return; }
