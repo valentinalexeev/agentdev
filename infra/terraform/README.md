@@ -80,7 +80,8 @@ Installing agentdev onto the cluster is phase 2 (Ansible, `infra/ansible/`). For
 
 ## Cluster add-ons (#208)
 
-`gateway_enabled`, `enable_managed_prometheus`, `enable_filestore_csi` and `monitoring_components` switch GKE add-ons
-that agentdev does not always use. The defaults keep what GKE gives a new cluster, so an existing plan shows no
-change. Cloud Logging is not an input: it holds the security events. How to use them: `docs/admin.md`, "Make the
-system pool smaller".
+The cluster is lean by default, so the platform fits on one small system node: Managed Prometheus and the Filestore
+CSI driver are off, `monitoring_components` is `["SYSTEM_COMPONENTS"]`, and the GKE load balancer and Gateway API are on
+only when `public_hosts` is set (`gateway_enabled`). Each input can be set back to keep an older cluster as it was.
+Cloud Logging is not an input: it holds the security events. How to use them: `docs/admin.md`, "Make the system pool
+smaller".

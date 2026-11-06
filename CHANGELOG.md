@@ -6,13 +6,22 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
+  `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
+  API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
+  system node when all agents are idle. Cloud Logging is unchanged. The next `terraform plan` of an existing instance
+  shows in-place cluster updates (no node pool is replaced). To keep the old cluster, set `enable_managed_prometheus
+  = true`, `enable_filestore_csi = true`, `monitoring_components = null` and `gateway_enabled = true`. Re-run:
+  Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
+
 ### Added
 - Terraform cluster add-on inputs (#208): `gateway_enabled` (GKE load balancer and Gateway API; `false` only with an
   empty `public_hosts`, for deployments with an external ingress), `enable_managed_prometheus`,
-  `enable_filestore_csi` and `monitoring_components` (default `null`: the GKE list). The defaults are what a new
-  cluster has, so existing instances show no change. A deployment can now shrink the system pool without patching
-  the module. Cloud Logging stays fixed: it carries the security events. Docs: `docs/admin.md` "Make the system pool
-  smaller"; the deployment template has commented pass-through lines. Re-run: Terraform module only.
+  `enable_filestore_csi` and `monitoring_components`. With these inputs a deployment can shrink the system pool
+  without patching the module; the lean defaults are in the BREAKING entry above.
+  Cloud Logging stays fixed: it carries the security events. Docs: `docs/admin.md` "Make the system pool smaller"; the
+  deployment template has commented pass-through lines.
 - External ingress (#160): Ansible `ingress.mode: gateway | external` (default `gateway`, so current instances do
   not change). With `external`, your own reverse proxy (for example a tailnet ingress) publishes the hosts: the
   playbook makes no Gateway, HTTPRoute or managed certificate, and Terraform `public_hosts` can stay empty (no static
