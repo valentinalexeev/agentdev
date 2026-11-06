@@ -24,6 +24,14 @@ You cannot push. To turn a result into work, file an issue on the forge with the
     "\$FORGE_URL/api/v1/repos/${REPO}/issues" -d '{"title":"...","body":"..."}'
 Use the Task format (What, Acceptance criterion, Open decisions) and leave assignment to the person.
 EOF
+# harness guide (#206) of the agent this session runs as: same text as the autonomous loop, appended after the
+# session rules. The session differs in one point, stated here: it has a read-only forge token and never pushes.
+GUIDE_FILE="${GUIDE_FILE:-/etc/agentdev/guide/guide.md}"
+if [[ -s "${GUIDE_FILE}" ]]; then
+  { printf '\nThe guide below is written for the autonomous agent. In this session you have the read-only forge token\n'
+    printf 'above for issues and comments, and you never push.\n\n'
+    head -c 8000 "${GUIDE_FILE}"; } >> /state/session-prompt.md
+fi
 
 rc=()
 [[ "${REMOTE_CONTROL:-false}" == true ]] && rc=(--remote-control)   # Claude app / claude.ai/code (#26); needs a subscription login

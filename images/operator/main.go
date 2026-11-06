@@ -63,24 +63,26 @@ func main() {
 		os.Exit(1)
 	}
 	r := &AgentReconciler{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), D: Defaults{
-		WorkerImage:     env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
-		ForgeImage:      env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
-		PullPolicy:      env("IMAGE_PULL_POLICY", "IfNotPresent"),
-		ForgeURL:        os.Getenv("FORGE_URL"),
-		ForgePublicURL:  os.Getenv("FORGE_PUBLIC_URL"),
-		GitHubURL:       env("GITHUB_URL", "https://github.com"),
-		Reviewer:        os.Getenv("REVIEWER"),
-		BotboardURL:     os.Getenv("BOTBOARD_URL"),
-		PollSeconds:     env("POLL_SECONDS", "20"),
-		IdleSeconds:     env("IDLE_SECONDS", "900"),
-		Approvals:       env("APPROVALS", "false"),
-		ApprovalsURL:    os.Getenv("APPROVALS_URL"),
-		ApprovalTimeout: env("APPROVAL_TIMEOUT_MINUTES", "30"),
-		EgressProxy:     os.Getenv("EGRESS_PROXY"),
-		ClaudeProxyURL:  os.Getenv("CLAUDE_PROXY_URL"),
-		CostLabels:      parseCostLabels(os.Getenv("COST_LABELS")),
-		StorageClass:    os.Getenv("AGENT_STORAGE_CLASS"), // #173; empty: cluster default
-		StateStorage:    env("AGENT_STATE_STORAGE", "10Gi"),
+		WorkerImage:      env("WORKER_IMAGE", "ghcr.io/valentinalexeev/agentdev-worker:latest"),
+		ForgeImage:       env("FORGE_IMAGE", "ghcr.io/valentinalexeev/agentdev-forge:latest"),
+		PullPolicy:       env("IMAGE_PULL_POLICY", "IfNotPresent"),
+		ForgeURL:         os.Getenv("FORGE_URL"),
+		ForgePublicURL:   os.Getenv("FORGE_PUBLIC_URL"),
+		GitHubURL:        env("GITHUB_URL", "https://github.com"),
+		Reviewer:         os.Getenv("REVIEWER"),
+		BotboardURL:      os.Getenv("BOTBOARD_URL"),
+		PollSeconds:      env("POLL_SECONDS", "20"),
+		IdleSeconds:      env("IDLE_SECONDS", "900"),
+		Approvals:        env("APPROVALS", "false"),
+		ApprovalsURL:     os.Getenv("APPROVALS_URL"),
+		ApprovalTimeout:  env("APPROVAL_TIMEOUT_MINUTES", "30"),
+		EgressProxy:      os.Getenv("EGRESS_PROXY"),
+		ClaudeProxyURL:   os.Getenv("CLAUDE_PROXY_URL"),
+		CostLabels:       parseCostLabels(os.Getenv("COST_LABELS")),
+		StorageClass:     os.Getenv("AGENT_STORAGE_CLASS"), // #173; empty: cluster default
+		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
+		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
+		ExecNS:           execNS,
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

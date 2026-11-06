@@ -59,6 +59,9 @@ spec:
         volumeMounts:
         - {name: state, mountPath: /state}
         - {name: claude, mountPath: /home/node/.claude}
+        - {name: guide, mountPath: /etc/agentdev/guide, readOnly: true}   # harness guide of CHAT_AGENT (#206)
       volumes:
       - {name: state, emptyDir: {}}    # a fresh clone per session
       - {name: claude, emptyDir: {}}
+      - name: guide                    # written by the operator; optional: no guide, no section
+        configMap: {name: agentdev-guides, optional: true, defaultMode: 0444, items: [{key: "${CHAT_AGENT}", path: guide.md}]}

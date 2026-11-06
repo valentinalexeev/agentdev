@@ -32,6 +32,22 @@ carries untrusted text from all earlier rounds.
 An agent works on several items at once (`MAX_CONCURRENT`, default 2), each in its own git worktree. A failed
 item is retried later with a backoff, not in a tight loop.
 
+### What the agent knows about the harness
+
+Every Claude run gets a short **harness guide** in its system prompt, after the security rules (#206). It tells the
+agent that it runs under agentdev and has no credentials, no push, no direct internet and no SSH, and what to do
+instead: commit and let the sidecar push, write infrastructure code for an executor, ask for a host or tool rather than
+work around a refusal. The second part is specific to the agent: repository, forge, reviewer, approvals on or off, the
+egress hosts it may reach, the executors that act on its repository, and (added by the loop) its turn limit, tool
+list and MCP tools.
+
+The operator writes the guide from its own configuration only, never from repository content or model output, and
+checks every value against a pattern before it goes in. It is one key per agent in the ConfigMap `agentdev-guides`,
+mounted read-only into the agent container; the agent cannot change it. The text stays short (about 500 tokens with
+the defaults, capped at 6 000 bytes). An interactive session gets the guide of the agent it runs as. The repository's
+own `CLAUDE.md` and `AGENTS.md` stay the project's rules. A section that project members can edit comes with the
+Project object (#54); it is added to this guide and never replaces it.
+
 ```mermaid
 flowchart LR
   you((people)) -- issues, reviews --> forge[forge<br/>repo + issues]

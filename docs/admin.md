@@ -113,6 +113,19 @@ only when the agents have no job.
    `kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT`
    The output shows one JSON line for each action that a guardrail stopped.
 
+### See the harness guide of an agent
+
+The operator writes a harness guide for each agent (#206). The guide tells the agent what agentdev gives it and what
+it does not give it. The loop adds the guide to the system prompt of each Claude run.
+
+1. Run this command:
+   `kubectl -n coding-agents get configmap agentdev-guides -o jsonpath='{.data.<name>}'`
+   The output shows the guide of the agent `<name>`.
+2. To change the list of hosts in the guide, change the egress allow-list. Refer to *Egress allow-list*.
+   The operator writes the guide again on the next reconcile.
+
+The fixed part of the guide is in the operator image. You cannot edit it.
+
 ### Reference: the agent pod
 
 | Item | Value |
@@ -122,6 +135,7 @@ only when the agents have no job.
 | The sidecar refuses a `git push` | to a branch outside `agent/<name>/*`; that touches `PROTECTED_PATHS` (default: the workflow directories); of more than `MAX_PUSH_MB` (50) |
 | Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
 | Egress | through `egress-proxy` only (`HTTPS_PROXY`), to the hosts of the allow-list. Refer to *Egress allow-list* |
+| Harness guide (#206) | ConfigMap `agentdev-guides`, key `<name>`, mounted read-only at `/etc/agentdev/guide/guide.md` in the `agent` container only |
 | Sidecar image | on `kind`, `./run.sh 06` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
 
 | Setting | `kind` | GKE (Ansible) |

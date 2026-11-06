@@ -364,6 +364,8 @@
             AGENT_STORAGE_CLASS: "{{ agent_storage_class }}"
             AGENT_STATE_STORAGE: "{{ agent_state_storage }}"
             EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
+            # harness guide (#206): the same list as the agents' egress proxy, for the text only
+            AGENT_EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}"
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"

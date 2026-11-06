@@ -16,7 +16,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -37,6 +39,9 @@ type Defaults struct {
 	CostLabels map[string]string
 	// agent volume (#173): StorageClass (empty: cluster default) and size of the one state claim
 	StorageClass, StateStorage string
+	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
+	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
+	AgentEgressHosts, ExecNS string
 }
 
 type AgentReconciler struct {
@@ -59,7 +64,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	l := log.FromContext(ctx)
 	var a v1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206)
+			return ctrl.Result{}, r.writeGuide(ctx, req.Namespace, req.Name, "")
+		}
+		return ctrl.Result{}, err
 	}
 	// second line of defence behind the CRD rules: never mount another agent's credentials (fail closed)
 	if msg := secretsBound(&a); msg != "" {
@@ -77,6 +85,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return controllerutil.SetControllerReference(&a, svc, r.Scheme())
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
+	}
+
+	// harness guide (#206): written before the pod that mounts it; the mount is optional, so a failure only delays it
+	execs, err := r.executorsFor(ctx, &a)
+	if err == nil {
+		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs))
+	}
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("harness guide: %w", err)
 	}
 
 	if wait, err := r.relayout(ctx, &a); err != nil || wait {
@@ -208,8 +225,31 @@ func equalStatus(x, y v1.AgentStatus) bool {
 }
 
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
-		Named("agent").Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{})
+	if r.D.ExecNS != "" {
+		// an Executor changes the harness guide of the agents on its repository (#206)
+		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))
+	}
+	return b.Named("agent").Complete(r)
+}
+
+// agentsOfExecutor: the Agents that work on the Executor's repository.
+func (r *AgentReconciler) agentsOfExecutor(ctx context.Context, o client.Object) []ctrlreconcile.Request {
+	e, ok := o.(*v1.Executor)
+	if !ok {
+		return nil
+	}
+	var l v1.AgentList
+	if err := r.List(ctx, &l); err != nil {
+		return nil
+	}
+	var out []ctrlreconcile.Request
+	for _, a := range l.Items {
+		if a.Spec.Repo == e.Spec.Repo {
+			out = append(out, ctrlreconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+		}
+	}
+	return out
 }
 
 // secretsBound returns why the Agent's Secret references are not allowed, or "". An agent may use only its own

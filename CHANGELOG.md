@@ -16,6 +16,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Harness guide for every agent (#206). The operator writes a short guide per agent (ConfigMap `agentdev-guides`, key
+  = agent name) from its own configuration: what agentdev does not give (credentials, push, direct internet, SSH,
+  apply) and what it gives (sidecar push, approvals, egress hosts, executors of the repository, credential proxy). The
+  agent pod mounts its own key read-only at `/etc/agentdev/guide`; the loop appends it to the system prompt of every
+  run after the security rules, with its turn limit, tool list and MCP tools. Interactive sessions get the guide of
+  their agent. New operator environment variable `AGENT_EGRESS_HOSTS` (set by Ansible and `./run.sh 12` from the
+  egress allow-list); the operator Role gets `get`/`update` on `agentdev-guides`. Docs: concepts "What the agent
+  knows about the harness", admin "See the harness guide of an agent".
 - Terraform cluster add-on inputs (#208): `gateway_enabled` (GKE load balancer and Gateway API; `false` only with an
   empty `public_hosts`, for deployments with an external ingress), `enable_managed_prometheus`,
   `enable_filestore_csi` and `monitoring_components`. With these inputs a deployment can shrink the system pool
