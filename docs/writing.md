@@ -117,6 +117,8 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | pull request (PR) | a request to merge a branch |
 | quota | a limit for the pods, the CPU and the memory of the agents namespace |
 | router | the agentdev service that receives forge webhooks and wakes agents |
+| public port | the port of a service that a Gateway or a reverse proxy publishes (router: 8080, webhooks only) |
+| internal port | the port of a service that only callers in the cluster use (router: 8081, `/status`, `/healthz`, `/register`, `/idle`) |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
@@ -134,6 +136,8 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | sidecar | a second container in the agent pod |
 | Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
+| billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
+| quota project | the Google Cloud project that a Google API charges for a request |
 | token budget | the number of Claude tokens that one agent can use in 24 hours |
 | specification (spec) | the project file, for example `my-project.yaml` |
 | sync | one run of `scripts/mcp-sync.sh` |

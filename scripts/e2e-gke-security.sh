@@ -316,13 +316,17 @@ if section https; then
       code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$HOST$p")
       [ "$code" = 404 ]; check $? "https://$HOST$p is not exposed (404)" "HTTP $code"
     done
-    if [ -n "$WEBHOOK_HOST" ]; then
-      code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -X POST -H 'X-GitHub-Event: ping' -d '{}' "https://$WEBHOOK_HOST/hook")
-      case "$code" in 2??) fail "https://$WEBHOOK_HOST/hook accepts an unsigned body (HTTP $code)";; 000) fail "https://$WEBHOOK_HOST/hook gives no answer";; *) pass "https://$WEBHOOK_HOST/hook refuses an unsigned body (HTTP $code)";; esac
-      code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$WEBHOOK_HOST/status")
-      [ "$code" = 404 ]; check $? "https://$WEBHOOK_HOST/status is not exposed (404)" "HTTP $code"
-    else skip "webhook host checks (no --webhook-host)"; fi
   fi
+  # the webhook host (#214): also without --host, for example a forwarder that publishes only the webhook host
+  if [ -n "$WEBHOOK_HOST" ]; then
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -X POST -H 'X-GitHub-Event: ping' -d '{}' "https://$WEBHOOK_HOST/hook")
+    case "$code" in 2??) fail "https://$WEBHOOK_HOST/hook accepts an unsigned body (HTTP $code)";; 000) fail "https://$WEBHOOK_HOST/hook gives no answer";; *) pass "https://$WEBHOOK_HOST/hook refuses an unsigned body (HTTP $code)";; esac
+    # the router answers 404 on its public port for anything but /hook, whatever the reverse proxy publishes
+    for p in /status /healthz /internal/x /register /idle; do
+      code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "https://$WEBHOOK_HOST$p")
+      [ "$code" = 404 ]; check $? "https://$WEBHOOK_HOST$p is not exposed (404, $INGRESS ingress)" "HTTP $code"
+    done
+  else skip "webhook host checks (no --webhook-host)"; fi
 fi
 
 # ---------------------------------------------------------------- API permission check (R42, R90, #57, #87)

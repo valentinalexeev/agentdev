@@ -253,7 +253,9 @@ resource "google_secret_manager_secret" "platform" {
 }
 
 # ---------- budget ----------
+# create_budget = false (#199): no budget, no budget channels, no billing IAM.
 resource "google_billing_budget" "monthly" {
+  count           = var.create_budget ? 1 : 0
   billing_account = var.billing_account_id
   display_name    = "agentdev ${var.project_id} monthly"
   budget_filter {
@@ -276,9 +278,25 @@ resource "google_billing_budget" "monthly" {
 }
 
 resource "google_monitoring_notification_channel" "budget" {
-  for_each     = toset(var.budget_alert_emails)
+  for_each     = var.create_budget ? toset(var.budget_alert_emails) : toset([])
   display_name = "budget ${each.value}"
   type         = "email"
   labels       = { email_address = each.value } # channel configuration, not resource labels
   user_labels  = local.labels                   # #184
+}
+
+# The automation account plans and applies from CI and must read and update the budget (#199).
+# roles/billing.costsManager is the smallest predefined role with billing.budgets.get/update on the billing account.
+# The identity of the first apply needs billing.accounts.setIamPolicy (normally the owner); CI cannot grant it.
+resource "google_billing_account_iam_member" "automation_budgets" {
+  count              = var.create_budget ? 1 : 0
+  billing_account_id = var.billing_account_id
+  role               = "roles/billing.costsManager"
+  member             = "serviceAccount:${google_service_account.automation.email}"
+}
+
+# The budget got count in #199; existing state moves without a replace.
+moved {
+  from = google_billing_budget.monthly
+  to   = google_billing_budget.monthly[0]
 }

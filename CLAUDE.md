@@ -86,12 +86,25 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   | `feature/` | new behaviour | `feature/57-agents-api` |
   | `bugfix/` | a fix to something not yet released | `bugfix/59-operator-replicas` |
   | `hotfix/` | an urgent fix to a released version, incidents | `hotfix/63-router-crash` |
-  | `release/` | cutting a release (`release/0.2.0`) | `release/0.2.0` |
   | `docs/` | documentation only | `docs/60-owner-credentials` |
-  | `chore/`, `ci/` | tooling, dependencies, workflows | `ci/64-api-image` |
+  | `chore/`, `ci/` | tooling, dependencies, workflows; `chore/release-X.Y.Z` cuts a release | `ci/64-api-image` |
+  | `merge/` | a forward merge between release lines (`scripts/release-lines.sh forward`) | `merge/release-1.0-into-main` |
 
-  Branches start from `main` and PRs target `main` (gitflow names on a single integration branch; a separate
-  `develop` branch is not used unless the owner decides otherwise).
+  Work branches start from, and PRs target, the **line of the issue's milestone**
+  ([ADR 0004](docs/adr/0004-branching-and-release-lines.md)): `main` for the next minor, `release/X.Y` for a frozen
+  or released line and its patches, `next/X.0` for breaking work for the next major. No `develop` branch.
+- **Release lines** (ADR 0004). The long-lived line branches form one chain by version:
+  `release/1.0` → `release/1.1` → `main` → `next/2.0` (`scripts/release-lines.sh list`).
+  - A fix goes into the lowest supported line that has the defect. Then it is merged forward one hop at a time
+    through a `merge/` PR (`scripts/release-lines.sh forward <lower>`). Merge commits only: never rebase a line,
+    never cherry-pick upward. A fix that does not apply higher up is still merged forward, resolved to the higher
+    line's content.
+  - Every line contains every lower line (`scripts/release-lines.sh check`). The `Release lines` workflow warns on a
+    pending hop and fails a release PR whose lower lines are not merged in.
+  - A forward-merge PR with no conflict resolution and green CI may be merged by the bot **without** a fresh owner
+    approval (owner, ADR 0004). This is the only exception to the approval rule below. A hop with a resolved
+    conflict needs the normal approval.
+  - Support window: the latest minor and the one before it. Older lines get security fixes only, on request.
 - **Commit messages follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):**
   `<type>[(scope)][!]: <description>`, imperative, lower-case, no trailing period, then an optional body and footers.
   Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Scope is the
@@ -213,8 +226,13 @@ required inputs.
 
 ## 7. Versioning and releases (strict SemVer)
 
-- Releases are git tags `vMAJOR.MINOR.PATCH` on `main`. Images are published with the same version (#28).
-  Deployments pin a tag; nothing deploys from a branch.
+- Releases are git tags `vMAJOR.MINOR.PATCH` on the line branch `release/MAJOR.MINOR`, never on `main` or `next/*`
+  (ADR 0004). Images are published with the same version (#28). Deployments pin a tag; nothing deploys from a branch.
+- **Patches get no branch.** Patch numbers only go up within a line. A patch tag is an explicit owner decision and
+  covers every fix merged on the line since its previous tag. Patch work uses the rolling milestone `X.Y.x`, renamed
+  to the real version at tagging.
+- **After `1.0.0`:** breaking changes go only to `next/X.0` (MAJOR), features and deprecations only to a minor,
+  patches take backwards-compatible fixes only.
 - **What counts as the public interface:** Terraform module variables and outputs, Ansible instance vars,
   manifest template variables, image entrypoints and environment variables, the router and listener HTTP API.
 - **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
@@ -223,5 +241,9 @@ required inputs.
 - Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
   (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
   **BREAKING** with the migration step.
-- Cutting a release: a PR from `release/X.Y.Z` (commit `chore(release): vX.Y.Z`) that moves `Unreleased` to the new version with the date and bumps any pinned
-  examples; after the owner merges it, the owner (or the bot on explicit permission) pushes the tag.
+- Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
+- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
+  `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
+  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward.
+- `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
+  of lower lines in version order.

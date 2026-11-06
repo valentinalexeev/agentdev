@@ -74,7 +74,13 @@ CAUTION: The bootstrap makes a project and links billing. The owner of the billi
    Otherwise the budget fails with `400 Request contains an invalid argument` and no detail, after all other
    resources are made. With user credentials (ADC), the budget can also fail with a 403
    `billingbudgets.googleapis.com requires a quota project`. Then set a quota project before plan and apply:
-   `export GOOGLE_CLOUD_QUOTA_PROJECT=<project_id> GOOGLE_USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT=<project_id>`
+   `export GOOGLE_CLOUD_QUOTA_PROJECT=<project_id> USER_PROJECT_OVERRIDE=true GOOGLE_BILLING_PROJECT=<project_id>`
+   The example `deploy.yml` sets these variables for CI (#199).
+
+   CAUTION: The first apply gives the automation account the role `roles/billing.costsManager` on the billing
+   account, so that CI can read the budget. The identity of the first apply must have
+   `billing.accounts.setIamPolicy` on the billing account. Usually this is the owner. CI cannot give this role to
+   itself. If you do not want a budget, set `create_budget = false`. Then Terraform makes no budget and no billing IAM.
 5. Examine the plan. For the costs, refer to `infra/terraform/README.md`.
 6. Run `terraform apply plan.bin` (the owner does this step the first time).
 7. Show the values: `terraform output ingress`, `terraform output webhook_ip` and

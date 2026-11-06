@@ -101,6 +101,12 @@ variable "monitoring_components" {
   }
 }
 
+variable "create_budget" {
+  description = "Create the monthly billing budget, its notification channels and the roles/billing.costsManager grant for the automation account on billing_account_id (#199). The first apply needs billing.accounts.setIamPolicy on the billing account. false = none of these."
+  type        = bool
+  default     = true
+}
+
 variable "budget_amount_usd" {
   description = "Monthly billing budget, in budget_currency (the name is historical); alerts at 50/90/100%. The budget alerts, it does not stop spending."
   type        = number

@@ -541,6 +541,125 @@ new_feedback() {  # new_feedback <pr> <since>  -> markdown list of feedback by o
   } | sed '/^- [^:]*: *$/d'
 }
 
+# ---------- feedback background (#223) ----------
+# Every Claude run is a fresh process. Without background a feedback run sees only the PR title and the new items, so
+# from round 2 on it can miss the original requirement or undo an earlier decision. The background is the linked
+# issue, the PR description and the last thread items at or before the cursor, rebuilt from the forge each run and
+# capped: FEEDBACK_CONTEXT_ITEMS thread items, FEEDBACK_CONTEXT_CHARS characters in total. Values from the environment
+# are plain integers or the default (never into arithmetic otherwise, review #102).
+FEEDBACK_CONTEXT_ITEMS="${FEEDBACK_CONTEXT_ITEMS:-20}"
+FEEDBACK_CONTEXT_CHARS="${FEEDBACK_CONTEXT_CHARS:-12000}"
+[[ "${FEEDBACK_CONTEXT_ITEMS}" =~ ^[0-9]{1,4}$ ]] || FEEDBACK_CONTEXT_ITEMS=20
+[[ "${FEEDBACK_CONTEXT_CHARS}" =~ ^[0-9]{1,7}$ ]] || FEEDBACK_CONTEXT_CHARS=12000
+FEEDBACK_CONTEXT_ITEMS=$((10#${FEEDBACK_CONTEXT_ITEMS})); FEEDBACK_CONTEXT_CHARS=$((10#${FEEDBACK_CONTEXT_CHARS}))
+
+# jq: a forge timestamp as Unix seconds. Gitea answers with a local offset (+01:00), GitHub and the cursor with Z, so
+# strings do not compare; an unparsable value gives no output (the item is skipped).
+JQ_EPOCH='def epoch: sub("\\.[0-9]+"; "") | capture("^(?<d>[0-9-]{10}T[0-9:]{8})(?<z>Z|[+-][0-9]{2}:[0-9]{2})$")
+  | ((.d + "Z") | fromdateiso8601) - (if .z == "Z" then 0
+      else ((.z[1:3] | tonumber) * 3600 + (.z[4:6] | tonumber) * 60) * (if .z[0:1] == "+" then 1 else -1 end) end);'
+
+# all_pages <path>: every page of a list call, as one JSON array per line (at most 10 pages, so a huge thread stays
+# bounded; a list sorted oldest first then loses its newest items only past 10 pages)
+all_pages() {
+  local p=1 page
+  while (( p <= 10 )); do
+    page=$(api GET "$1?$(per_page 50)&page=${p}") || return 0
+    printf '%s\n' "${page}"
+    [[ "$(jq 'length' <<<"${page}" 2>/dev/null)" == 50 ]] || return 0
+    p=$((p + 1))
+  done
+}
+
+# earlier_feedback <pr> <since> -> markdown list of the last FEEDBACK_CONTEXT_ITEMS thread items at or before <since>
+# (comments and reviews by anyone, the agent's own replies too), oldest first, in the format of new_feedback
+earlier_feedback() {
+  local pr=$1 since=$2 n=${FEEDBACK_CONTEXT_ITEMS} id head
+  (( n > 0 )) || return 0
+  {
+    all_pages "/repos/${REPO}/issues/${pr}/comments" | jq -c --arg s "${since}" "${JQ_EPOCH}"'
+      ($s | epoch) as $c | .[] | select((.body // "") | test("\\S")) | (.created_at | epoch) as $t
+      | select($t <= $c) | {t: $t, x: "- \(.user.login) commented: \(.body)"}'
+    # only the last n reviews can be in the window: inline comments are fetched for those only (one call each).
+    # One jq per review builds the item; the review id is validated before it goes into a path.
+    all_pages "/repos/${REPO}/pulls/${pr}/reviews" | jq -sr --arg s "${since}" --argjson n "${n}" "${JQ_EPOCH}"'
+      ($s | epoch) as $c | [.[][] | select(.submitted_at != null) | (.submitted_at | epoch) as $t | select($t <= $c)
+        | {t: $t, id: (.id | tostring), h: "- \(.user.login) reviewed (\(.state))", b: (.body // "")}]
+      | sort_by(.t) | .[-$n:] | .[] | "\(.id) \(tojson)"' |
+      while read -r id head; do
+        [[ "${id}" =~ ^[0-9]{1,15}$ ]] || continue
+        api GET "/repos/${REPO}/pulls/${pr}/reviews/${id}/comments" | jq -c --argjson r "${head}" '
+          [.[] | "  - on `\(.path)` line \(.line // .position // .original_line // .original_position): \(.body)"] as $in
+          | if ($r.b | test("\\S")) then ["\($r.h): \($r.b)"] + $in
+            elif ($in | length) > 0 then ["\($r.h) with inline comments:"] + $in else empty end
+          | {t: $r.t, x: join("\n")}'
+      done
+  } | jq -rs --argjson n "${n}" 'sort_by(.t) | .[-$n:] | .[].x'
+}
+
+# linked_issue <pr json> -> the issue number the PR resolves: from the card file issue_job wrote, else "Closes #N"
+linked_issue() {
+  local pr n=""
+  pr=$(jq -r '.number // ""' <<<"$1")
+  [[ "${pr}" =~ ^[0-9]{1,15}$ && -r "${STATE}/seen/pr-${pr}.board" ]] && read -r n _ < "${STATE}/seen/pr-${pr}.board"
+  [[ "${n}" =~ ^[1-9][0-9]{0,15}$ ]] || n=$(jq -r '.body // ""' <<<"$1" \
+    | grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[1-9][0-9]{0,15}\b' | head -n1 | grep -oE '[0-9]+$')
+  [[ "${n}" =~ ^[1-9][0-9]{0,15}$ ]] && echo "${n}"
+}
+
+# clip <text> <max> [tail]: at most max characters, with a marker; "tail" keeps the end (newest thread items)
+clip() {
+  local LC_ALL=C.UTF-8   # count and cut characters, not bytes: a cut never splits a UTF-8 character
+  local t=$1 max=$2
+  (( ${#t} <= max )) && { printf '%s' "${t}"; return; }
+  (( max > 40 )) || { printf '%s' "${t:0:max}"; return; }
+  if [[ "${3:-}" == tail ]]; then printf '[... older items cut]\n%s' "${t: -$((max - 23))}"
+  else printf '%s\n[... cut]' "${t:0:$((max - 10))}"; fi
+}
+
+# feedback_background <pr json> <since> -> the Background text for the feedback prompt, at most FEEDBACK_CONTEXT_CHARS
+# characters (the fixed headings included), or nothing. Issue and PR description get at most a quarter each; the
+# thread gets the rest and keeps its newest items.
+feedback_background() {
+  local pull=$1 since=$2 cap=${FEEDBACK_CONTEXT_CHARS} pr n issue="" desc thread out="" part
+  (( cap > 0 )) || return 0
+  pr=$(jq -r '.number // ""' <<<"${pull}"); [[ "${pr}" =~ ^[0-9]{1,15}$ ]] || return 0
+  if n=$(linked_issue "${pull}"); then
+    issue=$(api GET "/repos/${REPO}/issues/${n}" | jq -r '"Title: \(.title // "")\n\n\(.body // "")"' 2>/dev/null)
+    [[ -n "${issue}" ]] && { part="## Issue #${n}"$'\n'"$(clip "${issue}" $((cap / 4)))"; out+="${part}"$'\n\n'; }
+  fi
+  desc=$(jq -r '.body // ""' <<<"${pull}")
+  [[ "${desc}" =~ [^[:space:]] ]] && { part="## PR description"$'\n'"$(clip "${desc}" $((cap / 4)))"; out+="${part}"$'\n\n'; }
+  thread=$(earlier_feedback "${pr}" "${since}")
+  if [[ -n "${thread}" ]]; then
+    local room=$(( cap - ${#out} - 32 ))
+    (( room > 0 )) && out+="## Earlier review rounds"$'\n'"$(clip "${thread}" "${room}" tail)"
+  fi
+  out=${out%$'\n\n'}
+  clip "${out}" "${cap}"
+}
+
+# feedback_prompt <pr> <title> <background> <new feedback> <thread ask> -> the prompt of a feedback run. Background
+# and new feedback are both fenced as untrusted; only the new feedback is to be answered.
+feedback_prompt() {
+  local pr=$1 title=$2 bg=$3 fb=$4 ask=$5
+  printf '%s' "You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}")."
+  [[ -n "${bg}" ]] && printf '%s' "
+
+Background: the issue this PR resolves, the PR description and earlier review rounds. It is already handled and
+given for context only: keep its decisions and requirements, but do not reply to it.
+
+$(untrusted "${bg}")"
+  printf '%s' "
+
+New feedback from reviewers. Address and reply to these items only:
+
+$(untrusted "${fb}")
+
+Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
+Do not push. Finish with a short reply to the reviewers about the new feedback only.${ask}"
+}
+
 # ---------- security advisory threads (GitHub, #110 item 4) ----------
 # Review comments of github-advanced-security[bot] (code scanning) are answered in their own thread with exactly one
 # outcome. The thread ids and paths come from the forge JSON (validated), never from the model. The model proposes an
@@ -635,12 +754,14 @@ board_finish() {
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed=""
+  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
   [[ -z "${fb}" ]] && return
   threads=$(security_threads "${pr}" "${since}")
-  checks=$(failed_checks "$(api GET "/repos/${REPO}/pulls/${pr}")")
+  pull=$(api GET "/repos/${REPO}/pulls/${pr}") || pull='{}'
+  checks=$(failed_checks "${pull}")
+  bg=$(feedback_background "${pull}" "${since}")   # #223: the issue, the PR description, earlier rounds
   [[ -n "${checks}" ]] && fb+=$'\n'"Failing checks on the head:"$'\n'"${checks}"
   if [[ -n "${threads}" ]]; then
     thread_ask="
@@ -654,13 +775,7 @@ for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
-  result=$(run_claude "${dir}" "You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}").
-Reviewers left this feedback:
-
-$(untrusted "${fb}")
-
-Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
-Do not push. Finish with a short reply to the reviewers.${thread_ask}") || claude_rc=$?
+  result=$(run_claude "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
   before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
   if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then

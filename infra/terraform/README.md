@@ -15,7 +15,8 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
 | Managed certificate, SSL policy | only with `public_hosts`: Google-managed certificate for those names, TLS 1.2+ `MODERN` (#120) |
 | Cloud Armor (optional) | `cloud_armor = true`: deny bodies over `public_max_request_bytes`, `cloud_armor_requests_per_minute` per IP |
-| Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending) |
+| Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending). Optional: `create_budget = false` skips the budget, its notification channels and the billing IAM (#199) |
+| Billing IAM | with `create_budget` (default): `roles/billing.costsManager` on `billing_account_id` for the automation SA, so CI can read and update the budget (#199). It is the smallest predefined role with `billing.budgets.update`. The identity of the first apply needs `billing.accounts.setIamPolicy` on the billing account (normally the owner); CI cannot grant this role to itself |
 | Labels | `labels` (#184) merged over `service = "agentdev"` on every resource: provider `default_labels`, cluster and node pool `resource_labels`, notification channel `user_labels`. Set `environment` to `dev`, `stage` or `prod` |
 | Automation SA | `agentdev-automation`, least-privilege roles; GitHub Actions on `main` reach it through Workload Identity Federation (no key) |
 
@@ -72,7 +73,7 @@ until the pool has a new node and the pods are rescheduled, usually about a minu
 capacity. Webhooks sent in that gap are lost; agents still pick up their issues at the next poll (`poll_seconds`).
 Agents keep their state on PVCs. Switching the variable replaces the node pool.
 
-GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150.
+GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150. The budget and its billing IAM cost nothing; with `create_budget = false` you get no alerts.
 
 ## Not here
 
@@ -85,3 +86,27 @@ CSI driver are off, `monitoring_components` is `["SYSTEM_COMPONENTS"]`, and the 
 only when `public_hosts` is set (`gateway_enabled`). Each input can be set back to keep an older cluster as it was.
 Cloud Logging is not an input: it holds the security events. How to use them: `docs/admin.md`, "Make the system pool
 smaller".
+
+## Billing budget and CI (#199)
+
+The Billing Budgets API needs a quota project. The example `deploy.yml` sets `GOOGLE_BILLING_PROJECT` and
+`USER_PROJECT_OVERRIDE=true` (the two variables that the google provider reads) and `GOOGLE_CLOUD_QUOTA_PROJECT`
+(for gcloud). Set the same variables when you run plan or apply on your machine.
+
+Migration: if your deployment repository has the workaround resource
+`google_billing_account_iam_member.ci_budgets`, do one of these before the upgrade, else the plan shows two grants:
+
+- Delete the resource block and add this block (as in the template `main.tf`) for one apply. Terraform forgets the
+  old address without a destroy, and the module creates the same grant again:
+
+  ```hcl
+  removed {
+    from = google_billing_account_iam_member.ci_budgets
+    lifecycle {
+      destroy = false
+    }
+  }
+  ```
+- Or move the state to the module address:
+  `terraform state rm google_billing_account_iam_member.ci_budgets`, then
+  `terraform import 'module.agentdev.google_billing_account_iam_member.automation_budgets[0]' "<billing_account_id> roles/billing.costsManager serviceAccount:<automation_service_account>"`.

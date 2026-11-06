@@ -19,7 +19,10 @@
 //     open PRs, changed since it stopped) and scales only those agents to 1, as the webhook path does.
 //   The router keeps no list of stopped agents; Kubernetes is the source of truth, so a router restart loses nothing.
 //
-// Env: PORT (8080), FORGE_SECRETS ("gitea=<secret>,github=<secret>"), REGISTER_TOKEN (agents -> router),
+// Listeners (#214): PORT (8080) is the public webhook port: it serves only the deliveries (POST / and /hook...) and
+// answers 404 for anything else, so a Gateway or reverse proxy that publishes it cannot expose the rest. INTERNAL_PORT
+// (8081) serves everything for in-cluster callers: /healthz, /status, /register, /idle (and the deliveries too).
+// Env: PORT (8080), INTERNAL_PORT (8081), FORGE_SECRETS ("gitea=<secret>,github=<secret>"), REGISTER_TOKEN (agents -> router),
 //      REGISTRATION_TTL_SECONDS (300), K8S_NAMESPACE (agents namespace; scaling is off without it),
 //      K8S_API_URL (default: in-cluster API with the pod's service account),
 //      WAKE_POLL_SECONDS (0 = off), GITEA_URL, GITHUB_API_URL (https://api.github.com), FORGE_POLL_DIR (files of the
@@ -29,6 +32,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 
 const port = Number(process.env.PORT || 8080);
+const internalPort = Number(process.env.INTERNAL_PORT || 8081);
 const ttlMs = Number(process.env.REGISTRATION_TTL_SECONDS || 300) * 1000;
 const registerToken = process.env.REGISTER_TOKEN || '';
 const forgeSecrets = Object.fromEntries((process.env.FORGE_SECRETS || '').split(',').filter(Boolean)
@@ -242,7 +246,9 @@ function readBody(req, limit, cb) {
 
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(obj)); };
 
-http.createServer((req, res) => {
+const isDelivery = (req) => req.method === 'POST' && (req.url === '/' || req.url.startsWith('/hook'));
+
+function handle(req, res) {
   if (req.method === 'GET' && req.url === '/healthz') return json(res, 200, { ok: true });
   if (req.method === 'GET' && req.url === '/status') {
     return json(res, 200, { stats, agents: live().map(({ token, ...r }) => ({ ...r, repos: [...r.repos], ageSeconds: Math.round((Date.now() - r.seen) / 1000) })) });
@@ -282,7 +288,7 @@ http.createServer((req, res) => {
     })().catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 500, { error: 'scale failed' }); }));
   }
 
-  if (req.method === 'POST' && (req.url === '/' || req.url.startsWith('/hook'))) {
+  if (isDelivery(req)) {
     return readBody(req, 5e6, (body) => {
       const f = detectForge(req.headers);
       const secret = f && forgeSecrets[f.forge];
@@ -308,6 +314,11 @@ http.createServer((req, res) => {
   }
 
   json(res, 404, { error: 'not found' });
-}).listen(port, () => log(`listening on :${port}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}; wake poll: ${pollMs && ns ? `every ${pollMs / 1000}s` : 'off'}`));
+}
+
+// public: deliveries only (#214)
+http.createServer((req, res) => (isDelivery(req) ? handle(req, res) : json(res, 404, { error: 'not found' })))
+  .listen(port, () => log(`public (webhooks only) on :${port}`));
+http.createServer(handle).listen(internalPort, () => log(`internal on :${internalPort}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}; wake poll: ${pollMs && ns ? `every ${pollMs / 1000}s` : 'off'}`));
 // never die on a stray async error: log it (an exit would drop every registration and delivery in flight)
 process.on('unhandledRejection', (e) => log(`unhandled: ${e && e.message}`));

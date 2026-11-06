@@ -14,6 +14,21 @@ The loop does two things, again and again:
 2. **Feedback:** new comments or reviews from people on the agent's open PRs → a Claude run on that branch,
    a push and a reply.
 
+Each Claude run is a new process: it keeps no memory of the earlier runs. So the prompt of a feedback run has two
+parts, both fenced as untrusted data (#223):
+
+- **Background**, for context only: the issue the PR resolves (the issue the agent opened the PR for, else
+  `Closes #N` in the PR description), the PR description, and the latest earlier thread items (comments, reviews,
+  inline comments and the agent's own replies). The run keeps the decisions in it but does not reply to it.
+- **New feedback**: the comments and reviews since the last handled round (and failing checks on GitHub). The
+  reply to the reviewers covers these items only.
+
+The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread
+items (default 20) and `FEEDBACK_CONTEXT_CHARS` characters in total (default 12000; `0` turns the background off).
+The issue and the PR description get at most a quarter of that each; when the thread is cut, the oldest items go
+first. Resuming the CLI session per PR was not chosen: the input grows with each round, and the replayed transcript
+carries untrusted text from all earlier rounds.
+
 An agent works on several items at once (`MAX_CONCURRENT`, default 2), each in its own git worktree. A failed
 item is retried later with a backoff, not in a tight loop.
 

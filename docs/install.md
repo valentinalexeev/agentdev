@@ -109,10 +109,18 @@ If you already have a project with billing linked, set `create_project = false` 
 1. In `infra/terraform/bootstrap`, run the bootstrap:
    `terraform apply -var-file=<deployment>/terraform/bootstrap.tfvars`
    The bootstrap makes the project, the billing link and the state bucket.
+   With user credentials, set a quota project first: `export GOOGLE_BILLING_PROJECT=<project_id> USER_PROJECT_OVERRIDE=true`
 
 ### Deploy the instance
 
 WARNING: Do not put secret values in git, in issues or in logs. Put the secret values only in Secret Manager.
+
+NOTE: The Billing Budgets API needs a quota project. Before plan and apply, set
+`GOOGLE_BILLING_PROJECT=<project_id>` and `USER_PROJECT_OVERRIDE=true`. The example `deploy.yml` sets them for CI.
+
+CAUTION: The first apply gives the automation account a role on the billing account (#199). The identity of the
+first apply must have `billing.accounts.setIamPolicy` on the billing account. Usually this is the owner. CI cannot
+give this role to itself. To make no budget and no billing role, set `create_budget = false`.
 
 1. In the deployment repository, run `terraform plan`.
 2. Examine the plan.
