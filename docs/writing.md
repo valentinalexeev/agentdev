@@ -87,6 +87,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 
 | Word | Meaning |
 |---|---|
+| add-on | a GKE feature that runs pods on the cluster nodes (for example Managed Prometheus or the Filestore CSI driver) |
 | agent | one Claude Code worker with its own forge account |
 | Agent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `Agent`) that defines an agent |
 | approval request | a request from an agent for a right it does not have; a person approves or denies it |

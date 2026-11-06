@@ -79,6 +79,14 @@ GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2
 
 Installing agentdev onto the cluster is phase 2 (Ansible, `infra/ansible/`). For the public HTTPS entry point (#120), set `public_hosts`, point DNS `A` records at `webhook_ip` and copy `terraform output ingress` into `instance.yml` (`docs/admin.md`, "Public HTTPS entry point (GKE)").
 
+## Cluster add-ons (#208)
+
+The cluster is lean by default, so the platform fits on one small system node: Managed Prometheus and the Filestore
+CSI driver are off, `monitoring_components` is `["SYSTEM_COMPONENTS"]`, and the GKE load balancer and Gateway API are on
+only when `public_hosts` is set (`gateway_enabled`). Each input can be set back to keep an older cluster as it was.
+Cloud Logging is not an input: it holds the security events. How to use them: `docs/admin.md`, "Make the system pool
+smaller".
+
 ## Billing budget and CI (#199)
 
 The Billing Budgets API needs a quota project. The example `deploy.yml` sets `GOOGLE_BILLING_PROJECT` and

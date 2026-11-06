@@ -17,3 +17,9 @@ budget_amount_usd  = 150     # in budget_currency
 # agent_disk_type     = "pd-standard"
 labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
+# Cluster add-ons (agentdev #208): lean by default (Managed Prometheus, Filestore CSI and the extra monitoring
+# components are off; the load balancer is on only with public_hosts). Set one back to keep an older cluster as it was.
+# enable_managed_prometheus = true
+# enable_filestore_csi      = true
+# monitoring_components     = null   # the GKE default list
+# gateway_enabled           = true   # keep the load balancer without public_hosts

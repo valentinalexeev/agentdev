@@ -67,6 +67,40 @@ variable "system_pool_spot" {
   default     = false
 }
 
+# Cluster add-ons (#208). Lean by default: the system pool is sized for the platform, so add-ons agentdev does not use
+# are off. Every add-on costs CPU and memory on the system pool nodes. Set an input back to keep an old cluster as it was.
+variable "gateway_enabled" {
+  description = "Keep the GKE load balancer controller and the Gateway API channel. null (default): on when public_hosts is set, off when it is empty. true with an empty public_hosts keeps them anyway. false with public_hosts is refused: the Gateway and the managed certificate need the GKE load balancer."
+  type        = bool
+  default     = null
+  validation {
+    condition     = var.gateway_enabled != false || length(var.public_hosts) == 0
+    error_message = "gateway_enabled = false needs an empty public_hosts: the Gateway and the managed certificate need the GKE load balancer."
+  }
+}
+
+variable "enable_managed_prometheus" {
+  description = "Google Managed Service for Prometheus on the cluster (operator and a collector on every node). agentdev does not use it, so it is off by default."
+  type        = bool
+  default     = false
+}
+
+variable "enable_filestore_csi" {
+  description = "Filestore CSI driver add-on (a pod on every node and a controller). agentdev uses persistent disks only, so it is off by default."
+  type        = bool
+  default     = false
+}
+
+variable "monitoring_components" {
+  description = "GKE monitoring components. The default [\"SYSTEM_COMPONENTS\"] leaves out POD, DAEMONSET, DEPLOYMENT and STATEFULSET, which run kube-state-metrics. null keeps the GKE default list. Must include SYSTEM_COMPONENTS. Cloud Logging is not an input: it carries the security events (#70)."
+  type        = list(string)
+  default     = ["SYSTEM_COMPONENTS"]
+  validation {
+    condition     = var.monitoring_components == null || contains(coalesce(var.monitoring_components, []), "SYSTEM_COMPONENTS")
+    error_message = "monitoring_components must include SYSTEM_COMPONENTS (GKE requires it)."
+  }
+}
+
 variable "create_budget" {
   description = "Create the monthly billing budget, its notification channels and the roles/billing.costsManager grant for the automation account on billing_account_id (#199). The first apply needs billing.accounts.setIamPolicy on the billing account. false = none of these."
   type        = bool

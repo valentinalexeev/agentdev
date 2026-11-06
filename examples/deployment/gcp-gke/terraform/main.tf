@@ -39,6 +39,11 @@ module "agentdev" {
   # labels = var.labels
   # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
   # system_pool_spot = var.system_pool_spot
+  # cluster add-ons (agentdev #208): lean by default; uncomment with a ref= that contains #208
+  # gateway_enabled           = var.gateway_enabled
+  # enable_managed_prometheus = var.enable_managed_prometheus
+  # enable_filestore_csi      = var.enable_filestore_csi
+  # monitoring_components     = var.monitoring_components
   # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
   # create_budget = var.create_budget
 }
@@ -126,6 +131,26 @@ variable "system_pool_spot" {
   description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
   type        = bool
   default     = false
+}
+variable "gateway_enabled" {
+  description = "GKE load balancer and Gateway API (agentdev #208). null: on when public_hosts is set. false with public_hosts is refused."
+  type        = bool
+  default     = null
+}
+variable "enable_managed_prometheus" {
+  description = "Google Managed Prometheus (agentdev #208); agentdev does not use it."
+  type        = bool
+  default     = false
+}
+variable "enable_filestore_csi" {
+  description = "Filestore CSI driver (agentdev #208); agentdev uses persistent disks only."
+  type        = bool
+  default     = false
+}
+variable "monitoring_components" {
+  description = "GKE monitoring components (agentdev #208); null keeps the GKE default list."
+  type        = list(string)
+  default     = ["SYSTEM_COMPONENTS"]
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

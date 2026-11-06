@@ -102,6 +102,11 @@ resource "google_project_iam_member" "nodes" {
   member  = "serviceAccount:${google_service_account.nodes.email}"
 }
 
+locals {
+  # null (default) follows public_hosts: the Gateway needs the load balancer, nothing else does
+  gateway = coalesce(var.gateway_enabled, length(var.public_hosts) > 0)
+}
+
 resource "google_container_cluster" "this" {
   provider            = google-beta
   name                = var.cluster_name
@@ -133,10 +138,20 @@ resource "google_container_cluster" "this" {
   enable_fqdn_network_policy = true
   workload_identity_config { workload_pool = "${var.project_id}.svc.id.goog" }
   addons_config {
-    http_load_balancing { disabled = false }
+    # The GKE load balancer controller and the Gateway API serve the public HTTPS entry point (#120, ingress.tf);
+    # Off without public_hosts (a deployment that publishes its hosts through its own proxy, #160); see gateway_enabled.
+    http_load_balancing { disabled = !local.gateway }
+    # Filestore CSI: agentdev uses persistent disks only (#208)
+    gcp_filestore_csi_driver_config { enabled = var.enable_filestore_csi }
   }
   # Gateway API for the public HTTPS entry point (#120, Ansible role ingress); in-place change on an existing cluster
-  gateway_api_config { channel = "CHANNEL_STANDARD" }
+  gateway_api_config { channel = local.gateway ? "CHANNEL_STANDARD" : "CHANNEL_DISABLED" }
+  # Metrics. Cloud Logging stays untouched on purpose: it is the source of truth for security events (#70).
+  monitoring_config {
+    managed_prometheus { enabled = var.enable_managed_prometheus }
+    # null keeps the GKE default component list
+    enable_components = var.monitoring_components
+  }
   depends_on = [google_project_service.apis]
 }
 
