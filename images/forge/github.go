@@ -421,22 +421,26 @@ func checkOwnPRLabel(s *server, ctx context.Context, m []string, body []byte) er
 			return refuseAs("api-not-allowed", "medium", "label: only \"labels\" (a list of names) is allowed")
 		}
 	}
-	if len(labels) != 1 || labels[0] != "agent:"+s.c.AgentName {
-		return refuseAs("api-not-allowed", "medium", "label: only agent:%s on the agent's own PR", s.c.AgentName)
+	if len(labels) != 1 || labels[0] != "agent:"+s.c.ForgeUser { // the name the loop sends and the router routes by
+		return refuseAs("api-not-allowed", "medium", "label: only agent:%s on the agent's own PR", s.c.ForgeUser)
 	}
 	if len(m) < 3 {
 		return refuse("label: no PR number")
 	}
 	var pr struct {
 		Head struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			Repo *struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"head"`
 	}
 	if err := s.forgeGet(ctx, fmt.Sprintf("/repos/%s/pulls/%s", m[1], m[2]), &pr); err != nil {
 		return refuseAs("api-not-allowed", "medium", "label: #%s is not a pull request of this agent (%v)", m[2], err)
 	}
-	if checkBranch(s.c.ForgeUser, pr.Head.Ref) != nil {
-		return refuseAs("api-not-allowed", "high", "label: PR #%s is not from a branch of %s", m[2], s.c.ForgeUser)
+	// a fork can name its branch agent/<name>/x too: the head must be a branch of this very repository
+	if pr.Head.Repo == nil || !strings.EqualFold(pr.Head.Repo.FullName, m[1]) || checkBranch(s.c.ForgeUser, pr.Head.Ref) != nil {
+		return refuseAs("api-not-allowed", "high", "label: PR #%s is not from a branch of %s in %s", m[2], s.c.ForgeUser, m[1])
 	}
 	return nil
 }

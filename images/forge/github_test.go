@@ -60,9 +60,15 @@ func fakeGitHub(t *testing.T) (*httptest.Server, func() []ghCall) {
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14/comments":
 			w.Write(ghFixture(t, "review_comments.json"))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14": // alice's PR (#227)
-			w.Write([]byte(`{"number":14,"head":{"ref":"agent/alice/issue-12"}}`))
+			w.Write([]byte(`{"number":14,"head":{"ref":"agent/alice/issue-12","repo":{"full_name":"octo-org/repo"}}}`))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/15": // bob's PR
-			w.Write([]byte(`{"number":15,"head":{"ref":"agent/bob/issue-9"}}`))
+			w.Write([]byte(`{"number":15,"head":{"ref":"agent/bob/issue-9","repo":{"full_name":"octo-org/repo"}}}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/16": // a fork that named its branch like alice's
+			w.Write([]byte(`{"number":16,"head":{"ref":"agent/alice/issue-12","repo":{"full_name":"mallory/repo"}}}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/17": // a deleted fork
+			w.Write([]byte(`{"number":17,"head":{"ref":"agent/alice/issue-12","repo":null}}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/18": // GitHub is down
+			w.WriteHeader(502)
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/12": // an issue, not a PR
 			w.WriteHeader(404)
 			w.Write([]byte(`{"message":"Not Found"}`))
@@ -534,6 +540,9 @@ func TestGitHubOwnPRLabel(t *testing.T) {
 		{"label as object", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":[{"name":"agent:alice"}]}`},
 		{"bob's PR", "/api/v1/repos/octo-org/repo/issues/15/labels", `{"labels":["agent:alice"]}`},
 		{"an issue (self-assign work)", "/api/v1/repos/octo-org/repo/issues/12/labels", `{"labels":["agent:alice"]}`},
+		{"a fork with an agent-like branch", "/api/v1/repos/octo-org/repo/issues/16/labels", `{"labels":["agent:alice"]}`},
+		{"a deleted fork", "/api/v1/repos/octo-org/repo/issues/17/labels", `{"labels":["agent:alice"]}`},
+		{"GitHub error", "/api/v1/repos/octo-org/repo/issues/18/labels", `{"labels":["agent:alice"]}`},
 		{"other repo", "/api/v1/repos/other/repo/issues/14/labels", `{"labels":["agent:alice"]}`},
 	}
 	for _, c := range refused {

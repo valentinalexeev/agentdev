@@ -33,8 +33,10 @@ const reset = () => { for (const k of Object.keys(wakes)) wakes[k] = 0; ghCalls.
 const ghRepo = { full_name: 'octo-org/repo' }, gtRepo = { full_name: 'owner/playground' };
 const bot = { login: 'my-agentdev[bot]' };
 // PRs on the fake GitHub: 14 is alice's, 15 is a person's branch
-const ghPulls = { 14: { number: 14, head: { ref: 'agent/alice/issue-12' } }, 15: { number: 15, head: { ref: 'feature/x' } },
-  21: { number: 21, head: { ref: 'agent/carol/issue-3' } } };
+const own = { full_name: 'octo-org/repo' };
+const ghPulls = { 14: { number: 14, head: { ref: 'agent/alice/issue-12', repo: own } }, 15: { number: 15, head: { ref: 'feature/x', repo: own } },
+  21: { number: 21, head: { ref: 'agent/carol/issue-3', repo: own } },
+  22: { number: 22, head: { ref: 'agent/alice/issue-12', repo: { full_name: 'mallory/repo' } } } };   // a fork
 
 before(async () => {
   const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -126,6 +128,32 @@ test('GitHub: a comment on the PR of a stopped agent starts it (scale to zero)',
   assert.deepStrictEqual(r.body.started, ['agent-carol']); assert.deepStrictEqual(patches, ['agent-carol']);
 });
 
+test('GitHub: a fork that names its branch like an agent\'s wakes nobody', async () => {
+  reset();
+  const r = await hook('github', 'issue_comment', ghComment(22));
+  await settle();
+  assert.strictEqual(r.status, 202); assert.deepStrictEqual({ a: wakes.alice, b: wakes.bob }, { a: 0, b: 0 });
+});
+
+test('GitHub: a PR the lookup cannot find routes nowhere, and the delivery is still answered', async () => {
+  reset();
+  const r = await hook('github', 'issue_comment', ghComment(99));
+  await settle();
+  assert.strictEqual(r.status, 202); assert.strictEqual(r.body.routed, 0);
+  assert.deepStrictEqual({ a: wakes.alice, b: wakes.bob }, { a: 0, b: 0 });
+});
+
+test('GitHub: the read-only token is minted once and reused for later lookups', async () => {
+  reset();
+  await hook('github', 'issue_comment', ghComment(14));
+  await hook('github', 'issue_comment', ghComment(14));
+  await settle();
+  assert.strictEqual(ghCalls.filter((c) => c.path.endsWith('/access_tokens')).length, 0, 'token minted again');
+  assert.strictEqual(ghCalls.filter((c) => c.path === '/repos/octo-org/repo/pulls/14').length, 2);
+  assert.strictEqual(wakes.alice, 2);
+});
+
+// last: re-registers alice for Gitea (one registration per agent)
 test('Gitea: a comment on an agent PR routes by the PR author (the agent login)', async () => {
   reset();
   const reg = await req('POST', '/register', { agent: 'alice', forge: 'gitea', user: 'alice', repos: ['owner/playground'],

@@ -195,7 +195,17 @@ async function githubToken(repo) {
     headers: { ...jwt, accept: 'application/json', 'content-type': 'application/json' }, signal: AbortSignal.timeout(15e3),
     body: JSON.stringify({ repositories: [repo.split('/')[1]], permissions: { issues: 'read', pull_requests: 'read', metadata: 'read' } }) });
   if (!r.ok) throw new Error(`wake poll: installation token: HTTP ${r.status}`);
-  return (await r.json()).token;
+  const t = await r.json();
+  const exp = Date.parse(t.expires_at);
+  // cached until 5 minutes before it expires (#227: one PR lookup per comment must not mint a token each time)
+  if (typeof t.token === 'string' && Number.isFinite(exp)) ghTokens.set(repo, { token: t.token, until: exp - 300e3 });
+  return t.token;
+}
+const ghTokens = new Map();   // repo -> { token, until }
+async function githubTokenCached(repo) {
+  const c = ghTokens.get(repo);
+  if (c && Date.now() < c.until) return c.token;
+  return githubToken(repo);
 }
 // Does this stopped agent have work in repo changed after `since` (ms)? Same rules as the agent loop: on Gitea issues
 // assigned to it, on GitHub issues labelled agent:<name>; its PRs are the open ones from branches agent/<name>/...
@@ -289,42 +299,48 @@ function handle(req, res) {
   }
 
   if (isDelivery(req)) {
-    return readBody(req, 5e6, async (body) => {
-      const f = detectForge(req.headers);
-      const secret = f && forgeSecrets[f.forge];
-      if (!f || !secret || !f.sig || !safeEqual(f.sig, hmac(secret, body))) { stats.rejected++; log('rejected delivery (signature)'); return json(res, 401, { error: 'bad signature' }); }
-      stats.delivered++;
-      let p; try { p = JSON.parse(body); } catch { return json(res, 400, { error: 'bad json' }); }
-      const repo = p.repository && p.repository.full_name;
-      // the user an agent registered with: its forge login on Gitea, its agent name on GitHub
-      const who = routingFacts(f.forge, p);
-      // GitHub comment on a PR without an agent:<name> label (#227): the payload has no head branch, so read it from the
-      // PR with the router's read-only credential (the wake poll's). PRs opened since #227 carry the label already.
-      const prRef = f.forge === 'github' && !who.size && p.issue && p.issue.pull_request && Number.isInteger(p.issue.number);
-      if (prRef && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo || '')) {
-        try {
-          const h = { authorization: `Bearer ${await githubToken(repo)}`, 'x-github-api-version': '2022-11-28' };
-          const pr = await getJSON(`${githubApi}/repos/${repo}/pulls/${p.issue.number}`, h);
-          agentsOf({ pull_request: pr }).forEach((a) => who.add(a));
-          stats.prLookups++;
-        } catch (e) { stats.prLookupErrors++; log(`PR lookup for ${repo}#${p.issue.number}: ${e.message}`); }
-      }
-      const targets = live().filter((r) => r.forge === f.forge && r.repos.has(repo) && who.has(r.user));
-      if (!targets.length) {
-        // nobody live: maybe a stopped agent is responsible (#35)
-        return wakeStopped(f.forge, repo, who).then((started) => {
-          if (started.length) return json(res, 202, { routed: 0, started });
-          stats.unrouted++; log(`${f.forge} ${f.event} ${repo}: no agent among [${[...who].join(',')}]`);
-          return json(res, 202, { routed: 0 });
-        }).catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 202, { routed: 0 }); });
-      }
-      targets.forEach((r) => { r.lastWake = Date.now(); forward(r, { forge: f.forge, event: f.event, repo }); });
-      log(`${f.forge} ${f.event} ${repo} -> ${targets.map((r) => r.agent).join(',')}`);
-      return json(res, 202, { routed: targets.length });
-    });
+    return readBody(req, 5e6, (body) => deliver(req, res, body).catch((e) => {
+      log(`delivery: ${e && e.message}`); if (!res.headersSent) json(res, 500, { error: 'delivery failed' });
+    }));
   }
 
   json(res, 404, { error: 'not found' });
+}
+
+// one verified webhook delivery -> wake the agents it is about (#3); async for the PR lookup (#227)
+async function deliver(req, res, body) {
+  const f = detectForge(req.headers);
+  const secret = f && forgeSecrets[f.forge];
+  if (!f || !secret || !f.sig || !safeEqual(f.sig, hmac(secret, body))) { stats.rejected++; log('rejected delivery (signature)'); return json(res, 401, { error: 'bad signature' }); }
+  stats.delivered++;
+  let p; try { p = JSON.parse(body); } catch { return json(res, 400, { error: 'bad json' }); }
+  const repo = p.repository && p.repository.full_name;
+  // the user an agent registered with: its forge login on Gitea, its agent name on GitHub
+  const who = routingFacts(f.forge, p);
+  // GitHub comment on a PR without an agent:<name> label (#227): the payload has no head branch, so read it from the
+  // PR with the router's read-only credential (the wake poll's). PRs opened since #227 carry the label already.
+  const prRef = f.forge === 'github' && !who.size && p.issue && p.issue.pull_request && Number.isInteger(p.issue.number);
+  if (prRef && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo || '')) {
+    try {
+      const h = { authorization: `Bearer ${await githubTokenCached(repo)}`, 'x-github-api-version': '2022-11-28' };
+      const pr = await getJSON(`${githubApi}/repos/${repo}/pulls/${p.issue.number}`, h);
+      // only a branch of this repository counts: a fork can name its branch agent/<name>/... too
+      if (pr && pr.head && pr.head.repo && pr.head.repo.full_name === repo) agentsOf({ pull_request: pr }).forEach((a) => who.add(a));
+      stats.prLookups++;
+    } catch (e) { stats.prLookupErrors++; log(`PR lookup for ${repo}#${p.issue.number}: ${e.message}`); }
+  }
+  const targets = live().filter((r) => r.forge === f.forge && r.repos.has(repo) && who.has(r.user));
+  if (!targets.length) {
+    // nobody live: maybe a stopped agent is responsible (#35)
+    return wakeStopped(f.forge, repo, who).then((started) => {
+      if (started.length) return json(res, 202, { routed: 0, started });
+      stats.unrouted++; log(`${f.forge} ${f.event} ${repo}: no agent among [${[...who].join(',')}]`);
+      return json(res, 202, { routed: 0 });
+    }).catch((e) => { stats.scaleErrors++; log(e.message); if (!res.headersSent) json(res, 202, { routed: 0 }); });
+  }
+  targets.forEach((r) => { r.lastWake = Date.now(); forward(r, { forge: f.forge, event: f.event, repo }); });
+  log(`${f.forge} ${f.event} ${repo} -> ${targets.map((r) => r.agent).join(',')}`);
+  return json(res, 202, { routed: targets.length });
 }
 
 // public: deliveries only (#214)
