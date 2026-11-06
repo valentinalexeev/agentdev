@@ -40,7 +40,7 @@ const forgeSecrets = Object.fromEntries((process.env.FORGE_SECRETS || '').split(
 
 const log = (m) => console.log(`${new Date().toISOString().slice(11, 19)} router: ${m}`);
 const stats = { delivered: 0, rejected: 0, unrouted: 0, forwarded: 0, forwardErrors: 0, scaledUp: 0, scaledDown: 0, scaleErrors: 0,
-  polls: 0, polledUp: 0, pollErrors: 0 };
+  polls: 0, polledUp: 0, pollErrors: 0, prLookups: 0, prLookupErrors: 0 };
 
 // agent name -> { agent, forge, user, repos: Set, url, token, seen }
 const registry = new Map();
@@ -289,7 +289,7 @@ function handle(req, res) {
   }
 
   if (isDelivery(req)) {
-    return readBody(req, 5e6, (body) => {
+    return readBody(req, 5e6, async (body) => {
       const f = detectForge(req.headers);
       const secret = f && forgeSecrets[f.forge];
       if (!f || !secret || !f.sig || !safeEqual(f.sig, hmac(secret, body))) { stats.rejected++; log('rejected delivery (signature)'); return json(res, 401, { error: 'bad signature' }); }
@@ -298,6 +298,17 @@ function handle(req, res) {
       const repo = p.repository && p.repository.full_name;
       // the user an agent registered with: its forge login on Gitea, its agent name on GitHub
       const who = routingFacts(f.forge, p);
+      // GitHub comment on a PR without an agent:<name> label (#227): the payload has no head branch, so read it from the
+      // PR with the router's read-only credential (the wake poll's). PRs opened since #227 carry the label already.
+      const prRef = f.forge === 'github' && !who.size && p.issue && p.issue.pull_request && Number.isInteger(p.issue.number);
+      if (prRef && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo || '')) {
+        try {
+          const h = { authorization: `Bearer ${await githubToken(repo)}`, 'x-github-api-version': '2022-11-28' };
+          const pr = await getJSON(`${githubApi}/repos/${repo}/pulls/${p.issue.number}`, h);
+          agentsOf({ pull_request: pr }).forEach((a) => who.add(a));
+          stats.prLookups++;
+        } catch (e) { stats.prLookupErrors++; log(`PR lookup for ${repo}#${p.issue.number}: ${e.message}`); }
+      }
       const targets = live().filter((r) => r.forge === f.forge && r.repos.has(repo) && who.has(r.user));
       if (!targets.length) {
         // nobody live: maybe a stopped agent is responsible (#35)

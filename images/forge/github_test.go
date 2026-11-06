@@ -59,6 +59,13 @@ func fakeGitHub(t *testing.T) (*httptest.Server, func() []ghCall) {
 			w.Write(ghFixture(t, "pull_created.json"))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14/comments":
 			w.Write(ghFixture(t, "review_comments.json"))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14": // alice's PR (#227)
+			w.Write([]byte(`{"number":14,"head":{"ref":"agent/alice/issue-12"}}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/15": // bob's PR
+			w.Write([]byte(`{"number":15,"head":{"ref":"agent/bob/issue-9"}}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/12": // an issue, not a PR
+			w.WriteHeader(404)
+			w.Write([]byte(`{"message":"Not Found"}`))
 		default:
 			w.Write([]byte(`{"ok":true}`))
 		}
@@ -502,6 +509,47 @@ func TestGitHubLabelerRoutes(t *testing.T) {
 		{"GET", "/api/v1/repos/octo-org/repo/collaborators"}, {"GET", "/api/v1/repos/octo-org/repo/collaborators/a..b/permission"}} {
 		if rec := call(t, h, c.m, c.p, `{}`); rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s: %d", c.m, c.p, rec.Code)
+		}
+	}
+}
+
+// #227: the agent may add exactly its own label agent:<name>, only to a PR from its own branch (asked from GitHub)
+func TestGitHubOwnPRLabel(t *testing.T) {
+	d, _, calls := newTestGitHub(t)
+	s := newServer(d.c)
+	s.drv, s.rules = d, d.rules()
+	h := s.routes()
+	if rec := call(t, h, "POST", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["agent:alice"]}`); rec.Code/100 != 2 {
+		t.Fatalf("own label on own PR: %d %s", rec.Code, rec.Body)
+	}
+	cs := calls()
+	if last := cs[len(cs)-1]; last.method != "POST" || last.path != "/repos/octo-org/repo/issues/14/labels" {
+		t.Fatalf("label call not forwarded: %+v", last)
+	}
+	refused := []struct{ name, p, b string }{
+		{"another agent's label", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["agent:bob"]}`},
+		{"two labels", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["agent:alice","bug"]}`},
+		{"any other label", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["approved"]}`},
+		{"extra key", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["agent:alice"],"x":1}`},
+		{"label as object", "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":[{"name":"agent:alice"}]}`},
+		{"bob's PR", "/api/v1/repos/octo-org/repo/issues/15/labels", `{"labels":["agent:alice"]}`},
+		{"an issue (self-assign work)", "/api/v1/repos/octo-org/repo/issues/12/labels", `{"labels":["agent:alice"]}`},
+		{"other repo", "/api/v1/repos/other/repo/issues/14/labels", `{"labels":["agent:alice"]}`},
+	}
+	for _, c := range refused {
+		n := len(calls())
+		if rec := call(t, h, "POST", c.p, c.b); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: want 403, got %d", c.name, rec.Code)
+		}
+		for _, x := range calls()[n:] {
+			if x.method != "GET" {
+				t.Errorf("%s: a write reached GitHub: %+v", c.name, x)
+			}
+		}
+	}
+	for _, m := range []string{"PUT", "DELETE"} { // replace or remove labels: never
+		if rec := call(t, h, m, "/api/v1/repos/octo-org/repo/issues/14/labels", `{"labels":["agent:alice"]}`); rec.Code != http.StatusForbidden {
+			t.Errorf("%s labels: want 403, got %d", m, rec.Code)
 		}
 	}
 }

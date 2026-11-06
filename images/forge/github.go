@@ -406,6 +406,41 @@ func checkOwnHeadGitHub(s *server, body []byte) error {
 	return checkBranch(s.c.ForgeUser, pr.Head)
 }
 
+// checkOwnPRLabel (#227): the loop labels the PR it opened agent:<name>, so a webhook about the PR (a comment, too)
+// routes to it on GitHub, where every agent is the same App bot. Allowed only: exactly that one label, on a PR whose
+// head is a branch of this agent (asked from GitHub, not taken from the request). Never another agent's label, never
+// on an issue, never a label replace (PUT) or removal.
+func checkOwnPRLabel(s *server, ctx context.Context, m []string, body []byte) error {
+	var rq map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rq); err != nil {
+		return refuse("bad label body")
+	}
+	var labels []string
+	for k, v := range rq {
+		if k != "labels" || json.Unmarshal(v, &labels) != nil {
+			return refuseAs("api-not-allowed", "medium", "label: only \"labels\" (a list of names) is allowed")
+		}
+	}
+	if len(labels) != 1 || labels[0] != "agent:"+s.c.AgentName {
+		return refuseAs("api-not-allowed", "medium", "label: only agent:%s on the agent's own PR", s.c.AgentName)
+	}
+	if len(m) < 3 {
+		return refuse("label: no PR number")
+	}
+	var pr struct {
+		Head struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err := s.forgeGet(ctx, fmt.Sprintf("/repos/%s/pulls/%s", m[1], m[2]), &pr); err != nil {
+		return refuseAs("api-not-allowed", "medium", "label: #%s is not a pull request of this agent (%v)", m[2], err)
+	}
+	if checkBranch(s.c.ForgeUser, pr.Head.Ref) != nil {
+		return refuseAs("api-not-allowed", "high", "label: PR #%s is not from a branch of %s", m[2], s.c.ForgeUser)
+	}
+	return nil
+}
+
 // the calls the loop makes on GitHub (issues by label, PRs, comments, reviews, review threads, checks)
 func (d *githubDriver) rules() []rule {
 	r := func(m, p string, chk func(*server, []byte) error) rule {
@@ -428,6 +463,12 @@ func (d *githubDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+/comments`, nil),
 		sign(r("POST", repoRe+`/pulls/[0-9]+/comments/[0-9]+/replies`, nil)),
 		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequest),
+		// #227: its own label on its own PR; the PR is an issue for the labels endpoint
+		func() rule {
+			ru := mkRule("POST", repoRe+`/issues/([1-9][0-9]{0,15})/labels`, nil) // m[2] = the PR number
+			ru.checkPath = checkOwnPRLabel
+			return ru
+		}(),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/check-runs`, nil),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
 	}

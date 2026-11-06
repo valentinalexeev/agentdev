@@ -33,6 +33,8 @@ type rule struct {
 	method string
 	path   *regexp.Regexp
 	check  func(s *server, body []byte) error // optional body policy
+	// optional policy that also needs the path's groups (m[1] repo, m[2]... the numbers) and may ask the forge
+	checkPath func(s *server, ctx context.Context, m []string, body []byte) error
 	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
 	rewrite func(s *server, body []byte) ([]byte, error)
 }
@@ -243,9 +245,35 @@ func fail(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), code)
 }
 
+// forgeGet reads one forge REST resource with the agent's credential (for policy checks that need forge facts)
+func (s *server) forgeGet(ctx context.Context, path string, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	auth, err := s.driver().authorization(ctx)
+	if err != nil {
+		return errors.New("forge credential unavailable")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.driver().apiURL(path, ""), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", auth)
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return errors.New("forge unreachable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("forge: HTTP %d", resp.StatusCode)
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+}
+
 func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/api/v1")
 	var match *rule
+	var groups []string
 	otherRepo := false
 	for i := range s.rules {
 		ru := &s.rules[i]
@@ -254,7 +282,7 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if m := ru.path.FindStringSubmatch(p); m != nil {
 			if len(m) < 2 || s.repoAllowed(m[1]) {
-				match = ru
+				match, groups = ru, m
 				break
 			}
 			otherRepo = true
@@ -277,6 +305,14 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if match.check != nil {
 		if err := match.check(s, body); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
+	if match.checkPath != nil {
+		if err := match.checkPath(s, r.Context(), groups, body); err != nil {
 			s.logf("refused %s %s: %v", r.Method, p, err)
 			s.policyEvent(r, err, r.Method+" "+p)
 			fail(w, err)
