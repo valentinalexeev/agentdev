@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Feedback runs get background (#223): the prompt now has the issue the PR resolves, the PR description and the
+  latest earlier thread items as Background (context only, not answered), apart from the New feedback the run
+  replies to. Both parts are fenced as untrusted. The size is capped by the new worker environment variables
+  `FEEDBACK_CONTEXT_ITEMS` (default 20 thread items) and `FEEDBACK_CONTEXT_CHARS` (default 12000 characters, `0`
+  turns it off). From round 2 on an agent no longer loses the original requirement or earlier review decisions.
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
   the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
