@@ -13,6 +13,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - agentdev-guides
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - agentdev-security-positions
   resources:
   - configmaps

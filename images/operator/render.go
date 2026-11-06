@@ -87,7 +87,12 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		// usage pauses (#93): written by the operator, read by the loop before it starts a job; optional (no pauses yet)
 		{Name: "usage", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}}}
+			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}},
+		// harness guide (#206): only this agent's key of agentdev-guides, read-only; optional, so a missing guide never
+		// blocks the pod (the loop then runs with the security rules only)
+		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}}}
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -139,7 +144,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		EnvFrom: r.claudeEnvFrom(a),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
-			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}},
+			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),

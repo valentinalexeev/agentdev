@@ -103,6 +103,8 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
 | guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
+| harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
+| reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
