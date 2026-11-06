@@ -87,13 +87,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
 	}
 
-	// harness guide (#206): written before the pod that mounts it; the mount is optional, so a failure only delays it
+	// harness guide (#206): written before the pod that mounts it. The mount is optional, so a failure here never blocks
+	// the StatefulSet: it is logged and retried, and the pod starts with the security rules only meanwhile.
+	guideRetry := false
 	execs, err := r.executorsFor(ctx, &a)
 	if err == nil {
 		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs))
 	}
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("harness guide: %w", err)
+		l.Error(err, "harness guide not written, will retry", "agent", a.Name)
+		guideRetry = true
 	}
 
 	if wait, err := r.relayout(ctx, &a); err != nil || wait {
@@ -130,7 +133,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("statefulset "+string(op), "agent", a.Name)
 	}
 
-	return ctrl.Result{}, r.updateStatus(ctx, &a, sts)
+	if err := r.updateStatus(ctx, &a, sts); err != nil {
+		return ctrl.Result{}, err
+	}
+	if guideRetry {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	return ctrl.Result{}, nil
 }
 
 // relayout moves an agent to the current volume layout (#173). volumeClaimTemplates are immutable, so a StatefulSet
@@ -241,6 +250,7 @@ func (r *AgentReconciler) agentsOfExecutor(ctx context.Context, o client.Object)
 	}
 	var l v1.AgentList
 	if err := r.List(ctx, &l); err != nil {
+		log.FromContext(ctx).Error(err, "harness guide: cannot list agents for an executor change", "executor", e.Name)
 		return nil
 	}
 	var out []ctrlreconcile.Request

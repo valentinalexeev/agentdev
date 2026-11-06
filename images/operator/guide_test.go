@@ -2,14 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -196,4 +202,27 @@ func TestExecutorMapsToAgentsOfItsRepo(t *testing.T) {
 	if len(reqs) != 1 || reqs[0].Name != "max" {
 		t.Fatalf("requests: %+v", reqs)
 	}
+}
+
+// a guide that cannot be written never blocks the agent's pod (the mount is optional); the reconcile retries
+func TestGuideFailureDoesNotBlockThePod(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(s)
+	_ = v1.AddToScheme(s)
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(agent("ola", nil)).WithStatusSubresource(&v1.Agent{}).
+		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+			if _, ok := o.(*corev1.ConfigMap); ok {
+				return errors.New("configmaps are read-only today")
+			}
+			return c.Create(ctx, o, opts...)
+		}}).Build()
+	r := &AgentReconciler{Client: base, D: Defaults{WorkerImage: "w", ForgeImage: "f", PollSeconds: "20", IdleSeconds: "900"}}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "ola"}})
+	if err != nil {
+		t.Fatalf("reconcile failed on a guide error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("no retry after a guide error")
+	}
+	getSTS(t, base, "ola") // the StatefulSet exists anyway
 }

@@ -122,9 +122,13 @@ it does not give it. The loop adds the guide to the system prompt of each Claude
    `kubectl -n coding-agents get configmap agentdev-guides -o jsonpath='{.data.<name>}'`
    The output shows the guide of the agent `<name>`.
 2. To change the list of hosts in the guide, change the egress allow-list. Refer to *Egress allow-list*.
-   The operator writes the guide again on the next reconcile.
+   Then deploy the operator again: on `kind`, run `./run.sh 12`. On GKE, run the Ansible playbook.
+   The operator writes the guides again when it starts.
 
 The fixed part of the guide is in the operator image. You cannot edit it.
+
+All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the default settings is approximately
+2 KB, and its maximum size is 6000 bytes. Thus one instance can have approximately 170 agents at the maximum size.
 
 ### Reference: the agent pod
 

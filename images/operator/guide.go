@@ -28,7 +28,9 @@ import (
 
 const (
 	guidesCM = "agentdev-guides" // one key per agent; the agent pod mounts only its own key
-	// guideMaxBytes caps the guide: it is in the context of every run. Lists are cut before this is reached.
+	// guideMaxBytes caps the guide: it is in the context of every run. Lists are cut before this is reached. With the
+	// defaults a guide is about 2 KB, so the one ConfigMap (1 MiB limit) holds several hundred agents; at the cap, about
+	// 170. Beyond that, split into one ConfigMap per agent (tracked in the docs, admin "See the harness guide").
 	guideMaxBytes = 6000
 	guideMaxHosts = 40
 	guideMaxExecs = 20
