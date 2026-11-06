@@ -82,6 +82,12 @@ The **router** is the cluster's single webhook endpoint. It verifies the forge's
 event is about (assignees, PR author, requested reviewers) and wakes only those agents. The payload never reaches
 an agent: agents re-read state from the forge API. If webhooks fail, agents still poll (`POLL_SECONDS`).
 
+A comment on an agent's PR or issue wakes that agent at once (#227). On Gitea the PR author is the agent's login. On
+GitHub every agent is the same App bot and a comment webhook carries no branch, so the agent labels each PR it opens
+`agent:<name>` (the forge sidecar allows only that one label, only on a PR from the agent's own branch), and the router
+routes by the label. For an older PR without the label, the router reads the PR's head branch with its read-only App
+credential (the wake poll's). The same routing starts a stopped agent (scale to zero).
+
 ## Scale to zero
 
 On by default for every agent (#35, default since #181); `scaleToZero: false` on an agent keeps it running. An

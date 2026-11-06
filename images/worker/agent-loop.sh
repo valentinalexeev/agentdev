@@ -528,6 +528,12 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
+    # GitHub (#227): every agent is the same App bot, so the router finds the agent of a PR comment by this label
+    # (a comment webhook has no head branch). Best effort: the router also looks the PR up when the label is missing.
+    if [[ "${FORGE_KIND}" == github ]]; then
+      api POST "/repos/${REPO}/issues/${pr}/labels" "$(jq -cn --arg l "agent:${FORGE_USER}" '{labels:[$l]}')" >/dev/null \
+        || log "could not label PR #${pr} agent:${FORGE_USER}"
+    fi
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
     echo "${n} ${title}" > "${STATE}/seen/pr-${pr}.board"   # issue number and title for later card updates

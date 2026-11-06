@@ -91,6 +91,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
+  because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
+  neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
+  a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
+  with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
+  Gitea already routed comments by the PR author; a router test now covers it.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
