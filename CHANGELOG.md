@@ -63,6 +63,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- Ansible refuses a Secret Manager `claude-shared` or `agent-<name>-claude` without a recognised key (#212). A bare
+  token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
+  `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
+  `ANTHROPIC_API_KEY=...`; the message names the format, never the value. Test: `infra/ansible/tests/claude_credential.yml`.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
