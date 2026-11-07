@@ -8,9 +8,12 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 
 1. Read this file.
 2. Load the bot identity: `source ~/.config/github-bot/env.sh`, then check `gh api user -q .login` prints `valentinalexeev-bot`.
-3. Open GitHub Issues of `valentinalexeev/agentdev`, **only those assigned to `valentinalexeev-bot`**, in this order:
+3. Before anything else, and after every resumed session, read the owner events the monitor recorded and you have
+   not handled (#242): `ghwatch -repo … -owner … -state <state> -pending`. Act on each, then run it again with
+   `-ack`. Start `scripts/watch-github.sh` if it is not running; a `gap` line means it was down.
+4. Open GitHub Issues of `valentinalexeev/agentdev`, **only those assigned to `valentinalexeev-bot`**, in this order:
    open `incident` issues, then `in-progress`, then the rest by priority (lowest number first).
-4. Work the issue, check it against its acceptance criterion, update the issue.
+5. Work the issue, check it against its acceptance criterion, update the issue.
 
 ## 1. What this project is
 

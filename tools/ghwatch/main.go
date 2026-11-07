@@ -32,6 +32,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	dump := fs.String("dump-snapshot", "", "write the fetched snapshot here")
 	format := fs.String("format", "json", "json | text")
 	status := fs.Bool("status", false, "print the tracked state and exit")
+	pending := fs.Bool("pending", false, "print owner events not yet acknowledged (from the outbox) and exit")
+	ack := fs.Bool("ack", false, "with -pending: mark the printed events as acknowledged")
+	gapAfter := fs.Duration("gap-after", 5*time.Minute, "report a gap when the last poll is older than this")
 	api := fs.String("api", "https://api.github.com", "GitHub API base URL")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -47,6 +50,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *status {
 		printStatus(stdout, st)
+		return 0
+	}
+	if *pending {
+		if err := printPending(stdout, *statePath, *ack); err != nil {
+			fmt.Fprintln(stderr, "ghwatch: pending:", err)
+			return 1
+		}
 		return 0
 	}
 
@@ -78,7 +88,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	baseline := st.Cursor == ""
+	gap := ""
+	if !baseline && *replay == "" {
+		if t, err := time.Parse(time.RFC3339, st.Cursor); err == nil && time.Since(t) > *gapAfter {
+			gap = time.Since(t).Round(time.Minute).String()
+		}
+	}
 	next, events := Reduce(st, snap)
+	if gap != "" {
+		events = append([]Event{{Kind: EvGap, Owner: true, To: gap,
+			Text: fmt.Sprintf("monitor was down for %s (last poll %s); events below cover the gap", gap, st.Cursor)}}, events...)
+	}
+	// #242: the outbox is written before the state. A crash between the two repeats events (at-least-once),
+	// it never loses them.
+	if err := appendOutbox(outboxPath(*statePath), snap.At, events); err != nil {
+		fmt.Fprintln(stderr, "ghwatch: outbox:", err)
+		return 1
+	}
 	if err := saveState(*statePath, next); err != nil {
 		fmt.Fprintln(stderr, "ghwatch: save:", err)
 		return 1
@@ -103,6 +129,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func printStatus(w io.Writer, s State) {
 	fmt.Fprintf(w, "%s (owner %s), cursor %s\n", s.Repo, s.Owner, s.Cursor)
+	for _, k := range sortedKeys(s.Issues) { // answers nobody recorded come first: they block work
+		if i := s.Issues[k]; i.answered() {
+			fmt.Fprintf(w, "* ANSWERED issue #%s: the owner answered and needs-decision is still set: %s\n", k, i.Title)
+		}
+	}
 	for _, k := range sortedKeys(s.PRs) {
 		p := s.PRs[k]
 		if p.Lifecycle != PROpen && p.Lifecycle != PRDraft {

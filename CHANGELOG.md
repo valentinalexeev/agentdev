@@ -23,6 +23,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
   through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
   public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
+- Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
+  commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
+  are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
+  permission (is in the repository's assignee list), checked live like the GitHub label check; otherwise the issue is skipped with a security event. P6: Gitea
+  review requests go through the same check as on GitHub (1 to 5 user logins, no teams). Re-run: `./run.sh 06` or the
+  agent role of the playbook (new images only).
 - Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's
   instructions, stay in scope, no CI workflow files, report only tests that ran, ask instead of guessing) and end with
   `STATUS: done|partial|needs-decision|blocked`. `needs-decision` and `blocked` push nothing; `needs-decision` asks on
@@ -110,6 +116,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
+  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
+  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
+  Merged or closed PRs keep their last checks (no false `anomaly`).
 - Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
   because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
   neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
