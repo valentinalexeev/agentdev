@@ -139,16 +139,7 @@ func fetch(ctx context.Context, c *client, cursor string, now time.Time) (Snapsh
 			prNums[it.Number] = true
 			continue
 		}
-		oi := ObservedIssue{Number: it.Number, Title: it.Title, State: it.State}
-		for _, a := range it.Assignees {
-			oi.Assignees = append(oi.Assignees, a.Login)
-		}
-		for _, l := range it.Labels {
-			oi.Labels = append(oi.Labels, l.Name)
-		}
-		if it.Milestone != nil {
-			oi.Milestone = it.Milestone.Title
-		}
+		oi := toObservedIssue(it)
 		snap.Issues = append(snap.Issues, oi)
 	}
 	open, err := pages[ghPR](ctx, c, r+"/pulls", url.Values{"state": {"open"}}, 3)
@@ -188,8 +179,39 @@ func fetch(ctx context.Context, c *client, cursor string, now time.Time) (Snapsh
 		snap.Comments = append(snap.Comments, Comment{ID: x.ID, Number: lastNum(x.PRURL), User: x.User.Login, Inline: true, Path: x.Path, Body: x.Body})
 	}
 
-	// Actions runs: every trigger and branch, newest first. Baseline: the latest 100. Later: created since the cursor
-	// plus every run still unfinished in the last 2 pages (status changes do not move created_at).
+	// Decision state (#242): on every poll, every open needs-decision issue and its latest human and bot-marked
+	// comments. Issues already in the list above are not added twice; the others are added so their state is fresh.
+	nd, err := pages[ghIssue](ctx, c, r+"/issues", url.Values{"state": {"open"}, "labels": {"needs-decision"}}, 2)
+	if err != nil {
+		return snap, err
+	}
+	have := map[int]bool{}
+	for _, i := range snap.Issues {
+		have[i.Number] = true
+	}
+	for _, it := range nd {
+		if it.PullRequest != nil {
+			continue
+		}
+		if !have[it.Number] {
+			snap.Issues = append(snap.Issues, toObservedIssue(it))
+		}
+		cs, err := pages[ghIssueComment](ctx, c, fmt.Sprintf("%s/issues/%d/comments", r, it.Number), nil, 5)
+		if err != nil {
+			return snap, err
+		}
+		h := LastHuman{Number: it.Number}
+		for _, x := range cs { // oldest first
+			if strings.HasPrefix(strings.TrimSpace(x.Body), botMarker) {
+				h.BotAt = x.CreatedAt
+			} else {
+				h.User, h.HumanAt = x.User.Login, x.CreatedAt
+			}
+		}
+		snap.LastHuman = append(snap.LastHuman, h)
+	}
+
+	// Actions runs: every trigger and branch, newest first.
 	var wr struct {
 		Runs []struct {
 			ID         int64  `json:"id"`
@@ -323,4 +345,27 @@ func fetchPR(ctx context.Context, c *client, n int) (ObservedPR, error) {
 func lastNum(u string) int {
 	n, _ := strconv.Atoi(u[strings.LastIndex(u, "/")+1:])
 	return n
+}
+
+// botMarker starts every comment the bot writes (CLAUDE.md §3), also when it is posted from the owner account.
+const botMarker = "🤖"
+
+type ghIssueComment struct {
+	User      ghUser `json:"user"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+}
+
+func toObservedIssue(it ghIssue) ObservedIssue {
+	oi := ObservedIssue{Number: it.Number, Title: it.Title, State: it.State}
+	for _, a := range it.Assignees {
+		oi.Assignees = append(oi.Assignees, a.Login)
+	}
+	for _, l := range it.Labels {
+		oi.Labels = append(oi.Labels, l.Name)
+	}
+	if it.Milestone != nil {
+		oi.Milestone = it.Milestone.Title
+	}
+	return oi
 }

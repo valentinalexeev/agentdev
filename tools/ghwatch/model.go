@@ -12,7 +12,8 @@ package main
 
 // SchemaVersion of the persisted State. A State with another version is rejected, not migrated silently.
 // 2: workflow runs, actor events and releases (#233 review).
-const SchemaVersion = 2
+// 3: issue decision state (#243 review).
+const SchemaVersion = 3
 
 // Lifecycle states of a pull request.
 const (
@@ -78,6 +79,16 @@ type Comment struct {
 	Body   string `json:"body"`
 }
 
+// LastHuman is, per issue, the latest comment by a person and the latest bot-marked one (body starts with the bot
+// marker, whoever posted it). The fetcher fills it for every open needs-decision issue on every poll, so the
+// decision state never depends on having seen a comment event (#242).
+type LastHuman struct {
+	Number  int    `json:"number"`
+	User    string `json:"user"`     // author of the latest unmarked comment
+	HumanAt string `json:"human_at"` // its time (RFC 3339 UTC)
+	BotAt   string `json:"bot_at"`   // time of the latest bot-marked comment, "" if none
+}
+
 // ObservedPR is what one fetch saw of a pull request.
 type ObservedPR struct {
 	Number    int      `json:"number"`
@@ -108,13 +119,14 @@ type ObservedIssue struct {
 // Snapshot is one complete observation. Only the items in it are updated; items not in it keep their state
 // (the fetcher asks for what changed since the cursor, plus every open PR).
 type Snapshot struct {
-	At       string          `json:"at"` // RFC 3339, the time the fetch started; becomes the next cursor
-	PRs      []ObservedPR    `json:"prs"`
-	Issues   []ObservedIssue `json:"issues"`
-	Comments []Comment       `json:"comments"`
-	Runs     []WorkflowRun   `json:"runs"`     // GitHub Actions workflow runs (any branch, tags, schedules)
-	Actions  []RepoEvent     `json:"actions"`  // issue/PR timeline events with the actor (who closed, labeled, assigned...)
-	Releases []Release       `json:"releases"` // published releases and their tags
+	At        string          `json:"at"` // RFC 3339, the time the fetch started; becomes the next cursor
+	PRs       []ObservedPR    `json:"prs"`
+	Issues    []ObservedIssue `json:"issues"`
+	Comments  []Comment       `json:"comments"`
+	Runs      []WorkflowRun   `json:"runs"`       // GitHub Actions workflow runs (any branch, tags, schedules)
+	LastHuman []LastHuman     `json:"last_human"` // per open needs-decision issue (decision state)
+	Actions   []RepoEvent     `json:"actions"`    // issue/PR timeline events with the actor (who closed, labeled, assigned...)
+	Releases  []Release       `json:"releases"`   // published releases and their tags
 }
 
 // WorkflowRun is one Actions run.
@@ -178,7 +190,16 @@ type IssueState struct {
 	Assignees []string `json:"assignees"`
 	Labels    []string `json:"labels"`
 	Milestone string   `json:"milestone"`
+	Decision  string   `json:"decision"` // none | asked | answered (see decisionEdges)
 }
+
+// Decision states of an issue (#242). asked: needs-decision is set and the bot spoke last. answered: needs-decision
+// is set and the owner spoke after the bot: an answer nobody recorded yet. none: no needs-decision label.
+const (
+	DecisionNone     = "none"
+	DecisionAsked    = "asked"
+	DecisionAnswered = "answered"
+)
 
 // State is everything ghwatch remembers between runs. Maps are keyed by the decimal number so the JSON is stable.
 type State struct {
@@ -204,3 +225,5 @@ type Event struct {
 	Owner  bool   `json:"owner,omitempty"` // the owner did it: needs the agent's attention
 	Text   string `json:"text"`
 }
+
+func (s IssueState) answered() bool { return s.Decision == DecisionAnswered }

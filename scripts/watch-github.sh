@@ -38,6 +38,13 @@ local_events() {
 }
 
 first=1; fails=0
+# #242: replay owner events the agent has not acknowledged (outbox), so a restart or a missed wake loses nothing.
+# The agent acknowledges with: <bin> -repo R -owner O -state STATE -pending -ack
+pending=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -pending 2>/dev/null)
+if [[ -n "${pending}" && "${pending}" != *"pending owner events: 0"* ]]; then
+  echo "$(date '+%H:%M:%S') unacknowledged owner events from earlier polls:"; echo "${pending}"
+  echo 'JCODE_CHECKPOINT {"message":"agentdev: unacknowledged owner events"}'
+fi
 while true; do
   new=0
   if gh_out=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -format text 2>"${DIR}/ghwatch.err"); then
