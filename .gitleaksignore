@@ -1,2 +1,5 @@
 # false positive: a deliberately forged bearer token in the e2e script (#141)
 7df53b665cca578e9377a6d8a1f3a9f333401a48:scripts/e2e-gke-security.sh:curl-auth-header:270
+# false positives: fake credential shapes in the redaction test (#205), split at runtime since
+cca5ee0d7b250c022fe33833626941b0cee74d3d:images/operator/obsmcp_test.go:aws-access-token:175
+cca5ee0d7b250c022fe33833626941b0cee74d3d:images/operator/obsmcp_test.go:jwt:176
