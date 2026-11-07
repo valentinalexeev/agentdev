@@ -157,6 +157,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | subscription | one Claude login (a Claude credential Secret). Agents that use the same Secret use the same subscription |
 | usage window | a period in which Claude counts the use of a subscription: 5 hours or 7 days |
 | usage limit | a percent of a usage window. When the use is more, agents start no new runs |
+| package manager | the program that installs the libraries of a build: `npm`, `pip`, `uv` or `go` |
+| registry cache | the agentdev service `registry-cache` that keeps copies of npm, PyPI and Go packages for the agents (#203) |
+| remote repository | an Artifact Registry repository that keeps copies of the packages of a public registry |
+| upstream | the public registry from which a registry cache gets the packages, for example `registry.npmjs.org` |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 

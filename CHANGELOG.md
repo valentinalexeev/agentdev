@@ -16,6 +16,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Registry cache for npm, PyPI and Go (#203), one setting `registry_proxy` (`off` by default, `cluster`,
+  `artifact_registry`). GKE: Terraform `registry_proxy = true` makes Artifact Registry remote repositories
+  `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (labels, reader IAM per repository for a gateway service account
+  through Workload Identity, 30-day cleanup) and output `registry_proxy`. kind and GKE without Artifact Registry: new
+  Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
+  through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
+  public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
 - Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's
   instructions, stay in scope, no CI workflow files, report only tests that ran, ask instead of guessing) and end with
   `STATUS: done|partial|needs-decision|blocked`. `needs-decision` and `blocked` push nothing; `needs-decision` asks on
