@@ -33,6 +33,7 @@ jobs:
       forge: ${{ steps.f.outputs.forge }}
       credproxy: ${{ steps.f.outputs.credproxy }}
       ui: ${{ steps.f.outputs.ui }}
+      tools: ${{ steps.f.outputs.tools }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,6 +58,7 @@ jobs:
           echo "forge=$(has '(^images/forge/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "credproxy=$(has '(^images/credproxy/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "ui=$(has '(^images/ui/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "tools=$(has '(^tools/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
 
   lint:
     needs: scope
@@ -128,7 +130,7 @@ jobs:
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
       - uses: actions/setup-go@v5
-        if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
+        if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true' || needs.scope.outputs.tools == 'true'
         with: {go-version-file: images/api/go.mod, cache-dependency-path: images/api/go.sum}
       - name: API vet and tests (#46)
         if: needs.scope.outputs.api == 'true'
@@ -151,6 +153,10 @@ jobs:
         if: needs.scope.outputs.credproxy == 'true'
         working-directory: images/credproxy
         run: go vet ./... && go test ./...
+      - name: ghwatch session monitor vet and tests (#232)
+        if: needs.scope.outputs.tools == 'true'
+        working-directory: tools/ghwatch
+        run: go vet ./... && go test -race ./...
       - name: Go dead code (staticcheck U1000, #132)
         if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
         run: |
@@ -187,6 +193,8 @@ jobs:
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/usage.test.sh
           # feedback runs get the issue, PR description and earlier rounds as background (#223)
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/feedback.test.sh
+          # run contract: STATUS line, no push on needs-decision/blocked, resume after an answer (#234)
+          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/contract.test.sh
           if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
           grep -q FORGE_URL err.txt
       - name: skipped (images/worker unchanged)
