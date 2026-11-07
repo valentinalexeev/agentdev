@@ -27,10 +27,9 @@ api() {
     "GET /repos/o/r/issues/3/timeline") echo "[$(assign bob owner)]" ;;
     "GET /repos/o/r/issues/4/timeline") [[ "$2" == *page=1 ]] && echo "[$(assign alice owner),$(assign alice owner true)]" || echo '[]' ;;
     "GET /repos/o/r/issues/5/timeline") [[ "$2" == *page=1 ]] && echo "[$(assign alice 'a;b')]" || echo '[]' ;;
-    "GET /repos/o/r/collaborators/owner/permission") echo "{\"permission\":\"${OWNER_PERM:-owner}\"}" ;;
-    "GET /repos/o/r/collaborators/tria/permission") echo '{"permission":"read"}' ;;
+    "GET /repos/o/r/assignees") if [[ -n "${ASSIGNEES:-}" ]]; then echo "${ASSIGNEES}"; else echo '[{"login":"alice"},{"login":"owner"}]'; fi ;;
     "GET /repos/o/r/commits/"*"/status") cat <<'J'
-{"state":"failure","statuses":[{"context":"ci/test","state":"failure","description":"2 tests failed"},
+{"state":"failure","statuses":[{"context":"ci/test","status":"failure","state":null,"description":"2 tests failed"},
  {"context":"lint","state":"success"},{"context":"build","state":"error","description":""},{"context":"slow","state":"pending"}]}
 J
     ;;
@@ -44,9 +43,10 @@ check "last assignment by the owner wins" "labeler_ok 2"
 check "no assignment of this agent: refused" "! labeler_ok 3 && grep -q label-unverified \"\${tmp}/events\""
 check "a removed assignment does not count" "! labeler_ok 4"
 check "a bad actor name is refused" "! labeler_ok 5"
-OWNER_PERM="write"; check "writer counts" "labeler_ok 2"
-OWNER_PERM=none;  check "the assigner lost access: refused" "! labeler_ok 2"
-unset OWNER_PERM
+ASSIGNEES='[{"login":"alice"}]'; check "the assigner lost write access: refused" "! labeler_ok 2"
+ASSIGNEES='{"message":"forbidden"}'; check "an unknown answer: refused" "! labeler_ok 2"
+unset ASSIGNEES
+check "no permission call on Gitea" "! grep -q /permission \"\${tmp}/calls\""
 check "a bad issue number is refused" "! labeler_ok '1;x'"
 check "timeline is paged with limit" "grep -q 'timeline?limit=50&page=1' \"\${tmp}/calls\""
 

@@ -97,8 +97,9 @@ assigned_issues_path() {
 # labeler_ok <issue>: the label (GitHub) or the assignment (Gitea) alone does not give work to an agent. On GitHub
 # anyone with triage access can add a label; on Gitea an assignee can be set by people without write access in some
 # setups (#237 P3). The person who added agent:<name> (GitHub) or assigned the agent (Gitea) last must have write,
-# maintain, admin or owner on the repo, checked live before each start (a person who lost write access no longer
-# counts). Fails closed: no event, a bot, an unknown answer -> no.
+# maintain or admin on the repo, checked live before each start (a person who lost write access no longer counts).
+# Gitea does not show another user's permission to a collaborator, so there the person must be in the repo's
+# assignee list, which holds exactly the users with write access. Fails closed: no event, a bot, an unknown answer -> no.
 labeler_ok() {
   local n=$1 actor perm what
   [[ "${n}" =~ ^[1-9][0-9]{0,15}$ ]] || return 1
@@ -112,9 +113,13 @@ labeler_ok() {
       '[.[][] | select(.type == "assignees" and .assignee.login == $me)] | last | select(.removed_assignee | not) | .user.login // ""' 2>/dev/null)
   fi
   [[ "${actor}" =~ ^[A-Za-z0-9_]([A-Za-z0-9_.-]{0,38}[A-Za-z0-9_])?$ ]] || { security_event label-unverified medium "issue #${n}: no valid actor for ${what}"; return 1; }
-  perm=$(api GET "/repos/${REPO}/collaborators/${actor}/permission" | jq -r '.permission // ""' 2>/dev/null)
+  if [[ "${FORGE_KIND}" == github ]]; then
+    perm=$(api GET "/repos/${REPO}/collaborators/${actor}/permission" | jq -r '.permission // ""' 2>/dev/null)
+  else
+    perm=$(api GET "/repos/${REPO}/assignees" | jq -r --arg a "${actor}" 'if type == "array" then (if any(.[]; .login == $a) then "write" else "read" end) else "" end' 2>/dev/null)
+  fi
   case "${perm}" in
-    owner|admin|maintain|write) return 0 ;;
+    admin|maintain|write) return 0 ;;
     *) security_event label-not-writer medium "issue #${n}: ${what} by ${actor} (permission ${perm:-none})"; return 1 ;;
   esac
 }
@@ -842,8 +847,8 @@ failed_checks() {
        | "- check \(.name): \(.conclusion)\(if .output.title then " (\(.output.title))" else "" end)"' 2>/dev/null
   fi
   api GET "/repos/${REPO}/commits/${sha}/status" 2>/dev/null | jq -r \
-    '.statuses[]? | select(.state == "failure" or .state == "error")
-     | "- check \(.context // "status"): \(.state)\(if (.description // "") != "" then " (\(.description))" else "" end)"' 2>/dev/null
+    '.statuses[]? | (.state // .status) as $st | select($st == "failure" or $st == "error")
+     | "- check \(.context // "status"): \($st)\(if (.description // "") != "" then " (\(.description))" else "" end)"' 2>/dev/null
 }
 
 handle_feedback() {

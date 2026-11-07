@@ -19,7 +19,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
-  permission, checked live like the GitHub label check; otherwise the issue is skipped with a security event. P6: Gitea
+  permission (is in the repository's assignee list), checked live like the GitHub label check; otherwise the issue is skipped with a security event. P6: Gitea
   review requests go through the same check as on GitHub (1 to 5 user logins, no teams). Re-run: `./run.sh 06` or the
   agent role of the playbook (new images only).
 - Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's

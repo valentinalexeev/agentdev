@@ -26,8 +26,8 @@ parts, both fenced as untrusted data (#223):
 
 **Who may give work** (#130, #237): a label (GitHub) or an assignment (Gitea) alone is not enough. Before each
 start the loop finds the person who added `agent:<name>` last (GitHub issue events) or who assigned the agent last
-(Gitea issue timeline), and checks live that this person has write, maintain, admin or owner permission on the
-repository. Anything else (no such event, a reader, an unknown answer) skips the issue and records a
+(Gitea issue timeline), and checks live that this person has write, maintain or admin permission on the
+repository (on Gitea: that the person is in the repository's assignee list, which has only users with write access). Anything else (no such event, a reader, an unknown answer) skips the issue and records a
 `label-not-writer` or `label-unverified` security event.
 
 The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread

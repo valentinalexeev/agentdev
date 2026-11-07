@@ -15,8 +15,7 @@ func TestGiteaParityRules(t *testing.T) {
 		{"GET", "/api/v1/repos/owner/repo/commits/" + sha + "/status", ""},
 		{"GET", "/api/v1/repos/owner/repo/commits/" + sha + "/statuses?limit=50", ""},
 		{"GET", "/api/v1/repos/owner/repo/issues/3/timeline?limit=50&page=1", ""},
-		{"GET", "/api/v1/repos/owner/repo/collaborators/owner/permission", ""},
-		{"GET", "/api/v1/repos/owner/repo/collaborators/dev.user_1/permission", ""},
+		{"GET", "/api/v1/repos/owner/repo/assignees", ""},
 		{"POST", "/api/v1/repos/owner/repo/pulls/7/requested_reviewers", `{"reviewers":["owner"]}`},
 		{"POST", "/api/v1/repos/owner/repo/pulls/7/requested_reviewers", `{"reviewers":["dev.user_1","b"]}`},
 	}
@@ -33,7 +32,7 @@ func TestGiteaParityRules(t *testing.T) {
 		{"other repo status", "GET", "/api/v1/repos/other/repo/commits/" + sha + "/status", ""},
 		{"collaborator list", "GET", "/api/v1/repos/owner/repo/collaborators", ""},
 		{"add a collaborator", "PUT", "/api/v1/repos/owner/repo/collaborators/mallory", `{"permission":"admin"}`},
-		{"login with a path", "GET", "/api/v1/repos/owner/repo/collaborators/a..b/x/permission", ""},
+		{"another user's permission", "GET", "/api/v1/repos/owner/repo/collaborators/owner/permission", ""},
 		{"team reviewers", "POST", "/api/v1/repos/owner/repo/pulls/7/requested_reviewers", `{"team_reviewers":["core"]}`},
 		{"team with users", "POST", "/api/v1/repos/owner/repo/pulls/7/requested_reviewers", `{"reviewers":["owner"],"team_reviewers":["core"]}`},
 		{"no reviewers", "POST", "/api/v1/repos/owner/repo/pulls/7/requested_reviewers", `{"reviewers":[]}`},
