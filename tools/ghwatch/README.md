@@ -78,6 +78,13 @@ Per open PR, derived on every poll:
 Comments, timeline events and releases are reported once each, by id. JSON lines by default; `-format text` prints
 one line per event.
 
+## Delivery (#242)
+
+Printing an event is best effort; the outbox is not. Every event is appended to `<state>.events.jsonl` before the
+state is saved (at-least-once). `-pending` prints the owner events after the acknowledged offset (`<state>.ack`),
+`-pending -ack` moves the offset. `scripts/watch-github.sh` prints the pending ones on start. If the last poll is
+older than `-gap-after` (default 5 m), the next poll starts with a `gap` event saying how long the monitor was down.
+
 ## Use
 
 ```bash
@@ -85,6 +92,7 @@ source ~/.config/github-bot/env.sh            # GH_TOKEN of the bot
 go build -o /tmp/ghwatch ./tools/ghwatch
 /tmp/ghwatch -repo valentinalexeev/agentdev -owner valentinalexeev -state /tmp/gh.json              # poll once
 /tmp/ghwatch -repo valentinalexeev/agentdev -owner valentinalexeev -state /tmp/gh.json -status      # open PRs and issues
+/tmp/ghwatch ... -pending [-ack]           # owner events not yet handled
 /tmp/ghwatch ... -dump-snapshot snap.json     # keep the raw observation; replay it with -replay snap.json
 ```
 

@@ -166,6 +166,11 @@ func Reduce(prev State, snap Snapshot) (State, []Event) {
 }
 
 func transitionPR(n int, old, obs PRState, reviews []Review, owner string, emit func(Event)) PRState {
+	// #242: the fetcher does not read checks of a merged or closed PR; keep the last known value instead of reading
+	// the empty list as "checks disappeared".
+	if (obs.Lifecycle == PRMerged || obs.Lifecycle == PRClosed) && obs.Checks == ChecksNone && obs.HeadSHA == old.HeadSHA {
+		obs.Checks, obs.FailedNames = old.Checks, old.FailedNames
+	}
 	if old.Lifecycle != obs.Lifecycle {
 		e := Event{Kind: EvPRLifecycle, Number: n, From: old.Lifecycle, To: obs.Lifecycle,
 			Text: fmt.Sprintf("PR #%d %s -> %s: %s", n, old.Lifecycle, obs.Lifecycle, obs.Title)}

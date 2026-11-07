@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -436,5 +439,72 @@ func TestReleases(t *testing.T) {
 	_, ev := Reduce(st, Snapshot{At: "t1", Releases: []Release{{ID: 1, Tag: "v1.0.0-rc.5"}, {ID: 2, Tag: "v1.0.0", Author: owner, Name: "1.0.0"}}})
 	if len(ev) != 1 || ev[0].Kind != EvRelease || ev[0].To != "v1.0.0" || !ev[0].Owner {
 		t.Fatalf("release: %+v", ev)
+	}
+}
+
+func TestMergedPRKeepsChecks(t *testing.T) {
+	st := base(t, Snapshot{At: "t0", PRs: []ObservedPR{pr(green)}})
+	_, got := step(t, st, Snapshot{PRs: []ObservedPR{pr(func(p *ObservedPR) { p.State, p.Merged = "closed", true })}})
+	if !reflect.DeepEqual(got, []string{"pr_lifecycle:open>merged"}) {
+		t.Fatalf("merge produced %v (no checks anomaly expected)", got)
+	}
+}
+
+// TestOutboxReplay: events survive a missed stdout; -pending shows owner events once until acked, a gap is reported.
+func TestOutboxReplay(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "s.json")
+	write := func(name string, s Snapshot) string {
+		p := filepath.Join(dir, name)
+		b, _ := json.Marshal(s)
+		os.WriteFile(p, b, 0o600)
+		return p
+	}
+	args := []string{"-repo", "o/r", "-owner", owner, "-state", state}
+	var out, errb bytes.Buffer
+	run(append(args, "-replay", write("0.json", Snapshot{At: "t0"})), &out, &errb)
+	// stdout of this poll is "lost": we discard it
+	run(append(args, "-replay", write("1.json", Snapshot{At: "t1", Comments: []Comment{{ID: 7, Number: 236, User: owner, Body: "Accept defaults"}, {ID: 8, Number: 236, User: "x"}}})), io.Discard, &errb)
+	out.Reset()
+	if rc := run(append(args, "-pending"), &out, &errb); rc != 0 || !strings.Contains(out.String(), "#236 boss: Accept defaults") || !strings.Contains(out.String(), "pending owner events: 1") {
+		t.Fatalf("pending: rc=%d %q", rc, out.String())
+	}
+	out.Reset()
+	run(append(args, "-pending", "-ack"), &out, &errb)
+	out.Reset()
+	run(append(args, "-pending"), &out, &errb)
+	if !strings.Contains(out.String(), "pending owner events: 0") {
+		t.Fatalf("after ack: %q", out.String())
+	}
+	run(append(args, "-replay", write("2.json", Snapshot{At: "t2", Comments: []Comment{{ID: 9, User: owner, Body: "later"}}})), io.Discard, &errb)
+	out.Reset()
+	run(append(args, "-pending"), &out, &errb)
+	if !strings.Contains(out.String(), "later") || strings.Contains(out.String(), "Accept defaults") {
+		t.Fatalf("only new events after ack: %q", out.String())
+	}
+}
+
+func TestGapReported(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "s.json")
+	st := base(t, Snapshot{At: "2026-01-01T00:00:00Z"})
+	if err := saveState(state, st); err != nil {
+		t.Fatal(err)
+	}
+	// a fetch is needed for the gap check (replay skips it); point the client at a stub that returns empty lists
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/actions/runs") {
+			io.WriteString(w, `{"workflow_runs":[]}`)
+			return
+		}
+		io.WriteString(w, `[]`)
+	}))
+	defer srv.Close()
+	var out, errb bytes.Buffer
+	if rc := run([]string{"-repo", "o/r", "-owner", owner, "-state", state, "-api", srv.URL, "-format", "text"}, &out, &errb); rc != 0 {
+		t.Fatalf("rc=%d %s", rc, errb.String())
+	}
+	if !strings.Contains(out.String(), "gap") || !strings.Contains(out.String(), "monitor was down") {
+		t.Fatalf("no gap line: %q", out.String())
 	}
 }
