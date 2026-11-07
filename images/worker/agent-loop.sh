@@ -550,6 +550,15 @@ $(untrusted "${disc}")"
 ${RUN_CONTRACT}"
 }
 
+# clear_needs_decision <n> <issue json>: the question was answered; GitHub removes a label by name, Gitea by id
+clear_needs_decision() {
+  local id
+  id=$(jq -r '[.labels[]? | select(.name == "needs-decision") | .id] | first // ""' <<<"$2" 2>/dev/null)
+  [[ "${id}" =~ ^[1-9][0-9]{0,15}$ ]] || return 0
+  if [[ "${FORGE_KIND}" == github ]]; then id=needs-decision; fi
+  api DELETE "/repos/${REPO}/issues/$1/labels/${id}" >/dev/null 2>&1 || log "issue #$1: could not remove the label needs-decision"
+}
+
 # one issue -> one PR, in its own worktree (runs as a background job)
 issue_job() {
   local n=$1 base=$2 issue title body branch dir result claude_rc=0
@@ -576,6 +585,9 @@ issue_job() {
 
 ${summary}"
       date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/issue-${n}.asked"   # resumed on the next comment by someone else
+      # #236: the owner's needs-decision filter shows the question (best effort: the label may not exist)
+      api POST "/repos/${REPO}/issues/${n}/labels" '{"labels":["needs-decision"]}' >/dev/null 2>&1 \
+        || log "issue #${n}: could not add the label needs-decision"
       board_card "issue-${n}" "#${n} ${title}" blocked "waits for a decision on the issue" "$(web_url "issues/${n}")"
     else
       comment "${n}" "🤖 I am blocked on this.
@@ -587,16 +599,22 @@ ${summary}"
     return 0
   fi
   rm -f "${STATE}/seen/issue-${n}.asked"
+  clear_needs_decision "${n}" "${issue}"
   if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
-    local pr
-    pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
+    local pr draft=false prtitle=${title}
+    # #236: a partial result opens a draft PR, so it does not look mergeable. GitHub: draft=true; Gitea: the WIP:
+    # title prefix (Gitea's draft marker). The sidecar's ready_for_review clears either one, on the agent's own PR.
+    if [[ "${status}" == partial ]]; then
+      draft=true; [[ "${FORGE_KIND}" == github ]] || prtitle="WIP: ${title}"
+    fi
+    pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${prtitle}" --arg h "${branch}" --arg b "${base}" --argjson dr "${draft}" --arg k "${FORGE_KIND}" \
           --arg d "Closes #${n}
 
 ${summary}
 $([[ "${status}" == partial ]] && printf '\n**Partial:** the agent reports that part of the issue is still open (see above).\n')
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
-          '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+          '{title:$t, head:$h, base:$b, body:$d} + (if $dr and $k == "github" then {draft:true} else {} end)')" | jq -r .number)
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
     # GitHub (#227): every agent is the same App bot, so the router finds the agent of a PR comment by this label

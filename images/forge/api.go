@@ -24,6 +24,7 @@ type server struct {
 	drv    driver     // forge-specific API location, auth and allow-list (driver.go)
 
 	usageGate usageGate // POST /usage rate limit (usage.go)
+	etags     etagCache // conditional GETs (etag.go, #236)
 }
 
 type ctxJob struct{}
@@ -37,6 +38,8 @@ type rule struct {
 	checkPath func(s *server, ctx context.Context, m []string, body []byte) error
 	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
 	rewrite func(s *server, body []byte) ([]byte, error)
+	// optional: the sidecar answers itself after the checks (an operation that is not one forge REST call, #236)
+	serve func(s *server, ctx context.Context, m []string, body []byte) (int, []byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -346,6 +349,19 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	drv := s.driver()
+	if match.serve != nil {
+		code, out, err := match.serve(s, r.Context(), groups, body)
+		if err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write(out)
+		return
+	}
 	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
 		if err := qc.checkQuery(r.URL.Query()); err != nil {
 			s.logf("refused %s %s: %v", r.Method, p, err)
@@ -360,7 +376,8 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		fail(w, errors.New("forge credential unavailable"))
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, drv.apiURL(p, r.URL.RawQuery), bytes.NewReader(body))
+	upstream := drv.apiURL(p, r.URL.RawQuery)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, bytes.NewReader(body))
 	if err != nil {
 		fail(w, err)
 		return
@@ -368,6 +385,12 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	var cached *etagEntry
+	if r.Method == http.MethodGet {
+		if cached = s.etags.get(upstream); cached != nil {
+			req.Header.Set("If-None-Match", cached.etag)
+		}
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		fail(w, errors.New("forge unreachable"))
@@ -385,6 +408,31 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		if v := resp.Header.Get(h); v != "" {
 			w.Header().Set(h, v)
 		}
+	}
+	if r.Method == http.MethodGet {
+		if resp.StatusCode == http.StatusNotModified && cached != nil { // unchanged: the loop sees the earlier 200
+			if cached.ctype != "" {
+				w.Header().Set("Content-Type", cached.ctype)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(cached.body)
+			return
+		}
+		if et := resp.Header.Get("ETag"); resp.StatusCode == http.StatusOK && et != "" {
+			b, err := io.ReadAll(io.LimitReader(resp.Body, etagMaxBody+1))
+			if err == nil && len(b) <= etagMaxBody {
+				s.etags.put(upstream, &etagEntry{etag: et, ctype: resp.Header.Get("Content-Type"), body: b})
+			} else {
+				s.etags.drop(upstream)
+			}
+			w.WriteHeader(resp.StatusCode)
+			_, _ = w.Write(b)
+			if err == nil && len(b) > etagMaxBody {
+				_, _ = io.Copy(w, resp.Body)
+			}
+			return
+		}
+		s.etags.drop(upstream)
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)

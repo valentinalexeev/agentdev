@@ -67,7 +67,7 @@ func (d *giteaDriver) remoteURL(repo string) string { return d.c.ForgeURL + "/" 
 // exactly the calls agent-loop.sh makes (issues, PRs, comments, reviews, review requests)
 func (d *giteaDriver) rules() []rule {
 	r := mkRule
-	return []rule{
+	return append([]rule{
 		r("GET", `/user`, nil),
 		r("GET", repoRe, nil),
 		r("GET", repoRe+`/issues`, nil),
@@ -87,7 +87,7 @@ func (d *giteaDriver) rules() []rule {
 		// collaborator asking for another user's permission; the assignee list holds exactly the users with write.
 		r("GET", repoRe+`/issues/[0-9]+/timeline`, nil),
 		r("GET", repoRe+`/assignees`, nil),
-	}
+	}, ifaceRules(`[1-9][0-9]{0,15}`)...) // #236: labels, ready for review, own comment edits, PR files
 }
 
 // giteaLoginRe: a Gitea user name (letters, digits, '-', '_', '.'; no leading or trailing '.' or '-')

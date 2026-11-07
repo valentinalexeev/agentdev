@@ -80,6 +80,29 @@ api() { case "$1 $2" in
   *) echo '[]';; esac; }
 CANNED=partial issue_job 5 main
 check "PR body: no STATUS line, partial note" "! grep -q 'STATUS:' '${tmp}/prbody' && grep -q 'Partial' '${tmp}/prbody'"
+# #236: partial opens a draft (GitHub draft=true; Gitea WIP: title), done does not
+check "partial on GitHub: draft PR" "[[ \$(jq -r '.draft' '${tmp}/prbody') == true && \$(jq -r .title '${tmp}/prbody') == T ]]"
+rm -f "${STATE}"/seen/issue-5.*; CANNED='done' issue_job 5 main
+check "done on GitHub: not a draft" "[[ \$(jq -r '.draft // false' '${tmp}/prbody') == false ]]"
+FORGE_KIND=gitea
+rm -f "${STATE}"/seen/issue-5.*; CANNED=partial issue_job 5 main
+check "partial on Gitea: WIP title, no draft key" "[[ \$(jq -r .title '${tmp}/prbody') == 'WIP: T' && \$(jq -r 'has(\"draft\")' '${tmp}/prbody') == false ]]"
+rm -f "${STATE}"/seen/issue-5.*; CANNED='done' issue_job 5 main
+check "done on Gitea: plain title" "[[ \$(jq -r .title '${tmp}/prbody') == T ]]"
+FORGE_KIND=github
+# #236: needs-decision sets the label; the next run clears it (GitHub by name, Gitea by id)
+API_LOG="${tmp}/api2"; : > "${API_LOG}"
+api() { echo "$1 $2 ${3:-}" >> "${API_LOG}"; case "$1 $2" in
+  "GET /repos/o/r/issues/5") echo '{"number":5,"title":"T","body":"B","labels":[{"id":31,"name":"needs-decision"}]}';;
+  "POST /repos/o/r/pulls") echo '{"number":42}';;
+  *) echo '[]';; esac; }
+rm -f "${STATE}"/seen/issue-5.*; CANNED=needs-decision issue_job 5 main
+check "needs-decision: label added" "grep -qF 'POST /repos/o/r/issues/5/labels {\"labels\":[\"needs-decision\"]}' '${API_LOG}'"
+rm -f "${STATE}"/seen/issue-5.*; CANNED='done' issue_job 5 main
+check "next run on GitHub: label removed by name" "grep -q 'DELETE /repos/o/r/issues/5/labels/needs-decision' '${API_LOG}'"
+FORGE_KIND=gitea; rm -f "${STATE}"/seen/issue-5.*; CANNED='done' issue_job 5 main
+check "next run on Gitea: label removed by id" "grep -q 'DELETE /repos/o/r/issues/5/labels/31' '${API_LOG}'"
+FORGE_KIND=github
 
 # ---- awaiting_answer
 echo 2026-11-07T10:00:00Z > "${STATE}/seen/issue-5.asked"

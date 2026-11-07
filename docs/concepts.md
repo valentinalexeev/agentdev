@@ -51,9 +51,28 @@ the list.
 | Status | Issue run | Feedback run |
 |---|---|---|
 | `done` | push, open the PR | push, reply |
-| `partial` | push, open the PR with a "Partial" note | push, reply |
-| `needs-decision` | no push; ask on the issue; resume after the next comment by someone else | no push; ask on the PR |
+| `partial` | push, open a **draft** PR with a "Partial" note (#236) | push, reply |
+| `needs-decision` | no push; ask on the issue and add the label `needs-decision`; resume after the next comment by someone else (the label is removed then) | no push; ask on the PR |
 | `blocked` | no push; explain on the issue; the issue is finished | no push; explain on the PR |
+
+### Forge calls of an agent (#236)
+
+The agent never holds a forge credential: every forge call goes through the forge sidecar, which allows a fixed list
+of calls and checks each write against facts it reads from the forge itself. Besides reading issues, PRs, comments,
+reviews, checks and the files of a PR, an agent may:
+
+- add or remove the labels `needs-decision` and `in-progress` on an issue given to it (assigned on Gitea, labelled
+  `agent:<name>` on GitHub) or on its own PR, and add `agent:<name>` only on its own PR. Any other label, a label
+  replace or a label on someone else's item is refused with a security event (`label-not-allowed`).
+- open a draft PR (GitHub `draft`, Gitea a `WIP:` title) and mark only its own PR ready for review through the
+  sidecar path `POST /repos/{o}/{r}/pulls/{n}/ready_for_review` (GitHub GraphQL, Gitea removes the `WIP:` prefix).
+- edit only its own comments (`PATCH /issues/comments/{id}`): the sidecar reads the comment first. On GitHub, where
+  all agents are one App bot, the comment must also carry this agent's signature line (`comment-not-own` event).
+
+GET answers that carry an `ETag` are cached in the sidecar (at most 512 entries, 32 MiB): the next GET asks with
+`If-None-Match`, and a `304` is served from the cache as the earlier answer. The loop sees no difference; on GitHub
+a `304` does not count against the rate limit. A typed work endpoint is proposed in
+[ADR 0005](adr/0005-forge-work-endpoint.md).
 
 An agent works on several items at once (`MAX_CONCURRENT`, default 2), each in its own git worktree. A failed
 item is retried later with a backoff, not in a tight loop.

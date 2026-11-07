@@ -16,6 +16,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Forge sidecar interface additions (#236), both forges. Labels `needs-decision`, `in-progress` and `agent:<name>`
+  (only those; `agent:<name>` only on the agent's own PR) on issues given to the agent or its own PRs; draft PRs and a
+  sidecar `POST /repos/{o}/{r}/pulls/{n}/ready_for_review` for the agent's own PR; edits of the agent's own comments;
+  `GET /pulls/{n}/files`; an ETag cache for GET answers (a `304` is served from the cache). The loop opens a draft PR
+  for `STATUS: partial` (GitHub `draft`, Gitea `WIP:` title) and adds `needs-decision` when it asks a question,
+  removed on the next run. New security events `label-not-allowed`, `comment-not-own`. The GitHub App needs no new
+  permission. ADR 0005 proposes a typed `/v1/work` endpoint. Re-run: `./run.sh 06` or the agent role of the playbook
+  (new images only).
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
