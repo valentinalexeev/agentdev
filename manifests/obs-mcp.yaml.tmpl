@@ -1,0 +1,70 @@
+# Read-only observability MCP tools (#205), namespace ${PLATFORM_NS}. Rendered by 08-mcp.sh (kind) and the platform role
+# (GKE) when OBS_MCP=true / obs_mcp_enabled. The operator image runs `agentdev-operator obs-mcp`. It holds the backend
+# credential (Secret obs-mcp-token, optional, mounted as a file); agents only reach it through ContextForge with their
+# project-scoped token: add {name: obs, url: http://obs-mcp.${PLATFORM_NS}.svc.cluster.local:8080/mcp} to a project
+# spec's mcp.servers and obs-mcp.${PLATFORM_NS}.svc.cluster.local to the MCP allow-list (docs/admin.md).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obs-mcp
+  namespace: ${PLATFORM_NS}
+  # Cloud Logging add-on on GKE: a Google service account with roles/logging.viewer only (empty: no add-on)
+  annotations: {iam.gke.io/gcp-service-account: "${OBS_GSA}"}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: obs-mcp, namespace: ${PLATFORM_NS}, labels: {app: obs-mcp}}
+spec:
+  replicas: 1                      # rate limits are per pod
+  selector: {matchLabels: {app: obs-mcp}}
+  template:
+    metadata: {labels: {app: obs-mcp}}
+    spec:
+      serviceAccountName: obs-mcp
+      automountServiceAccountToken: false   # no Kubernetes API access
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: obs-mcp
+        image: ${OPERATOR_IMAGE}
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
+        args: [obs-mcp]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        env:
+        - {name: PROMETHEUS_URL, value: "${PROMETHEUS_URL}"}
+        - {name: LOKI_URL, value: "${LOKI_URL}"}
+        - {name: LOKI_TENANT, value: "${LOKI_TENANT}"}
+        - {name: CLOUD_LOGGING_PROJECT, value: "${CLOUD_LOGGING_PROJECT}"}
+        - {name: OBS_TOKEN_FILE, value: /var/run/obs-mcp/token}
+        - {name: OBS_MCP_MAX_OUTPUT, value: "${OBS_MCP_MAX_OUTPUT}"}
+        - {name: OBS_MCP_RATE_PER_MIN, value: "${OBS_MCP_RATE_PER_MIN}"}
+        - {name: OBS_MCP_RATE_BURST, value: "${OBS_MCP_RATE_BURST}"}
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits:   {memory: 128Mi}
+        volumeMounts: [{name: token, mountPath: /var/run/obs-mcp, readOnly: true}]
+      volumes:
+      # bearer token for Prometheus/Loki (key: token); optional, the stock in-cluster stacks need none
+      - name: token
+        secret: {secretName: obs-mcp-token, optional: true, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: obs-mcp, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: obs-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Only ContextForge calls the tools: an agent pod cannot reach obs-mcp directly (it would skip the gateway's token
+# check). The namespace's default-deny-ingress (platform.yaml.tmpl) covers everything else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: obs-mcp, namespace: ${PLATFORM_NS}}
+spec:
+  podSelector: {matchLabels: {app: obs-mcp}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: contextforge}}}]
+    ports: [{port: 8080}]
