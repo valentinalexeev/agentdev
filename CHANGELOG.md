@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's
+  instructions, stay in scope, no CI workflow files, report only tests that ran, ask instead of guessing) and end with
+  `STATUS: done|partial|needs-decision|blocked`. `needs-decision` and `blocked` push nothing; `needs-decision` asks on
+  the issue and resumes after the next comment by someone else; `partial` marks the PR. Issue runs also get the issue
+  discussion (fenced, new worker variable `ISSUE_CONTEXT_CHARS`, default 8000). A run without a status line behaves as
+  before (`done`).
 - `tools/ghwatch` (#232): a deterministic state machine over GitHub activity for the operator's session monitor.
   It tracks PRs (lifecycle, pushes, checks on the head, every review, the owner's review state, mergeability, merge
   readiness), issues (state, assignees, labels, milestone), comments, who did what on issues and PRs (timeline

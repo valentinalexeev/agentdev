@@ -29,6 +29,25 @@ The issue and the PR description get at most a quarter of that each; when the th
 first. Resuming the CLI session per PR was not chosen: the input grows with each round, and the replayed transcript
 carries untrusted text from all earlier rounds.
 
+### Run contract (#234)
+
+Issue runs and feedback runs share one set of rules, added after the forge text: read the repository's own
+instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`), stay in the scope of the task, leave CI workflow files to
+a person (the sidecar refuses them anyway), report only tests that really ran, and ask instead of guessing when a
+wrong guess is costly. An issue run also gets the issue's comments (fenced, at most `ISSUE_CONTEXT_CHARS`
+characters, default 8000, newest kept), because maintainer decisions often live there.
+
+Every run ends with one line `STATUS: done | partial | needs-decision | blocked`. The loop reads only the last valid
+line; any other word is ignored, and a missing line counts as `done`, so model text cannot choose an action outside
+the list.
+
+| Status | Issue run | Feedback run |
+|---|---|---|
+| `done` | push, open the PR | push, reply |
+| `partial` | push, open the PR with a "Partial" note | push, reply |
+| `needs-decision` | no push; ask on the issue; resume after the next comment by someone else | no push; ask on the PR |
+| `blocked` | no push; explain on the issue; the issue is finished | no push; explain on the PR |
+
 An agent works on several items at once (`MAX_CONCURRENT`, default 2), each in its own git worktree. A failed
 item is retried later with a backoff, not in a tight loop.
 

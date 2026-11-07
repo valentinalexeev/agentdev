@@ -82,12 +82,12 @@ NOTE: Use the label `security-finding` for an issue that comes from a security f
 An agent asks a question when an issue is not clear. The agent does not guess. The instructions in `AGENTS.md` (from
 the process pack) tell the agent to do this.
 
-1. Find the issue with the `needs-decision` label.
+1. Find the issue with the `needs-decision` label, or the comment "I need a decision before I continue".
 2. Read the question of the agent in the issue.
-3. Write your answer in a comment on the issue.
+3. Write your answer in a comment on the issue. The agent starts again on the issue after your comment.
 
-NOTE: If the agent cannot make a change, the agent writes "could not produce a change" in the issue. Open a new issue
-with more information.
+NOTE: If the agent cannot make a change, the agent writes "could not produce a change" or "I am blocked on this" in
+the issue. Open a new issue with more information.
 
 ## Discuss the project in an interactive session
 
