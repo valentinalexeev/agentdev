@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
+  waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
+  from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
+  auth hosts answer without a proxy error. The run fails with the URL and the answer. New instance values
+  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). Not run with `--check`. Test:
+  `infra/ansible/tests/ingress_smoke.yml`. Docs: admin.md "Post-deploy smoke test", troubleshooting.md.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write

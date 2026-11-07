@@ -1184,6 +1184,24 @@ playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider tha
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
+### Post-deploy smoke test
+
+At the end of each run, the playbook sends requests to the public hosts from the operator computer (#213). It does
+this in the two ingress modes. The run fails when one of these checks does not pass in `ingress.smoke_timeout`
+seconds (default 300):
+
+| Check | Expected answer |
+|---|---|
+| Forwarder pods (only with `ingress.forwarder.namespace` and `pod_selector`) | Ready |
+| `POST https://<ingress.webhook_host>/hook` without a signature | 401 from the router |
+| `GET https://<ingress.webhook_host>/status` | 404 (the internal endpoints are not public) |
+| `GET https://<ingress.host>/` (when the UI is routed) | 200, a redirect, 401 or 403 |
+| `GET https://<ingress.auth_host>/` (with authentik) | 200, a redirect, 401 or 403 |
+
+The failure message gives the URL and the answer. A new managed certificate can need more time on the first run.
+Then run the playbook again, or set a larger `ingress.smoke_timeout`. To turn the test off, set `ingress.smoke: false`.
+The test does not operate in check mode (`--check`).
+
 ### Reference: the public entry point
 
 | Control | Where | Value |
