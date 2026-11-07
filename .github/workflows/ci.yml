@@ -101,6 +101,10 @@ jobs:
           AGENTS_NS=coding-agents PLATFORM_NS=agentdev-platform CLAUDE_PROXY_IMAGE=img IMAGE_PULL_POLICY=Never CLAUDE_BUDGET_TOKENS=0 \
             CLAUDE_SECRET_SOURCES="$(scripts/claude-proxy-sources.sh alice)" envsubst < manifests/claude-proxy.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
+          # observability MCP tools (#205)
+          PLATFORM_NS=agentdev-platform OPERATOR_IMAGE=img IMAGE_PULL_POLICY=Never PROMETHEUS_URL=http://p LOKI_URL='' LOKI_TENANT='' \
+            CLOUD_LOGGING_PROJECT='' OBS_GSA='' OBS_MCP_MAX_OUTPUT=16384 OBS_MCP_RATE_PER_MIN=30 OBS_MCP_RATE_BURST=10 \
+            envsubst < manifests/obs-mcp.yaml.tmpl | ./kubeconform -strict -summary -
       # The checks below cover files that #98 (egress, #65) and #115 (Ansible API role, #104) add; each one is skipped
       # until its file is on the branch, so this workflow can merge first.
       - name: egress proxy (#65) manifests validate and squid.conf parses with the pinned image
