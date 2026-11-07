@@ -16,6 +16,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
+  `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
+  project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
+  bounded, output redacted, clipped and fenced as untrusted, calls are rate limited (docs/security.md R99). Off by
+  default: `OBS_MCP=true` and `./run.sh 08` on kind, `obs_mcp.enabled` and the playbook (role `platform`) on GKE.
 - Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's
   instructions, stay in scope, no CI workflow files, report only tests that ran, ask instead of guessing) and end with
   `STATUS: done|partial|needs-decision|blocked`. `needs-decision` and `blocked` push nothing; `needs-decision` asks on

@@ -140,6 +140,23 @@ through [ContextForge](https://github.com/IBM/mcp-context-forge), an MCP gateway
 its project's server, so one project's agents cannot reach another project's tools. The readiness report shows how
 many tools an agent sees.
 
+### Observability tools (#205)
+
+Agents get no SSH and no backend credentials. To read the state of what they deploy, a project can add the
+**observability tools**: the pod `obs-mcp` in `agentdev-platform` (the operator image, subcommand `obs-mcp`) is an
+MCP server with `prometheus_query`, `loki_query` and, on GKE as an add-on, `cloud_logging_query`. It is registered in
+ContextForge like any other project server, so an agent reaches it only with its project-scoped token, and a
+NetworkPolicy lets only ContextForge call the pod. The backend token (and on GKE the Workload Identity for Cloud
+Logging) stays in that pod.
+
+The tools only call the backends' query APIs. Input is bounded (query length, time range, lines, points); output
+is redacted for common credential shapes, clipped, and returned as `UNTRUSTED DATA` in a fence the text cannot
+close. That output goes to the model only; no limit, pause or credential decision reads it (reviewer checklist item
+4). Prometheus and Loki are the backend on both kind and GKE (owner decision on #205); agentdev does not install them.
+
+Planned in #205, after the SSH certificate authority (#204): scheduled snapshots of fixed server facts, a nightly
+drift check, and a catalogue of admin-defined server checks (`server_check`).
+
 ## Interactive session
 
 An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
