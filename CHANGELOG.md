@@ -63,6 +63,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- `scripts/e2e-gke-security.sh`: the check `forge: GitHub works for the sidecar (proxy credential)` gave HTTP 000 on
+  a healthy instance (#211). Squid sends no 407 challenge, and busybox `wget` sends the proxy credential only after one.
+  The check now opens the tunnel with git and `http.proxyAuthMethod=basic`, as the sidecar does (#162). A new check
+  `forge: GitHub is refused with a wrong proxy credential` makes sure the probe still fails without the right credential.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
