@@ -185,6 +185,8 @@ jobs:
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/guard.test.sh
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/jobs.test.sh
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/usage.test.sh
+          # feedback runs get the issue, PR description and earlier rounds as background (#223)
+          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/feedback.test.sh
           if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
           grep -q FORGE_URL err.txt
       - name: skipped (images/worker unchanged)
