@@ -79,9 +79,20 @@ func (d *giteaDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+`, nil),
 		r("GET", repoRe+`/pulls/[0-9]+/reviews`, nil),
 		r("GET", repoRe+`/pulls/[0-9]+/reviews/[0-9]+/comments`, nil),
-		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, nil),
+		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequestGitea), // #237 P6
+		// #237 P1: CI results (Gitea Actions and external CI report commit statuses) for feedback runs
+		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
+		r("GET", repoRe+`/commits/[0-9a-f]{40}/statuses`, nil),
+		// #237 P3: who assigned the agent (issue timeline) and whether that person may write
+		r("GET", repoRe+`/issues/[0-9]+/timeline`, nil),
+		r("GET", repoRe+`/collaborators/`+giteaLogin+`/permission`, nil),
 	}
 }
+
+// giteaLogin: a Gitea user name (letters, digits, '-', '_', '.'; no leading or trailing '.' or '-'), never a path
+const giteaLogin = `[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,38}[A-Za-z0-9_])?`
+
+var giteaLoginRe = regexp.MustCompile("^" + giteaLogin + "$")
 
 // driverOrGitea is newDriver for code paths that cannot fail (tests building a server by hand); main checks the
 // kind with newDriver first, so an unknown kind never gets here at runtime.

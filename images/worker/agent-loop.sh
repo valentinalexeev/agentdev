@@ -94,21 +94,28 @@ assigned_issues_path() {
   if [[ "${FORGE_KIND}" == github ]]; then echo "/repos/${REPO}/issues?state=open&labels=agent:${FORGE_USER}&$(per_page 50)"
   else echo "/repos/${REPO}/issues?state=open&type=issues&assigned_by=${FORGE_USER}&$(per_page 50)"; fi
 }
-# labeler_ok <issue>: on GitHub anyone with triage access can add a label, so the label alone does not give work to
-# an agent. The person who added agent:<name> last must have write, maintain or admin on the repo, checked live
-# before each start (a person who lost write access no longer counts). Fails closed: no event, a bot, an unknown
-# answer -> no. Gitea: assignment needs write access already, so always yes.
+# labeler_ok <issue>: the label (GitHub) or the assignment (Gitea) alone does not give work to an agent. On GitHub
+# anyone with triage access can add a label; on Gitea an assignee can be set by people without write access in some
+# setups (#237 P3). The person who added agent:<name> (GitHub) or assigned the agent (Gitea) last must have write,
+# maintain, admin or owner on the repo, checked live before each start (a person who lost write access no longer
+# counts). Fails closed: no event, a bot, an unknown answer -> no.
 labeler_ok() {
-  [[ "${FORGE_KIND}" == github ]] || return 0
-  local n=$1 actor perm
+  local n=$1 actor perm what
   [[ "${n}" =~ ^[1-9][0-9]{0,15}$ ]] || return 1
-  actor=$(api GET "/repos/${REPO}/issues/${n}/events?$(per_page 100)" | jq -r --arg l "agent:${FORGE_USER}" \
-    '[.[] | select(.event == "labeled" and .label.name == $l)] | last | .actor.login // ""' 2>/dev/null)
-  [[ "${actor}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]] || { security_event label-unverified medium "issue #${n}: no valid labeler for agent:${FORGE_USER}"; return 1; }
+  if [[ "${FORGE_KIND}" == github ]]; then
+    what="agent:${FORGE_USER}"
+    actor=$(api GET "/repos/${REPO}/issues/${n}/events?$(per_page 100)" | jq -r --arg l "${what}" \
+      '[.[] | select(.event == "labeled" and .label.name == $l)] | last | .actor.login // ""' 2>/dev/null)
+  else
+    what="assignment of ${FORGE_USER}"
+    actor=$(all_pages "/repos/${REPO}/issues/${n}/timeline" | jq -rs --arg me "${FORGE_USER}" \
+      '[.[][] | select(.type == "assignees" and .assignee.login == $me)] | last | select(.removed_assignee | not) | .user.login // ""' 2>/dev/null)
+  fi
+  [[ "${actor}" =~ ^[A-Za-z0-9_]([A-Za-z0-9_.-]{0,38}[A-Za-z0-9_])?$ ]] || { security_event label-unverified medium "issue #${n}: no valid actor for ${what}"; return 1; }
   perm=$(api GET "/repos/${REPO}/collaborators/${actor}/permission" | jq -r '.permission // ""' 2>/dev/null)
   case "${perm}" in
-    admin|maintain|write) return 0 ;;
-    *) security_event label-not-writer medium "issue #${n}: agent:${FORGE_USER} added by ${actor} (permission ${perm:-none})"; return 1 ;;
+    owner|admin|maintain|write) return 0 ;;
+    *) security_event label-not-writer medium "issue #${n}: ${what} by ${actor} (permission ${perm:-none})"; return 1 ;;
   esac
 }
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
@@ -824,14 +831,19 @@ reply_threads() {
       || log "PR #${pr}: could not reply in thread ${id}"
   done <<<"${threads}"
 }
-# failed_checks <pr json> -> lines "- check <name>: <conclusion>" for the PR head (GitHub), untrusted context only
+# failed_checks <pr json> -> lines "- check <name>: <state>" for the PR head, untrusted context only. GitHub: check
+# runs; both forges: commit statuses (Gitea Actions and external CI report through them, #237 P1).
 failed_checks() {
-  [[ "${FORGE_KIND}" == github ]] || return 0
   local sha; sha=$(jq -r '.head.sha // ""' <<<"$1")
   [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 0
-  api GET "/repos/${REPO}/commits/${sha}/check-runs?$(per_page 50)" 2>/dev/null | jq -r \
-    '.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")
-     | "- check \(.name): \(.conclusion)\(if .output.title then " (\(.output.title))" else "" end)"' 2>/dev/null
+  if [[ "${FORGE_KIND}" == github ]]; then
+    api GET "/repos/${REPO}/commits/${sha}/check-runs?$(per_page 50)" 2>/dev/null | jq -r \
+      '.check_runs[]? | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")
+       | "- check \(.name): \(.conclusion)\(if .output.title then " (\(.output.title))" else "" end)"' 2>/dev/null
+  fi
+  api GET "/repos/${REPO}/commits/${sha}/status" 2>/dev/null | jq -r \
+    '.statuses[]? | select(.state == "failure" or .state == "error")
+     | "- check \(.context // "status"): \(.state)\(if (.description // "") != "" then " (\(.description))" else "" end)"' 2>/dev/null
 }
 
 handle_feedback() {

@@ -20,8 +20,15 @@ parts, both fenced as untrusted data (#223):
 - **Background**, for context only: the issue the PR resolves (the issue the agent opened the PR for, else
   `Closes #N` in the PR description), the PR description, and the latest earlier thread items (comments, reviews,
   inline comments and the agent's own replies). The run keeps the decisions in it but does not reply to it.
-- **New feedback**: the comments and reviews since the last handled round (and failing checks on GitHub). The
-  reply to the reviewers covers these items only.
+- **New feedback**: the comments and reviews since the last handled round, and the failing checks on the PR head
+  (GitHub check runs, and commit statuses on both forges, so Gitea Actions results count too, #237). The reply to
+  the reviewers covers these items only.
+
+**Who may give work** (#130, #237): a label (GitHub) or an assignment (Gitea) alone is not enough. Before each
+start the loop finds the person who added `agent:<name>` last (GitHub issue events) or who assigned the agent last
+(Gitea issue timeline), and checks live that this person has write, maintain, admin or owner permission on the
+repository. Anything else (no such event, a reader, an unknown answer) skips the issue and records a
+`label-not-writer` or `label-unverified` security event.
 
 The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread
 items (default 20) and `FEEDBACK_CONTEXT_CHARS` characters in total (default 12000; `0` turns the background off).

@@ -27,7 +27,7 @@ func TestGiteaDriverUnchanged(t *testing.T) {
 		if got := d.remoteURL("o/r"); got != "http://gitea:3000/o/r.git" {
 			t.Errorf("remote: %s", got)
 		}
-		if len(d.rules()) != 12 {
+		if len(d.rules()) != 16 {
 			t.Errorf("rules: %d", len(d.rules()))
 		}
 	}
