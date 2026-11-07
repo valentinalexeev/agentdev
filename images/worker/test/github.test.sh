@@ -104,6 +104,6 @@ check "bad head sha: no call" "[[ -z \$(failed_checks '{\"head\":{\"sha\":\"main
 FORGE_KIND=gitea
 check "gitea: assigned_by and limit" "[[ \$(assigned_issues_path) == '/repos/octo-org/repo/issues?state=open&type=issues&assigned_by=alice&limit=50' ]]"
 check "gitea: no GHAS calls" "[[ -z \$(security_threads 14 2026-11-01T09:00:00Z) ]]"
-check "gitea: no labeler check" "labeler_ok 13"
+check "gitea: labeler check fails closed without a timeline (#237 P3)" "! labeler_ok 13"
 check "gitea: PR links use /pulls/" "[[ \$(pr_url 14) == https://github.com/octo-org/repo/pulls/14 ]]"
 exit "${fail}"
