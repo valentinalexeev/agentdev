@@ -100,6 +100,10 @@ log "Egress allow-list (#65): proxy and NetworkPolicy"
 # with the credential proxy on, only claude-proxy reaches the Claude API (R64): drop it from the agents' list
 agent_egress_hosts=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
   { if [[ "${CLAUDE_PROXY}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
+# registry cache (#203): with a cache the agents reach the package registries only through it
+if [[ "${REGISTRY_PROXY}" != off ]]; then
+  agent_egress_hosts=$(echo "${agent_egress_hosts}" | xargs -n1 | grep -vxF -f <(echo "${REGISTRY_PROXY_UPSTREAM_HOSTS}" | xargs -n1) | xargs)
+fi
 # the forge hosts (GitHub) are for the forge sidecar only: the proxy wants its credential (manifests/egress.yaml.tmpl)
 FORGE_PROXY_KEY=$(secret_file "${SPIKE_DIR}/.secrets/egress-forge-proxy.key")
 forge_auth="^Basic $(printf 'forge:%s' "${FORGE_PROXY_KEY}" | base64 | tr -d '\n')\$"
@@ -116,6 +120,14 @@ egress_render | k apply -f - >/dev/null
 AGENTS_NS="${AGENTS_NS}" envsubst '${AGENTS_NS}' < "${SPIKE_DIR}/manifests/egress-proxy-web.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout status deploy/egress-proxy --timeout=180s >/dev/null
 ok "egress-proxy up; agents may reach only: ${agent_egress_hosts} (forge sidecar also: ${FORGE_EGRESS_HOSTS})"
+
+log "Registry cache (#203): ${REGISTRY_PROXY}"
+case "${REGISTRY_PROXY}" in off|cluster) ;; *) die "REGISTRY_PROXY must be off or cluster on kind (artifact_registry is GKE only)" ;; esac
+ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags registry-cache \
+  -e kind_cluster_name="${CLUSTER_NAME}" -e registry_proxy="${REGISTRY_PROXY}" -e registry_cache_ns="${AGENTS_NS}" \
+  -e "{\"registry_proxy_upstream_hosts\": $(echo "${REGISTRY_PROXY_UPSTREAM_HOSTS}" | xargs -n1 | jq -R . | jq -sc .)}" >/dev/null \
+  || die "registry cache failed (ansible-playbook infra/ansible/kind.yml --tags registry-cache)"
+ok "registry cache: ${REGISTRY_PROXY}"
 
 log "Agents"
 # agents are Agent objects (#47, #57): the operator turns them into StatefulSets. Install it when missing; to

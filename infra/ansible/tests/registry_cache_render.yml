@@ -1,0 +1,88 @@
+# Test of the registry cache templates (#203): ansible-playbook infra/ansible/tests/registry_cache_render.yml
+# (no cluster needed). Renders both modes, checks the read-only gateway, the agent settings and the egress lists.
+- name: Registry cache renders
+  hosts: localhost
+  gather_facts: false
+  vars:
+    registry_cache_ns: coding-agents
+    registry_cache_labels: {service: agentdev}
+    ar:
+      service_account: agentdev-registry-cache@my-proj.iam.gserviceaccount.com
+      npm: https://europe-west4-npm.pkg.dev/my-proj/agentdev-npm/
+      pypi: https://europe-west4-python.pkg.dev/my-proj/agentdev-pypi/
+      go: https://europe-west4-go.pkg.dev/my-proj/agentdev-go/
+    tpl: ../roles/registry_cache/templates/registry-cache.yaml.j2
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/registry_cache/defaults/main.yml
+
+    - name: Render cluster mode
+      ansible.builtin.set_fact:
+        cl: >-
+          {{ lookup('ansible.builtin.template', tpl, template_vars={'registry_cache_mode': 'cluster',
+             'registry_cache_ar': {}}) | from_yaml_all | list }}
+
+    - name: Render artifact_registry mode
+      ansible.builtin.set_fact:
+        arr: >-
+          {{ lookup('ansible.builtin.template', tpl, template_vars={'registry_cache_mode': 'artifact_registry',
+             'registry_cache_ar': ar}) | from_yaml_all | list }}
+
+    - name: Settings for the agents
+      ansible.builtin.set_fact:
+        cl_env: "{{ (cl | selectattr('metadata.name', 'equalto', 'registry-proxy') | first).data }}"
+        ar_env: "{{ (arr | selectattr('metadata.name', 'equalto', 'registry-proxy') | first).data }}"
+        cl_nginx: >-
+          {{ (cl | selectattr('metadata.name', 'equalto', 'registry-cache') | selectattr('kind', 'equalto', 'ConfigMap')
+             | first).data['nginx.conf'] }}
+        ar_nginx: >-
+          {{ (arr | selectattr('metadata.name', 'equalto', 'registry-cache') | selectattr('kind', 'equalto', 'ConfigMap')
+             | first).data['nginx.conf'] }}
+        ar_sa: "{{ arr | selectattr('kind', 'equalto', 'ServiceAccount') | first }}"
+
+    - name: Check
+      ansible.builtin.assert:
+        that:
+          # cluster: gateway + three caches with volumes; artifact_registry: gateway only, no PVC
+          - cl | selectattr('kind', 'equalto', 'Deployment') | list | length == 4
+          - cl | selectattr('kind', 'equalto', 'PersistentVolumeClaim') | list | length == 3
+          - arr | selectattr('kind', 'equalto', 'Deployment') | list | length == 1
+          - arr | selectattr('kind', 'equalto', 'PersistentVolumeClaim') | list | length == 0
+          # agents get URLs of the gateway only, never a token
+          - cl_env.npm_config_registry == 'http://registry-cache.coding-agents.svc.cluster.local:4873/'
+          - cl_env.PIP_INDEX_URL == 'http://registry-cache.coding-agents.svc.cluster.local:3141/root/pypi/+simple/'
+          - ar_env.PIP_INDEX_URL == 'http://registry-cache.coding-agents.svc.cluster.local:3141/simple/'
+          - cl_env.GOPROXY == 'http://registry-cache.coding-agents.svc.cluster.local:3000'
+          - (cl_env | to_json + ar_env | to_json) is not search('(?i)token|password|bearer|pkg\.dev')
+          # read-only in both modes; the Artifact Registry token stays in the gateway
+          - cl_nginx is search('return 405') and ar_nginx is search('return 405')
+          - ar_nginx | regex_findall('proxy_set_header Authorization') | length == 3
+          - cl_nginx is not search('Authorization')
+          - ar_sa.metadata.annotations['iam.gke.io/gcp-service-account'] == ar.service_account
+        quiet: true
+
+    - name: Agents' egress names with the cache off and on
+      ansible.builtin.set_fact:
+        names_off: "{{ lookup('ansible.builtin.template', '../egress_fqdn.j2', template_vars=v_off) | from_yaml | map(attribute='name') | list }}"
+        names_on: "{{ lookup('ansible.builtin.template', '../egress_fqdn.j2', template_vars=v_on) | from_yaml | map(attribute='name') | list }}"
+      vars:
+        egress_hosts: [registry.npmjs.org, pypi.org, index.crates.io]
+        egress_extra_hosts: []
+        forge_egress_hosts: []
+        claude_proxy: false
+        v_off: {registry_proxy: 'off'}
+        v_on: {registry_proxy: cluster}
+
+    - name: Agents' egress list drops the registries only with the cache on
+      ansible.builtin.assert:
+        that:
+          - names_off == ['registry.npmjs.org', 'pypi.org', 'index.crates.io']
+          - names_on == ['index.crates.io']
+        fail_msg: "{{ names_off | to_json }} {{ names_on | to_json }}"
+
+    - name: Write the rendered manifests for kubeconform
+      ansible.builtin.copy:
+        content: "{{ (cl + arr) | map('to_nice_yaml') | join('---\n') }}"
+        dest: "{{ lookup('env', 'REGISTRY_CACHE_OUT') | default('/dev/null', true) }}"
+        mode: "0644"
+      when: lookup('env', 'REGISTRY_CACHE_OUT') | length > 0
