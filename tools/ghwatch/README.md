@@ -28,6 +28,7 @@ was done by the owner (or is a PR that became merge ready).
 | Who did what | repo-wide timeline `/issues/events`: closed, reopened, merged, labeled, assigned, milestoned, renamed, review requested, draft/ready, locked, force-pushed, auto-merge... | `action` (with the actor) |
 | GitHub Actions | `/actions/runs`: every workflow, trigger (push, PR, schedule, manual, dynamic) and branch | `run_new`, `run_status`, `run_concluded` |
 | Releases | `/releases` (published, not drafts) | `release` |
+| Decisions | open `needs-decision` issues with their latest human and bot-marked comment, on every poll | `decision` (`none` / `asked` / `answered`); `answered` = the owner replied after the bot and the label is still set |
 | Surprises | any change outside a transition table | `anomaly` |
 
 Not covered (the bot token cannot read them, or there is no API): repository settings, branch protection, secrets,

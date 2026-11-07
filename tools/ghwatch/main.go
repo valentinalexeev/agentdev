@@ -129,6 +129,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func printStatus(w io.Writer, s State) {
 	fmt.Fprintf(w, "%s (owner %s), cursor %s\n", s.Repo, s.Owner, s.Cursor)
+	for _, k := range sortedKeys(s.Issues) { // answers nobody recorded come first: they block work
+		if i := s.Issues[k]; i.answered() {
+			fmt.Fprintf(w, "* ANSWERED issue #%s: the owner answered and needs-decision is still set: %s\n", k, i.Title)
+		}
+	}
 	for _, k := range sortedKeys(s.PRs) {
 		p := s.PRs[k]
 		if p.Lifecycle != PROpen && p.Lifecycle != PRDraft {

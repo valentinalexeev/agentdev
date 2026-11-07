@@ -508,3 +508,45 @@ func TestGapReported(t *testing.T) {
 		t.Fatalf("no gap line: %q", out.String())
 	}
 }
+
+func TestDecisionState(t *testing.T) {
+	nd := func(state string, labels ...string) ObservedIssue {
+		return ObservedIssue{Number: 205, Title: "probes", State: state, Labels: labels}
+	}
+	lh := func(user, human, bot string) []LastHuman {
+		return []LastHuman{{Number: 205, User: user, HumanAt: human, BotAt: bot}}
+	}
+	// asked: label set, bot spoke last
+	st := base(t, Snapshot{At: "t0", Issues: []ObservedIssue{nd("open", "needs-decision")}, LastHuman: lh("x", "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z")})
+	if st.Issues["205"].Decision != DecisionAsked {
+		t.Fatalf("baseline decision %q", st.Issues["205"].Decision)
+	}
+	// owner answers after the bot -> answered (owner event)
+	st2, ev := Reduce(st, Snapshot{At: "t1", Issues: []ObservedIssue{nd("open", "needs-decision")}, LastHuman: lh(owner, "2026-11-05T22:17:55Z", "2026-11-02T00:00:00Z")})
+	if got := kinds(ev); !reflect.DeepEqual(got, []string{"decision:asked>answered"}) || !ev[0].Owner {
+		t.Fatalf("answer: %v %+v", got, ev)
+	}
+	// still answered on the next poll: no new event (state, not a one-off line)
+	_, ev = Reduce(st2, Snapshot{At: "t2", Issues: []ObservedIssue{nd("open", "needs-decision")}, LastHuman: lh(owner, "2026-11-05T22:17:55Z", "2026-11-02T00:00:00Z")})
+	if len(ev) != 0 {
+		t.Fatalf("repeated: %+v", ev)
+	}
+	if !st2.Issues["205"].answered() {
+		t.Fatal("status should list it")
+	}
+	// bot records the decision and removes the label -> none
+	_, ev = Reduce(st2, Snapshot{At: "t3", Issues: []ObservedIssue{nd("open")}, LastHuman: nil})
+	if got := kinds(ev); !reflect.DeepEqual(got, []string{"label_removed:needs-decision>", "decision:answered>none"}) {
+		t.Fatalf("recorded: %v", got)
+	}
+	// a bot-marked comment from the owner account is not an answer (#168)
+	_, ev = Reduce(st, Snapshot{At: "t1", Issues: []ObservedIssue{nd("open", "needs-decision")}, LastHuman: lh("x", "2026-11-01T00:00:00Z", "2026-11-05T00:00:00Z")})
+	if len(ev) != 0 {
+		t.Fatalf("bot-marked counted: %+v", ev)
+	}
+	// an issue first seen already answered reports it (the 2026-11-05 miss: new state, old answer)
+	_, ev = Reduce(base(t, Snapshot{At: "t0"}), Snapshot{At: "t1", Issues: []ObservedIssue{nd("open", "needs-decision")}, LastHuman: lh(owner, "2026-11-05T22:17:55Z", "")})
+	if got := kinds(ev); !reflect.DeepEqual(got, []string{"issue_new:>open", "decision:none>answered"}) {
+		t.Fatalf("first seen answered: %v", got)
+	}
+}

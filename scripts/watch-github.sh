@@ -38,22 +38,6 @@ local_events() {
 }
 
 first=1; fails=0
-# #242: independent of the outbox, list open needs-decision issues whose latest comment is the owner's: an answer
-# nobody recorded. Runs on start and every UNANSWERED_EVERY polls.
-unanswered() {
-  local n last
-  for n in $(gh api "repos/$R/issues?state=open&labels=needs-decision&per_page=100" -q '.[].number' 2>/dev/null); do
-    # the latest human comment: bot-marked text counts as the bot even when posted from the owner account (#168)
-    last=$(gh api "repos/$R/issues/$n/comments?per_page=100" -q '[.[] | select((.body // "") | startswith("🤖") | not)] | last | .user.login // ""' 2>/dev/null)
-    [[ "${last}" == "${OWNER}" ]] || continue
-    # answered only if that human comment is newer than the bot's last comment
-    local tb th
-    th=$(gh api "repos/$R/issues/$n/comments?per_page=100" -q '[.[] | select((.body // "") | startswith("🤖") | not)] | last | .created_at' 2>/dev/null)
-    tb=$(gh api "repos/$R/issues/$n/comments?per_page=100" -q '[.[] | select((.body // "") | startswith("🤖"))] | last | .created_at // ""' 2>/dev/null)
-    [[ "${th}" > "${tb}" ]] && echo "* unanswered      #$n: the owner answered and needs-decision is still set"
-  done
-}
-UNANSWERED_EVERY=${UNANSWERED_EVERY:-30}; polls=0
 # #242: replay owner events the agent has not acknowledged (outbox), so a restart or a missed wake loses nothing.
 # The agent acknowledges with: <bin> -repo R -owner O -state STATE -pending -ack
 pending=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -pending 2>/dev/null)
@@ -63,12 +47,6 @@ if [[ -n "${pending}" && "${pending}" != *"pending owner events: 0"* ]]; then
 fi
 while true; do
   new=0
-  if (( polls % UNANSWERED_EVERY == 0 )); then
-    while IFS= read -r line; do
-      [[ -n "$line" ]] && { echo "$(date '+%H:%M:%S') ${line}"; new=1; }
-    done <<< "$(unanswered)"
-  fi
-  polls=$((polls + 1))
   if gh_out=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -format text 2>"${DIR}/ghwatch.err"); then
     fails=0
     while IFS= read -r line; do
