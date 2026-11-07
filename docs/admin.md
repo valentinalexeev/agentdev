@@ -1898,6 +1898,10 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
 
+NOTE: During an upgrade, agent pods of the old version run next to the new platform. agentdev supports this for
+one MINOR step ([ADR 0006](adr/0006-mixed-version-compatibility.md)). Upgrade one MINOR version at a time, for
+example 1.1 to 1.2, then 1.2 to 1.3.
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.

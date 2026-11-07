@@ -16,6 +16,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- ADR 0006 (proposed, #178): compatibility rule for mixed versions during a rollout. The internal interface (agent
+  pod to platform calls, pod template, CRD fields, state volume, Postgres schema) accepts the previous MINOR release
+  and changes additively; a breaking internal change takes two releases. Operator unit test
+  `TestPodTemplateIsAdditive` fails when the rendered agent pod loses an environment variable, mount, volume or
+  container listed in `images/operator/testdata/pod-contract.txt`.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
