@@ -463,6 +463,17 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message> <base>  -> 0 if 
 }
 
 # ---------- 1. new issues -> PRs ----------
+# awaiting_answer <n>: 0 while the agent asked on issue n (needs-decision) and nobody else commented since.
+# One API call per asked issue per pass, only while it waits.
+awaiting_answer() {
+  local f="${STATE}/seen/issue-$1.asked" since
+  [[ -r "${f}" ]] || return 1
+  read -r since < "${f}"
+  [[ "${since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || return 1
+  [[ -z "$(api GET "/repos/${REPO}/issues/$1/comments?since=${since}" | jq -r --arg me "${MY_LOGIN}" --arg s "${since}" "${JQ_EPOCH}"'
+          ($s | epoch) as $c | [.[] | select(.user.login != $me) | select((.created_at | epoch) > $c)] | first | .id // empty' 2>/dev/null)" ]]
+}
+
 handle_issues() {
   local issues; issues=$(api GET "$(assigned_issues_path)") || return
   issues=$(jq -c '[.[] | select(.pull_request == null)]' <<<"${issues}") || return   # GitHub lists PRs as issues too
@@ -482,6 +493,7 @@ handle_issues() {
     fi
     is_running "issue-${n}" && continue
     backing_off "issue-${n}" && continue   # failed recently; retried after its backoff
+    awaiting_answer "${n}" && continue    # #234: asked a question; resumes after a reply by someone else
     labeler_ok "${n}" || { log "issue #${n}: label not added by a writer, skipped"; continue; }
     if start_job "issue-${n}" issue_job "${n}" "${base}"; then
       log "issue #${n}: ${title} (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
@@ -489,6 +501,41 @@ handle_issues() {
       log "issue #${n}: waiting for a free slot ($(running_jobs)/${MAX_CONCURRENT} running)"
     fi
   done
+}
+
+# ISSUE_CONTEXT_CHARS caps the issue discussion given to an issue run (owner decisions often live in comments)
+ISSUE_CONTEXT_CHARS="${ISSUE_CONTEXT_CHARS:-8000}"
+[[ "${ISSUE_CONTEXT_CHARS}" =~ ^[0-9]{1,7}$ ]] || ISSUE_CONTEXT_CHARS=8000
+ISSUE_CONTEXT_CHARS=$((10#${ISSUE_CONTEXT_CHARS}))
+
+# issue_discussion <n> -> the issue's comments, oldest first, newest kept when cut; the agent's own pickup note dropped
+issue_discussion() {
+  local c
+  (( ISSUE_CONTEXT_CHARS > 0 )) || return 0
+  c=$(all_pages "/repos/${REPO}/issues/$1/comments" | jq -rs --arg me "${MY_LOGIN:-}" \
+      '[.[][] | select((.body // "") | test("\\S")) | select(.user.login != $me or ((.body // "") | test("picked this up") | not))]
+       | .[] | "- \(.user.login) commented: \(.body)"' 2>/dev/null)
+  [[ -n "${c}" ]] && clip "${c}" "${ISSUE_CONTEXT_CHARS}" tail
+}
+
+# issue_prompt <n> <title> <body> <discussion> -> the prompt of an issue run
+issue_prompt() {
+  local n=$1 title=$2 body=$3 disc=$4
+  printf '%s' "You are ${FORGE_USER}, an autonomous engineer working in this git repository.
+Resolve issue #${n}. Its title and description, as written by the reporter:
+
+$(untrusted "Title: ${title}
+
+${body}")"
+  [[ -n "${disc}" ]] && printf '%s' "
+
+Discussion on the issue, oldest first. Later comments by maintainers can refine or override the description;
+when they conflict, follow the latest maintainer decision:
+
+$(untrusted "${disc}")"
+  printf '%s' "
+
+${RUN_CONTRACT}"
 }
 
 # one issue -> one PR, in its own worktree (runs as a background job)
@@ -502,27 +549,39 @@ issue_job() {
   sync_repo || { log "clone failed"; board_card "issue-${n}" "#${n} ${title}" blocked "clone failed, will retry" "$(web_url "issues/${n}")"; return 1; }
   dir=$(worktree "${branch}" "origin/${base}") || { log "worktree failed"; return 1; }
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
-  result=$(run_claude "${dir}" "You are ${FORGE_USER}, an autonomous engineer working in this git repository.
-Resolve issue #${n}. Its title and description, as written by the reporter:
-
-$(untrusted "Title: ${title}
-
-${body}")
-
-Make the code changes, run the project's tests if you can, and keep the change focused.
-Do not push and do not create branches; just leave the work in the working tree (committing is fine).
-Finish with a short summary of what you changed, written for a PR description.") || claude_rc=$?
+  result=$(run_claude "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
   # rate limit (#93): keep the work, retry after the pause; no "could not produce a change" comment
   if [[ ${claude_rc:-0} == 75 ]]; then
     board_card "issue-${n}" "#${n} ${title}" blocked "Claude usage limit reached, will resume" "$(web_url "issues/${n}")"; return 1
   fi
+  local status summary
+  status=$(run_status "${result}"); summary=$(run_summary "${result}")
+  # #234: a question or a blocker is answered on the issue and nothing is pushed, even if the tree has changes
+  if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
+    log "issue #${n}: ${status}, nothing pushed"
+    if [[ "${status}" == needs-decision ]]; then
+      comment "${n}" "🤖 I need a decision before I continue. Reply on this issue and I will pick it up again.
+
+${summary}"
+      date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/issue-${n}.asked"   # resumed on the next comment by someone else
+      board_card "issue-${n}" "#${n} ${title}" blocked "waits for a decision on the issue" "$(web_url "issues/${n}")"
+    else
+      comment "${n}" "🤖 I am blocked on this.
+
+${summary}"
+      touch "${STATE}/seen/issue-${n}.done"
+      board_card "issue-${n}" "#${n} ${title}" blocked "blocked (see the issue)" "$(web_url "issues/${n}")"
+    fi
+    return 0
+  fi
+  rm -f "${STATE}/seen/issue-${n}.asked"
   if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
     local pr
     pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
           --arg d "Closes #${n}
 
-${result}
-
+${summary}
+$([[ "${status}" == partial ]] && printf '\n**Partial:** the agent reports that part of the issue is still open (see above).\n')
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
@@ -544,7 +603,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     board_card "issue-${n}" "#${n} ${title}" blocked "could not produce a change (see the issue)" "$(web_url "issues/${n}")"
     comment "${n}" "🤖 I could not produce a change for this.
 
-${result}"
+${summary}"
     # done for now: without this the dispatcher would restart it at once (hot loop, repeated comments).
     # To retry, open a new issue (re-pickup of an issue is not supported yet).
     touch "${STATE}/seen/issue-${n}.done"
@@ -552,6 +611,43 @@ ${result}"
 }
 
 # ---------- 2. feedback on my PRs ----------
+# ---------- run contract (#234) ----------
+# Every run ends with exactly one status line. The loop reads only the last line that matches; the word is checked
+# against a fixed list, so model text can never pick an action outside it. A missing or malformed line counts as
+# "done" (the behaviour before #234), so an old model or a cut-off run still opens its PR.
+#   done            the task is complete; open or update the PR
+#   partial         some of it is done; open the PR and say what is left
+#   needs-decision  a person has to choose; ask on the issue, do not push
+#   blocked         the rules or the environment prevent it; explain, do not push
+RUN_CONTRACT="Rules for this task:
+- Read the repository's own instructions first if they exist (CLAUDE.md, AGENTS.md, CONTRIBUTING.md) and follow them.
+- Do only what the task asks. No unrelated refactoring, formatting or dependency changes.
+- Do not change CI workflow files (.github/workflows/, .gitea/workflows/, .forgejo/workflows/): a person must make
+  those changes. If the task needs one, put the exact change in your summary instead.
+- Run the tests that cover your change. Report what you ran and the result; never claim a test passed that you did
+  not run.
+- If the task is ambiguous and a wrong guess would be costly, do not guess: ask one precise question with options and
+  your proposed default.
+- Do not push and do not create branches. Leave the work in the working tree (committing is fine).
+
+End your answer with:
+1. A short summary for the reviewers: what changed, why, the tests you ran with their results, and anything left.
+2. As the very last line, exactly one of:
+STATUS: done
+STATUS: partial
+STATUS: needs-decision
+STATUS: blocked"
+
+# run_status <result> -> done | partial | needs-decision | blocked (the last valid STATUS line; default done)
+run_status() {
+  local s
+  s=$(grep -E '^[[:space:]]*STATUS:[[:space:]]*(done|partial|needs-decision|blocked)[[:space:]]*$' <<<"$1" | tail -n1 |
+      sed -E 's/^[[:space:]]*STATUS:[[:space:]]*([a-z-]+).*/\1/')
+  echo "${s:-done}"
+}
+# run_summary <result> -> the result without STATUS lines (for PR bodies and comments)
+run_summary() { grep -vE '^[[:space:]]*STATUS:[[:space:]]*(done|partial|needs-decision|blocked)[[:space:]]*$' <<<"$1"; }
+
 new_feedback() {  # new_feedback <pr> <since>  -> markdown list of feedback by others newer than <since>
   local pr=$1 since=$2
   {
@@ -684,7 +780,12 @@ New feedback from reviewers. Address and reply to these items only:
 $(untrusted "${fb}")
 
 Address it with code changes where it asks for them. If a point is a question or you disagree, explain why.
-Do not push. Finish with a short reply to the reviewers about the new feedback only.${ask}"
+Keep the earlier decisions from the background unless the new feedback changes them.${ask}
+
+${RUN_CONTRACT}
+
+Your summary is posted as the reply to the reviewers: answer each new item in order,
+and cover the new feedback only."
 }
 
 # ---------- security advisory threads (GitHub, #110 item 4) ----------
@@ -792,9 +893,9 @@ feedback_job() {
   [[ -n "${checks}" ]] && fb+=$'\n'"Failing checks on the head:"$'\n'"${checks}"
   if [[ -n "${threads}" ]]; then
     thread_ask="
-Some feedback are code scanning (security) findings. For each, end your reply with one line exactly like
+Some feedback are code scanning (security) findings. For each, put one line exactly like
 THREAD <id> <fixed|accepted-risk|false-positive>: <one-sentence reason>
-for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
+before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   fi
   sync_repo || return 1
   dir=$(worktree "${branch}" "origin/${branch}") || { log "worktree failed"; return 1; }
@@ -804,6 +905,17 @@ for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
   result=$(run_claude "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
+  local status; status=$(run_status "${result}"); result=$(run_summary "${result}")
+  if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
+    # #234: reply only; the working tree is not pushed. The reviewers' next comment starts a new run.
+    reply_threads "${pr}" "${threads}" "${result}" "" ""
+    comment "${pr}" "🤖 $([[ "${status}" == blocked ]] && echo 'I am blocked on this feedback.' || echo 'I need a decision before I change the code.')
+
+${result}"
+    echo "${now}" > "${STATE}/seen/pr-${pr}"
+    log "PR #${pr}: ${status}, replied without a push"
+    return 0
+  fi
   before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
   if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
     after=$(lgit -C "${dir}" rev-parse HEAD 2>/dev/null)

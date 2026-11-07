@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Run contract for agent prompts (#234). Issue and feedback runs get shared rules (read the repository's
+  instructions, stay in scope, no CI workflow files, report only tests that ran, ask instead of guessing) and end with
+  `STATUS: done|partial|needs-decision|blocked`. `needs-decision` and `blocked` push nothing; `needs-decision` asks on
+  the issue and resumes after the next comment by someone else; `partial` marks the PR. Issue runs also get the issue
+  discussion (fenced, new worker variable `ISSUE_CONTEXT_CHARS`, default 8000). A run without a status line behaves as
+  before (`done`).
 - Harness guide for every agent (#206). The operator writes a short guide per agent (ConfigMap `agentdev-guides`, key
   = agent name) from its own configuration: what agentdev does not give (credentials, push, direct internet, SSH,
   apply) and what it gives (sidecar push, approvals, egress hosts, executors of the repository, credential proxy). The
