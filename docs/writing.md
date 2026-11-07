@@ -128,6 +128,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
 | thread | a comment on a line of a pull request, with its replies |
 | commit | one saved change of a git repository, identified by its sha |
+| commit status | the result (success, failure, error, pending) that a CI system records for one commit |
 | security event | a record of an action that a guardrail stopped |
 | SecurityEvent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SecurityEvent`) that the operator makes for each security event |
 | guardrail | a check in agentdev that stops an action of an agent |

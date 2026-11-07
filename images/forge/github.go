@@ -479,7 +479,13 @@ func (d *githubDriver) rules() []rule {
 }
 
 // checkReviewRequest: the agent asks people for a review, never teams; at most 5 plain logins.
-func checkReviewRequest(_ *server, body []byte) error {
+func checkReviewRequest(_ *server, body []byte) error { return checkReviewers(body, ghLoginRe) }
+
+// checkReviewRequestGitea (#237 P6): the same policy on Gitea, whose body may also carry team_reviewers (refused)
+// and whose user names allow '_' and '.'.
+func checkReviewRequestGitea(_ *server, body []byte) error { return checkReviewers(body, giteaLoginRe) }
+
+func checkReviewers(body []byte, loginRe *regexp.Regexp) error {
 	var rq map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rq); err != nil {
 		return refuse("bad review request body")
@@ -494,7 +500,7 @@ func checkReviewRequest(_ *server, body []byte) error {
 		return refuse("review request: 1 to 5 reviewers")
 	}
 	for _, l := range who {
-		if !ghLoginRe.MatchString(l) {
+		if !loginRe.MatchString(l) {
 			return refuse("review request: %q is not a login", l)
 		}
 	}
