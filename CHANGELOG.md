@@ -117,6 +117,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
+  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
+  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
+  Merged or closed PRs keep their last checks (no false `anomaly`).
 - Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
   because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
   neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on

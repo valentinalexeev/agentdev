@@ -33,6 +33,7 @@ const (
 	EvRunConcluded    = "run_concluded" // completed, To = conclusion
 	EvAction          = "action"        // who did what on an issue/PR (closed, labeled, assigned, merged...)
 	EvRelease         = "release"
+	EvDecision        = "decision" // issue decision state: none | asked | answered
 	EvAnomaly         = "anomaly"
 )
 
@@ -136,9 +137,14 @@ func Reduce(prev State, snap Snapshot) (State, []Event) {
 	}
 
 	issues := dedupeIssues(snap.Issues, emit)
+	lastHuman := map[int]LastHuman{}
+	for _, h := range snap.LastHuman {
+		lastHuman[h.Number] = h
+	}
 	for _, o := range issues {
 		key := strconv.Itoa(o.Number)
 		obs := IssueState{Title: o.Title, Lifecycle: o.State, Assignees: sortedSet(o.Assignees), Labels: sortedSet(o.Labels), Milestone: o.Milestone}
+		obs.Decision = decisionOf(o.Number, obs, lastHuman, prev.Owner)
 		if obs.Lifecycle != IssueOpen && obs.Lifecycle != IssueClosed {
 			emit(Event{Kind: EvAnomaly, Number: o.Number, To: o.State, Text: fmt.Sprintf("issue #%d has unknown state %q", o.Number, o.State)})
 		}
@@ -146,8 +152,14 @@ func Reduce(prev State, snap Snapshot) (State, []Event) {
 		if !known {
 			emit(Event{Kind: EvIssueNew, Number: o.Number, To: obs.Lifecycle,
 				Text: fmt.Sprintf("issue #%d new (%s), assigned to [%s]: %s", o.Number, obs.Lifecycle, strings.Join(obs.Assignees, ","), o.Title)})
+			if obs.Decision == DecisionAnswered {
+				emit(decisionEvent(o.Number, DecisionNone, obs))
+			}
 			next.Issues[key] = obs
 			continue
+		}
+		if old.Decision == "" {
+			old.Decision = DecisionNone // state from before schema 3
 		}
 		transitionIssue(o.Number, old, obs, prev.Owner, emit)
 		next.Issues[key] = obs
@@ -166,6 +178,11 @@ func Reduce(prev State, snap Snapshot) (State, []Event) {
 }
 
 func transitionPR(n int, old, obs PRState, reviews []Review, owner string, emit func(Event)) PRState {
+	// #242: the fetcher does not read checks of a merged or closed PR; keep the last known value instead of reading
+	// the empty list as "checks disappeared".
+	if (obs.Lifecycle == PRMerged || obs.Lifecycle == PRClosed) && obs.Checks == ChecksNone && obs.HeadSHA == old.HeadSHA {
+		obs.Checks, obs.FailedNames = old.Checks, old.FailedNames
+	}
 	if old.Lifecycle != obs.Lifecycle {
 		e := Event{Kind: EvPRLifecycle, Number: n, From: old.Lifecycle, To: obs.Lifecycle,
 			Text: fmt.Sprintf("PR #%d %s -> %s: %s", n, old.Lifecycle, obs.Lifecycle, obs.Title)}
@@ -253,6 +270,49 @@ func transitionIssue(n int, old, obs IssueState, owner string, emit func(Event))
 		emit(Event{Kind: EvIssueMilestone, Number: n, From: old.Milestone, To: obs.Milestone, Text: fmt.Sprintf("issue #%d milestone %q -> %q", n, old.Milestone, obs.Milestone)})
 	}
 	labelEvents(n, "issue", old.Labels, obs.Labels, emit)
+	if old.Decision != obs.Decision {
+		e := decisionEvent(n, old.Decision, obs)
+		if !decisionEdges[edge{old.Decision, obs.Decision}] {
+			e.Kind, e.Owner = EvAnomaly, false
+			e.Text = fmt.Sprintf("issue #%d decision %s -> %s", n, old.Decision, obs.Decision)
+		}
+		emit(e)
+	}
+}
+
+// decisionEdges: every move is legal; the table documents them and keeps the reducer strict for future states.
+// none -> answered happens when the label is set and the owner already commented (rare, still reported).
+var decisionEdges = map[edge]bool{
+	{DecisionNone, DecisionAsked}: true, {DecisionNone, DecisionAnswered}: true,
+	{DecisionAsked, DecisionAnswered}: true, {DecisionAsked, DecisionNone}: true,
+	{DecisionAnswered, DecisionAsked}: true, {DecisionAnswered, DecisionNone}: true,
+}
+
+// decisionOf: none without the needs-decision label or on a closed issue; answered when the latest unmarked
+// comment is the owner's and newer than the latest bot-marked one; asked otherwise. Without LastHuman data for an
+// open labelled issue it stays asked (the fetcher always sends it; a missing entry is not an answer).
+func decisionOf(n int, s IssueState, lh map[int]LastHuman, owner string) string {
+	labelled := false
+	for _, l := range s.Labels {
+		if l == "needs-decision" {
+			labelled = true
+		}
+	}
+	if !labelled || s.Lifecycle != IssueOpen {
+		return DecisionNone
+	}
+	if h, ok := lh[n]; ok && h.User == owner && h.HumanAt > h.BotAt {
+		return DecisionAnswered
+	}
+	return DecisionAsked
+}
+
+func decisionEvent(n int, from string, s IssueState) Event {
+	t := fmt.Sprintf("issue #%d decision %s -> %s: %s", n, from, s.Decision, s.Title)
+	if s.Decision == DecisionAnswered {
+		t = fmt.Sprintf("issue #%d: the owner answered and needs-decision is still set: %s", n, s.Title)
+	}
+	return Event{Kind: EvDecision, Number: n, From: from, To: s.Decision, Owner: s.Decision == DecisionAnswered, Text: t}
 }
 
 func normRunStatus(s string) string {
