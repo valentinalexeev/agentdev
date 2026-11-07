@@ -11,7 +11,8 @@
 package main
 
 // SchemaVersion of the persisted State. A State with another version is rejected, not migrated silently.
-const SchemaVersion = 1
+// 2: workflow runs, actor events and releases (#233 review).
+const SchemaVersion = 2
 
 // Lifecycle states of a pull request.
 const (
@@ -111,6 +112,48 @@ type Snapshot struct {
 	PRs      []ObservedPR    `json:"prs"`
 	Issues   []ObservedIssue `json:"issues"`
 	Comments []Comment       `json:"comments"`
+	Runs     []WorkflowRun   `json:"runs"`     // GitHub Actions workflow runs (any branch, tags, schedules)
+	Actions  []RepoEvent     `json:"actions"`  // issue/PR timeline events with the actor (who closed, labeled, assigned...)
+	Releases []Release       `json:"releases"` // published releases and their tags
+}
+
+// WorkflowRun is one Actions run.
+type WorkflowRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Event      string `json:"event"` // push | pull_request | schedule | workflow_dispatch | ...
+	Branch     string `json:"branch"`
+	SHA        string `json:"sha"`
+	Actor      string `json:"actor"`
+	Status     string `json:"status"`     // queued | in_progress | completed (waiting, requested, pending count as queued)
+	Conclusion string `json:"conclusion"` // when completed
+}
+
+// RepoEvent is one issue or PR timeline event (repo-wide /issues/events): closed, reopened, labeled, assigned,
+// milestoned, merged, review_requested, ... with the login of whoever did it.
+type RepoEvent struct {
+	ID     int64  `json:"id"`
+	Number int    `json:"number"`
+	Event  string `json:"event"`
+	Actor  string `json:"actor"`
+	Detail string `json:"detail,omitempty"` // label name, assignee, milestone title
+}
+
+// Release is one published release (drafts are not visible to the bot).
+type Release struct {
+	ID         int64  `json:"id"`
+	Tag        string `json:"tag"`
+	Name       string `json:"name"`
+	Author     string `json:"author"`
+	Prerelease bool   `json:"prerelease"`
+}
+
+// RunState is the tracked state of a workflow run.
+type RunState struct {
+	Name       string `json:"name"`
+	Branch     string `json:"branch"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 }
 
 // PRState is the tracked state of a pull request.
@@ -146,6 +189,9 @@ type State struct {
 	PRs        map[string]PRState    `json:"prs"`
 	Issues     map[string]IssueState `json:"issues"`
 	CommentIDs []int64               `json:"comment_ids"` // reported comment ids, sorted, capped (see maxCommentIDs)
+	Runs       map[string]RunState   `json:"runs"`        // workflow runs not yet completed, plus completed ones until pruned
+	ActionIDs  []int64               `json:"action_ids"`  // reported timeline event ids, sorted, capped
+	ReleaseIDs []int64               `json:"release_ids"` // reported release ids, sorted
 }
 
 // Event is one reported change. Kind is a fixed vocabulary (see kinds in reduce.go); Text is for humans.

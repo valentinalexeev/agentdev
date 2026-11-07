@@ -28,6 +28,11 @@ const (
 	EvIssueUnassigned = "issue_unassigned"
 	EvIssueMilestone  = "issue_milestone"
 	EvComment         = "comment"
+	EvRunNew          = "run_new"       // a workflow run appeared (any trigger)
+	EvRunStatus       = "run_status"    // queued -> in_progress
+	EvRunConcluded    = "run_concluded" // completed, To = conclusion
+	EvAction          = "action"        // who did what on an issue/PR (closed, labeled, assigned, merged...)
+	EvRelease         = "release"
 	EvAnomaly         = "anomaly"
 )
 
@@ -48,6 +53,32 @@ var prLifecycleEdges = map[edge]bool{
 
 var issueLifecycleEdges = map[edge]bool{
 	{IssueOpen, IssueClosed}: true, {IssueClosed, IssueOpen}: true,
+}
+
+// Workflow run statuses after normalization.
+const (
+	RunQueued     = "queued"
+	RunInProgress = "in_progress"
+	RunCompleted  = "completed"
+)
+
+// runEdges: a run only moves forward. completed is terminal except for a re-run, which GitHub reports as a new
+// attempt on the same id (queued or in_progress again): allowed and reported, not an anomaly.
+var runEdges = map[edge]bool{
+	{RunQueued, RunInProgress}: true, {RunQueued, RunCompleted}: true, {RunInProgress, RunCompleted}: true,
+	{RunCompleted, RunQueued}: true, {RunCompleted, RunInProgress}: true,
+}
+
+// maxRuns bounds the tracked runs; completed runs are pruned oldest id first.
+const maxRuns = 200
+
+// actionEvents: the timeline events worth reporting. Others (subscribed, mentioned, referenced...) are noise.
+var actionEvents = map[string]bool{
+	"closed": true, "reopened": true, "merged": true, "labeled": true, "unlabeled": true,
+	"assigned": true, "unassigned": true, "milestoned": true, "demilestoned": true, "renamed": true,
+	"review_requested": true, "review_request_removed": true, "ready_for_review": true, "convert_to_draft": true,
+	"locked": true, "unlocked": true, "pinned": true, "transferred": true, "head_ref_force_pushed": true,
+	"head_ref_deleted": true, "base_ref_changed": true, "auto_merge_enabled": true, "auto_merge_disabled": true,
 }
 
 // checkEdges on the SAME head commit. A new head resets the checks and is not checked against this table.
@@ -71,7 +102,7 @@ var reviewEdges = map[edge]bool{
 
 // NewState is an empty state; the first Reduce on it is a baseline.
 func NewState(repo, owner string) State {
-	return State{Version: SchemaVersion, Repo: repo, Owner: owner, PRs: map[string]PRState{}, Issues: map[string]IssueState{}}
+	return State{Version: SchemaVersion, Repo: repo, Owner: owner, PRs: map[string]PRState{}, Issues: map[string]IssueState{}, Runs: map[string]RunState{}}
 }
 
 // Reduce applies one snapshot. It is pure: it does not read the clock, the network or the disk, and its output
@@ -123,6 +154,9 @@ func Reduce(prev State, snap Snapshot) (State, []Event) {
 	}
 
 	next.CommentIDs = reduceComments(prev.CommentIDs, snap.Comments, prev.Owner, emit)
+	next.Runs = reduceRuns(prev.Runs, snap.Runs, prev.Owner, emit)
+	next.ActionIDs = reduceActions(prev.ActionIDs, snap.Actions, prev.Owner, emit)
+	next.ReleaseIDs = reduceReleases(prev.ReleaseIDs, snap.Releases, prev.Owner, emit)
 	if snap.At != "" {
 		next.Cursor = snap.At
 	} else if next.Cursor == "" {
@@ -219,6 +253,144 @@ func transitionIssue(n int, old, obs IssueState, owner string, emit func(Event))
 		emit(Event{Kind: EvIssueMilestone, Number: n, From: old.Milestone, To: obs.Milestone, Text: fmt.Sprintf("issue #%d milestone %q -> %q", n, old.Milestone, obs.Milestone)})
 	}
 	labelEvents(n, "issue", old.Labels, obs.Labels, emit)
+}
+
+func normRunStatus(s string) string {
+	switch s {
+	case RunInProgress:
+		return RunInProgress
+	case RunCompleted:
+		return RunCompleted
+	}
+	return RunQueued // queued, waiting, requested, pending
+}
+
+func reduceRuns(prev map[string]RunState, runs []WorkflowRun, owner string, emit func(Event)) map[string]RunState {
+	next := make(map[string]RunState, len(prev))
+	for k, v := range prev {
+		next[k] = v
+	}
+	sorted := append([]WorkflowRun(nil), runs...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	for i, r := range sorted {
+		if i > 0 && sorted[i-1].ID == r.ID {
+			continue
+		}
+		key := strconv.FormatInt(r.ID, 10)
+		obs := RunState{Name: r.Name, Branch: r.Branch, Status: normRunStatus(r.Status), Conclusion: r.Conclusion}
+		if obs.Status != RunCompleted {
+			obs.Conclusion = ""
+		}
+		old, known := prev[key]
+		label := fmt.Sprintf("run %q on %s (%s)", r.Name, r.Branch, r.Event)
+		if !known {
+			k, to := EvRunNew, obs.Status
+			if obs.Status == RunCompleted {
+				k, to = EvRunConcluded, obs.Conclusion
+			}
+			emit(Event{Kind: k, To: to, Actor: r.Actor, Owner: r.Actor == owner,
+				Text: fmt.Sprintf("%s %s by %s on %s", label, to, r.Actor, short(r.SHA))})
+			next[key] = obs
+			continue
+		}
+		switch {
+		case old.Status != obs.Status && !runEdges[edge{old.Status, obs.Status}]:
+			emit(Event{Kind: EvAnomaly, From: old.Status, To: obs.Status, Text: fmt.Sprintf("%s went %s -> %s", label, old.Status, obs.Status)})
+		case old.Status != obs.Status && obs.Status == RunCompleted:
+			emit(Event{Kind: EvRunConcluded, From: old.Status, To: obs.Conclusion, Actor: r.Actor, Owner: r.Actor == owner,
+				Text: fmt.Sprintf("%s %s on %s", label, obs.Conclusion, short(r.SHA))})
+		case old.Status != obs.Status:
+			emit(Event{Kind: EvRunStatus, From: old.Status, To: obs.Status, Text: fmt.Sprintf("%s %s -> %s", label, old.Status, obs.Status)})
+		case obs.Status == RunCompleted && old.Conclusion != obs.Conclusion:
+			emit(Event{Kind: EvAnomaly, From: old.Conclusion, To: obs.Conclusion,
+				Text: fmt.Sprintf("%s conclusion changed %s -> %s without a re-run", label, old.Conclusion, obs.Conclusion)})
+		}
+		next[key] = obs
+	}
+	if len(next) > maxRuns { // keep every unfinished run, and the newest completed ones
+		var done []int64
+		for k, v := range next {
+			if v.Status == RunCompleted {
+				id, _ := strconv.ParseInt(k, 10, 64)
+				done = append(done, id)
+			}
+		}
+		sort.Slice(done, func(i, j int) bool { return done[i] < done[j] })
+		for _, id := range done {
+			if len(next) <= maxRuns {
+				break
+			}
+			delete(next, strconv.FormatInt(id, 10))
+		}
+	}
+	return next
+}
+
+// seenIDs: items are reported once by id. With a full list, ids at or below the oldest kept one count as seen.
+func seenIDs(prev []int64, max int) (map[int64]bool, int64) {
+	seen := make(map[int64]bool, len(prev))
+	for _, id := range prev {
+		seen[id] = true
+	}
+	var floor int64 = -1
+	if len(prev) >= max && len(prev) > 0 {
+		floor = prev[0]
+	}
+	return seen, floor
+}
+
+func capIDs(ids []int64, max int) []int64 {
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if len(ids) > max {
+		ids = ids[len(ids)-max:]
+	}
+	return ids
+}
+
+func reduceActions(prev []int64, evs []RepoEvent, owner string, emit func(Event)) []int64 {
+	seen, floor := seenIDs(prev, maxCommentIDs)
+	sorted := append([]RepoEvent(nil), evs...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	ids := append([]int64(nil), prev...)
+	for _, e := range sorted {
+		if seen[e.ID] || e.ID <= floor {
+			continue
+		}
+		seen[e.ID] = true
+		ids = append(ids, e.ID)
+		if !actionEvents[e.Event] {
+			continue // remembered, not reported
+		}
+		t := fmt.Sprintf("#%d %s by %s", e.Number, e.Event, e.Actor)
+		if e.Detail != "" {
+			t += ": " + e.Detail
+		}
+		emit(Event{Kind: EvAction, Number: e.Number, To: e.Event, Actor: e.Actor, Owner: e.Actor == owner, Text: t})
+	}
+	return capIDs(ids, maxCommentIDs)
+}
+
+const maxReleaseIDs = 1000
+
+func reduceReleases(prev []int64, rs []Release, owner string, emit func(Event)) []int64 {
+	seen, floor := seenIDs(prev, maxReleaseIDs)
+	sorted := append([]Release(nil), rs...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	ids := append([]int64(nil), prev...)
+	for _, r := range sorted {
+		if seen[r.ID] || r.ID <= floor {
+			continue
+		}
+		seen[r.ID] = true
+		ids = append(ids, r.ID)
+		kind := "release"
+		if r.Prerelease {
+			kind = "pre-release"
+		}
+		emit(Event{Kind: EvRelease, To: r.Tag, Actor: r.Author, Owner: r.Author == owner,
+			Text: fmt.Sprintf("%s %s published by %s: %s", kind, r.Tag, r.Author, r.Name)})
+	}
+	return capIDs(ids, maxReleaseIDs)
 }
 
 func reduceComments(prev []int64, cs []Comment, owner string, emit func(Event)) []int64 {
@@ -467,6 +639,12 @@ func cloneState(s State) State {
 		c.Issues[k] = v
 	}
 	c.CommentIDs = append([]int64(nil), s.CommentIDs...)
+	c.ActionIDs = append([]int64(nil), s.ActionIDs...)
+	c.ReleaseIDs = append([]int64(nil), s.ReleaseIDs...)
+	c.Runs = make(map[string]RunState, len(s.Runs))
+	for k, v := range s.Runs {
+		c.Runs[k] = v
+	}
 	return c
 }
 

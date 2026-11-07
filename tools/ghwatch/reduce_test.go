@@ -356,3 +356,85 @@ func TestCLIReplay(t *testing.T) {
 		t.Fatalf("missing flags: rc=%d", rc)
 	}
 }
+
+func TestWorkflowRuns(t *testing.T) {
+	run := func(id int64, status, concl string) WorkflowRun {
+		return WorkflowRun{ID: id, Name: "CI", Event: "push", Branch: "main", SHA: sha1, Actor: owner, Status: status, Conclusion: concl}
+	}
+	st := base(t, Snapshot{At: "t0", Runs: []WorkflowRun{run(1, "completed", "success")}})
+	st, got := step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "queued", "")}})
+	if !reflect.DeepEqual(got, []string{"run_new:>queued"}) {
+		t.Fatalf("new: %v", got)
+	}
+	st, got = step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "in_progress", "")}})
+	if !reflect.DeepEqual(got, []string{"run_status:queued>in_progress"}) {
+		t.Fatalf("progress: %v", got)
+	}
+	st, got = step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "completed", "failure")}})
+	if !reflect.DeepEqual(got, []string{"run_concluded:in_progress>failure"}) {
+		t.Fatalf("concluded: %v", got)
+	}
+	_, got = step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "completed", "success")}})
+	if !reflect.DeepEqual(got, []string{"anomaly:failure>success"}) {
+		t.Fatalf("conclusion flip without re-run: %v", got)
+	}
+	_, got = step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "waiting", "")}})
+	if !reflect.DeepEqual(got, []string{"run_status:completed>queued"}) {
+		t.Fatalf("re-run: %v", got)
+	}
+	_, got = step(t, st, Snapshot{Runs: []WorkflowRun{run(2, "completed", "failure")}})
+	if len(got) != 0 {
+		t.Fatalf("unchanged run reported: %v", got)
+	}
+	s2, ev := Reduce(st, Snapshot{At: "t9", Runs: []WorkflowRun{run(3, "completed", "success")}})
+	if len(ev) != 1 || ev[0].Kind != EvRunConcluded || !ev[0].Owner || len(s2.Runs) != 3 {
+		t.Fatalf("completed on first sight: %+v", ev)
+	}
+}
+
+func TestRunPrune(t *testing.T) {
+	st := base(t, Snapshot{At: "t0"})
+	var rs []WorkflowRun
+	for i := int64(1); i <= maxRuns+20; i++ {
+		rs = append(rs, WorkflowRun{ID: i, Status: "completed", Conclusion: "success"})
+	}
+	rs = append(rs, WorkflowRun{ID: 0, Status: "in_progress"}) // oldest id, unfinished: must stay
+	next, _ := Reduce(st, Snapshot{At: "t1", Runs: rs})
+	if len(next.Runs) != maxRuns {
+		t.Fatalf("pruned to %d", len(next.Runs))
+	}
+	if _, ok := next.Runs["0"]; !ok {
+		t.Fatal("unfinished run was pruned")
+	}
+	if _, ok := next.Runs["1"]; ok {
+		t.Fatal("oldest completed run kept")
+	}
+}
+
+func TestOwnerActions(t *testing.T) {
+	st := base(t, Snapshot{At: "t0", Actions: []RepoEvent{{ID: 1, Number: 3, Event: "closed", Actor: owner}}})
+	evs := []RepoEvent{
+		{ID: 4, Number: 3, Event: "subscribed", Actor: owner}, // noise: remembered, not reported
+		{ID: 3, Number: 3, Event: "labeled", Actor: owner, Detail: "bug"},
+		{ID: 2, Number: 5, Event: "merged", Actor: "bot"},
+		{ID: 1, Number: 3, Event: "closed", Actor: owner},
+	}
+	next, ev := Reduce(st, Snapshot{At: "t1", Actions: evs})
+	if len(ev) != 2 || ev[0].Text != "#5 merged by bot" || ev[0].Owner || ev[1].Text != "#3 labeled by boss: bug" || !ev[1].Owner {
+		t.Fatalf("actions: %+v", ev)
+	}
+	if len(next.ActionIDs) != 4 {
+		t.Fatalf("noise not remembered: %v", next.ActionIDs)
+	}
+	if _, ev = Reduce(next, Snapshot{At: "t2", Actions: evs}); len(ev) != 0 {
+		t.Fatalf("reported twice: %+v", ev)
+	}
+}
+
+func TestReleases(t *testing.T) {
+	st := base(t, Snapshot{At: "t0", Releases: []Release{{ID: 1, Tag: "v1.0.0-rc.5"}}})
+	_, ev := Reduce(st, Snapshot{At: "t1", Releases: []Release{{ID: 1, Tag: "v1.0.0-rc.5"}, {ID: 2, Tag: "v1.0.0", Author: owner, Name: "1.0.0"}}})
+	if len(ev) != 1 || ev[0].Kind != EvRelease || ev[0].To != "v1.0.0" || !ev[0].Owner {
+		t.Fatalf("release: %+v", ev)
+	}
+}

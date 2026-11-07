@@ -34,6 +34,9 @@ func loadState(path, repo, owner string) (State, error) {
 	if s.Issues == nil {
 		s.Issues = map[string]IssueState{}
 	}
+	if s.Runs == nil {
+		s.Runs = map[string]RunState{}
+	}
 	return s, nil
 }
 

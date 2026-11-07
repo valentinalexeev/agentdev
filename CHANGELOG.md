@@ -18,8 +18,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Added
 - `tools/ghwatch` (#232): a deterministic state machine over GitHub activity for the operator's session monitor.
   It tracks PRs (lifecycle, pushes, checks on the head, every review, the owner's review state, mergeability, merge
-  readiness), issues (state, assignees, labels, milestone) and comments, and reports changes its transition tables
-  do not allow as `anomaly`. `scripts/watch-github.sh` now uses it instead of a seen-set; it keeps the pod and
+  readiness), issues (state, assignees, labels, milestone), comments, who did what on issues and PRs (timeline
+  events with the actor), GitHub Actions runs (every workflow and trigger) and releases, and reports changes its
+  transition tables do not allow as `anomaly`. `scripts/watch-github.sh` now uses it instead of a seen-set; it keeps the pod and
   token checks. Its state file moves to `<repo>.ghwatch.json` (the first run is a new, silent baseline).
 - Harness guide for every agent (#206). The operator writes a short guide per agent (ConfigMap `agentdev-guides`, key
   = agent name) from its own configuration: what agentdev does not give (credentials, push, direct internet, SSH,

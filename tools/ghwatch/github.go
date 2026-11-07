@@ -187,6 +187,80 @@ func fetch(ctx context.Context, c *client, cursor string, now time.Time) (Snapsh
 	for _, x := range pc {
 		snap.Comments = append(snap.Comments, Comment{ID: x.ID, Number: lastNum(x.PRURL), User: x.User.Login, Inline: true, Path: x.Path, Body: x.Body})
 	}
+
+	// Actions runs: every trigger and branch, newest first. Baseline: the latest 100. Later: created since the cursor
+	// plus every run still unfinished in the last 2 pages (status changes do not move created_at).
+	var wr struct {
+		Runs []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Event      string `json:"event"`
+			Branch     string `json:"head_branch"`
+			SHA        string `json:"head_sha"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			Actor      ghUser `json:"triggering_actor"`
+		} `json:"workflow_runs"`
+	}
+	for p := 1; p <= 2; p++ {
+		wr.Runs = nil
+		if err := c.get(ctx, r+"/actions/runs", url.Values{"per_page": {"100"}, "page": {strconv.Itoa(p)}}, &wr); err != nil {
+			return snap, err
+		}
+		for _, x := range wr.Runs {
+			snap.Runs = append(snap.Runs, WorkflowRun{ID: x.ID, Name: x.Name, Event: x.Event, Branch: x.Branch, SHA: x.SHA,
+				Actor: x.Actor.Login, Status: x.Status, Conclusion: x.Conclusion})
+		}
+		if len(wr.Runs) < 100 || since == "" {
+			break
+		}
+	}
+
+	// who did what on issues and PRs (repo-wide timeline events, newest first)
+	var ev []struct {
+		ID        int64                   `json:"id"`
+		Event     string                  `json:"event"`
+		Actor     ghUser                  `json:"actor"`
+		Label     *struct{ Name string }  `json:"label"`
+		Assignee  *ghUser                 `json:"assignee"`
+		Milestone *struct{ Title string } `json:"milestone"`
+		Rename    *struct{ To string }    `json:"rename"`
+		Issue     struct{ Number int }    `json:"issue"`
+	}
+	if err := c.get(ctx, r+"/issues/events", url.Values{"per_page": {"100"}}, &ev); err != nil {
+		return snap, err
+	}
+	for _, x := range ev {
+		d := ""
+		switch {
+		case x.Label != nil:
+			d = x.Label.Name
+		case x.Assignee != nil:
+			d = x.Assignee.Login
+		case x.Milestone != nil:
+			d = x.Milestone.Title
+		case x.Rename != nil:
+			d = x.Rename.To
+		}
+		snap.Actions = append(snap.Actions, RepoEvent{ID: x.ID, Number: x.Issue.Number, Event: x.Event, Actor: x.Actor.Login, Detail: d})
+	}
+
+	var rel []struct {
+		ID         int64  `json:"id"`
+		Tag        string `json:"tag_name"`
+		Name       string `json:"name"`
+		Author     ghUser `json:"author"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
+	}
+	if err := c.get(ctx, r+"/releases", url.Values{"per_page": {"30"}}, &rel); err != nil {
+		return snap, err
+	}
+	for _, x := range rel {
+		if !x.Draft {
+			snap.Releases = append(snap.Releases, Release{ID: x.ID, Tag: x.Tag, Name: x.Name, Author: x.Author.Login, Prerelease: x.Prerelease})
+		}
+	}
 	return snap, nil
 }
 
