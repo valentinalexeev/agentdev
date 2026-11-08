@@ -145,9 +145,10 @@ func probeArgv(pr *v1.ExecutorProbe, values []string) ([]string, error) {
 
 // ProbeServer serves the catalogue to obs-mcp. It shares the executor poller's clients, CA and forge.
 type ProbeServer struct {
-	P     *ExecutorPoller
-	Token []byte // bearer token obs-mcp sends (PROBE_TOKEN_FILE); empty: every request is refused
-	Dial  func(ctx context.Context, network, addr string) (net.Conn, error)
+	P         *ExecutorPoller
+	Token     []byte // bearer token obs-mcp sends; empty: TokenFile is read per request (rotation, startup order)
+	TokenFile string
+	Dial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Run runs the SSH command; replaced in tests. Default: sshProbeRun.
 	Run    func(ctx context.Context, ca *SSHCA, t *v1.SSHTarget, keyID, command string) (string, error)
 	mu     sync.Mutex
@@ -167,7 +168,7 @@ func (s *ProbeServer) allow(target string) bool {
 	defer s.mu.Unlock()
 	l, ok := s.perTgt[target]
 	if !ok {
-		l = rate.NewLimiter(rate.Limit(s.rate/2), max(1, s.burst/2))
+		l = rate.NewLimiter(rate.Limit(s.rate/2), max(1, s.burst))
 		s.perTgt[target] = l
 	}
 	return l.Allow() && s.global.Allow()
@@ -193,7 +194,13 @@ func (s *ProbeServer) Handler() http.Handler {
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if len(s.Token) == 0 || subtle.ConstantTimeCompare([]byte(got), s.Token) != 1 {
+			want := s.Token
+			if len(want) == 0 && s.TokenFile != "" {
+				if b, err := os.ReadFile(s.TokenFile); err == nil {
+					want = []byte(strings.TrimSpace(string(b)))
+				}
+			}
+			if len(want) < 32 || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -556,12 +563,10 @@ func probeServerFromEnv(p *ExecutorPoller) (*ProbeServer, string, error) {
 	if listen == "" {
 		return nil, "", nil
 	}
-	tok, err := os.ReadFile(env("PROBE_TOKEN_FILE", "/var/run/agentdev-probe/token"))
-	if err != nil || len(strings.TrimSpace(string(tok))) < 32 {
-		// fail closed without stopping the operator: no token Secret (yet), no probe server
-		return nil, "", fmt.Errorf("PROBE_TOKEN_FILE: a token of at least 32 characters is required; the probe server is off")
-	}
-	return newProbeServer(p, []byte(strings.TrimSpace(string(tok))), envInt("PROBE_RATE_PER_MIN", 20), envInt("PROBE_RATE_BURST", 5)), listen, nil
+	// the token is read per request: until Secret agentdev-probe-token is mounted, every call is refused (fail closed)
+	s := newProbeServer(p, nil, envInt("PROBE_RATE_PER_MIN", 20), envInt("PROBE_RATE_BURST", 5))
+	s.TokenFile = env("PROBE_TOKEN_FILE", "/var/run/agentdev-probe/token")
+	return s, listen, nil
 }
 
 // Start serves until ctx ends (manager.Runnable).

@@ -90,7 +90,8 @@ spec:
     metadata: {labels: {app: agentdev-operator}}
     spec:
       serviceAccountName: agentdev-operator
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      # fsGroup: the probe token (#205) is mounted 0440 for this group
+      securityContext: {runAsNonRoot: true, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: operator
         image: ${OPERATOR_IMAGE}

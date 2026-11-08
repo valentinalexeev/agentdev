@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -254,5 +255,30 @@ func TestProbeSSHCertificate(t *testing.T) {
 	tg2 := readyTarget("web1", "tf-prod", "web1.example.com", nil2key(t))
 	if _, err := s.sshProbeRun(context.Background(), ca, tg2, "check/x-probe-2", "check disk"); err == nil {
 		t.Fatal("a server without a host certificate of the host CA was accepted")
+	}
+}
+
+func TestProbeTokenFile(t *testing.T) {
+	_, s, _ := probeEnv(t)
+	s.Token = nil
+	s.TokenFile = t.TempDir() + "/token"
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	call := func() int {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/catalogue", nil)
+		req.Header.Set("Authorization", "Bearer "+strings.Repeat("k", 40))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := call(); c != 401 {
+		t.Fatalf("no token file: %d", c)
+	}
+	_ = os.WriteFile(s.TokenFile, []byte(strings.Repeat("k", 40)+"\n"), 0o600)
+	if c := call(); c != 200 {
+		t.Fatalf("token file: %d", c)
 	}
 }
