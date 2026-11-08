@@ -22,7 +22,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
   for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
   `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
-  part 4).
+  part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
+  repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
+  variable (`ESO_SA`) for the chart and the policy.
 - Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
   `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
   base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
