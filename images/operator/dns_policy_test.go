@@ -26,7 +26,12 @@ func allPolicies(t *testing.T) map[string]networkingv1.NetworkPolicy {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, d := range strings.Split(os.Expand(string(b), func(string) string { return "x" }), "\n---\n") {
+		for _, d := range strings.Split(os.Expand(string(b), func(k string) string {
+			if strings.HasSuffix(k, "_SELECTOR") { // a label map (TELEMETRY_SCRAPER_SELECTOR)
+				return "{x: x}"
+			}
+			return "x"
+		}), "\n---\n") {
 			if !strings.Contains(d, "kind: NetworkPolicy") {
 				continue
 			}

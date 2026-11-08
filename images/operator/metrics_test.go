@@ -1,13 +1,15 @@
 package main
 
 import (
-	networkingv1 "k8s.io/api/networking/v1"
 	"net/http"
 	"net/http/httptest"
-	"sigs.k8s.io/yaml"
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"sigs.k8s.io/yaml"
 )
 
 func TestOperatorPausedMetric(t *testing.T) {
@@ -34,15 +36,24 @@ func TestOperatorPausedMetric(t *testing.T) {
 	}
 }
 
-// #196 (ADR 0002 D4): port 9464 of claude-proxy and the operator admits only the scraper namespace; no rule lets an
-// agent pod (or any pod of the agents namespace) reach it.
+// #196 (ADR 0002 D4): port 9464 of claude-proxy and the operator admits only the scraper pods of the scraper
+// namespace (not Grafana or the OTLP collector next to them, review of #276); no rule lets an agent pod (or any pod
+// of the agents namespace) reach it; and no Service exposes 9464.
 func TestMetricsPortOnlyFromScraper(t *testing.T) {
 	vals := map[string]string{"AGENTS_NS": "coding-agents", "PLATFORM_NS": "agentdev-platform", "EXEC_NS": "agentdev-executors",
 		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}",
-		"TELEMETRY_OTLP_URL": "", "TELEMETRY_SCRAPER_NS": "monitoring", "CLAUDE_JOB_BUDGET_UNITS": "0", "JOB_TIMEOUT": "3600", "MAX_BUDGET_USD": "", "CLAUDE_CODE_TELEMETRY": "false", "CLAUDE_CODE_OTLP_URL": "", "CLAUDE_SECRET_SOURCES": "[]"}
+		"TELEMETRY_OTLP_URL": "", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_JOB_BUDGET_UNITS": "0", "JOB_TIMEOUT": "3600", "MAX_BUDGET_USD": "", "CLAUDE_CODE_TELEMETRY": "false", "CLAUDE_CODE_OTLP_URL": "", "CLAUDE_SECRET_SOURCES": "[]"}
 	docs := append(renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals), renderTmpl(t, "../../manifests/operator.yaml.tmpl", vals)...)
 	seen := 0
 	for _, d := range docs {
+		var svc corev1.Service
+		if yaml.Unmarshal([]byte(d), &svc) == nil && svc.Kind == "Service" {
+			for _, sp := range svc.Spec.Ports {
+				if sp.Port == 9464 || sp.TargetPort.IntValue() == 9464 || sp.TargetPort.String() == "metrics" {
+					t.Errorf("Service %s exposes the metrics port", svc.Name)
+				}
+			}
+		}
 		var p networkingv1.NetworkPolicy
 		if yaml.Unmarshal([]byte(d), &p) != nil || p.Kind != "NetworkPolicy" || (p.Name != "claude-proxy" && p.Name != "agentdev-operator") {
 			continue
@@ -62,7 +73,8 @@ func TestMetricsPortOnlyFromScraper(t *testing.T) {
 				continue
 			}
 			for _, f := range r.From {
-				if f.PodSelector != nil || f.IPBlock != nil || f.NamespaceSelector == nil ||
+				if f.PodSelector == nil || len(f.PodSelector.MatchLabels) == 0 || f.PodSelector.MatchLabels["app.kubernetes.io/name"] != "prometheus" ||
+					f.IPBlock != nil || f.NamespaceSelector == nil ||
 					f.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "monitoring" {
 					t.Errorf("%s: 9464 open to %+v", p.Name, f)
 				}

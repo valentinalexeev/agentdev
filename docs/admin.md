@@ -259,8 +259,10 @@ never logged.
 ### Metrics and OpenTelemetry
 
 `claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
-(#196, ADR 0002 D4). A NetworkPolicy lets only the namespace of the metrics scraper reach this port: `monitoring` on
-kind (`TELEMETRY_SCRAPER_NS`), `gmp-system` on GKE (`telemetry.scraper_ns`). Agent pods cannot reach it.
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
 
 | Metric (Prometheus name) | What it shows |
 |---|---|
@@ -286,12 +288,22 @@ On `kind` an optional step installs an OpenTelemetry Collector, Prometheus and G
 
 To remove the stack, run `./run.sh 14` again without `TELEMETRY_STACK=true`.
 
+The stack is hardened against the agents, which can reach the collector when `CLAUDE_CODE_TELEMETRY=true`. Grafana
+is a ClusterIP Service without anonymous access. The collector accepts at most 1 MiB per request and refuses data under
+memory pressure. It also replaces `agentdev.agent` on `claude_code.*` series with the `agent` label of the pod that
+sent them, so an agent cannot report as another agent. Only the Prometheus server reaches port 9464. The cost
+panels come from the proxy, not from the agents.
+
 On GKE, Managed Service for Prometheus collects the metrics:
 
 1. In the deployment repository set `enable_managed_prometheus = true` in `terraform/instance.tfvars` and apply.
 2. Set `telemetry: {pod_monitoring: true}` in `ansible/instance.yml` and run the playbook. It creates a
    `PodMonitoring` for `claude-proxy` and the operator (scrape interval 60 s, about 20 series per agent).
-3. Import `grafana/agentdev-llm-cost.json` into your Grafana (data source: Managed Service for Prometheus), or use
+3. Make sure that both targets are scraped. With Dataplane V2 the GMP collectors in `gmp-system` are ordinary pods,
+   so the NetworkPolicies (namespace `gmp-system`, label `app.kubernetes.io/name: collector`) admit them. In Cloud
+   Monitoring, Metrics Explorer, run the PromQL query `up{job=~"claude-proxy|agentdev-operator"}`. Both series must
+   be `1`. If a series is `0`, check `telemetry.scraper_ns` and `telemetry.scraper_selector`.
+4. Import `grafana/agentdev-llm-cost.json` into your Grafana (data source: Managed Service for Prometheus), or use
    Cloud Monitoring with PromQL.
 
 The billing truth stays in the Anthropic Console (Usage and Cost pages). For instances that bill by API key, a

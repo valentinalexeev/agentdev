@@ -373,7 +373,13 @@ run_guards() {  # sets GUARD (command prefix), GUARD_ARGS (claude flags), GUARD_
     if [[ "${MAX_BUDGET_USD}" =~ ^[0-9]{1,6}(\.[0-9]{1,2})?$ ]]; then GUARD_ARGS=(--max-budget-usd "${MAX_BUDGET_USD}")
     else log "MAX_BUDGET_USD is not an amount (^[0-9]+(.[0-9]{1,2})?$): ignored" >&2; fi
   fi
-  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] && GUARD_ENV=("ANTHROPIC_CUSTOM_HEADERS=X-Agentdev-Job: ${JOB}")
+  # appended to an existing ANTHROPIC_CUSTOM_HEADERS (newline-separated), never replacing it (review of #277)
+  if [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
+    GUARD_ENV=("ANTHROPIC_CUSTOM_HEADERS=${ANTHROPIC_CUSTOM_HEADERS:+${ANTHROPIC_CUSTOM_HEADERS}$'\n'}X-Agentdev-Job: ${JOB}")
+  fi
+  # every process of this run carries AGENTDEV_RUN, also one that detached with setsid or nohup; reap_run ends them
+  RUN_MARK="${RANDOM}${RANDOM}$$"
+  GUARD_ENV+=("AGENTDEV_RUN=${RUN_MARK}")
   if [[ "${CLAUDE_CODE_TELEMETRY:-false}" == true ]]; then
     if [[ "${CLAUDE_CODE_OTLP_URL:-}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]]; then
       GUARD_ENV+=(CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
@@ -383,6 +389,23 @@ run_guards() {  # sets GUARD (command prefix), GUARD_ARGS (claude flags), GUARD_
       log "CLAUDE_CODE_TELEMETRY is on but CLAUDE_CODE_OTLP_URL is not an http(s) URL: telemetry off" >&2
     fi
   fi
+  return 0
+}
+# reap_run: after claude ended (or JOB_TIMEOUT stopped it), kill what is left of the run. timeout(1) signals its process
+# group, but a Bash tool child that called setsid or nohup and ignores SIGTERM survives, keeps the slot busy and can
+# keep calling the proxy without the job header (review of #277). The marker is in each such process's environment.
+# Residual: a process that also cleared its environment (env -i) is not found; JOB_TIMEOUT and the per-agent budget
+# still bound it.
+reap_run() {
+  [[ -n "${RUN_MARK:-}" && -d /proc/self ]] || return 0
+  local p n=0
+  for p in /proc/[0-9]*; do
+    [[ "${p#/proc/}" == "$$" || "${p#/proc/}" == "${BASHPID}" ]] && continue
+    if tr '\0' '\n' < "${p}/environ" 2>/dev/null | grep -qxF "AGENTDEV_RUN=${RUN_MARK}"; then
+      kill -KILL "${p#/proc/}" 2>/dev/null && n=$((n + 1))
+    fi
+  done
+  (( n == 0 )) || log "run ${JOB:-?}: ended ${n} leftover process(es) of the run (#196)"
   return 0
 }
 # ---------- end run guards ----------
@@ -409,6 +432,7 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
           "${mcp[@]}" 2>"${err}"); rc=$?
+  reap_run
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
