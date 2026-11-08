@@ -1,0 +1,104 @@
+---
+- name: Registry cache settings are valid (#203)
+  ansible.builtin.assert:
+    that:
+      - registry_cache_mode in ['off', 'cluster', 'artifact_registry']
+      - registry_cache_mode != 'artifact_registry' or (registry_cache_ar.service_account | default(''))
+        is match('^[a-z][-a-z0-9]{4,28}[a-z0-9]@[a-z][-a-z0-9.:]+\\.iam\\.gserviceaccount\\.com$')
+      - registry_cache_mode != 'artifact_registry' or (['npm', 'pypi', 'go'] | map('extract', registry_cache_ar)
+        | select('match', '^https://[a-z0-9-]+-(npm|python|go)\\.pkg\\.dev/[a-z][-a-z0-9:.]*/[a-z][-a-z0-9]*/$') | list | length == 3)
+      - registry_cache_storage is match('^[1-9][0-9]{0,4}(Mi|Gi)$')
+    fail_msg: >-
+      registry_proxy: off, cluster or artifact_registry. artifact_registry needs registry_cache_ar
+      from `terraform output registry_proxy` (service_account, npm, pypi, go).
+    quiet: true
+
+# devpi wants a root password; nobody logs in (the gateway refuses every write), so it is random, kept in the cluster
+# only, and never in an agent pod
+- name: Existing devpi root password
+  kubernetes.core.k8s_info:
+    context: "{{ registry_cache_context }}"
+    kind: Secret
+    namespace: "{{ registry_cache_ns }}"
+    name: registry-cache-pypi
+  register: registry_cache_pypi_secret
+  no_log: true
+  when: registry_cache_mode == 'cluster'
+
+- name: Devpi root password Secret (generated once)
+  kubernetes.core.k8s:
+    context: "{{ registry_cache_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: registry-cache-pypi, namespace: "{{ registry_cache_ns }}", labels: "{{ registry_cache_labels }}"}
+      stringData: {password: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"}
+  no_log: true
+  when: registry_cache_mode == 'cluster' and (registry_cache_pypi_secret.resources | default([]) | length == 0)
+
+- name: Gateway, caches and settings of the registry cache
+  kubernetes.core.k8s:
+    context: "{{ registry_cache_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'registry-cache.yaml.j2') | from_yaml_all | list }}"
+  when: registry_cache_mode != 'off'
+
+- name: Is the FQDNNetworkPolicy type served?
+  kubernetes.core.k8s_info:
+    context: "{{ registry_cache_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: fqdnnetworkpolicies.networking.gke.io
+  register: registry_cache_fqdn_crd
+  when: registry_cache_mode != 'off' and registry_cache_fqdn_policy | bool
+
+- name: Egress of the caches and the gateway by name (GKE FQDNNetworkPolicy)
+  kubernetes.core.k8s:
+    context: "{{ registry_cache_context }}"
+    definition:
+      apiVersion: networking.gke.io/v1alpha1
+      kind: FQDNNetworkPolicy
+      metadata: {name: registry-cache, namespace: "{{ registry_cache_ns }}"}
+      spec:
+        podSelector: {matchLabels: {agentdev/registry-cache-egress: "true"}}
+        egress:
+          - matches: "{{ lookup('ansible.builtin.template', 'fqdn_matches.j2') | from_yaml }}"
+            ports: [{protocol: TCP, port: 443}]
+  vars:
+    registry_cache_egress_names: >-
+      {{ registry_cache_upstream_hosts if registry_cache_mode == 'cluster' else
+         (['npm', 'pypi', 'go'] | map('extract', registry_cache_ar) | map('urlsplit', 'hostname') | unique | list)
+         + ['sum.golang.org'] }}
+  when: registry_cache_mode != 'off' and registry_cache_fqdn_policy | bool and (registry_cache_fqdn_crd.resources | default([]) | length > 0)
+
+- name: Egress of the caches and the gateway to any public address on 443 (no FQDN policy; kind)
+  kubernetes.core.k8s:
+    context: "{{ registry_cache_context }}"
+    state: "{{ 'present' if registry_cache_mode != 'off' and not registry_cache_fqdn_policy | bool else 'absent' }}"
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata: {name: registry-cache-web, namespace: "{{ registry_cache_ns }}"}
+      spec:
+        podSelector: {matchLabels: {agentdev/registry-cache-egress: "true"}}
+        policyTypes: [Egress]
+        egress:
+          - to: [{ipBlock: {cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16]}}]
+            ports: [{port: 443, protocol: TCP}]
+
+- name: Registry cache is off - remove its objects (agents fall back to the public registries)
+  kubernetes.core.k8s:
+    context: "{{ registry_cache_context }}"
+    state: absent
+    api_version: "{{ item.api }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ registry_cache_ns }}"
+    name: "{{ item.name }}"
+  loop: "{{ registry_cache_cleanup }}"
+  when: registry_cache_mode == 'off'
+
+- name: Gateway and caches are ready
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ registry_cache_context }}", -n, "{{ registry_cache_ns }}", rollout, status, "deploy/{{ item }}", --timeout=300s]
+  loop: "{{ ['registry-cache'] + (['registry-cache-npm', 'registry-cache-pypi', 'registry-cache-go'] if registry_cache_mode == 'cluster' else []) }}"
+  changed_when: false
+  when: registry_cache_mode != 'off' and not ansible_check_mode

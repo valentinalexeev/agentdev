@@ -94,6 +94,13 @@ in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-for
 Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
 Test: `tests/ingress_external.yml`.
 
+## Registry cache (#203)
+
+Role `registry_cache`, run by `deploy.yml` and by `kind.yml --tags registry-cache` (`./run.sh 06` on kind). Setting
+`registry_proxy`: `off` (default), `cluster` (Verdaccio, devpi, Athens in the cluster) or `artifact_registry` (GKE, with
+`registry_proxy_artifact_registry` from `terraform output registry_proxy`). No Secret Manager entry: the GKE gateway
+reads Artifact Registry through Workload Identity. Procedure: `docs/admin.md`, "Configure the registry cache".
+
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
 ```bash
@@ -117,6 +124,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
+| 06 (part) | `registry-cache` | `registry_cache` (#203) |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test

@@ -554,3 +554,29 @@ func TestGitHubAgentEgressProxy(t *testing.T) {
 		}
 	}
 }
+
+// #203: the agent container reads the optional ConfigMap registry-proxy (package manager URLs of the registry cache);
+// the forge sidecar does not, and the ConfigMap is optional so pods start without it.
+func TestRegistryProxyConfigMap(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	reconcile(t, r, "alice")
+	s := getSTS(t, c, "alice")
+	ag, fg := container(s, "agent"), container(s, "forge")
+	found := false
+	for _, f := range ag.EnvFrom {
+		if f.ConfigMapRef != nil && f.ConfigMapRef.Name == "registry-proxy" {
+			found = true
+			if f.ConfigMapRef.Optional == nil || !*f.ConfigMapRef.Optional {
+				t.Error("registry-proxy ConfigMap must be optional")
+			}
+		}
+	}
+	if !found {
+		t.Error("agent container lacks envFrom ConfigMap registry-proxy")
+	}
+	for _, f := range fg.EnvFrom {
+		if f.ConfigMapRef != nil && f.ConfigMapRef.Name == "registry-proxy" {
+			t.Error("forge container reads registry-proxy")
+		}
+	}
+}

@@ -1,0 +1,4 @@
+{#- host names as FQDNNetworkPolicy matches (exact names only) -#}
+{%- set m = [] -%}
+{%- for h in registry_cache_egress_names -%}{%- set _ = m.append({'name': h}) -%}{%- endfor -%}
+{{ m | to_json }}

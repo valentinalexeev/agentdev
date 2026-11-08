@@ -21,6 +21,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Registry cache for npm, PyPI and Go (#203), one setting `registry_proxy` (`off` by default, `cluster`,
+  `artifact_registry`). GKE: Terraform `registry_proxy = true` makes Artifact Registry remote repositories
+  `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (labels, reader IAM per repository for a gateway service account
+  through Workload Identity, 30-day cleanup) and output `registry_proxy`. kind and GKE without Artifact Registry: new
+  Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
+  through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
+  public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation

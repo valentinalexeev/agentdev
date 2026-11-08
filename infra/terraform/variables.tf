@@ -209,3 +209,19 @@ variable "agent_disk_type" {
     error_message = "agent_disk_type must be pd-standard, pd-balanced or pd-ssd."
   }
 }
+
+variable "registry_proxy" {
+  description = "Create Artifact Registry remote repositories (npm, PyPI, Go) as the agents' package cache (#203), a reader service account with IAM per repository, and its Workload Identity binding. Needs create_artifact_registry. Set the Ansible registry_proxy to artifact_registry to use them."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.registry_proxy || var.create_artifact_registry
+    error_message = "registry_proxy needs create_artifact_registry = true. Without Artifact Registry use the in-cluster caches (Ansible registry_proxy: cluster)."
+  }
+}
+
+variable "agents_namespace" {
+  description = "Kubernetes namespace of the agents (Ansible agents_ns). The registry cache gateway runs there with the Kubernetes service account registry-cache (Workload Identity, #203)."
+  type        = string
+  default     = "coding-agents"
+}

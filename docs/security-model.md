@@ -160,7 +160,11 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   flood of them gives a `medium` rate-limited event, not `high`; this holds until approvals (phase 4) let a person
   allow the host. A line from an unknown IP is logged by the operator and dropped.
 - The proxy is one replica (new pod first on a change); a change of the list breaks agent egress for a few seconds.
-- Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project
+- Registry cache (#203, optional, `registry_proxy`): npm, PyPI and Go through the in-cluster gateway
+  `registry-cache` (Artifact Registry remote repositories on GKE, Verdaccio, devpi and Athens on kind). With it on, the
+  public registry hosts leave the agents' list; the gateway is read-only (GET and HEAD) and holds the only Google token
+  (Workload Identity, reader on the three repositories). Private registries per project: #248 (R101).
+- Not yet: per-project
   extra hosts in the project spec (one instance-wide list for now), and an approval request for a refused host
   (phase 4).
 
