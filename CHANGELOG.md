@@ -16,12 +16,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
-- Monthly dependency re-pin. `.github/dependabot.yml` (new) checks GitHub Actions, Dockerfile base images, Go modules,
-  npm and Terraform providers once a month. The workflow `repin.yml` runs `scripts/repin.sh --write` on the 1st of
-  each month and opens one PR (`chore/repin`) for the pins Dependabot does not see: Helm charts (authentik, External
-  Secrets, Coder), agent-sandbox, gVisor, and image digests pinned as `<image>:<tag>@sha256:...`. It stays on the same
-  major version; a new major or a newer image tag is listed in the PR and is bumped by hand. Run it by hand with
-  `scripts/repin.sh` (check) or from the Actions tab.
+- Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
+  from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
+  digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of
+  date, it opens one chore issue (label `chore`) with the table, or updates the open one. It does not push code or
+  open a PR. `scripts/repin.sh --write` writes the simple same-major updates in `config.env` and the workflows.
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and

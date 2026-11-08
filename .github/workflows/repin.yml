@@ -1,18 +1,17 @@
 name: Re-pin dependencies
 
-# Monthly check of the pins that Dependabot does not see (#repin): Helm charts, GitHub releases and gVisor in
-# config.env, and the digests of container images pinned as <image>:<tag>@sha256:<digest> (config.env, workflows).
-# Dependabot (.github/dependabot.yml) covers GitHub Actions, Dockerfile base images, Go modules and npm.
-# The job rewrites the pins with scripts/repin.sh --write and opens (or updates) one PR, branch chore/repin.
-# A new major version is only listed in the PR, never written. The PR runs the normal CI; a person merges it.
+# Monthly check of all pinned dependencies (scripts/repin.sh): Helm charts, GitHub releases and gVisor in config.env,
+# image digests and tags, Dockerfile base images, GitHub Actions, Go modules and npm.
+# The job only checks (no --write). When a pin is out of date, it opens one chore issue (label `chore`), or updates
+# the open one. An agent or a person then does the bump in a normal PR. Nothing here pushes code or opens a PR.
 on:
   schedule:
     - cron: "23 4 1 * *"   # 04:23 UTC on the 1st of each month
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  issues: write
 
 concurrency:
   group: repin
@@ -24,30 +23,40 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: find and write newer pins
+      - uses: actions/setup-go@v5
+        with: {go-version-file: images/operator/go.mod, cache: false}
+      - uses: actions/setup-node@v4
+        with: {node-version-file: images/ui/package.json}
+      - name: check the pins
         env:
           REPIN_SUMMARY: ${{ runner.temp }}/repin.md
           GH_TOKEN: ${{ github.token }}   # GitHub API rate limit for the release lookups
         run: |
-          scripts/repin.sh --write
+          scripts/repin.sh
           cat "$REPIN_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-      - name: open or update the PR
+      - name: open or update the chore issue
         env:
           GH_TOKEN: ${{ github.token }}
           SUMMARY: ${{ runner.temp }}/repin.md
         run: |
-          if git diff --quiet; then echo "all pins are current"; exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
-          git switch -C chore/repin
-          git commit -qam "chore(deps): monthly re-pin $(date -u +%Y-%m)"
-          git push -f origin chore/repin
-          body=$(printf '%s\n\n%s\n\n%s\n' \
-            "Monthly re-pin (workflow \`repin.yml\`, script \`scripts/repin.sh\`)." \
+          # rows after the table header that are not "current"
+          if ! tail -n +3 "$SUMMARY" | grep -vqE '\| current \|$'; then
+            echo "all pins are current"; exit 0
+          fi
+          month=$(date -u +%Y-%m)
+          title="chore(deps): monthly re-pin $month"
+          body=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n' \
+            "🤖 Monthly pin check (workflow \`repin.yml\`, script \`scripts/repin.sh\`). Some pins are out of date." \
             "$(cat "$SUMMARY")" \
-            "Rows \"major\" and \"newer tag\" are not written: bump them by hand. Check the CHANGELOG of each updated pin before you merge.")
-          if gh pr view chore/repin --json state -q .state 2>/dev/null | grep -q OPEN; then
-            gh pr edit chore/repin --body "$body"
+            "## What to do" \
+            "1. Run \`scripts/repin.sh --write\` on a branch. It writes the rows \"update\" and \"update (digest)\" in \`config.env\` and the workflows (same major only)." \
+            "2. Bump the rows \"newer version\" (\`go get\`, \`npm install\`) and \"newer tag\". Rows \"major\" need their release notes first: bump them in their own PR, or note why they wait." \
+            "3. Open one PR with \`Closes\` this issue. CI and a kind e2e check the new versions.")
+          gh label create chore --color c5def5 --description "maintenance task" 2>/dev/null || true
+          n=$(gh issue list --state open --label chore --search "in:title \"monthly re-pin\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --title "$title" --body "$body"
+            gh issue comment "$n" --body "🤖 The check of $month still finds out-of-date pins. The table above is updated."
           else
-            gh pr create --base main --head chore/repin --title "chore(deps): monthly re-pin $(date -u +%Y-%m)" --body "$body"
+            gh issue create --title "$title" --label chore --body "$body"
           fi
