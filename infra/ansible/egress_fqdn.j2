@@ -2,8 +2,10 @@
     and its subdomains in Squid, so it becomes the name x.org plus the pattern *.x.org. GKE patterns match one level
     only, so a deeper subdomain (a.b.x.org) is refused at the network level although Squid allows it. -#}
 {%- set m = [] -%}
-{#- the agents' list (without the Claude API when claude_proxy is on, R64) plus the forge sidecar's hosts -#}
-{%- set drop = [claude_proxy_upstream_host | default('api.anthropic.com')] if claude_proxy | default(false) | bool else [] -%}
+{#- the agents' list (without the Claude API when claude_proxy is on, R64, and without the package registries when the
+    registry cache is on, #203) plus the forge sidecar's hosts -#}
+{%- set drop = ([claude_proxy_upstream_host | default('api.anthropic.com')] if claude_proxy | default(false) | bool else [])
+               + (registry_proxy_upstream_hosts | default([]) if registry_proxy | default('off') != 'off' else []) -%}
 {%- for h in (egress_hosts + egress_extra_hosts) | reject('in', drop) | list + forge_egress_hosts | default([]) -%}
 {%-   if h.startswith('.') -%}
 {%-     set _ = m.extend([{'name': h[1:]}, {'pattern': '*' ~ h}]) -%}

@@ -15,6 +15,12 @@ agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels
 mcp_projects: []
 # trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R51)
 mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.local:8080]
+# registry cache for npm, PyPI and Go (agentdev #203): off (default), cluster, or artifact_registry with the values of
+# `terraform output registry_proxy` (terraform registry_proxy = true). Agents then install packages through the cache.
+# registry_proxy: artifact_registry
+# registry_proxy_artifact_registry: {service_account: agentdev-registry-cache@my-agentdev.iam.gserviceaccount.com,
+#   npm: https://europe-west4-npm.pkg.dev/my-agentdev/agentdev-npm/, pypi: https://europe-west4-python.pkg.dev/my-agentdev/agentdev-pypi/,
+#   go: https://europe-west4-go.pkg.dev/my-agentdev/agentdev-go/}
 # read-only observability MCP tools (agentdev docs/admin.md "Give agents the observability tools"); off by default
 # obs_mcp:
 #   enabled: true

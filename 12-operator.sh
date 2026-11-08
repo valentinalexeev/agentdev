@@ -47,6 +47,9 @@ if [[ "${SECRETS_STORE_ENABLED:-true}" == true ]] && k get crd externalsecrets.e
 fi
 SECRETS_REMOTE_PROPERTY=""   # the kind store's value Secrets have one key, value (GCP: the payload itself)
 [[ -n "${SECRETS_STORE}" ]] && SECRETS_REMOTE_PROPERTY=value
+if [[ "${REGISTRY_PROXY:-off}" != off ]]; then   # registry cache (#203), as 06-agents.sh
+  AGENT_EGRESS_HOSTS=$(echo "${AGENT_EGRESS_HOSTS}" | xargs -n1 | grep -vxF -f <(echo "${REGISTRY_PROXY_UPSTREAM_HOSTS}" | xargs -n1) | xargs)
+fi
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \

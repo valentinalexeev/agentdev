@@ -1,0 +1,57 @@
+---
+# Package registry cache for agents (#203): npm, PyPI and Go. Agents get the cache URLs from the ConfigMap
+# registry-proxy (the operator adds it to the agent container) and talk to one gateway Service, registry-cache.
+# The gateway only allows GET and HEAD: the cache is read-only, publishing stays an executor job.
+#
+# registry_proxy (group_vars/all.yml; set it in instance.yml, or REGISTRY_PROXY in config.env on kind):
+#   off               - no cache; agents reach the public registries through the egress proxy (default, as before)
+#   cluster           - in-cluster caches: Verdaccio (npm), devpi (PyPI), Athens (Go) behind the gateway. kind, and GKE
+#                       without Artifact Registry (create_artifact_registry = false, #157)
+#   artifact_registry - GKE: the gateway forwards to the Artifact Registry remote repositories of infra/terraform
+#                       (registry_proxy = true) with a short-lived token of its Workload Identity service account
+# With a cache on, the public registry hosts (registry_proxy_upstream_hosts) leave the agents' egress allow-list.
+registry_cache_mode: "{{ registry_proxy | default('off') }}"
+registry_cache_context: "{{ kube_context | default('kind-agentdev') }}"
+registry_cache_ns: "{{ agents_ns | default('coding-agents') }}"
+registry_cache_labels: "{{ agentdev_effective_labels | default({'service': 'agentdev'}) }}"
+# hosts the in-cluster caches reach (group_vars registry_proxy_upstream_hosts); dropped from the agents' egress list
+registry_cache_upstream_hosts: >-
+  {{ registry_proxy_upstream_hosts
+     | default(['registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'proxy.golang.org', 'sum.golang.org']) }}
+# FQDNNetworkPolicy for the caches and the gateway (GKE). false: they may reach any public address on 443 (kind).
+registry_cache_fqdn_policy: "{{ egress_fqdn_policy | default(false) }}"
+
+# artifact_registry: `terraform output registry_proxy` of infra/terraform
+registry_cache_ar: "{{ registry_proxy_artifact_registry | default({}) }}"   # {service_account, npm, pypi, go}
+
+# cluster: images pinned by digest, one volume per cache
+registry_cache_gateway_image: nginxinc/nginx-unprivileged:1.29.3-alpine@sha256:5aea7cc516b419e3526f47dd1531be31a56a046cfe44754d94f9383e13e2ee99
+registry_cache_token_image: curlimages/curl:8.17.0@sha256:935d9100e9ba842cdb060de42472c7ca90cfe9a7c96e4dacb55e79e560b3ff40
+registry_cache_verdaccio_image: verdaccio/verdaccio:6.1.6@sha256:44af8dec4b8bfb9b940263f56ee5f371484515e4397eea56ab9c942500ab9dfa
+registry_cache_devpi_image: jonasal/devpi-server:6.14.0@sha256:5ab1eee485f4281a9f36343ea7aed386786ea94738f20fc10ae2c8f454b569c1
+registry_cache_athens_image: gomods/athens:v0.16.0@sha256:c92d4d9ef305f0cb22555f7b0b0758621de08d107f28ec89664ee8f398ff260d
+registry_cache_storage: 5Gi              # per cache
+registry_cache_storage_class: ""         # "" = the cluster default
+# objects removed when registry_proxy is off (PVCs too: the cache holds public packages only)
+registry_cache_cleanup:
+  - {api: v1, kind: ConfigMap, name: registry-proxy}
+  - {api: v1, kind: ConfigMap, name: registry-cache}
+  - {api: v1, kind: Service, name: registry-cache}
+  - {api: v1, kind: ServiceAccount, name: registry-cache}
+  - {api: apps/v1, kind: Deployment, name: registry-cache}
+  - {api: networking.k8s.io/v1, kind: NetworkPolicy, name: registry-cache}
+  - {api: networking.k8s.io/v1, kind: NetworkPolicy, name: registry-cache-backends}
+  - {api: networking.k8s.io/v1, kind: NetworkPolicy, name: registry-cache-egress}
+  - {api: networking.k8s.io/v1, kind: NetworkPolicy, name: registry-cache-web}
+  - {api: networking.gke.io/v1alpha1, kind: FQDNNetworkPolicy, name: registry-cache}
+  - {api: apps/v1, kind: Deployment, name: registry-cache-npm}
+  - {api: apps/v1, kind: Deployment, name: registry-cache-pypi}
+  - {api: apps/v1, kind: Deployment, name: registry-cache-go}
+  - {api: v1, kind: Service, name: registry-cache-npm}
+  - {api: v1, kind: Service, name: registry-cache-pypi}
+  - {api: v1, kind: Service, name: registry-cache-go}
+  - {api: v1, kind: ConfigMap, name: registry-cache-npm}
+  - {api: v1, kind: Secret, name: registry-cache-pypi}
+  - {api: v1, kind: PersistentVolumeClaim, name: registry-cache-npm}
+  - {api: v1, kind: PersistentVolumeClaim, name: registry-cache-pypi}
+  - {api: v1, kind: PersistentVolumeClaim, name: registry-cache-go}

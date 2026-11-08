@@ -44,6 +44,8 @@ module "agentdev" {
   # enable_managed_prometheus = var.enable_managed_prometheus
   # enable_filestore_csi      = var.enable_filestore_csi
   # monitoring_components     = var.monitoring_components
+  # registry cache for npm, PyPI and Go (agentdev #203): uncomment with a ref= that contains #203
+  # registry_proxy = var.registry_proxy
   # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
   # create_budget = var.create_budget
 }
@@ -173,3 +175,8 @@ variable "monitoring_components" {
 #   role     = "roles/viewer"
 #   member   = "serviceAccount:${google_service_account.exec["${each.key}-plan"].email}"
 # }
+
+variable "registry_proxy" {
+  type    = bool
+  default = false
+}

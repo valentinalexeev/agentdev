@@ -70,6 +70,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
   repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
   variable (`ESO_SA`) for the chart and the policy.
+- Registry cache for npm, PyPI and Go (#203), one setting `registry_proxy` (`off` by default, `cluster`,
+  `artifact_registry`). GKE: Terraform `registry_proxy = true` makes Artifact Registry remote repositories
+  `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (labels, reader IAM per repository for a gateway service account
+  through Workload Identity, 30-day cleanup) and output `registry_proxy`. kind and GKE without Artifact Registry: new
+  Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
+  through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
+  public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
