@@ -156,7 +156,9 @@ The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, 
 `gitea_forge_secrets_dir/<agent>.token` (mode 600), and the branch protection of `gitea_forge_branch`. The owner
 password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
 `no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
-changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
+changes nothing. An existing token file is kept when it still logs in as its agent; a file from an older cluster
+(HTTP 401) is replaced by a new token, then run `--tags agents` (step 06) so the agent gets it. Delete a file to mint
+a new token. GKE uses GitHub (#2), not this role.
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
