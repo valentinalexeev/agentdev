@@ -34,8 +34,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Added
 - Optional telemetry backends (#196, ADR 0002 D5): `TELEMETRY_STACK=true ./run.sh 14` installs an OpenTelemetry
-  Collector, Prometheus and Grafana (pinned charts) in `monitoring` on kind, with the dashboard
-  `grafana/agentdev-llm-cost.json`. Off by default (`./run.sh` does not run step 14). On GKE,
+  Collector and Prometheus (pinned charts) in `monitoring` on kind. Off by default (`./run.sh` does not run step 14).
+  Grafana is optional and off by default (`TELEMETRY_GRAFANA=true` adds it). The dashboard
+  `grafana/agentdev-llm-cost.json` imports into any external Grafana: the data source and the agentdev instance
+  (label `agentdev_instance`) are variables. On GKE,
   `telemetry.pod_monitoring: true` (with Terraform `enable_managed_prometheus = true`) creates `PodMonitoring`
   objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents. It sets
   `agentdev.agent` from the sending pod, limits requests to 1 MiB, and Grafana is ClusterIP without anonymous access.

@@ -1,4 +1,12 @@
 {
+ "__requires": [
+  {
+   "type": "datasource",
+   "id": "prometheus",
+   "name": "Prometheus",
+   "version": "1.0.0"
+  }
+ ],
  "uid": "agentdev-llm-cost",
  "title": "agentdev: Claude cost and usage",
  "tags": [
@@ -13,17 +21,39 @@
  },
  "refresh": "1m",
  "editable": false,
- "description": "ADR 0002 (#196). Per-job cost is on GET /status and the web UI (Cost per job); the job id is never a metric label.",
+ "description": "ADR 0002 (#196). Per-job cost is on GET /status and the web UI (Cost per job); the job id is never a metric label. Import into any Grafana: pick the Prometheus data source; the instance variable selects agentdev instances (label agentdev_instance).",
  "templating": {
   "list": [
    {
     "name": "datasource",
+    "label": "Data source",
     "type": "datasource",
     "query": "prometheus",
+    "current": {},
+    "hide": 0
+   },
+   {
+    "name": "instance",
+    "label": "Instance",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${datasource}"
+    },
+    "query": {
+     "query": "label_values(agentdev_budget_used, agentdev_instance)",
+     "refId": "A"
+    },
+    "definition": "label_values(agentdev_budget_used, agentdev_instance)",
+    "includeAll": true,
+    "multi": true,
+    "allValue": ".*",
     "current": {
-     "text": "Prometheus",
-     "value": "prometheus"
-    }
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2,
+    "sort": 1
    },
    {
     "name": "agent",
@@ -33,10 +63,10 @@
      "uid": "${datasource}"
     },
     "query": {
-     "query": "label_values(agentdev_budget_used, agentdev_agent)",
+     "query": "label_values(agentdev_budget_used{agentdev_instance=~\"$instance\"}, agentdev_agent)",
      "refId": "A"
     },
-    "definition": "label_values(agentdev_budget_used, agentdev_agent)",
+    "definition": "label_values(agentdev_budget_used{agentdev_instance=~\"$instance\"}, agentdev_agent)",
     "includeAll": true,
     "multi": true,
     "allValue": ".*",
@@ -82,7 +112,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (agentdev_agent) (increase(agentdev_cost_units_total{agentdev_agent=~\"$agent\"}[1h]))",
+     "expr": "sum by (agentdev_agent) (increase(agentdev_cost_units_total{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[1h]))",
      "legendFormat": "{{agentdev_agent}}",
      "datasource": {
       "type": "prometheus",
@@ -124,7 +154,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (gen_ai_response_model) (increase(agentdev_cost_units_total{agentdev_agent=~\"$agent\"}[1h]))",
+     "expr": "sum by (gen_ai_response_model) (increase(agentdev_cost_units_total{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[1h]))",
      "legendFormat": "{{gen_ai_response_model}}",
      "datasource": {
       "type": "prometheus",
@@ -166,7 +196,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "agentdev_budget_used{agentdev_agent=~\"$agent\"}",
+     "expr": "agentdev_budget_used{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}",
      "legendFormat": "{{agentdev_agent}} used",
      "datasource": {
       "type": "prometheus",
@@ -175,7 +205,7 @@
     },
     {
      "refId": "B",
-     "expr": "agentdev_budget_limit{agentdev_agent=~\"$agent\"} > 0",
+     "expr": "agentdev_budget_limit{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"} > 0",
      "legendFormat": "{{agentdev_agent}} limit",
      "datasource": {
       "type": "prometheus",
@@ -209,7 +239,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "100 * agentdev_budget_used{agentdev_agent=~\"$agent\"} / (agentdev_budget_limit{agentdev_agent=~\"$agent\"} > 0)",
+     "expr": "100 * agentdev_budget_used{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"} / (agentdev_budget_limit{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"} > 0)",
      "legendFormat": "{{agentdev_agent}}",
      "datasource": {
       "type": "prometheus",
@@ -251,7 +281,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "100 * agentdev_ratelimit_utilization",
+     "expr": "100 * agentdev_ratelimit_utilization{agentdev_instance=~\"$instance\"}",
      "legendFormat": "{{agentdev_subscription}} {{agentdev_window}}",
      "datasource": {
       "type": "prometheus",
@@ -293,7 +323,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "agentdev_usage_paused{agentdev_agent=~\"$agent\"}",
+     "expr": "agentdev_usage_paused{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}",
      "legendFormat": "{{agentdev_agent}} {{agentdev_reason}}",
      "datasource": {
       "type": "prometheus",
@@ -335,7 +365,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (agentdev_agent) (increase(gen_ai_client_token_usage_sum{agentdev_agent=~\"$agent\",agentdev_cache=\"read\"}[1h])) / sum by (agentdev_agent) (increase(gen_ai_client_token_usage_sum{agentdev_agent=~\"$agent\",gen_ai_token_type=\"input\"}[1h]))",
+     "expr": "sum by (agentdev_agent) (increase(gen_ai_client_token_usage_sum{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\",agentdev_cache=\"read\"}[1h])) / sum by (agentdev_agent) (increase(gen_ai_client_token_usage_sum{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\",gen_ai_token_type=\"input\"}[1h]))",
      "legendFormat": "{{agentdev_agent}}",
      "datasource": {
       "type": "prometheus",
@@ -377,7 +407,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (gen_ai_token_type, agentdev_cache) (increase(gen_ai_client_token_usage_sum{agentdev_agent=~\"$agent\"}[1h]))",
+     "expr": "sum by (gen_ai_token_type, agentdev_cache) (increase(gen_ai_client_token_usage_sum{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[1h]))",
      "legendFormat": "{{gen_ai_token_type}} {{agentdev_cache}}",
      "datasource": {
       "type": "prometheus",
@@ -419,7 +449,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (agentdev_agent) (increase(agentdev_cost_usd_total{agentdev_agent=~\"$agent\"}[24h]))",
+     "expr": "sum by (agentdev_agent) (increase(agentdev_cost_usd_total{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[24h]))",
      "legendFormat": "{{agentdev_agent}}",
      "datasource": {
       "type": "prometheus",
@@ -461,7 +491,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum by (agentdev_agent, agentdev_reason) (increase(agentdev_requests_refused_total[1h]))",
+     "expr": "sum by (agentdev_agent, agentdev_reason) (increase(agentdev_requests_refused_total{agentdev_instance=~\"$instance\"}[1h]))",
      "legendFormat": "{{agentdev_agent}} {{agentdev_reason}}",
      "datasource": {
       "type": "prometheus",
@@ -503,7 +533,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "histogram_quantile(0.5, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{agentdev_agent=~\"$agent\"}[15m])))",
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[15m])))",
      "legendFormat": "p50",
      "datasource": {
       "type": "prometheus",
@@ -512,7 +542,7 @@
     },
     {
      "refId": "B",
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{agentdev_agent=~\"$agent\"}[15m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket{agentdev_instance=~\"$instance\",agentdev_agent=~\"$agent\"}[15m])))",
      "legendFormat": "p95",
      "datasource": {
       "type": "prometheus",

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Optional telemetry stack on kind (#196, ADR 0002 D5): OpenTelemetry Collector, Prometheus (server only) and Grafana
-# with the agentdev dashboard, in namespace monitoring. Off by default (owner decision 4): ./run.sh does not run it.
+# Optional telemetry stack on kind (#196, ADR 0002 D5): OpenTelemetry Collector and Prometheus (server only), in
+# namespace monitoring. Off by default (owner decision 4): ./run.sh does not run it. Grafana is optional too (#278
+# review): TELEMETRY_GRAFANA=true adds it with the agentdev dashboard; else use an external Grafana and import
+# grafana/agentdev-llm-cost.json (data source and instance are variables).
 #   TELEMETRY_STACK=true ./run.sh 14     install or update
 #   ./run.sh 14                          (TELEMETRY_STACK=false) remove it
 # Then ./run.sh 06 and 12 are not needed: claude-proxy and the operator already serve /metrics on 9464, and their
@@ -21,7 +23,7 @@ if [[ "${TELEMETRY_STACK}" != true ]]; then
   exit 0
 fi
 
-log "Telemetry stack: Prometheus ${PROMETHEUS_CHART_VERSION}, OpenTelemetry Collector ${OTEL_COLLECTOR_CHART_VERSION}, Grafana ${GRAFANA_CHART_VERSION}"
+log "Telemetry stack: Prometheus ${PROMETHEUS_CHART_VERSION}, OpenTelemetry Collector ${OTEL_COLLECTOR_CHART_VERSION}, Grafana: ${TELEMETRY_GRAFANA}"
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null 2>&1 || true
 helm repo add grafana-community https://grafana-community.github.io/helm-charts >/dev/null 2>&1 || true
@@ -30,20 +32,25 @@ k create namespace "${ns}" --dry-run=client -o yaml | k apply -f - >/dev/null
 # shellcheck disable=SC2086 # COST_LABELS is a comma list turned into words (#184)
 [[ -z "${COST_LABELS}" ]] || k label --overwrite namespace "${ns}" ${COST_LABELS//,/ } >/dev/null
 
-# Grafana admin: a random password in .secrets, never in git or the log
-pw=$(secret_file "${SPIKE_DIR}/.secrets/platform/grafana-admin")
-k -n "${ns}" create secret generic grafana-admin --from-literal=admin-user=admin --from-file=admin-password=<(printf '%s' "${pw}") \
-  --dry-run=client -o yaml | k apply -f - >/dev/null
-k -n "${ns}" create configmap grafana-dashboard-agentdev --from-file="${SPIKE_DIR}/grafana/agentdev-llm-cost.json" \
-  --dry-run=client -o yaml | k apply -f - >/dev/null
-
 T="${SPIKE_DIR}/manifests/telemetry"
 H upgrade --install prometheus prometheus-community/prometheus --version "${PROMETHEUS_CHART_VERSION}" -n "${ns}" \
   -f "${T}/prometheus-values.yaml" --wait --timeout 5m >/dev/null
 H upgrade --install otel-collector open-telemetry/opentelemetry-collector --version "${OTEL_COLLECTOR_CHART_VERSION}" -n "${ns}" \
   -f "${T}/collector-values.yaml" --set fullnameOverride=otel-collector --wait --timeout 5m >/dev/null
-H upgrade --install grafana grafana-community/grafana --version "${GRAFANA_CHART_VERSION}" -n "${ns}" \
-  -f "${T}/grafana-values.yaml" --wait --timeout 5m >/dev/null
+if [[ "${TELEMETRY_GRAFANA}" == true ]]; then
+  # Grafana admin: a random password in .secrets, never in git or the log
+  pw=$(secret_file "${SPIKE_DIR}/.secrets/platform/grafana-admin")
+  k -n "${ns}" create secret generic grafana-admin --from-literal=admin-user=admin --from-file=admin-password=<(printf '%s' "${pw}") \
+    --dry-run=client -o yaml | k apply -f - >/dev/null
+  k -n "${ns}" create configmap grafana-dashboard-agentdev --from-file="${SPIKE_DIR}/grafana/agentdev-llm-cost.json" \
+    --dry-run=client -o yaml | k apply -f - >/dev/null
+  H upgrade --install grafana grafana-community/grafana --version "${GRAFANA_CHART_VERSION}" -n "${ns}" \
+    -f "${T}/grafana-values.yaml" --wait --timeout 5m >/dev/null
+else
+  H -n "${ns}" uninstall grafana >/dev/null 2>&1 || true
+  k -n "${ns}" delete secret grafana-admin --ignore-not-found >/dev/null
+  k -n "${ns}" delete configmap grafana-dashboard-agentdev --ignore-not-found >/dev/null
+fi
 # D7: agents may reach the collector only when Claude Code telemetry is on
 if [[ "${CLAUDE_CODE_TELEMETRY}" == true ]]; then
   # shellcheck disable=SC2016 # envsubst takes the variable names literally
@@ -53,7 +60,9 @@ else
   k -n "${AGENTS_NS}" delete networkpolicy agent-otlp --ignore-not-found >/dev/null
 fi
 ok "telemetry stack up in ${ns}"
-record "telemetry stack (Prometheus, OTel Collector, Grafana) in ${ns}"
-echo "  Grafana:    ${KUBECTL} -n ${ns} port-forward svc/grafana 3001:80   then http://localhost:3001 (admin / .secrets/platform/grafana-admin)"
+record "telemetry stack (Prometheus, OTel Collector$([[ "${TELEMETRY_GRAFANA}" == true ]] && echo ", Grafana")) in ${ns}"
+[[ "${TELEMETRY_GRAFANA}" == true ]] \
+  && echo "  Grafana:    ${KUBECTL} -n ${ns} port-forward svc/grafana 3001:80   then http://localhost:3001 (admin / .secrets/platform/grafana-admin)" \
+  || echo "  Grafana:    off (TELEMETRY_GRAFANA=false). External Grafana: import grafana/agentdev-llm-cost.json, data source = this Prometheus"
 echo "  Prometheus: ${KUBECTL} -n ${ns} port-forward svc/prometheus-server 9090:80"
 echo "  Claude Code telemetry (optional): CLAUDE_CODE_TELEMETRY=true ./run.sh 12"
