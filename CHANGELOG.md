@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
+  The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
+  Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.
+
 ### Changed
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
