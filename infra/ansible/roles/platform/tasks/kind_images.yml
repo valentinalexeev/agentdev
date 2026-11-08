@@ -1,0 +1,25 @@
+---
+# kind (#106, was 08-mcp.sh): pull the platform images once and load them into the kind nodes. A local operator tag
+# (agentdev-operator:*) is built from images/operator first, as ./run.sh 12 does.
+- name: Platform images present locally
+  ansible.builtin.shell: >-
+    {{ platform_container_engine }} image inspect {{ item | quote }} >/dev/null 2>&1
+    || { {{ platform_container_engine }} pull -q {{ item | quote }} >/dev/null && echo pulled; }
+  loop: "{{ platform_kind_images }}"
+  register: platform_pull
+  changed_when: "'pulled' in platform_pull.stdout"
+
+- name: Build the local operator image (obs-mcp)
+  ansible.builtin.command:
+    argv: ["{{ platform_container_engine }}", build, -q, -t, "{{ operator_image }}", "{{ repo_root }}/images/operator"]
+  register: platform_operator_build
+  changed_when: false
+  when: platform_obs_mcp_enabled | bool and operator_image is match('agentdev-operator:')
+
+- name: Load the platform images into kind
+  ansible.builtin.command:
+    argv: [kind, load, docker-image, "{{ item }}", --name, "{{ platform_kind_cluster }}"]
+  loop: "{{ platform_kind_images + ([operator_image] if platform_operator_build is not skipped else []) }}"
+  register: platform_load
+  # kind writes "already present on all nodes" to stderr on a skip
+  changed_when: "'already present on all nodes' not in (platform_load.stdout ~ platform_load.stderr)"

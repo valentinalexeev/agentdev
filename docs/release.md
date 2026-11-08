@@ -22,6 +22,9 @@ decision on #125.
       approvals on the forge (#67), security events and SIEM outputs (#70, #71).
 - [ ] **Docs:** `install.md`, `admin.md`, `user-guide.md`, `troubleshooting.md` and `private-deployment.md` describe
       the GKE + GitHub + Workspace path end to end, in STE (`docs/writing.md`).
+- [ ] **Compatibility (ADR 0006, #178):** the `compat` CI job passes on the release commit. Also do one run with the
+      real model: start the workflow `compat` by hand (input `real_model: true`). It uses the repository secret
+      `COMPAT_ANTHROPIC_API_KEY`. Local run: `PREV_TAG=<previous release> scripts/e2e-compat.sh`.
 - [ ] **Workstream issues:** every issue in milestone 1 is closed, or moved out with an owner decision.
 
 ## 2. GKE e2e checklist
