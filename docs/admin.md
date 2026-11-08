@@ -1857,6 +1857,26 @@ permission. The agent examines this before each start. Else it does not do the w
 | Security findings | the agent replies in the thread of each `github-advanced-security[bot]` comment. It does not resolve the thread |
 | Not permitted | merge, labels, issue changes, GraphQL, `.github/workflows/` |
 
+### Reference: agents on Gitea
+
+| Item | Value |
+|---|---|
+| Account on Gitea | one account for each agent (the agent name) |
+| Work | open issues assigned to the agent by a person with write access |
+| Branches | `agent/<agent>/...` |
+| Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (`./run.sh 05`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
+| Router | finds the agent from the logins in the event and from the label `agent:<agent>` |
+| Not permitted | merge, other labels, issue changes |
+
+Differences from GitHub (#241):
+
+- **Code scanning:** Gitea has no code scanning API. The agent does not reply to security findings on Gitea.
+- **Inline review comments:** Gitea has no reply endpoint for a review comment. The agent answers all review
+  comments in one PR comment. Gitea shows that comment in the conversation of the PR.
+- **Session monitor:** `tools/ghwatch -forge gitea` reads a Gitea repository (token in `GITEA_TOKEN`). Gitea has no
+  repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
+  label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
+
 ## Limits and blocked agents
 
 ### Set a quota for the agents

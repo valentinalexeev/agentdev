@@ -63,3 +63,30 @@
         dest: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"
         mode: "0600"
       no_log: true
+
+# #241 P5: the agent labels its own PRs agent:<name>. Gitea does not create a missing label on use: create it here.
+- name: Existing labels before agent:{{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/labels?limit=100"
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+  register: gitea_forge_labels
+  no_log: true
+
+- name: Label agent:{{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/repos/{{ gitea_forge_repo }}/labels"
+    method: POST
+    user: "{{ gitea_forge_admin_user }}"
+    password: "{{ gitea_forge_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "agent:{{ gitea_forge_agent }}"
+      color: "#5319e7"
+      description: Work of this agent (issues and its own PRs)
+    status_code: 201
+  when: ('agent:' ~ gitea_forge_agent) not in (gitea_forge_labels.json | map(attribute='name') | list)
+  changed_when: true
+  no_log: true

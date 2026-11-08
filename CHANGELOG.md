@@ -16,6 +16,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Gitea parity, part 2 (#241, 1.4.0). P5: the agent labels its own PR `agent:<name>` on Gitea too (forge sidecar:
+  the same check as on GitHub, only that label, only on a PR from its own branch). Gitea does not make a missing
+  label, so the Ansible role `gitea_forge` and `lib-forge.sh` make `agent:<name>` for each agent. P7: on Gitea the
+  router also routes by the label `agent:<name>`; router tests with Gitea comment and review payloads. P8:
+  `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
+  replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
+  `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

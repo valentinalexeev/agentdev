@@ -87,7 +87,17 @@ func (d *giteaDriver) rules() []rule {
 		// collaborator asking for another user's permission; the assignee list holds exactly the users with write.
 		r("GET", repoRe+`/issues/[0-9]+/timeline`, nil),
 		r("GET", repoRe+`/assignees`, nil),
+		giteaOwnPRLabelRule(),
 	}
+}
+
+// giteaOwnPRLabelRule (#241 P5): the loop labels its own PR agent:<name> on Gitea too, as on GitHub (#227). The
+// same check: exactly that one label, only on a PR from the agent's branch in this repository (asked from Gitea).
+// Gitea accepts label names in the body (labels: ["agent:alice"]).
+func giteaOwnPRLabelRule() rule {
+	ru := mkRule("POST", repoRe+`/issues/([1-9][0-9]{0,15})/labels`, nil) // m[2] = the PR number
+	ru.checkPath = checkOwnPRLabel
+	return ru
 }
 
 // giteaLoginRe: a Gitea user name (letters, digits, '-', '_', '.'; no leading or trailing '.' or '-')

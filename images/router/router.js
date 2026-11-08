@@ -68,7 +68,7 @@ function people(p) {
 // GitHub (#2): all agents act as one App bot, so logins do not say which agent is meant. The agent names come from
 // the labels agent:<name> on the issue or PR and from the PR head branch agent/<name>/...; names are checked.
 const agentName = /^[a-z0-9][a-z0-9-]{0,40}$/;
-function agentsOf(p) {
+function labelAgents(p) {
   const out = new Set();
   const item = p.issue || p.pull_request || {};
   const labels = [...(item.labels || []), ...(p.label ? [p.label] : [])];
@@ -76,6 +76,10 @@ function agentsOf(p) {
     const m = /^agent:(.+)$/.exec((l && l.name) || '');
     if (m && agentName.test(m[1])) out.add(m[1]);
   }
+  return out;
+}
+function agentsOf(p) {
+  const out = labelAgents(p);
   const ref = (p.pull_request && p.pull_request.head && p.pull_request.head.ref) || '';
   const m = /^agent\/([^/]+)\//.exec(ref);
   if (m && agentName.test(m[1])) out.add(m[1]);
@@ -86,7 +90,9 @@ function agentsOf(p) {
   }
   return out;
 }
-const routingFacts = (forge, p) => (forge === 'github' ? agentsOf(p) : people(p));
+// Gitea (#241 P7): logins, plus the agent:<name> labels (the agent labels its own PRs since #241 P5; there the agent
+// name is its forge login). A label only wakes an agent, which re-reads the forge; it never gives work.
+const routingFacts = (forge, p) => (forge === 'github' ? agentsOf(p) : new Set([...people(p), ...labelAgents(p)]));
 
 function live() {
   const now = Date.now();
