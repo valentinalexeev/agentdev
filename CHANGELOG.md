@@ -114,6 +114,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
+  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
+  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
+  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
 - `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
   to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
   events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
