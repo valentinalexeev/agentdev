@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
+  `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
+  audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
+  `agentdev/created-by` (OIDC subject) on agents the API makes. Ansible `api.max_agents` / `api.max_agents_per_user`
+  (validated as whole numbers), `config.env` `MAX_AGENTS` / `MAX_AGENTS_PER_USER`. An invalid env value stops the API
+  at start. To apply: kind `./run.sh 10`; GKE the playbook (role `api`). Docs: admin.md "Limit the number of agents".
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
