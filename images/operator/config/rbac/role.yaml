@@ -136,6 +136,7 @@ rules:
   - agentdev.dev
   resources:
   - executors
+  - projectsecrets
   - sshtargets
   verbs:
   - get
@@ -145,6 +146,7 @@ rules:
   - agentdev.dev
   resources:
   - executors/status
+  - projectsecrets/status
   - sshtargets/status
   verbs:
   - get
@@ -171,4 +173,16 @@ rules:
   - delete
   - get
   - list
+  - watch
+- apiGroups:
+  - external-secrets.io
+  resources:
+  - externalsecrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
