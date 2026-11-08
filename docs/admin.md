@@ -494,8 +494,8 @@ of the agents. It shows one card for each issue.
 
 ### Deploy botboard
 
-1. Run run.sh step 07: `./run.sh 07`
-   The script deploys botboard in the namespace `botboard`.
+1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml --tags botboard`
+   The playbook deploys botboard in the namespace `botboard`. The old command `./run.sh 07` does the same (deprecated, #106).
 2. Run run.sh step 06 again: `./run.sh 06`
    The script finds botboard and sets `BOTBOARD_URL` on each agent.
 
@@ -533,7 +533,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
    Separate the paths with spaces.
 3. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres.
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
+   The playbook deploys the namespace `agentdev-platform` with Postgres.
    If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
@@ -1415,6 +1416,24 @@ playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider tha
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
+### Post-deploy smoke test
+
+At the end of each run, the playbook sends requests to the public hosts from the operator computer (#213). It does
+this in the two ingress modes. The run fails when one of these checks does not pass in `ingress.smoke_timeout`
+seconds (default 300):
+
+| Check | Expected answer |
+|---|---|
+| Forwarder pods (only with `ingress.forwarder.namespace` and `pod_selector`) | Ready |
+| `POST https://<ingress.webhook_host>/hook` without a signature | 401 from the router |
+| `GET https://<ingress.webhook_host>/status` | 404 (the internal endpoints are not public) |
+| `GET https://<ingress.host>/` (when the UI is routed) | 200, a redirect, 401 or 403 |
+| `GET https://<ingress.auth_host>/` (with authentik) | 200, a redirect, 401 or 403 |
+
+The failure message gives the URL and the answer. A new managed certificate can need more time on the first run.
+Then run the playbook again, or set a larger `ingress.smoke_timeout`. To turn the test off, set `ingress.smoke: false`.
+The test does not operate in check mode (`--check`).
+
 ### Reference: the public entry point
 
 | Control | Where | Value |
@@ -1860,6 +1879,93 @@ The next `./run.sh 12` or playbook run makes it again.
   [Add a host for an executor](#add-a-host-for-an-executor).
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
+## Project secrets
+
+A project secret is a credential that the agents of one project, or one agent, can use (#202, ADR 0003). An
+example is the token of a private package registry. The agent does not get the value. The credential broker adds
+the value to the requests of the agent. A `ProjectSecret` object tells who can use the secret and how. The value
+is in the secret store, never in the object.
+
+| Field | Values |
+|---|---|
+| `scope` | `project` (all agents of `spec.project` on `spec.forge`) or `agent` (only `spec.agent`, and only while it works on `spec.project` on `spec.forge`) |
+| `forge` | `gitea` (default) or `github`. A repository is the pair of forge and name: `acme/app` on Gitea is not `acme/app` on GitHub |
+| `mode` | `broker` (the broker adds the value to requests for `spec.broker.upstream`) or `env` (the agent can read the value, see below) |
+
+Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
+into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
+
+> **Status:** part 1 of #202. This part adds the object, the store and the copy. The broker, the write-only API and
+> the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
+
+### Set up the secret store (kind)
+
+1. Install External Secrets Operator, the store and the rules:
+
+   ```bash
+   ./run.sh 13
+   ```
+
+2. Make sure that the store is ready:
+
+   ```bash
+   kubectl -n coding-agents get secretstore agentdev-secrets
+   ```
+
+   The column `READY` shows `True`.
+
+To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
+
+### Add a project secret (kind, before the API part)
+
+1. Apply the ProjectSecret object:
+
+   ```bash
+   kubectl -n coding-agents apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: ProjectSecret
+   metadata: {name: npm-registry}
+   spec:
+     scope: project
+     project: owner/repo
+     mode: broker
+     broker: {upstream: "https://npm.pkg.github.com", scheme: bearer}
+   EOF
+   ```
+
+2. Write the value into the store. Do not write the value on the command line: read it from a file.
+
+   ```bash
+   kubectl -n agentdev-secret-values create secret generic agentdev-ps-npm-registry --from-file=value=token.txt
+   ```
+
+3. Make sure that the copy is ready:
+
+   ```bash
+   kubectl -n coding-agents get projectsecret npm-registry
+   ```
+
+   The column `PHASE` shows `ready` after one minute or less (`SECRETS_REFRESH_SECONDS`, default 60).
+
+To rotate the value, replace the Secret in step 2. To remove the project secret, delete the ProjectSecret object and
+then the Secret `agentdev-ps-<n>`.
+
+### Mode env
+
+In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
+it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
+database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
+`HTTPS_PROXY` are not permitted.
+
+### Rules in the cluster
+
+ValidatingAdmissionPolicies (`manifests/secrets-policy.yaml.tmpl`) make sure that:
+
+- An ExternalSecret in the agents namespace has the name `ps-<n>`, uses only the store `agentdev-secrets` and reads
+  only the key `agentdev-ps-<n>`.
+- Only External Secrets Operator writes a Secret `ps-*` in the agents namespace.
+- No agentdev service account writes a SecretStore or a ClusterSecretStore.
+
 ## Subscription usage limits
 
 Each Claude subscription has a 5-hour usage window and a weekly usage window. After each Claude run, the agent loop
@@ -2167,11 +2273,12 @@ a run.sh step or a manual `kubectl` command on GKE.
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
+| botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
-| Platform namespace | 08 | role `platform` |
+| Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |

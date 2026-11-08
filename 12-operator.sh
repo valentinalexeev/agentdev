@@ -23,7 +23,7 @@ else ok "using published image"; fi
 log "CRDs agents, securityevents, approvals, executors, executorruns (agentdev.dev)"
 k apply --server-side --force-conflicts --field-manager=agentdev -f "${SPIKE_DIR}/images/operator/config/crd/" >/dev/null
 k wait --for=condition=Established crd/agents.agentdev.dev crd/securityevents.agentdev.dev crd/approvals.agentdev.dev \
-  crd/executors.agentdev.dev crd/executorruns.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
+  crd/executors.agentdev.dev crd/executorruns.agentdev.dev crd/projectsecrets.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
 
 log "Operator (${PLATFORM_NS}, watching ${AGENTS_NS})"
 BOTBOARD_URL="${BOTBOARD_URL:-}"
@@ -36,6 +36,14 @@ AGENT_EGRESS_HOSTS=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
   { if [[ "${CLAUDE_PROXY:-true}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
 [[ "${JOB_TIMEOUT:-3600}" =~ ^[0-9]{1,7}$ ]] || die "JOB_TIMEOUT must be a number of seconds (0 = off)"   # #196
 [[ "${MAX_BUDGET_USD:-}" =~ ^([0-9]{1,6}(\.[0-9]{1,2})?)?$ ]] || die "MAX_BUDGET_USD must be an amount like 2.50 (empty = off)"
+# scoped secrets store (#202): on only once ./run.sh 13 installed External Secrets Operator (its CRD must be served,
+# or the operator's cache never syncs); 13 re-runs this step
+SECRETS_STORE=""
+if [[ "${SECRETS_STORE_ENABLED:-true}" == true ]] && k get crd externalsecrets.external-secrets.io >/dev/null 2>&1; then
+  SECRETS_STORE=agentdev-secrets
+fi
+SECRETS_REMOTE_PROPERTY=""   # the kind store's value Secrets have one key, value (GCP: the payload itself)
+[[ -n "${SECRETS_STORE}" ]] && SECRETS_REMOTE_PROPERTY=value
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
@@ -51,6 +59,7 @@ COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS
   TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_INSTANCE="${TELEMETRY_INSTANCE:-agentdev}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" TELEMETRY_SCRAPER_SELECTOR="${TELEMETRY_SCRAPER_SELECTOR}" \
   JOB_TIMEOUT="${JOB_TIMEOUT:-3600}" MAX_BUDGET_USD="${MAX_BUDGET_USD:-}" \
   CLAUDE_CODE_TELEMETRY="${CLAUDE_CODE_TELEMETRY:-false}" CLAUDE_CODE_OTLP_URL="${CLAUDE_CODE_OTLP_URL:-}" \
+  SECRETS_STORE="${SECRETS_STORE}" SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 label_ns "${EXEC_NS}"   # created by the operator manifest
