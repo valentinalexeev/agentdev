@@ -221,9 +221,8 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		addBudgets(r.Context(), list) // #66
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
-	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has
-	// write access to needs the forge permission check of #67 and per-project access from #57: see #57.
-	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events)))
+	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
+	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
@@ -237,7 +236,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		}
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
-		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
+		// every signed-in user, filtered by forge write access (review #102, R35 #308); Secret names for admins only
 		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
