@@ -81,3 +81,27 @@ func TestEnvCount(t *testing.T) {
 		}
 	}
 }
+
+// #27 acceptance, word for word: the admin sets a per-user limit of 2 agents. A user (adam, not in
+// agentdev-admins) launches two agents, and the third launch is refused and not created.
+func TestAcceptanceUserLimitOfTwo(t *testing.T) {
+	gitea := fakeGitea(t)
+	defer gitea.Close()
+	e := newEnv(t, gitea.URL)
+	e.wr.limits = agentLimits{PerUser: 2}
+	for _, n := range []string{"bob", "carl"} {
+		if w := e.call("POST", "/api/agents", "admin", `{"name":"`+n+`","repo":"owner/x"}`); w.Code != 201 {
+			t.Fatalf("%s within the limit: %d %s", n, w.Code, w.Body)
+		}
+	}
+	w := e.call("POST", "/api/agents", "admin", `{"name":"dora","repo":"owner/x"}`)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "your limit of 2 agents") {
+		t.Fatalf("third agent: %d %s", w.Code, w.Body)
+	}
+	if e.spec(t, "dora") != nil {
+		t.Error("dora was created above the limit")
+	}
+	if a := e.lastAudit(t); a.Result != "denied" || a.Agent != "dora" {
+		t.Errorf("audit %+v", a)
+	}
+}
