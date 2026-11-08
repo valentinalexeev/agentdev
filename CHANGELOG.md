@@ -16,6 +16,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi
+  with its git mirror `emptyDir` capped at 4Gi, `state-init` 64Mi. A pod past a limit is evicted by the kubelet and
+  the StatefulSet recreates it; the work tree on the state volume is not counted. Re-run: Ansible `operator` role
+  (new operator image), agent pods roll on the next reconcile.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
