@@ -4,7 +4,7 @@
 # Checks: ProjectSecret -> ExternalSecret -> ps-<n> sync, rotation, CRD CEL, admission policies, deletion.
 # The test value is random and never printed.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 source ./config.env
 k() { ${KUBECTL} "$@"; }
 pass=0 fail=0
