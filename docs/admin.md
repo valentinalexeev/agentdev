@@ -225,6 +225,9 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
    `budgets` lists units per agent. `jobs` lists each job (issue or pull request) of the last 7 days with its
    units, tokens by type and number of requests, most expensive first. The worker names the job in the header
    `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
+   `weights` lists the weight of each token type. Each `AGENTDEV_USAGE` line of the proxy has `tokens` (by type),
+   `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
+   rounded up.
 
 ### Stop a run that takes too long or costs too much
 

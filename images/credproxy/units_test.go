@@ -229,3 +229,43 @@ func TestModelLabelBounded(t *testing.T) {
 		t.Error("model label not bounded to known families")
 	}
 }
+
+// Acceptance of #196 (owner decision 2026-11-08, option 1): through the real proxy path, a cache-read-heavy fixture
+// response gives units = ceil(sum(tokens x weight) x multiplier) exactly, the usage line carries the numbers to
+// recompute it, and the units are under 20% of the raw tokens.
+func TestCacheHeavyFixtureUnderTwentyPercent(t *testing.T) {
+	f := newFixture(t, 0)
+	f.upstream = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-4-5-20250929\","+
+			"\"usage\":{\"input_tokens\":250,\"cache_creation_input_tokens\":400,\"cache_read_input_tokens\":48000,\"output_tokens\":1}}}\n\n")
+		io.WriteString(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":600}}\n\n")
+	}
+	resp := f.post("/v1/messages", agentKey(testSigning, "alice"), `{}`, map[string]string{jobHeader: "issue-7"})
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	u := lines(f.logs, usagePrefix)
+	if len(u) != 1 {
+		t.Fatalf("usage %v", u)
+	}
+	var ul usageLine
+	json.Unmarshal([]byte(u[0]), &ul)
+	// 250x1 + 400x1.25 + 48000x0.1 + 600x5 = 8550, multiplier 1 (Sonnet 4.x)
+	if ul.Units != 8550 || ul.Multiplier != 1 || ul.Tokens["cache_read"] != 48000 || ul.Tokens["cache_write_5m"] != 400 {
+		t.Errorf("usage line %s", u[0])
+	}
+	raw := int64(250 + 400 + 48000 + 600)
+	if ul.Units*100/raw >= 20 {
+		t.Errorf("cache-heavy fixture: %d units of %d raw tokens, want < 20%%", ul.Units, raw)
+	}
+	r, _ := http.Get(f.srv.URL + "/status")
+	var st struct {
+		Weights map[string]float64 `json:"weights"`
+		Jobs    []jobTotal         `json:"jobs"`
+	}
+	json.NewDecoder(r.Body).Decode(&st)
+	r.Body.Close()
+	if st.Weights["cache_read"] != 0.1 || st.Weights["output"] != 5 || len(st.Jobs) != 1 || st.Jobs[0].Units != 8550 {
+		t.Errorf("status %+v", st)
+	}
+}
