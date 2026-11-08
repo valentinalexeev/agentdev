@@ -20,7 +20,8 @@ import (
 
 // Claude cost in the UI (#196, ADR 0002 U5, owner decision 5a).
 //
-//	GET /api/costs                    every signed-in user: per-job cost of the last 7 days from claude-proxy
+//	GET /api/costs                    per-job cost of the last 7 days from claude-proxy, only of agents whose
+//	                                  repository the caller can read on the forge (admins: all; review of #279)
 //	PUT /api/costs/budgets/{agent}    agentdev admins only: the agent's limit in ConfigMap claude-proxy-budgets
 //
 // The proxy stays the enforcer (D1): the API only writes its configuration. The API's ServiceAccount may patch only
@@ -83,13 +84,66 @@ func validJobs(in []jobCost) []jobCost {
 	return out
 }
 
-func getCosts(rw http.ResponseWriter, r *http.Request) {
+// costsAPI serves GET /api/costs. Job ids are issue and PR numbers, so a caller sees only the jobs of agents whose
+// repository it can read (the same live forge check as for writes, permRead), unless it is an admin.
+type costsAPI struct {
+	w      *writer
+	agents agentLister
+}
+
+func (c *costsAPI) get(rw http.ResponseWriter, r *http.Request) {
 	jobs, ok := jobsSource(r.Context())
 	if !ok {
 		writeJSON(rw, http.StatusOK, map[string]any{"available": false, "jobs": []jobCost{}})
 		return
 	}
-	writeJSON(rw, http.StatusOK, map[string]any{"available": true, "unit": "units", "jobs": validJobs(jobs)})
+	jobs = validJobs(jobs)
+	if c.w == nil || !c.w.isAdmin(r.Context().Value(ctxIdentity{}).(*identity)) {
+		jobs = c.visible(r.Context(), jobs)
+	}
+	// per-job figures come from the X-Agentdev-Job header the agent sends: a report, not a bill (R110)
+	writeJSON(rw, http.StatusOK, map[string]any{"available": true, "unit": "units", "attribution": "agent-reported", "jobs": jobs})
+}
+
+// visible keeps the jobs of agents whose repository the caller can read; one forge check per repository and request.
+// Fail closed: no writer, an unknown agent or a forge error hides the job.
+func (c *costsAPI) visible(ctx context.Context, jobs []jobCost) []jobCost {
+	out := []jobCost{}
+	if c.w == nil || c.agents == nil {
+		return out
+	}
+	list, err := c.agents.List(ctx)
+	if err != nil {
+		return out
+	}
+	repoOf := map[string][2]string{}
+	for _, a := range list {
+		if len(a.Repos) > 0 {
+			f := a.Forge
+			if f == "" {
+				f = "gitea"
+			}
+			repoOf[a.Name] = [2]string{f, a.Repos[0]}
+		}
+	}
+	id := ctx.Value(ctxIdentity{}).(*identity)
+	can := map[[2]string]bool{}
+	for _, j := range jobs {
+		fr, ok := repoOf[j.Agent]
+		if !ok {
+			continue
+		}
+		allowed, seen := can[fr]
+		if !seen {
+			p, err := c.w.repoPerm(ctx, id, fr[0], fr[1])
+			allowed = err == nil && p >= permRead
+			can[fr] = allowed
+		}
+		if allowed {
+			out = append(out, j)
+		}
+	}
+	return out
 }
 
 // budgetStore patches one key of the proxy's budgets ConfigMap.
@@ -149,6 +203,12 @@ func (w *writer) putAgentBudget(rw http.ResponseWriter, r *http.Request) {
 		n, _ := strconv.ParseInt(raw, 10, 64)
 		ba.Units = &n
 	}
+	// setting a value needs the agent (a typo would create a key that silently does nothing); removing an override
+	// (null) also works for a deleted agent, to clean up
+	if ba.Units != nil && !w.agentExists(r.Context(), name) {
+		w.fail(rw, e, &httpErr{http.StatusNotFound, "invalid", "no such agent: " + name})
+		return
+	}
 	bs, ok := w.store.(budgetStore)
 	if !ok {
 		w.fail(rw, e, errors.New("budget store not available"))
@@ -196,4 +256,9 @@ func adminName(id *identity) string {
 		return n
 	}
 	return "an administrator"
+}
+
+func (w *writer) agentExists(ctx context.Context, name string) bool {
+	_, err := w.store.Get(ctx, name)
+	return err == nil
 }

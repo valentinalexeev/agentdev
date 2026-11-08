@@ -226,7 +226,9 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
 
 1. Open the web UI. The column **Claude units (24 h)** on **Agents** shows the units of each agent and the budget
    (and the estimated USD when prices are set). The page **Cost** shows the cost of each job (issue or pull request)
-   of the last 7 days, with the share of cache reads.
+   of the last 7 days, with the share of cache reads. You see the jobs of agents whose repository you can read on
+   the forge (administrators: all). The agent reports which job a request belongs to, so the per-job figures are
+   for finding expensive work, not for billing. The per-agent totals are exact.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
 

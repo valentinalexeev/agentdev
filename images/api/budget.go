@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -51,7 +52,35 @@ type proxyStatus struct {
 	Jobs []jobCost `json:"jobs"`
 }
 
+// statusCache keeps the proxy's GET /status for statusTTL: several UI tabs polling must not hit the proxy, whose
+// /status takes the jobs lock, on every request (review of #279). A failure is not cached.
+var statusCache struct {
+	sync.Mutex
+	url string
+	at  time.Time
+	st  *proxyStatus
+}
+
+const statusTTL = 15 * time.Second
+
 func fetchProxyStatus(ctx context.Context, url string, c *http.Client) *proxyStatus {
+	statusCache.Lock()
+	if statusCache.st != nil && statusCache.url == url && time.Since(statusCache.at) < statusTTL {
+		st := statusCache.st
+		statusCache.Unlock()
+		return st
+	}
+	statusCache.Unlock()
+	st := fetchProxyStatusNow(ctx, url, c)
+	if st != nil {
+		statusCache.Lock()
+		statusCache.url, statusCache.at, statusCache.st = url, time.Now(), st
+		statusCache.Unlock()
+	}
+	return st
+}
+
+func fetchProxyStatusNow(ctx context.Context, url string, c *http.Client) *proxyStatus {
 	{
 		if url == "" {
 			return nil

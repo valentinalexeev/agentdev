@@ -61,6 +61,14 @@ ip=$(k -n "${PLATFORM_NS}" get pod -l app=agentdev-operator -o jsonpath='{.items
 if k -n "${AGENTS_NS}" exec "${pod}" -c agent -- curl -sS -m 5 --noproxy '*' "http://${ip}:9464/metrics" >/dev/null 2>&1; then
   bad "agent pod reached the operator's 9464"; else pass "agent pod cannot reach the operator's 9464"; fi
 
+# 5b. other pods of the scraper namespace (Grafana) cannot reach 9464 either: only the scraper pods (review of #276)
+gpod=$(k -n "${TELEMETRY_SCRAPER_NS}" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}')
+pip=$(k -n "${AGENTS_NS}" get pod -l app=claude-proxy -o jsonpath='{.items[0].status.podIP}')
+if [[ -n "${gpod}" ]]; then
+  if k -n "${TELEMETRY_SCRAPER_NS}" exec "${gpod}" -c grafana -- wget -q -T 5 -O /dev/null "http://${pip}:9464/metrics" >/dev/null 2>&1; then
+    bad "Grafana (not a scraper) reached claude-proxy:9464"; else pass "Grafana cannot reach claude-proxy:9464"; fi
+else echo "SKIP no Grafana pod for the non-scraper check"; fi
+
 # 6. the job budget stops a job: a request with a job id over CLAUDE_JOB_BUDGET_UNITS gets 429
 limit=$(k -n "${AGENTS_NS}" get deploy claude-proxy -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="CLAUDE_JOB_BUDGET_UNITS")].value}')
 stopped=$(jq '[.[] | select(.stopped==true)] | length' <<<"${jobs}")

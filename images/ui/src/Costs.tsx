@@ -82,6 +82,11 @@ export function Costs({ token, onExpired }: { token: string; onExpired: () => vo
       <h2>Cost per job (7 days)</h2>
       {!jobs ? <p>Loading…</p> : !jobs.available ? <p className="muted">The Claude proxy does not answer; no job costs.</p> : (
         <>
+          <p className="muted">
+            Attributed by the agent&apos;s job header: the agent reports which job a request belongs to, so use these
+            figures to find expensive work, not for billing. The per-agent totals above are exact. You see the jobs of
+            agents whose repository you can read.
+          </p>
           <label>Agent{' '}
             <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)}>
               <option value="">all</option>

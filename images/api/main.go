@@ -239,7 +239,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		}
 	}
 	// Claude cost (#196, costs.go): per-job cost for every signed-in user, budget edits for admins (audited)
-	mux.Handle("GET /api/costs", auth(verify, http.HandlerFunc(getCosts)))
+	mux.Handle("GET /api/costs", auth(verify, http.HandlerFunc((&costsAPI{w: wr, agents: agents}).get)))
 	if wr != nil {
 		mux.Handle("PUT /api/costs/budgets/{name}", auditAuth("set-budget", auth(verify, http.HandlerFunc(wr.putAgentBudget))))
 	}
