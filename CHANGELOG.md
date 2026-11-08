@@ -23,6 +23,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- `scripts/e2e-gke-security.sh` has a `gitea` section (#216). It does the steps of the `github` section on a Gitea
+  repository: an issue assigned to the agent, the PR with the owner as reviewer and the label `agent:<name>`, a
+  change-request review, the agent's reply and a new commit. The `github` section now also sends a change request
+  and waits for a new commit, not only a comment. Use `--gitea OWNER/REPO --owner LOGIN [--gitea-url URL]` with
+  `E2E_GITEA_TOKEN` or `FORGE_ADMIN_USER`/`FORGE_ADMIN_PASSWORD` (`docs/e2e-security.md`). No step to re-run.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
