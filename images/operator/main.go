@@ -141,6 +141,11 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("deterministic executors on", "namespace", execNS)
+		// SSH server enrolment (#204): SSHTargets in EXEC_NS; idle until scripts/ssh-ca-init.sh made the CA Secrets
+		if err := mgr.Add(newSSHEnroller(mgr.GetClient(), mgr.GetAPIReader(), execNS)); err != nil {
+			log.Error(err, "ssh enroller")
+			os.Exit(1)
+		}
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,

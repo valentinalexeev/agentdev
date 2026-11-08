@@ -1,0 +1,84 @@
+# SSH certificate authority for executors (#204, docs/adr/0007), in the executors namespace. Rendered by 12-operator.sh
+# (envsubst) and infra/ansible/deploy.yml (same template).
+#
+# - step-ca: one replica, keys and config from Secret step-ca (made by scripts/ssh-ca-init.sh, never by agentdev). The
+#   pod waits (Pending, volume not found) until that Secret exists, so deploying the manifest without a CA is harmless.
+# - Only the operator may connect (NetworkPolicy); the CA's only provisioner is the operator's JWK key.
+# - Its database is an emptyDir: step-ca keeps only issued-certificate records there. agentdev revokes nothing
+#   through it (certificates live minutes; the emergency stop is the KRL on the servers).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: step-ca, namespace: ${EXEC_NS}, labels: {app: step-ca}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: step-ca}}
+  template:
+    metadata: {labels: {app: step-ca}}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: step-ca
+        image: ${STEP_CA_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [step-ca, /home/step/config/ca.json, --password-file, /home/step/secrets/password]
+        env: [{name: STEPPATH, value: /home/step}]
+        ports: [{name: https, containerPort: 9000}]
+        readinessProbe: {tcpSocket: {port: https}, periodSeconds: 10}
+        livenessProbe: {tcpSocket: {port: https}, periodSeconds: 20}
+        # the image's step-ca binary carries the file capability cap_net_bind_service: without it in the bounding set the
+        # kernel refuses the exec. It only allows ports below 1024; the CA listens on 9000.
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL], add: [NET_BIND_SERVICE]}}
+        volumeMounts:
+        - {name: ca, mountPath: /home/step/config/ca.json, subPath: ca.json, readOnly: true}
+        - {name: ca, mountPath: /home/step/config/defaults.json, subPath: defaults.json, readOnly: true}
+        - {name: certs, mountPath: /home/step/certs, readOnly: true}
+        - {name: secrets, mountPath: /home/step/secrets, readOnly: true}
+        - {name: templates, mountPath: /home/step/templates/ssh, readOnly: true}
+        - {name: db, mountPath: /home/step/db}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits: {cpu: 500m, memory: 128Mi}
+      volumes:
+      - {name: ca, secret: {secretName: step-ca, defaultMode: 0400, items: [{key: ca.json, path: ca.json}, {key: defaults.json, path: defaults.json}]}}
+      - name: certs
+        secret:
+          secretName: step-ca
+          defaultMode: 0444
+          items: [{key: root_ca.crt, path: root_ca.crt}, {key: intermediate_ca.crt, path: intermediate_ca.crt},
+                  {key: ssh_host_ca_key.pub, path: ssh_host_ca_key.pub}, {key: ssh_user_ca_key.pub, path: ssh_user_ca_key.pub}]
+      - name: secrets
+        secret:
+          secretName: step-ca
+          defaultMode: 0400
+          items: [{key: intermediate_ca_key, path: intermediate_ca_key}, {key: ssh_host_ca_key, path: ssh_host_ca_key},
+                  {key: ssh_user_ca_key, path: ssh_user_ca_key}, {key: password, path: password}]
+      - name: templates
+        secret:
+          secretName: step-ca
+          defaultMode: 0444
+          items: [{key: tpl-ca.tpl, path: ca.tpl}, {key: tpl-config.tpl, path: config.tpl}, {key: tpl-known_hosts.tpl, path: known_hosts.tpl},
+                  {key: tpl-sshd_config.tpl, path: sshd_config.tpl}, {key: tpl-step_config.tpl, path: step_config.tpl},
+                  {key: tpl-step_includes.tpl, path: step_includes.tpl}]
+      - {name: db, emptyDir: {sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: step-ca, namespace: ${EXEC_NS}}
+spec:
+  selector: {app: step-ca}
+  ports: [{name: https, port: 9000, targetPort: https}]
+---
+# only the operator may ask the CA (executor Jobs never reach it; executors-no-ingress denies the rest)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: step-ca, namespace: ${EXEC_NS}}
+spec:
+  podSelector: {matchLabels: {app: step-ca}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-operator}}}]
+    ports: [{port: 9000}]
+  egress: []   # the CA calls nothing

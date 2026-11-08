@@ -20,10 +20,10 @@ if [[ "${OPERATOR_IMAGE}" == agentdev-operator:* ]]; then
   ok "built and loaded"
 else ok "using published image"; fi
 
-log "CRDs agents, securityevents, approvals, executors, executorruns (agentdev.dev)"
+log "CRDs agents, securityevents, approvals, executors, executorruns, sshtargets (agentdev.dev)"
 k apply --server-side --force-conflicts --field-manager=agentdev -f "${SPIKE_DIR}/images/operator/config/crd/" >/dev/null
 k wait --for=condition=Established crd/agents.agentdev.dev crd/securityevents.agentdev.dev crd/approvals.agentdev.dev \
-  crd/executors.agentdev.dev crd/executorruns.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
+  crd/executors.agentdev.dev crd/executorruns.agentdev.dev crd/sshtargets.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
 
 log "Operator (${PLATFORM_NS}, watching ${AGENTS_NS})"
 BOTBOARD_URL="${BOTBOARD_URL:-}"
@@ -53,6 +53,9 @@ label_ns "${EXEC_NS}"   # created by the operator manifest
 EXEC_NS="${EXEC_NS}" FORGE_NS="${FORGE_NS}" EGRESS_PROXY_IMAGE="${EGRESS_PROXY_IMAGE}" \
   envsubst '${EXEC_NS} ${FORGE_NS} ${EGRESS_PROXY_IMAGE}' < "${SPIKE_DIR}/manifests/executor-egress.yaml.tmpl" | k apply -f - >/dev/null
 EXEC_NS="${EXEC_NS}" envsubst '${EXEC_NS}' < "${SPIKE_DIR}/manifests/executor-egress-web.yaml.tmpl" | k apply -f - >/dev/null
+# SSH CA (#204): runs once scripts/ssh-ca-init.sh made Secret step-ca; until then the pod waits for the Secret
+EXEC_NS="${EXEC_NS}" PLATFORM_NS="${PLATFORM_NS}" STEP_CA_IMAGE="${STEP_CA_IMAGE}" \
+  envsubst '${EXEC_NS} ${PLATFORM_NS} ${STEP_CA_IMAGE}' < "${SPIKE_DIR}/manifests/step-ca.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-operator >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-operator --timeout=120s >/dev/null || die "operator did not become ready"
 ok "agentdev-operator ready"

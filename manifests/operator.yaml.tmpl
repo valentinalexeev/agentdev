@@ -47,6 +47,9 @@ metadata: {name: agentdev-operator, namespace: ${EXEC_NS}}
 rules:   # same rules as the generated images/operator/config/rbac/role.yaml (executor.go), scoped to this namespace
 - {apiGroups: [agentdev.dev], resources: [executors], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [executors/status], verbs: [get, update, patch]}
+# SSH server enrolment (#204): admins write SSHTargets; the operator only reads them and writes their status
+- {apiGroups: [agentdev.dev], resources: [sshtargets], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [sshtargets/status], verbs: [get, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [executorruns, executorruns/status], verbs: [get, list, watch, create, update, patch, delete]}
 - {apiGroups: [batch], resources: [jobs], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [persistentvolumeclaims], verbs: [get, list, watch, create, delete]}

@@ -283,7 +283,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent, SecurityEvent, Approval, Executor and ExecutorRun CRDs (#47, #70, #67, #69)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and SSHTarget CRDs (#47, #70, #67, #69, #204)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -292,7 +292,7 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml]
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_sshtargets.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -404,6 +404,19 @@
             EXEC_NS: "{{ exec_ns }}"
             FORGE_NS: forge
             EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
+          replace: []
+
+    - name: SSH certificate authority (#204) - step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_step_ca) | from_yaml_all | list }}"
+      vars:
+        vars_step_ca:
+          src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+          values:
+            EXEC_NS: "{{ exec_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            STEP_CA_IMAGE: "{{ step_ca_image }}"
           replace: []
 
     # GKE: the executor proxy itself may reach only the hosts of all executors (same mapping as the agents' proxy)

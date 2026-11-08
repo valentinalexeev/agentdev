@@ -136,6 +136,7 @@ rules:
   - agentdev.dev
   resources:
   - executors
+  - sshtargets
   verbs:
   - get
   - list
@@ -144,6 +145,7 @@ rules:
   - agentdev.dev
   resources:
   - executors/status
+  - sshtargets/status
   verbs:
   - get
   - patch

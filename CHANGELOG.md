@@ -16,6 +16,18 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- SSH certificate authority and server enrolment for executors (#204, part 1 of 2; ADR 0007). step-ca runs in
+  `EXEC_NS` (`manifests/step-ca.yaml.tmpl`, Ansible `step_ca_image`), only the operator may connect, and its only
+  provisioner is the operator's JWK key: user certificates at most 15 minutes, no extensions, key ID
+  `executor/<run>/<commit>`, `probe/<target>` or `host/<target>`. `scripts/ssh-ca-init.sh` is the key ceremony
+  (Secrets `step-ca` and `step-ca-provisioner`; never replaced; `--out`/`--from` for rotation). New CRD `SSHTarget`:
+  the operator signs a server's host key only when it matches `spec.hostKeyFingerprint`, writes the host certificate
+  and CA keys to the status, and sets `Ready` after a probe with a forced-command certificate against the host CA (no
+  trust on first use). `scripts/ssh-enrol.sh <target>` prints the server snippet (shell, `--format ansible`,
+  `--format cloud-init`): users `agentdev` (apply, sudo) and `agentdev-check` (check and probe, no sudo), principals
+  files, `TrustedUserCAKeys`, an empty KRL, sshd settings. The Ansible executor stages follow in part 2. Manuals:
+  admin.md "SSH access for executors" (set up the CA, enrol, remove, rotate), troubleshooting; risks R102, R103. kind
+  e2e: `scripts/e2e-ssh.sh` with a test SSH server (`tests/e2e/ssh-server`).
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write

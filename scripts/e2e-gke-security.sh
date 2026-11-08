@@ -274,7 +274,7 @@ if section executors; then
   if k api-resources --api-group=agentdev.dev -o name 2>/dev/null | grep -q '^executors'; then
     [ "$EXEC_NS" != "$AGENTS_NS" ]; check $? "executors have their own namespace ($EXEC_NS)"
     sa="system:serviceaccount:$AGENTS_NS:$(echo "$POD_JSON" | jq -r '.spec.serviceAccountName')"
-    for res in secrets executors.agentdev.dev executorruns.agentdev.dev jobs.batch pods; do
+    for res in secrets executors.agentdev.dev executorruns.agentdev.dev sshtargets.agentdev.dev jobs.batch pods; do
       for verb in get create; do
         r=$(k auth can-i "$verb" "$res" -n "$EXEC_NS" --as="$sa" 2>/dev/null)
         [ "$r" = no ]; check $? "agent service account cannot $verb $res in $EXEC_NS" "can-i=$r"

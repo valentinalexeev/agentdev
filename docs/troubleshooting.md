@@ -130,6 +130,17 @@ To claim a new sandbox, delete the claim of the step: `kubectl --context kind-ag
 | Step 05 stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Export the password that was used the first time. 2. Do run.sh step 05 again. |
 | An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Do run.sh step 05 again, it mints a new token. |
 
+## SSH access for executors
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The SSHTarget stays `Pending` with `SSH CA: Secret step-ca-provisioner`. | The CA is not set up. | 1. Do the task "Set up the SSH certificate authority" in `admin.md`. 2. Wait one minute. |
+| The SSHTarget shows `HostKeyMismatch`. | The server sent a host key with another fingerprint. | 1. On the server, run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`. 2. If the fingerprint is the same as `status.observedFingerprint`, correct `spec.hostKeyFingerprint`. 3. If it is not the same, do not continue: another computer answers on that address. |
+| The SSHTarget shows `Unreachable`. | The operator cannot open a TCP connection to the server, or the server has no ed25519 host key. | 1. Examine `spec.host` and `spec.port`. 2. Make sure that the firewall of the server lets the cluster connect. 3. Make sure that `/etc/ssh/ssh_host_ed25519_key` exists. |
+| The SSHTarget stays `Enrolling` with `probe failed ... unable to authenticate`. | The snippet is not applied, or sshd did not load it. | 1. On the server, run `sshd -T \| grep -i trustedusercakeys`. 2. Apply the output of `scripts/ssh-enrol.sh <target>` again. 3. Read the sshd log: `journalctl -u ssh -n 50`. |
+| The SSHTarget shows `probe failed ... ssh: no authorities for hostname` or `ssh: certificate signed by unrecognized authority`. | The server does not send the host certificate, or sends an old one. | 1. Run `scripts/ssh-enrol.sh <target>` again. The file has the current host certificate. 2. Apply it. 3. On the server, examine `HostCertificate` in `/etc/ssh/sshd_config.d/50-agentdev.conf`. |
+| `sshd -t` fails after the snippet. | The sshd version is older than 8.2, or `sshd_config` has a `Match` block before the `Include` line. | 1. Read the error of `sshd -t`. 2. Move the `Include /etc/ssh/sshd_config.d/*.conf` line to the start of `/etc/ssh/sshd_config`. |
+
 ## Report a problem that continues
 
 WARNING: Do not put credentials in the issue.
