@@ -1,0 +1,19 @@
+---
+# One refused smoke-test case for tests/ingress_smoke.yml (included per case, so each one is checked).
+- name: Refuse {{ case.name }}
+  block:
+    - name: Try it
+      ansible.builtin.include_tasks: ../../roles/ingress/tasks/smoke.yml
+      vars:
+        ingress: "{{ case.ingress }}"
+    - name: Not reached
+      ansible.builtin.fail:
+        msg: "smoke test passed although {{ case.name }}"
+  rescue:
+    - name: Refused as expected, the message names the host and the answer
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Check the answers of the public hosts'
+          - case.want in ansible_failed_result.msg
+          - "'ingress.smoke: false' in ansible_failed_result.msg"
+        quiet: true
