@@ -297,6 +297,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   `.secrets/github-app`), the image built and loaded into kind, and the Gitea account `agentdev-api` (#100). Same
   result (database roles and grants, Secrets `agentdev-api-db`, `-forge`, `-github`, `-siem`, Deployment). Changed:
   the API restarts only when a Secret or the loaded image changes, so a second run changes nothing. GKE does not change.
+- Step 11 (#106): `11-ui.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags ui`: the web UI
+  tasks of the role `api` (moved to `roles/api/tasks/ui.yml`, same tasks on GKE), with the image built and loaded into
+  kind. Changed: the UI restarts only after a new image, so a second run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

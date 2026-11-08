@@ -2103,7 +2103,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Operator and CRDs | 12 | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
-| Web UI | 11 | role `api` (`api.ui`) |
+| Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of

@@ -67,23 +67,7 @@
   changed_when: false
   when: not ansible_check_mode
 
-# web UI (#48, #120): the same manifests/ui.yaml.tmpl as ./run.sh 11. Users reach it through the role ingress.
-- name: Web UI Deployment, Service and NetworkPolicies
-  kubernetes.core.k8s:
-    context: "{{ kube_context }}"
-    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=ui_render) | from_yaml_all | list }}"
-  vars:
-    ui_render:
-      src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
-      values:
-        PLATFORM_NS: "{{ platform_ns }}"
-        UI_IMAGE: "{{ api_ui_image }}"
-        OIDC_ISSUER: "{{ api_oidc_issuer }}"
-      replace: []
+# web UI (#48, #120): tasks/ui.yml; kind.yml runs it alone with the tag ui (was 11-ui.sh)
+- name: Web UI
+  ansible.builtin.include_tasks: ui.yml
   when: api_ui | bool
-
-- name: Wait for the web UI
-  ansible.builtin.command: >-
-    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-ui --timeout=120s
-  changed_when: false
-  when: api_ui | bool and not ansible_check_mode
