@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -48,9 +50,16 @@ const genAIProvider = "anthropic"
 // newTelemetry builds the meters. otlpURL "" = Prometheus only. b supplies the budget gauges.
 func newTelemetry(otlpURL string, b *budget) (*telemetry, error) {
 	t := &telemetry{util: map[[2]string]float64{}, shutdown: func(context.Context) error { return nil }}
-	res := resource.NewSchemaless(semconv.ServiceName("claude-proxy"), attribute.String("service.namespace", "agentdev"))
+	inst, err := telemetryInstance(os.Getenv("TELEMETRY_INSTANCE"))
+	if err != nil {
+		return nil, err
+	}
+	res := resource.NewSchemaless(semconv.ServiceName("claude-proxy"), attribute.String("service.namespace", "agentdev"),
+		attribute.String(instanceAttr, inst))
 	reg := prometheus.NewRegistry()
-	promExp, err := otelprom.New(otelprom.WithRegisterer(reg), otelprom.WithoutScopeInfo())
+	// agentdev_instance on every series, so one external Prometheus and Grafana can tell instances apart (#278 review)
+	promExp, err := otelprom.New(otelprom.WithRegisterer(reg), otelprom.WithoutScopeInfo(),
+		otelprom.WithResourceAsConstantLabels(attribute.NewAllowKeysFilter(instanceAttr)))
 	if err != nil {
 		return nil, err
 	}
@@ -223,4 +232,20 @@ func (t *telemetry) serveMetrics(ctx context.Context, addr string) {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("metrics listener: %v", err)
 	}
+}
+
+// instanceAttr names the agentdev instance (TELEMETRY_INSTANCE, default "agentdev"). Prometheus label:
+// agentdev_instance (the label "instance" belongs to the scrape target).
+const instanceAttr = "agentdev.instance"
+
+var instanceRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func telemetryInstance(v string) (string, error) {
+	if v == "" {
+		return "agentdev", nil
+	}
+	if !instanceRe.MatchString(v) {
+		return "", errors.New("TELEMETRY_INSTANCE must be a DNS label (a-z, 0-9, -; at most 63 characters)")
+	}
+	return v, nil
 }
