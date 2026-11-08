@@ -22,7 +22,9 @@
 // Listeners (#214): PORT (8080) is the public webhook port: it serves only the deliveries (POST / and /hook...) and
 // answers 404 for anything else, so a Gateway or reverse proxy that publishes it cannot expose the rest. INTERNAL_PORT
 // (8081) serves everything for in-cluster callers: /healthz, /status, /register, /idle (and the deliveries too).
-// Env: PORT (8080), INTERNAL_PORT (8081), FORGE_SECRETS ("gitea=<secret>,github=<secret>"), REGISTER_TOKEN (agents -> router),
+// HEALTH_PORT (8082) serves only GET /healthz (#218): the load balancer health check and the kubelet probes use it, so
+// the Google Front End ranges that the NetworkPolicy must let in never reach /status on the internal port.
+// Env: PORT (8080), INTERNAL_PORT (8081), HEALTH_PORT (8082), FORGE_SECRETS ("gitea=<secret>,github=<secret>"), REGISTER_TOKEN (agents -> router),
 //      REGISTRATION_TTL_SECONDS (300), K8S_NAMESPACE (agents namespace; scaling is off without it),
 //      K8S_API_URL (default: in-cluster API with the pod's service account),
 //      WAKE_POLL_SECONDS (0 = off), GITEA_URL, GITHUB_API_URL (https://api.github.com), FORGE_POLL_DIR (files of the
@@ -33,6 +35,7 @@ const crypto = require('node:crypto');
 
 const port = Number(process.env.PORT || 8080);
 const internalPort = Number(process.env.INTERNAL_PORT || 8081);
+const healthPort = Number(process.env.HEALTH_PORT || 8082);
 const ttlMs = Number(process.env.REGISTRATION_TTL_SECONDS || 300) * 1000;
 const registerToken = process.env.REGISTER_TOKEN || '';
 const forgeSecrets = Object.fromEntries((process.env.FORGE_SECRETS || '').split(',').filter(Boolean)
@@ -319,6 +322,9 @@ function handle(req, res) {
 // public: deliveries only (#214)
 http.createServer((req, res) => (isDelivery(req) ? handle(req, res) : json(res, 404, { error: 'not found' })))
   .listen(port, () => log(`public (webhooks only) on :${port}`));
+// health only (#218): the load balancer health check and the probes
+http.createServer((req, res) => (req.method === 'GET' && req.url === '/healthz' ? json(res, 200, { ok: true }) : json(res, 404, { error: 'not found' })))
+  .listen(healthPort, () => log(`health only on :${healthPort}`));
 http.createServer(handle).listen(internalPort, () => log(`internal on :${internalPort}; forges: ${Object.keys(forgeSecrets).join(',') || 'none'}; scaling: ${ns ? `on (${ns})` : 'off'}; wake poll: ${pollMs && ns ? `every ${pollMs / 1000}s` : 'off'}`));
 // never die on a stray async error: log it (an exit would drop every registration and delivery in flight)
 process.on('unhandledRejection', (e) => log(`unhandled: ${e && e.message}`));

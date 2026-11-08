@@ -137,6 +137,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- The router has a health-only port 8082 (`HEALTH_PORT`, #218). It serves only `GET /healthz`. The kubelet probes,
+  the GKE HealthCheckPolicy and the Google Front End rule of the NetworkPolicy `webhook-router-from-forwarder` use it,
+  so the Google ranges no longer reach the internal port 8081 (`/status`, `/register`, `/idle`). Upgrade: deploy the
+  router image and the manifests of the same release together (kind: `./run.sh 06`; GKE: the playbook, roles
+  `ingress` and the router in `deploy.yml`). A new router image with old manifests keeps working on 8081.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder

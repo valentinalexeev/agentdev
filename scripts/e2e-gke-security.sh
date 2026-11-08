@@ -103,6 +103,12 @@ if section pods; then
   for d in webhook-router egress-proxy; do
     k -n "$AGENTS_NS" rollout status "deploy/$d" --timeout=10s >/dev/null 2>&1; check $? "deployment $d is available"
   done
+  # #218: the health port serves only /healthz, and no ipBlock rule of the router policies opens the internal port
+  # shellcheck disable=SC2016  # node code
+  hp=$(k -n "$AGENTS_NS" exec deploy/webhook-router -- node -e 'const g=(p)=>new Promise((r)=>require("http").get({host:"127.0.0.1",port:8082,path:p},(x)=>{x.resume();r(x.statusCode)}).on("error",()=>r(0)));Promise.all([g("/healthz"),g("/status")]).then((a)=>console.log(a.join(" ")))' 2>/dev/null)
+  [ "$hp" = "200 404" ]; check $? "router: the health port 8082 gives /healthz and nothing else (#218)" "got: ${hp:-no answer}"
+  open81=$(k -n "$AGENTS_NS" get networkpolicy -o json 2>/dev/null | jq -r '[.items[]|select(.spec.podSelector.matchLabels.app=="webhook-router")|.spec.ingress[]?|select(any(.from[]?; .ipBlock))|.ports[]?|select(.port==8081)]|length')
+  [ "${open81:-0}" = 0 ]; check $? "router: no ipBlock rule (load balancer ranges) reaches the internal port 8081 (#218)" "$open81 rule(s)"
   if $PROXY_ON; then k -n "$AGENTS_NS" rollout status deploy/claude-proxy --timeout=10s >/dev/null 2>&1; check $? "deployment claude-proxy is available"
   else fail "deployment claude-proxy is missing (CLAUDE_PROXY off: R11 and R64 are open)"; fi
   if $KIND; then skip "gVisor runtime (GKE sandbox pool only)"
