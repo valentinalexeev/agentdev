@@ -23,6 +23,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
   through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
   public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
+- Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
+  `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
+  project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
+  bounded, output redacted, clipped and fenced as untrusted, calls are rate limited (docs/security.md R99). Off by
+  default: `OBS_MCP=true` and `./run.sh 08` on kind, `obs_mcp.enabled` and the playbook (role `platform`) on GKE.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write

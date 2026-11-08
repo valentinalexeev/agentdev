@@ -21,6 +21,14 @@ mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.loca
 # registry_proxy_artifact_registry: {service_account: agentdev-registry-cache@my-agentdev.iam.gserviceaccount.com,
 #   npm: https://europe-west4-npm.pkg.dev/my-agentdev/agentdev-npm/, pypi: https://europe-west4-python.pkg.dev/my-agentdev/agentdev-pypi/,
 #   go: https://europe-west4-go.pkg.dev/my-agentdev/agentdev-go/}
+# read-only observability MCP tools (agentdev docs/admin.md "Give agents the observability tools"); off by default
+# obs_mcp:
+#   enabled: true
+#   prometheus_url: http://prometheus-server.monitoring.svc.cluster.local
+#   loki_url: http://loki-gateway.monitoring.svc.cluster.local
+#   token_secret: ""              # Secret Manager name of a read-only bearer token; empty: none
+#   cloud_logging_project: ""     # add-on: GCP project for cloud_logging_query
+#   cloud_logging_gsa: ""         # Google service account with roles/logging.viewer only
 # GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
 github_app:
   name: my-agentdev                              # unique on GitHub
