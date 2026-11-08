@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -147,6 +148,65 @@ type writer struct {
 	perms      permChecker
 	adminGroup string
 	usage      usageStore // usage limits (#93); nil: the endpoints are not served
+	limits     agentLimits
+	createMu   sync.Mutex // one create at a time, so two requests cannot both pass the caps (one API replica)
+}
+
+// agentLimits (#27): caps on the number of Agent objects that POST /api/agents may reach. 0 = no cap.
+//   - Total: all Agent objects in the namespace, whoever made them (also Ansible, kubectl); applies to everyone.
+//   - PerUser: the Agent objects that one person made through the API (annotation agentdev/created-by = OIDC
+//     subject). Members of the admin group are not limited by it. Objects made outside the API count only for Total.
+//
+// Admins set them on the instance (Ansible api.max_agents / api.max_agents_per_user, config.env MAX_AGENTS /
+// MAX_AGENTS_PER_USER). The ResourceQuota from the project spec stays the Kubernetes backstop.
+type agentLimits struct {
+	Total   int
+	PerUser int
+}
+
+// createdByAnnotation records who made an Agent through the API (#27). Set only by the API, read for PerUser.
+const createdByAnnotation = "agentdev/created-by"
+
+// agentCounter counts Agent objects for the caps. kubeAgents implements it; a store without it skips the caps.
+type agentCounter interface {
+	CountAgents(ctx context.Context, subject string) (total, mine int, err error)
+}
+
+func (k *kubeAgents) CountAgents(ctx context.Context, subject string) (int, int, error) {
+	l, err := k.d.Resource(agentsGVR).Namespace(k.ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return 0, 0, err
+	}
+	mine := 0
+	for _, u := range l.Items {
+		if subject != "" && u.GetAnnotations()[createdByAnnotation] == subject {
+			mine++
+		}
+	}
+	return len(l.Items), mine, nil
+}
+
+// checkLimits refuses a create above a cap (403, audited as denied). It fails closed when the count is not possible.
+func (w *writer) checkLimits(ctx context.Context, id *identity) error {
+	if w.limits.Total <= 0 && w.limits.PerUser <= 0 {
+		return nil
+	}
+	c, ok := w.store.(agentCounter)
+	if !ok {
+		return nil
+	}
+	total, mine, err := c.CountAgents(ctx, id.Subject)
+	if err != nil {
+		log.Printf("count agents: %v", err)
+		return &httpErr{http.StatusServiceUnavailable, "error", "cannot count the agents for the limit; try again later"}
+	}
+	if w.limits.Total > 0 && total >= w.limits.Total {
+		return denied(fmt.Sprintf("the instance limit of %d agents is reached; remove an agent or ask an administrator to raise max_agents", w.limits.Total))
+	}
+	if w.limits.PerUser > 0 && !w.isAdmin(id) && mine >= w.limits.PerUser {
+		return denied(fmt.Sprintf("your limit of %d agents is reached; remove one of your agents or ask an administrator", w.limits.PerUser))
+	}
+	return nil
 }
 
 func (w *writer) who(id *identity) auditWho {
@@ -380,9 +440,19 @@ func (w *writer) create(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Grant = grant
+	w.createMu.Lock()
+	defer w.createMu.Unlock()
+	if err := w.checkLimits(r.Context(), id); err != nil {
+		w.fail(rw, e, err)
+		return
+	}
+	meta := map[string]any{"name": name}
+	if id.Subject != "" {
+		meta["annotations"] = map[string]any{createdByAnnotation: id.Subject}
+	}
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agentdev.dev/v1alpha1", "kind": "Agent",
-		"metadata": map[string]any{"name": name},
+		"metadata": meta,
 		"spec": map[string]any{"repo": st.Repo, "forge": st.Forge, "forgeSecret": "agent-" + name,
 			"claudeSecret": st.ClaudeSecret, "maxConcurrent": int64(st.MaxConcurrent), "scaleToZero": st.ScaleToZero},
 	}}
