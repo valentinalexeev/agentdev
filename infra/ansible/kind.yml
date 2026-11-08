@@ -8,9 +8,10 @@
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
+#   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, mcp: 08.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -57,6 +58,15 @@
       vars:
         gitea_forge_context: kind-{{ kind_cluster_name }}
       tags: [forge]
+
+    # optional (#26): not in the default run. Agents get BOTBOARD_URL from ./run.sh 06 when the namespace exists.
+    - name: Botboard dashboard (was 07-botboard.sh)
+      ansible.builtin.include_role:
+        name: botboard
+        apply: {tags: [botboard]}
+      vars:
+        botboard_context: kind-{{ kind_cluster_name }}
+      tags: [botboard, never]
 
     # Postgres always; ContextForge and mcp-sync only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
     # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager.
