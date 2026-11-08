@@ -39,8 +39,32 @@
     path: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"
   register: gitea_forge_token_file
 
+# A token file from an older cluster (a new Gitea has new tokens) gives 401 to the agents (#106). Check that the file
+# logs in as the agent; if not, mint a new token. Gitea answers 401 for an unknown token.
+- name: Read the token file of {{ gitea_forge_agent }}
+  ansible.builtin.slurp: {src: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"}
+  register: gitea_forge_token_have
+  when: gitea_forge_token_file.stat.exists and gitea_forge_token_file.stat.size > 0
+  no_log: true
+
+- name: The token file still logs in as {{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/user"
+    headers: {Authorization: "token {{ gitea_forge_token_have.content | b64decode | trim }}"}
+    status_code: [200, 401, 403]
+  register: gitea_forge_token_check
+  when: gitea_forge_token_have is not skipped
+  no_log: true
+
+- name: Stale token file of {{ gitea_forge_agent }} (older cluster)
+  ansible.builtin.debug:
+    msg: >-
+      {{ gitea_forge_agent }}.token does not log in (HTTP {{ gitea_forge_token_check.status }}): a new token replaces it.
+      Then run --tags agents (step 06) so the agent gets it.
+  when: gitea_forge_token_stale
+
 - name: Mint and store the token of {{ gitea_forge_agent }}
-  when: not gitea_forge_token_file.stat.exists or gitea_forge_token_file.stat.size == 0
+  when: not gitea_forge_token_file.stat.exists or gitea_forge_token_file.stat.size == 0 or gitea_forge_token_stale
   block:
     - name: Mint a token
       ansible.builtin.command:
