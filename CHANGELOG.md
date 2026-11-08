@@ -22,7 +22,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agentdev/created-by` (OIDC subject) on agents the API makes. Ansible `api.max_agents` / `api.max_agents_per_user`
   (validated as whole numbers), `config.env` `MAX_AGENTS` / `MAX_AGENTS_PER_USER`. An invalid env value stops the API
   at start. To apply: kind `./run.sh 10`; GKE the playbook (role `api`). Docs: admin.md "Limit the number of agents".
-=======
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
