@@ -1,0 +1,135 @@
+---
+# kind: a local OIDC stand-in plays Google Workspace (manifests/kind/sso-standin.yaml); the same blueprint and property
+# mappings as GKE (manifests/authentik-blueprint-sso.yaml) turn it into the source `agentdev-sso`.
+- name: Check the SSO stand-in settings (they go into blueprint expressions; same patterns as authentik_sso)
+  ansible.builtin.assert:
+    that:
+      - authentik_kind_sso_admin_group is match('^[A-Za-z0-9._@+-]{1,128}$')
+      - authentik_kind_sso_allowed_domains is match('^[a-z0-9]([a-z0-9.-]{0,252})(,[a-z0-9]([a-z0-9.-]{0,252}))*$')
+      - authentik_kind_sso_forge_attr is match('^[A-Za-z][A-Za-z0-9_.]{0,63}$')
+      - authentik_kind_sso_forge_attr_github is match('^[A-Za-z][A-Za-z0-9_.]{0,63}$')
+      - authentik_kind_sso_forge_attr_gitea is match('^[A-Za-z][A-Za-z0-9_.]{0,63}$')
+    fail_msg: "SSO_ADMIN_GROUP (letters, digits, ._@+-), SSO_ALLOWED_DOMAINS (comma-separated lower-case domains), SSO_FORGE_ATTR* (attribute names)"
+    quiet: true
+
+- name: Stand-in Deployment and Service
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    src: "{{ repo_root }}/manifests/kind/sso-standin.yaml"
+
+- name: Stand-in rollout is complete
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", rollout, status, deploy/sso-standin, --timeout=180s]
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Stand-in client secret file (generated once)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    f="{{ authentik_kind_secrets_dir }}/sso-standin-client-secret"
+    if [ ! -s "$f" ]; then umask 077; openssl rand -hex 24 > "$f"; chmod 600 "$f"; echo created; fi
+  args: {executable: /bin/bash}
+  register: authentik_kind_cs_created
+  changed_when: "'created' in authentik_kind_cs_created.stdout"
+
+- name: Read the stand-in client secret
+  ansible.builtin.slurp: {src: "{{ authentik_kind_secrets_dir }}/sso-standin-client-secret"}
+  register: authentik_kind_cs
+  failed_when: authentik_kind_cs.failed | default(false) and not ansible_check_mode
+  no_log: true
+
+- name: SSO env for the authentik pods (same keys as the role authentik_sso, OIDC)
+  ansible.builtin.set_fact:
+    authentik_kind_sso_env:
+      AGENTDEV_SSO_OIDC: "true"
+      AGENTDEV_SSO_NAME: Company SSO (local stand-in)
+      AGENTDEV_SSO_ADMIN_GROUP: "{{ authentik_kind_sso_admin_group }}"
+      AGENTDEV_SSO_FORGE_ATTR: "{{ authentik_kind_sso_forge_attr }}"
+      AGENTDEV_SSO_ALLOWED_DOMAINS: "{{ authentik_kind_sso_allowed_domains }}"
+      AGENTDEV_SSO_FORGE_ATTR_GITHUB: "{{ authentik_kind_sso_forge_attr_github }}"
+      AGENTDEV_SSO_FORGE_ATTR_GITEA: "{{ authentik_kind_sso_forge_attr_gitea }}"
+      AGENTDEV_SSO_OIDC_CLIENT_ID: authentik
+      AGENTDEV_SSO_OIDC_CLIENT_SECRET: "{{ (authentik_kind_cs.content | default('')) | b64decode | trim }}"
+      # the browser reaches the stand-in through a port-forward; authentik in the cluster
+      AGENTDEV_SSO_OIDC_AUTHORIZE_URL: http://localhost:18080/default/authorize
+      AGENTDEV_SSO_OIDC_TOKEN_URL: "{{ authentik_kind_inner }}/token"
+      AGENTDEV_SSO_OIDC_USERINFO_URL: "{{ authentik_kind_inner }}/userinfo"
+  vars:
+    authentik_kind_inner: http://sso-standin.{{ platform_ns }}.svc.cluster.local:8080/default
+  no_log: true
+
+- name: Secret authentik-sso
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: authentik-sso, namespace: "{{ platform_ns }}"}
+      stringData: "{{ authentik_kind_sso_env }}"
+  no_log: true
+
+# envFrom is read at pod start: restart when the settings changed (hash only, never the values)
+- name: Restart authentik when the SSO settings changed
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: patched
+    kind: Deployment
+    name: "{{ item }}"
+    namespace: "{{ platform_ns }}"
+    definition:
+      spec: {template: {metadata: {annotations: {agentdev/sso-hash: "{{ (authentik_kind_sso_env | to_json | hash('sha256'))[:16] }}"}}}}
+  loop: [authentik-server, authentik-worker]
+  no_log: true
+
+- name: Authentik rollout is complete
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", rollout, status, "deploy/{{ item }}", --timeout=600s]
+  loop: [authentik-server, authentik-worker]
+  changed_when: false
+  when: not ansible_check_mode
+
+# the worker re-applies a blueprint only when its file changes, not when its env does: apply the SSO one now. A
+# changed ConfigMap reaches the mounted file after up to a minute: wait for the repo version first.
+- name: The SSO blueprint of the repo reached the worker
+  ansible.builtin.shell: |
+    set -euo pipefail
+    # compare without trailing newlines: the ConfigMap value may lose the final newline of the file
+    want=$(printf '%s' "$(cat {{ (repo_root ~ '/manifests/authentik-blueprint-sso.yaml') | quote }})" | openssl dgst -sha256 -r | cut -d' ' -f1)
+    k="kubectl --context {{ kube_context }} -n {{ platform_ns }}"
+    wp=$($k get pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=worker \
+         --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+    for _ in $(seq 1 60); do
+      have=$(printf '%s' "$($k exec "$wp" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null)" \
+             | openssl dgst -sha256 -r | cut -d' ' -f1)
+      [ "$have" = "$want" ] && { echo "$wp"; exit 0; }
+      sleep 3
+    done
+    echo "the SSO blueprint did not reach the authentik worker" >&2; exit 1
+  args: {executable: /bin/bash}
+  register: authentik_kind_wp
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Apply the SSO blueprint
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ authentik_kind_wp.stdout }}",
+           --, ak, shell]
+    stdin: |
+      from authentik.blueprints.models import BlueprintInstance
+      from authentik.blueprints.v1.importer import Importer
+      bi = BlueprintInstance.objects.get(path="mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml")
+      print("SSO_APPLIED=" + str(Importer.from_string(bi.retrieve(), bi.context).apply()))
+  register: authentik_kind_sso_apply
+  changed_when: false
+  failed_when: "'SSO_APPLIED=True' not in authentik_kind_sso_apply.stdout"
+  when: not ansible_check_mode
+
+# sign-in checks: add, keep a hand-added member, remove only on leaving the directory group, audit (#122)
+- name: SSO sign-in check (scripts/sso-check.py)
+  ansible.builtin.command:
+    argv: [python3, "{{ repo_root }}/scripts/sso-check.py", --context, "{{ kube_context }}", --namespace, "{{ platform_ns }}",
+           --admin-group, "{{ authentik_kind_sso_admin_group }}", --forge-attr, "{{ authentik_kind_sso_forge_attr }}",
+           --forge-attr-github, "{{ authentik_kind_sso_forge_attr_github }}", --forge-attr-gitea, "{{ authentik_kind_sso_forge_attr_gitea }}",
+           --domain, "{{ authentik_kind_sso_allowed_domains.split(',') | first }}"]
+  changed_when: false
+  when: authentik_kind_sso_check | bool and not ansible_check_mode

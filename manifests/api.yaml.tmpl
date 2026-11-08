@@ -54,6 +54,9 @@ spec:
         - {name: APPROVAL_DENY_ACCOUNTS, value: "${APPROVAL_DENY_ACCOUNTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # same defaults as the operator (#93), shown in the web UI
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
+        - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
+        - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
