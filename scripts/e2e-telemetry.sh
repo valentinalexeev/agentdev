@@ -52,10 +52,15 @@ units=$(jq '[.[].units] | add // 0' <<<"${jobs}")
 
 # 3. Prometheus has the metrics
 q() { curl -s -m 10 --data-urlencode "query=$1" http://localhost:19090/api/v1/query; }
-for m in agentdev_cost_units_total gen_ai_client_token_usage_count agentdev_budget_used agentdev_ratelimit_utilization; do
+for m in agentdev_cost_units_total gen_ai_client_token_usage_count agentdev_budget_used; do
   c=$(q "${m}" | jq '.data.result | length')
   (( c > 0 )) && pass "Prometheus has ${m} (${c} series)" || bad "Prometheus has no ${m}"
 done
+# the rate limit gauge comes from the anthropic-ratelimit-unified-* response headers: only a subscription login
+# sends them, an API key and the e2e Claude stub do not (proxy unit tests cover the parsing)
+c=$(q agentdev_ratelimit_utilization | jq '.data.result | length')
+(( c > 0 )) && pass "Prometheus has agentdev_ratelimit_utilization (${c} series)" \
+  || echo "SKIP no agentdev_ratelimit_utilization (upstream sent no anthropic-ratelimit-unified-* headers: API key or stub)"
 c=$(q 'agentdev_usage_paused' | jq '.status')
 [[ "${c}" == '"success"' ]] && pass "operator metrics scraped (query ok)" || bad "operator query"
 inst="${TELEMETRY_INSTANCE:-agentdev}"
