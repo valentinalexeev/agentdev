@@ -7,6 +7,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- UI (#323): Ansible `api.ui_oidc_scopes` (default `openid profile email forge`) and `api.oidc_client_id` (default
+  `agentdev`). The UI gets them as `OIDC_SCOPES` and `OIDC_CLIENT_ID` through `/config.json`. `api.oidc_audience`
+  follows `api.oidc_client_id`. The defaults keep authentik as it is. For Pocket ID, use the scopes
+  `openid profile email groups forge`.
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
   the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
