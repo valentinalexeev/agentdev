@@ -3,7 +3,7 @@
 # TELEMETRY_STACK=true ./run.sh 14, with at least one agent that has worked on an issue (so the proxy saw requests).
 #   scripts/e2e-telemetry.sh [agent]
 # Checks: units = sum(tokens x weight) x multiplier exactly, per-job cost on GET /status, metrics in Prometheus,
-# Grafana has the dashboard, the job budget and JOB_TIMEOUT stop a run, agent pods cannot reach port 9464.
+# the agentdev_instance label, Grafana (when TELEMETRY_GRAFANA=true) has the dashboard, the job budget and JOB_TIMEOUT stop a run, agent pods cannot reach port 9464.
 # Prints PASS/FAIL lines; exit code 1 if any FAIL.
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
@@ -15,9 +15,11 @@ bad()  { printf 'FAIL %s\n' "$*"; fail=1; }
 # GET /status through a port-forward: the proxy's NetworkPolicy admits only agents and the API on 8080
 k -n "${AGENTS_NS}" port-forward deploy/claude-proxy 18080:8080 >/dev/null 2>&1 & pf=$!
 k -n "${TELEMETRY_SCRAPER_NS}" port-forward svc/prometheus-server 19090:80 >/dev/null 2>&1 & pf2=$!
-k -n "${TELEMETRY_SCRAPER_NS}" port-forward svc/grafana 13001:80 >/dev/null 2>&1 & pf3=$!   # distroless: no shell inside
-trap 'kill "${pf}" "${pf2}" "${pf3}" 2>/dev/null' EXIT
-sleep 3
+grafana=false; k -n "${TELEMETRY_SCRAPER_NS}" get svc grafana >/dev/null 2>&1 && grafana=true   # optional (TELEMETRY_GRAFANA)
+pf3=""; [[ "${grafana}" == true ]] && { k -n "${TELEMETRY_SCRAPER_NS}" port-forward svc/grafana 13001:80 >/dev/null 2>&1 & pf3=$!; }
+trap 'kill "${pf}" "${pf2}" ${pf3} 2>/dev/null' EXIT
+# wait for the port-forwards (a fixed sleep raced the /status check in an earlier run)
+for _ in $(seq 1 20); do curl -s -m 2 -o /dev/null http://localhost:18080/healthz && curl -s -m 2 -o /dev/null http://localhost:19090/-/ready && break; sleep 1; done
 
 # 1. GET /status: units, jobs, tokens by type
 st=$(curl -s -m 10 http://localhost:18080/status)
@@ -56,13 +58,22 @@ for m in agentdev_cost_units_total gen_ai_client_token_usage_count agentdev_budg
 done
 c=$(q 'agentdev_usage_paused' | jq '.status')
 [[ "${c}" == '"success"' ]] && pass "operator metrics scraped (query ok)" || bad "operator query"
+inst="${TELEMETRY_INSTANCE:-agentdev}"
+c=$(q "agentdev_budget_used{agentdev_instance=\"${inst}\"}" | jq '.data.result | length')
+nolbl=$(q '{__name__=~"agentdev_.*|gen_ai_.*",job="agentdev",agentdev_instance=""}' | jq '.data.result | length')
+(( c > 0 && nolbl == 0 )) && pass "every agentdev series has agentdev_instance=${inst}" || bad "instance label: ${c} with ${inst}, ${nolbl} without"
 up=$(q 'up{job="agentdev"}' | jq '[.data.result[] | select(.value[1]=="1")] | length')
 (( up >= 2 )) && pass "both targets up (claude-proxy, operator)" || bad "targets up: ${up}"
 
-# 4. Grafana has the dashboard
-pw=$(cat "${SPIKE_DIR}/.secrets/platform/grafana-admin")
-d=$(curl -s -m 10 -u "admin:${pw}" http://localhost:13001/api/dashboards/uid/agentdev-llm-cost | jq -r .dashboard.title)
-[[ "${d}" == "agentdev: Claude cost and usage" ]] && pass "Grafana dashboard loaded" || bad "Grafana dashboard: ${d}"
+# 4. Grafana (optional, TELEMETRY_GRAFANA=true) has the dashboard, and its instance variable lists this instance
+if [[ "${grafana}" == true ]]; then
+  pw=$(cat "${SPIKE_DIR}/.secrets/platform/grafana-admin")
+  d=$(curl -s -m 10 -u "admin:${pw}" http://localhost:13001/api/dashboards/uid/agentdev-llm-cost | jq -r .dashboard.title)
+  [[ "${d}" == "agentdev: Claude cost and usage" ]] && pass "Grafana dashboard loaded" || bad "Grafana dashboard: ${d}"
+else
+  echo "SKIP Grafana is off (TELEMETRY_GRAFANA=false); the dashboard JSON is for an external Grafana"
+  k -n "${TELEMETRY_SCRAPER_NS}" get deploy grafana >/dev/null 2>&1 && bad "Grafana runs although TELEMETRY_GRAFANA=false" || pass "no Grafana in ${TELEMETRY_SCRAPER_NS} (off by default)"
+fi
 
 # 5. agent pods cannot reach port 9464 (proxy and operator)
 pod=$(k -n "${AGENTS_NS}" get pod -l "agent=${agent}" -o jsonpath='{.items[0].metadata.name}')
@@ -76,7 +87,7 @@ if k -n "${AGENTS_NS}" exec "${pod}" -c agent -- curl -sS -m 5 --noproxy '*' "ht
   bad "agent pod reached the operator's 9464"; else pass "agent pod cannot reach the operator's 9464"; fi
 
 # 5b. other pods of the scraper namespace (Grafana) cannot reach 9464 either: only the scraper pods (review of #276)
-gpod=$(k -n "${TELEMETRY_SCRAPER_NS}" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}')
+gpod=$(k -n "${TELEMETRY_SCRAPER_NS}" get pod -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 pip=$(k -n "${AGENTS_NS}" get pod -l app=claude-proxy -o jsonpath='{.items[0].status.podIP}')
 if [[ -n "${gpod}" ]]; then
   if k -n "${TELEMETRY_SCRAPER_NS}" exec "${gpod}" -c grafana -- wget -q -T 5 -O /dev/null "http://${pip}:9464/metrics" >/dev/null 2>&1; then
