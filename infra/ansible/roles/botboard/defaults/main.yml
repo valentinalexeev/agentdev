@@ -1,0 +1,9 @@
+---
+# botboard (#26) on kind (#106, was 07-botboard.sh): the optional dashboard that agents report their work to.
+# GKE uses an external botboard through botboard_url (group_vars/all.yml), so deploy.yml has no botboard role.
+botboard_context: kind-agentdev
+botboard_ns: botboard
+# pinned; botboard has no release tags yet (same value as BOTBOARD_IMAGE in config.env)
+botboard_image: ghcr.io/valentinalexeev/botboard:sha-ce7d0f9
+botboard_manifest: "{{ playbook_dir }}/../../manifests/botboard.yaml.tmpl"
+botboard_timeout: 180
