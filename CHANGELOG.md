@@ -82,6 +82,10 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- API (#322): OIDC providers with minimal access tokens (for example Pocket ID) now work. When the access
+  token has no `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo_endpoint`.
+  The userinfo `sub` must be the token's `sub`. An error or a different subject refuses the token. Results are
+  cached per token until it expires. authentik tokens have the claims, so authentik does not change.
 - Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
   `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
   `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
