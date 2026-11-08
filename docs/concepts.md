@@ -161,8 +161,31 @@ is redacted for common credential shapes, clipped, and returned as `UNTRUSTED DA
 close. That output goes to the model only; no limit, pause or credential decision reads it (reviewer checklist item
 4). Prometheus and Loki are the backend on both kind and GKE (owner decision on #205); agentdev does not install them.
 
-Planned in #205, after the SSH certificate authority (#204): scheduled snapshots of fixed server facts, a nightly
-drift check, and a catalogue of admin-defined server checks (`server_check`).
+### Server state for agents: snapshots, drift and server checks (#205)
+
+Agents still get no SSH. Three fixed channels show them the state of the servers of an executor. All three use the
+SSH certificate flow of #204, run as the unprivileged check user, and return redacted, clipped text that is untrusted
+data for the model, never a control decision (reviewer checklist item 4).
+
+- **Snapshot** (`spec.snapshot`): a fixed fact gathering every few hours, published in ConfigMap
+  `agentdev-snapshots`.
+- **Drift** (`spec.drift`): the plan command (for Ansible `--check --diff`) on the head of the protected branch, every
+  few hours. Output that matches `changedPattern` is drift: the executor opens one forge issue, comments on it while
+  the drift stays, and closes it after a clean run. A failed run is never reported as clean. The report is in
+  ConfigMap `agentdev-drift`. A drift run keeps no plan and asks for no approval, so it can never change a server.
+- **Server checks** (`spec.probes`, the probe catalogue): admin-defined argv templates with argument patterns. An agent
+  lists them with `server_checks` and runs one with `server_check(target, check, args)`, tools of `obs-mcp`. obs-mcp
+  forwards the call with a token to the operator's probe server, which is the only holder of SSH CA access. The
+  operator rate-limits, checks the check name and each argument (charset, no leading `-`, anchored pattern), records
+  an `ExecutorRun` (stage `probe`) and a SecurityEvent, and connects with a new key and a 5-minute certificate:
+  principal `agentdev-probe`, `force-command /usr/local/sbin/agentdev-probe`, key ID `check/<run>`. On the server,
+  `agentdev-probe` runs a check only if the server's own allow-list (`/etc/agentdev/probes`, written by
+  `scripts/ssh-enrol.sh`) has it, and checks the arguments again: a valid certificate alone runs nothing else. The
+  principals file also forces that command. A check marked `sensitive` needs an Approval (source `executor`, tool
+  `probe`) of that exact argv on the executor's "Server check approvals" issue; it allows one run within one hour
+  (owner decision 2 on #205).
+
+`server_report(executor, kind)` returns the latest snapshot or drift report through the same server.
 
 ## Interactive session
 

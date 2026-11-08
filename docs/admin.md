@@ -1877,6 +1877,83 @@ the user `agentdev-check` and no checkout. No code from the repository runs.
 NOTE: The operator removes values that look like passwords, tokens and private keys, and keeps at most 64 KiB for
 each executor. The text can still contain data from the servers. The agents treat it as data, not as instructions.
 
+### Find drift on the servers
+
+The drift check of an executor runs the plan command on the newest commit of the protected branch (#205). For
+Ansible, this is `--check --diff`. The check uses the user `agentdev-check` and the read-only plan credentials. It
+keeps no plan file and requests no approval. It cannot change a server.
+
+1. Add `spec.drift` to the Executor. The pattern finds a change in the output:
+
+   ```bash
+   kubectl -n agentdev-executors patch executor ansible-prod --type=merge -p \
+     '{"spec":{"drift":{"changedPattern":"changed=[1-9]","intervalHours":24}}}'
+   ```
+
+   For Terraform, use `"changedPattern":"Plan: [0-9]+ to"`. To use another command, add `"command":[...]`.
+   On GKE, set `drift: {changed_pattern: "changed=[1-9]", hours: 24}` for the executor in `instance.yml`.
+
+2. Wait for the next poll. Then make sure that the run is there:
+   `kubectl -n agentdev-executors get exr -l agentdev/stage=drift`
+
+3. If the output shows drift, the executor opens the issue "Drift: <executor> (<environment>) differs from <branch>".
+   Fix the code with a pull request, or fix the server.
+
+4. The executor closes the issue after the next clean check.
+
+NOTE: A failed check is not a clean check. The executor adds a comment to the open issue and keeps it open.
+
+NOTE: The agents read the last report with the MCP tool `server_report`, or in ConfigMap `agentdev-drift`.
+
+### Add a server check
+
+A server check is a fixed command that agents can run on the servers of an executor with the MCP tool
+`server_check` (#205). The command runs as `agentdev-check`, without sudo. The agents can change only the arguments.
+Each argument must match its pattern.
+
+CAUTION: Add only commands that read. Do not add a command that runs other commands, for example `sh`, `env`, `find`
+or `xargs`. Do not add commands that show files with secrets.
+
+1. Add the check to `spec.probes` of the Executor. An element `{name}` of the command is an argument:
+
+   ```bash
+   kubectl -n agentdev-executors patch executor ansible-prod --type=merge -p '{"spec":{"probes":[
+     {"name":"service-status","description":"status of one service",
+      "command":["systemctl","status","--no-pager","{unit}"],
+      "args":[{"name":"unit","pattern":"[a-z0-9@-]+\\.service"}]}]}}'
+   ```
+
+   On GKE, set `probes:` for the executor in `instance.yml`, with the same fields.
+
+2. To require an approval for each call, set `"sensitive":true` on the check.
+
+3. Get the snippet for each server of the executor: `scripts/ssh-enrol.sh <target>`
+
+4. Apply the snippet on each server as root. The snippet writes the allow-list `/etc/agentdev/probes` of the server.
+
+   WARNING: The server runs only the checks in its own allow-list. If you do not apply the snippet, the new check
+   fails on that server.
+
+5. Turn on the tools in obs-mcp. On `kind`, set `OBS_MCP=true` and run `./run.sh 08`. On GKE, set
+   `obs_mcp: {enabled: true}` in `instance.yml`. The tools `server_checks`, `server_check` and `server_report` are on
+   by default (`OBS_SERVER_CHECKS`, `obs_mcp.server_checks`).
+
+6. Add the obs MCP server to the project spec (see "Give agents the observability tools").
+
+7. Make sure that the check operates. In an agent session, call `server_checks`, then `server_check` with a target
+   and the check name.
+
+NOTE: Each call is an `ExecutorRun` with stage `probe` and a SecurityEvent (`executor.probe`). A refused call is
+the SecurityEvent `executor.probe-refused`. The key ID in the sshd log is `check/<run>`.
+
+NOTE: To remove a check, remove it from `spec.probes` and apply the new snippet on each server.
+
+To approve a sensitive check:
+
+1. Open the issue "Server check approvals: executor <executor>" in the repository of the executor.
+2. Read the argv in the request.
+3. Reply `/approve <id>` or `/deny <id>`. An approval permits one run within one hour.
+
 ### Reference: SSH access
 
 | Setting | Default | Where |
@@ -1886,10 +1963,16 @@ each executor. The text can still contain data from the servers. The agents trea
 | `SSH_PROBE_MINUTES` (time between two probes of a `Ready` server) | 10 | operator env |
 | User certificate lifetime | 15 minutes maximum | step-ca provisioner `agentdev-operator` |
 | Host certificate lifetime | 90 days; the operator signs a new one 30 days before the end | step-ca provisioner |
+| Server check certificate lifetime | 5 minutes, `force-command /usr/local/sbin/agentdev-probe` | operator (#205) |
+| `PROBE_RATE_PER_MIN`, `PROBE_RATE_BURST` (server checks, all agents; one server gets half) | 20, 5 | `config.env`; Ansible `probes` |
+| Server check output | 64 KiB, timeout 20 s on the server, redacted | operator and `agentdev-probe` |
+| Drift interval (`spec.drift.intervalHours`) | 24 h | Executor; Ansible `drift.hours` |
 
 - The certificates have no extensions: no PTY, no port forwarding, no agent forwarding, no X11 forwarding.
-- The key ID of each certificate is in the sshd log: `executor/<run>/<commit>`, `probe/<target>` or
-  `host/<target>`.
+- The key ID of each certificate is in the sshd log: `executor/<run>/<commit>`, `snapshot/<run>`, `check/<run>`,
+  `probe/<target>` or `host/<target>`.
+- The probe server of the operator (port 8090, Service `agentdev-probe`) accepts calls only from obs-mcp, with the
+  token in Secret `agentdev-probe-token` of the platform namespace.
 - Only the operator can connect to step-ca (NetworkPolicy `step-ca`).
 - Static SSH keys in `exec-<name>-apply` still operate. They are deprecated: use an `SSHTarget` instead.
 - Troubleshooting: [SSH access](troubleshooting.md#ssh-access-for-executors).
