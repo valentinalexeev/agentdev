@@ -127,6 +127,16 @@ it does not give it. The loop adds the guide to the system prompt of each Claude
 
 The fixed part of the guide is in the operator image. You cannot edit it.
 
+The guide also shows these items:
+
+- The registry cache, when `registry_proxy` is `cluster` or `artifact_registry` (#203). The guide tells the agent to
+  use the package managers and not to change their settings.
+- The server checks of the executors of the agent's repository (#205). The guide tells the agent to use
+  `server_checks` and `server_check`, and not `ssh`, `curl` or `/proc`.
+
+To test the guide on `kind`, run `REGISTRY_PROXY=cluster OBS_MCP=true scripts/e2e-guide.sh`. The test needs a Claude
+credential.
+
 All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the default settings is approximately
 2 KB, and its maximum size is 6000 bytes. Thus one instance can have approximately 170 agents at the maximum size.
 

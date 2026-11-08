@@ -16,6 +16,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Harness guide, part 2 (#206): the guide names the registry cache when `REGISTRY_PROXY` / `registry_proxy` is on
+  (#203), and lists the server checks of the executors of the agent's repository (#205) with the tools
+  `server_checks` and `server_check`. New operator setting `REGISTRY_PROXY` (kind `12-operator.sh`, Ansible
+  `deploy.yml`, same manifest). New kind e2e `scripts/e2e-guide.sh` for the acceptance of #206: a real agent task
+  that needs a package and a server fact. Re-run: `./run.sh 12` or the playbook.
 - Drift reports and the probe catalogue (#205 parts 2 and 3). `Executor.spec.drift` (`changedPattern`, `intervalHours`,
   optional `command`) runs the plan command on the head of the protected branch with the read-only credentials and,
   with `spec.ssh`, the check certificate (new `ExecutorRun` stage `drift`: no plan file, no approval, no apply). Drift

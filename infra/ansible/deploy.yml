@@ -380,6 +380,7 @@
             AGENT_EGRESS_HOSTS: >-
               {{ (egress_hosts + egress_extra_hosts)
                  | reject('in', agent_egress_drop) | join(' ') }}
+            REGISTRY_PROXY: "{{ registry_proxy }}"   # harness guide (#206): names the registry cache (#203)
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"

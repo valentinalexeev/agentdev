@@ -86,6 +86,7 @@ func main() {
 		StorageClass:     os.Getenv("AGENT_STORAGE_CLASS"), // #173; empty: cluster default
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
+		RegistryProxy:    os.Getenv("REGISTRY_PROXY"),     // harness guide text (#206, #203)
 		ExecNS:           execNS,
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {

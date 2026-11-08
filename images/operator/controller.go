@@ -42,6 +42,8 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// RegistryProxy (#203, REGISTRY_PROXY): off, cluster or artifact_registry; the guide names the cache when it is on
+	RegistryProxy string
 }
 
 type AgentReconciler struct {
