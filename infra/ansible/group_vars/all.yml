@@ -37,6 +37,17 @@ egress_extra_hosts: []
 # api.anthropic.com in egress_hosts is dropped for agents while claude_proxy is true (docs/security.md R64).
 forge_egress_hosts: [api.github.com, github.com]
 egress_fqdn_policy: true
+# registry cache (#203): off (default), cluster (Verdaccio, devpi, Athens in the cluster) or artifact_registry (GKE:
+# the Artifact Registry remote repositories of infra/terraform registry_proxy; set registry_proxy_artifact_registry
+# from `terraform output registry_proxy`). With a cache on, the hosts below leave the agents' egress allow-list:
+# agents install packages only through the cache. Role registry_cache, docs/admin.md "Configure the registry cache".
+registry_proxy: "off"
+registry_proxy_artifact_registry: {}
+registry_proxy_upstream_hosts: [registry.npmjs.org, pypi.org, files.pythonhosted.org, proxy.golang.org, sum.golang.org]
+# hosts removed from the agents' list: the Claude API with the credential proxy (R64), package registries with the cache
+agent_egress_drop: >-
+  {{ ([claude_proxy_upstream_host] if claude_proxy | bool else [])
+     + (registry_proxy_upstream_hosts if registry_proxy != 'off' else []) }}
 egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
 
 forge_kind: github

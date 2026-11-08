@@ -165,6 +165,12 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | project secret | a credential that the agents of one project, or one agent, can use (`ProjectSecret` object, #202) |
 | rotate | to replace the value of a credential with a new value |
 | secret store | the place that keeps the values of project secrets: GCP Secret Manager on GKE, a Kubernetes namespace on `kind` |
+| package manager | the program that installs the libraries of a build: `npm`, `pip`, `uv` or `go` |
+| registry cache | the agentdev service `registry-cache` that keeps copies of npm, PyPI and Go packages for the agents (#203) |
+| remote repository | an Artifact Registry repository that keeps copies of the packages of a public registry |
+| upstream | the public registry from which a registry cache gets the packages, for example `registry.npmjs.org` |
+| private registry | a package registry that needs a credential to read, for example GitHub Packages for npm (#248) |
+| scoped package | an npm package whose name starts with `@<scope>/`; npm can get each scope from a different registry |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 

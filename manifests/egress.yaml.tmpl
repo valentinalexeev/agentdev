@@ -158,6 +158,9 @@ spec:
     ports: [{port: 8080}]
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: contextforge}}}]
     ports: [{port: 4444}]
+  # registry cache (#203): the gateway of the npm, PyPI and Go caches (role registry_cache); no pod without it
+  - to: [{podSelector: {matchLabels: {app: registry-cache}}}]
+    ports: [{port: 4873}, {port: 3141}, {port: 3000}]
   # approvals (#67): the forge sidecar asks the API's internal endpoint for decisions (per-request secret, R73)
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}]
     ports: [{port: 8081}]
