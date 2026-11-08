@@ -63,6 +63,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
+  `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
+  `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
+  header and docs no longer say "PR plan". Copy the new file into your deployment repository. A read-only plan
+  identity for PRs is #291.
 - `scripts/e2e-gke-security.sh`: the check `forge: GitHub works for the sidecar (proxy credential)` gave HTTP 000 on
   a healthy instance (#211). Squid sends no 407 challenge, and busybox `wget` sends the proxy credential only after one.
   The check now opens the tunnel with git and `http.proxyAuthMethod=basic`, as the sidecar does (#162). A new check
