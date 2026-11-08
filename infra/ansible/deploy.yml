@@ -307,7 +307,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent, SecurityEvent, Approval, Executor and ExecutorRun CRDs (#47, #70, #67, #69)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -316,7 +316,7 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml]
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -411,6 +411,9 @@
             TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
             TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
             TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
+            # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
+            SECRETS_STORE: ""
+            SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
@@ -789,3 +792,12 @@
         label_selectors: ["{{ item }}"]
       loop: ["app=webhook-router", "app=coding-agent"]
       when: not ansible_check_mode
+
+    # post-deploy smoke test (#213): the public hosts answer from outside and the forwarder is Ready. Last, after the
+    # router and the UI are up. Off with ingress.smoke: false.
+    - name: Post-deploy smoke test of the public hosts
+      ansible.builtin.include_role: {name: ingress, tasks_from: smoke.yml}
+      when:
+        - not ansible_check_mode
+        - (ingress | default({})).host | default('') | length > 0
+        - (ingress | default({})).smoke | default(true) | bool
