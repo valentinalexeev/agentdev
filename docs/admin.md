@@ -260,6 +260,30 @@ kind (`TELEMETRY_SCRAPER_NS`), `gmp-system` on GKE (`telemetry.scraper_ns`). Age
 | `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
 | `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
 
+### Dashboards: Prometheus and Grafana
+
+On `kind` an optional step installs an OpenTelemetry Collector, Prometheus and Grafana in namespace `monitoring`
+(#196, ADR 0002 D5). It is off by default.
+
+1. Run `TELEMETRY_STACK=true ./run.sh 14`.
+2. Run `kubectl -n monitoring port-forward svc/grafana 3001:80` and open `http://localhost:3001`. The user is
+   `admin`, the password is in `.secrets/platform/grafana-admin`.
+3. Open the dashboard **agentdev: Claude cost and usage** (folder agentdev). It shows units and USD per agent and
+   model, the cache-read share, budget used and limit, the 5 h and 7 d utilization, pauses and refused requests.
+
+To remove the stack, run `./run.sh 14` again without `TELEMETRY_STACK=true`.
+
+On GKE, Managed Service for Prometheus collects the metrics:
+
+1. In the deployment repository set `enable_managed_prometheus = true` in `terraform/instance.tfvars` and apply.
+2. Set `telemetry: {pod_monitoring: true}` in `ansible/instance.yml` and run the playbook. It creates a
+   `PodMonitoring` for `claude-proxy` and the operator (scrape interval 60 s, about 20 series per agent).
+3. Import `grafana/agentdev-llm-cost.json` into your Grafana (data source: Managed Service for Prometheus), or use
+   Cloud Monitoring with PromQL.
+
+The billing truth stays in the Anthropic Console (Usage and Cost pages). For instances that bill by API key, a
+workspace spend limit in the Console is a second fuse behind the proxy (ADR 0002, U4).
+
 The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
 with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
 `TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be

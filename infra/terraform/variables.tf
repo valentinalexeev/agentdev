@@ -80,7 +80,7 @@ variable "gateway_enabled" {
 }
 
 variable "enable_managed_prometheus" {
-  description = "Google Managed Service for Prometheus on the cluster (operator and a collector on every node). agentdev does not use it, so it is off by default."
+  description = "Google Managed Service for Prometheus on the cluster (operator and a collector on every node). Off by default; turn it on to scrape the Claude cost metrics of claude-proxy and the operator (#196, Ansible telemetry.pod_monitoring)."
   type        = bool
   default     = false
 }

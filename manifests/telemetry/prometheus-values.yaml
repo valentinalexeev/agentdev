@@ -1,0 +1,33 @@
+# Prometheus for the optional kind telemetry stack (#196, ADR 0002 D5; ./run.sh 14). Server only: no Alertmanager,
+# node exporter, kube-state-metrics or pushgateway (idle cost, #168). It scrapes port 9464 of claude-proxy and the
+# operator (the NetworkPolicies admit the monitoring namespace only) and receives OTLP from the collector.
+alertmanager: {enabled: false}
+kube-state-metrics: {enabled: false}
+prometheus-node-exporter: {enabled: false}
+prometheus-pushgateway: {enabled: false}
+configmapReload: {prometheus: {enabled: false}}
+server:
+  global: {scrape_interval: 30s}
+  retention: 7d
+  persistentVolume: {enabled: false}
+  extraFlags: [web.enable-otlp-receiver]
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+serverFiles:
+  prometheus.yml:
+    scrape_configs:
+    - job_name: agentdev
+      scrape_interval: 30s
+      kubernetes_sd_configs: [{role: pod}]
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        regex: claude-proxy|agentdev-operator
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        regex: "9464"
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace

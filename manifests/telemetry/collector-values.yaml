@@ -1,0 +1,44 @@
+# OpenTelemetry Collector for the optional kind telemetry stack (#196, ADR 0002 D5/D7). Receives OTLP over HTTP (the
+# agents' Claude Code telemetry when CLAUDE_CODE_TELEMETRY=true) and forwards metrics to Prometheus' OTLP receiver.
+# Logs and events are dropped (debug exporter, basic verbosity): they are not stored in this stack.
+# The model can send OTLP here too (ADR 0002 D7), so only metrics named claude_code.* pass: an agent cannot forge
+# the agentdev_* or gen_ai_* series that the proxy and the operator export (they are scraped, not pushed).
+mode: deployment
+image: {repository: otel/opentelemetry-collector-contrib}
+presets: {}
+ports:
+  otlp: {enabled: false}
+  otlp-http: {enabled: true}
+  jaeger-compact: {enabled: false}
+  jaeger-thrift: {enabled: false}
+  jaeger-grpc: {enabled: false}
+  zipkin: {enabled: false}
+  metrics: {enabled: false}
+resources:
+  requests: {cpu: 20m, memory: 64Mi}
+  limits: {memory: 256Mi}
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+    otlp:
+      protocols:
+        grpc: null
+        http: {endpoint: "0.0.0.0:4318"}
+  processors:
+    filter/claude-code-only:
+      error_mode: ignore
+      metrics:
+        metric: ['not IsMatch(name, "^claude_code\\.")']
+  exporters:
+    otlphttp/prometheus:
+      metrics_endpoint: http://prometheus-server.monitoring.svc.cluster.local/api/v1/otlp/v1/metrics
+      tls: {insecure: true}
+    debug: {verbosity: basic}
+  service:
+    telemetry: {metrics: {level: none}}
+    pipelines:
+      metrics: {receivers: [otlp], processors: [memory_limiter, filter/claude-code-only, batch], exporters: [otlphttp/prometheus]}
+      logs: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [debug]}
+      traces: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [debug]}

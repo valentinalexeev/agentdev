@@ -30,6 +30,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Optional telemetry backends (#196, ADR 0002 D5): `TELEMETRY_STACK=true ./run.sh 14` installs an OpenTelemetry
+  Collector, Prometheus and Grafana (pinned charts) in `monitoring` on kind, with the dashboard
+  `grafana/agentdev-llm-cost.json`. Off by default (`./run.sh` does not run step 14). On GKE,
+  `telemetry.pod_monitoring: true` (with Terraform `enable_managed_prometheus = true`) creates `PodMonitoring`
+  objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents.
 - Run guards (#196, ADR 0002 D6/D7): `JOB_TIMEOUT` (default 3600 s, 0 = off) stops a Claude run that takes too long;
   `MAX_BUDGET_USD` adds `--max-budget-usd` per run; `CLAUDE_JOB_BUDGET_UNITS` makes `claude-proxy` refuse a job id
   after that many units (loop guard, event `job-budget-exhausted`, `stopped` on `GET /status`). The worker sends the

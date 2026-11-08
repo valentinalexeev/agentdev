@@ -668,6 +668,37 @@
           replace: []
       when: claude_proxy | bool
 
+    # GKE (#196, ADR 0002 D5): Managed Service for Prometheus scrapes claude-proxy and the operator on 9464. Off by
+    # default; the PodMonitoring type exists only with enable_managed_prometheus (infra/terraform).
+    - name: Is the PodMonitoring type served (Managed Service for Prometheus)?
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: podmonitorings.monitoring.googleapis.com
+      register: telemetry_pm_crd
+
+    - name: PodMonitoring needs Managed Service for Prometheus
+      ansible.builtin.assert:
+        that: telemetry_pm_crd.resources | default([]) | length > 0
+        fail_msg: >-
+          telemetry.pod_monitoring is true but the cluster does not serve PodMonitoring: set
+          enable_managed_prometheus = true in infra/terraform and apply first (docs/admin.md, Metrics).
+        quiet: true
+      when: telemetry.pod_monitoring | default(false) | bool and not ansible_check_mode
+
+    - name: PodMonitoring for claude-proxy and the operator (#196)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: "{{ 'present' if (telemetry.pod_monitoring | default(false) | bool) else 'absent' }}"
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_pm) | from_yaml_all | list }}"
+      vars:
+        vars_pm:
+          src: "{{ repo_root }}/manifests/telemetry/podmonitoring.yaml.tmpl"
+          values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}"}
+          replace: []
+      when: telemetry_pm_crd.resources | default([]) | length > 0   # without the type there is nothing to create or delete
+
     # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
     # template allows HTTPS to any public address; Dataplane V2 enforces this one in addition when the type is served
     # (infra/terraform enable_fqdn_network_policy). Not served: the playbook says so and keeps the plain policy.

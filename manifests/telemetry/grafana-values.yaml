@@ -1,0 +1,20 @@
+# Grafana for the optional kind telemetry stack (#196, ADR 0002 D5, U1). Visualize only: it never changes a budget.
+# The admin password comes from the Secret grafana-admin (created by ./run.sh 14 from .secrets/platform/grafana-admin).
+# The dashboard is grafana/agentdev-llm-cost.json, loaded from the ConfigMap grafana-dashboard-agentdev.
+admin: {existingSecret: grafana-admin, userKey: admin-user, passwordKey: admin-password}
+persistence: {enabled: false}
+resources:
+  requests: {cpu: 20m, memory: 96Mi}
+  limits: {memory: 256Mi}
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+    - {name: Prometheus, uid: prometheus, type: prometheus, access: proxy, url: "http://prometheus-server.monitoring.svc.cluster.local", isDefault: true}
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+    - {name: agentdev, orgId: 1, folder: agentdev, type: file, disableDeletion: true, editable: false, options: {path: /var/lib/grafana/dashboards/agentdev}}
+dashboardsConfigMaps:
+  agentdev: grafana-dashboard-agentdev

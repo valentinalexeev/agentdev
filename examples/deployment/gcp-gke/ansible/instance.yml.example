@@ -86,6 +86,11 @@ github_app:
 # and the prices ConfigMap. Set usd_per_million_units to show an estimated USD spend in the web UI.
 # claude_budget_units: 2000000
 # claude_prices: {usd_per_million_units: 3}
+# Optional (#196): per-run guards and metrics. pod_monitoring needs enable_managed_prometheus = true in Terraform.
+# job_timeout: 3600
+# max_budget_usd: "5.00"            # API-key billing only
+# claude_job_budget_units: 0
+# telemetry: {scraper_ns: gmp-system, otlp_url: "", pod_monitoring: true}
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
 # Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
 # security:
