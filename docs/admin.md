@@ -1253,6 +1253,12 @@ is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarde
 playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
 `authentik_trusted_proxy_allow_wide: true`.
 
+NOTE: With `ingress.forwarder.namespace` and `pod_selector`, the operator monitors the forwarder pods (#213). When
+no pod is Ready for 10 minutes, the operator writes a warning to its log. It also records one SecurityEvent with
+source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event. Each outage gives one event. To
+change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
+namespace that can only read pods. Without `pod_selector`, the monitor is off.
+
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 

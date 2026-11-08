@@ -29,3 +29,7 @@ ingress_dns_re: '^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 # forwarder CIDRs shorter than /8 (for example 0.0.0.0/0, every address) are refused unless this is true (#198 review)
 ingress_forwarder_allow_wide_cidrs: "{{ (ingress | default({})).forwarder_allow_wide_cidrs | default(false) }}"
 ingress_cidr_re: '^(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(\.(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}/([0-9]|[12][0-9]|3[0-2])$'
+# operator forwarder watch (#213): on with a forwarder namespace and pod_selector; SecurityEvent after N minutes not Ready
+ingress_forwarder_watch_ns: "{{ ingress_forwarder.namespace | default('') if ingress_forwarder is mapping else '' }}"
+ingress_forwarder_watch: >-
+  {{ ingress_forwarder_watch_ns | length > 0 and (ingress_forwarder.pod_selector | default({})) | length > 0 }}

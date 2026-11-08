@@ -383,6 +383,14 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            # external forwarder watch (#213): on only with ingress.forwarder namespace and pod_selector
+            FORWARDER_NS: >-
+              {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
+                 if (((ingress | default({})).forwarder | default({})).pod_selector | default({})) | length > 0 else '' }}
+            FORWARDER_SELECTOR: >-
+              {{ (((ingress | default({})).forwarder | default({})).pod_selector | default({})).items()
+                 | map('join', '=') | join(',') }}
+            FORWARDER_NOT_READY_MINUTES: "{{ (ingress | default({})).forwarder_not_ready_minutes | default(10) }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
