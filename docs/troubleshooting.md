@@ -29,6 +29,7 @@
 | The router log shows `no agent among [...]`. | The event is about a person who has no agent. | No procedure. This is correct for issues that are not assigned to an agent. |
 | The agent pod shows `OOMKilled`. | The agent has too many items at the same time for its memory limit. | 1. Decrease `MAX_CONCURRENT`, or increase the memory limit. |
 | The agent stopped and does not start again. | Scale to zero is on, and no event for the agent occurred. | 1. Assign an issue or write a comment. 2. Find `scaled ... -> 1` and errors in the router log. |
+| The agent log shows `continuing an interrupted job`. | The pod stopped while the job ran (#175). The job continues from its last step. | No procedure. If the log then shows `could not resume Claude session`, the transcript is gone and Claude starts the task again. |
 | The agent tries the same item again after a delay. | The job failed. The delay increases up to a maximum. | 1. Read the log of the agent. It shows the failure and `retry in Ns`. |
 | The bootstrap stops with a message about branch protection. | The repository has a rule already. The bootstrap keeps the rule. | 1. Keep the rule, or run the bootstrap again with `REPLACE_BRANCH_PROTECTION=1`. |
 | The agent log shows `push to agent/<name>/... failed: push refused: ... protected path`. | The change touches `.github/workflows/` (or a different `PROTECTED_PATHS` entry). | No procedure. This is the design (#64): a person makes that change. The issue shows "could not produce a change". |
