@@ -2,7 +2,7 @@
 # kind e2e checks for LLM telemetry and cost control (#196, ADR 0002). Run after ./run.sh (00 01 05 06 10 11 12) and
 # TELEMETRY_STACK=true ./run.sh 14, with at least one agent that has worked on an issue (so the proxy saw requests).
 #   scripts/e2e-telemetry.sh [agent]
-# Checks: units well below raw tokens (cache-read heavy), per-job cost on GET /status, metrics in Prometheus,
+# Checks: units = sum(tokens x weight) x multiplier exactly, per-job cost on GET /status, metrics in Prometheus,
 # Grafana has the dashboard, the job budget and JOB_TIMEOUT stop a run, agent pods cannot reach port 9464.
 # Prints PASS/FAIL lines; exit code 1 if any FAIL.
 set -uo pipefail
@@ -26,13 +26,27 @@ jobs=$(jq --arg a "${agent}" '[.jobs[] | select(.agent==$a)]' <<<"${st}")
 n=$(jq length <<<"${jobs}")
 (( n > 0 )) && pass "GET /status lists ${n} job(s) of ${agent} with units: $(jq -c '[.[] | {job, units, requests}]' <<<"${jobs}")" \
   || bad "no jobs of ${agent} on GET /status"
-# 2. cache-read heavy: units < 20 % of the raw token count
+# 2. units = sum(tokens x weight) x multiplier, rounded up, exactly (owner decision on #196, 2026-11-08). Each usage
+# line of the proxy has the tokens by type, the multiplier and the units; GET /status has the weights. The weighted
+# sum is added in the same order as the proxy (input, cache_write_5m, cache_write_1h, cache_read, output).
+w=$(jq -c .weights <<<"${st}")
+ul=$(k -n "${AGENTS_NS}" logs deploy/claude-proxy --since=168h | sed -n 's/^AGENTDEV_USAGE //p' | jq -c 'select(.tokens != null)')
+nl=$(grep -c . <<<"${ul}")
+if (( nl > 0 )) && [[ "${w}" != null ]]; then
+  wrong=$(jq -s --argjson w "${w}" '[.[] | . as $l
+    | (reduce ("input","cache_write_5m","cache_write_1h","cache_read","output") as $t (0; . + (($l.tokens[$t] // 0) * $w[$t])) * $l.multiplier) as $u
+    | (if $u <= 0 then 0 elif $u > 1e12 then 1e12 else ($u | ceil) end) as $want
+    | select($want != $l.units) | {units: $l.units, want: $want, tokens: $l.tokens, multiplier: $l.multiplier}]' <<<"${ul}")
+  [[ $(jq length <<<"${wrong}") == 0 ]] && pass "units of all ${nl} usage lines = sum(tokens x weight) x multiplier, exactly" \
+    || bad "units differ from the weighted sum: $(jq -c '.[:3]' <<<"${wrong}")"
+  # the job totals on GET /status are the sums of the usage lines of the job (same proxy pod, so same memory)
+  diff=$(jq -s --arg a "${agent}" --argjson jobs "${jobs}" '[map(select(.agent == $a and .job != null)) | group_by(.job)[] | {job: .[0].job, u: (map(.units) | add)}]
+    | map(. as $g | select(($jobs | map(select(.job == $g.job)) | .[0].units // -1) != $g.u)) | length' <<<"${ul}")
+  [[ "${diff}" == 0 ]] && pass "job units on GET /status = sum of the job's usage lines" || bad "${diff} job(s) on GET /status differ from their usage lines"
+else bad "no usage lines with tokens (${nl}) or no weights on GET /status"; fi
 raw=$(jq '[.[].tokens | to_entries[] | .value] | add // 0' <<<"${jobs}")
 units=$(jq '[.[].units] | add // 0' <<<"${jobs}")
-if (( raw > 0 )); then
-  pct=$(( units * 100 / raw ))
-  (( pct < 20 )) && pass "units ${units} are ${pct} % of ${raw} raw tokens (< 20 %)" || bad "units ${units} are ${pct} % of ${raw} raw tokens"
-else bad "no tokens counted"; fi
+(( raw > 0 )) && echo "INFO units ${units} are $(( units * 100 / raw )) % of ${raw} raw tokens (the < 20 % check is a unit test: short e2e runs are output heavy)"
 
 # 3. Prometheus has the metrics
 q() { curl -s -m 10 --data-urlencode "query=$1" http://localhost:19090/api/v1/query; }
