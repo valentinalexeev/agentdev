@@ -127,6 +127,16 @@ it does not give it. The loop adds the guide to the system prompt of each Claude
 
 The fixed part of the guide is in the operator image. You cannot edit it.
 
+The guide also shows these items:
+
+- The registry cache, when `registry_proxy` is `cluster` or `artifact_registry` (#203). The guide tells the agent to
+  use the package managers and not to change their settings.
+- The server checks of the executors of the agent's repository (#205). The guide tells the agent to use
+  `server_checks` and `server_check`, and not `ssh`, `curl` or `/proc`.
+
+To test the guide on `kind`, run `REGISTRY_PROXY=cluster OBS_MCP=true scripts/e2e-guide.sh`. The test needs a Claude
+credential.
+
 All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the default settings is approximately
 2 KB, and its maximum size is 6000 bytes. Thus one instance can have approximately 170 agents at the maximum size.
 
@@ -252,6 +262,71 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
+
+## Registry cache
+
+The registry cache (`registry-cache`, #203) keeps copies of npm, PyPI and Go packages. The agents install packages
+through the cache. The agents do not get a registry credential. The cache is read-only: an agent cannot publish a
+package through it. Only an executor can publish.
+
+When the cache is on, the agents cannot connect to the npm, PyPI and Go registries directly. The playbook removes
+these hosts from the egress allow-list. The default is off: the agents connect to the public registries through the
+egress proxy, as before.
+
+| Mode | Where | Caches |
+|---|---|---|
+| `off` | all | none (default) |
+| `cluster` | `kind`; GKE without Artifact Registry (`create_artifact_registry = false`) | Verdaccio (npm), devpi (PyPI) and Athens (Go) in the cluster, each with one 5 GiB volume |
+| `artifact_registry` | GKE | Artifact Registry remote repositories `agentdev-npm`, `agentdev-pypi` and `agentdev-go` |
+
+### Configure the registry cache
+
+Do this task to make the agents install npm, PyPI and Go packages through the cache.
+
+1. Select the mode from the table above.
+2. On `kind`:
+   1. Set `REGISTRY_PROXY=cluster` in `.env`.
+   2. Run `./run.sh 06`.
+   3. Run `./run.sh 12`.
+3. On GKE with `artifact_registry`:
+   1. In `terraform/instance.tfvars` of the deployment repository, set `registry_proxy = true`.
+   2. Run `terraform plan`.
+      Make sure that the plan adds three repositories, one service account and four IAM members.
+   3. Run `terraform apply`.
+   4. Run `terraform output registry_proxy`.
+   5. In `ansible/instance.yml`, set `registry_proxy: artifact_registry`.
+   6. Copy the output of step 4 into `registry_proxy_artifact_registry` in `instance.yml`.
+   7. Run the playbook.
+4. On GKE with `cluster`: set `registry_proxy: cluster` in `instance.yml`, then run the playbook.
+5. Stop and start each agent.
+   The agents read the cache settings when their pod starts.
+6. Do a check:
+   `kubectl -n coding-agents exec agent-alice-0 -c agent -- npm view left-pad version`
+   The output shows a version number.
+
+To stop the cache, set the mode to `off` and do steps 2 to 5 again. The playbook removes the cache and its volumes.
+
+CAUTION: When the cache is on, a build that uses a different registry needs that host on the allow-list
+(`egress_extra_hosts`). crates.io stays on the list until the cache supports it.
+
+### Reference: registry cache
+
+| Setting | Default | Where |
+|---|---|---|
+| Mode | `off` | `REGISTRY_PROXY` in `config.env`; Ansible `registry_proxy` |
+| Hosts removed from the agents' list when the cache is on | `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org` | `REGISTRY_PROXY_UPSTREAM_HOSTS`; Ansible `registry_proxy_upstream_hosts` |
+| Remote repositories (GKE) | off | Terraform `registry_proxy` (needs `create_artifact_registry`) |
+| Repository URLs and service account (GKE) | none | Ansible `registry_proxy_artifact_registry` = `terraform output registry_proxy` |
+| Volume of each cache (`cluster`) | `5Gi` | Ansible `registry_cache_storage`, `registry_cache_storage_class` |
+| Settings for the agents | `npm_config_registry`, `PIP_INDEX_URL`, `UV_DEFAULT_INDEX`, `GOPROXY`, `GOSUMDB` | ConfigMap `registry-proxy` (the operator adds it to the agent container) |
+
+NOTE: The gateway accepts only `GET` and `HEAD` requests. `npm audit` and `npm publish` do not operate through the
+cache. The ConfigMap sets `npm_config_audit` to `false`.
+
+NOTE: With `artifact_registry`, only the gateway pod gets a Google token, through Workload Identity. The token gives
+read access to the three repositories only.
+
+NOTE: Private registries for each project are not in this release (#248).
 
 ## Labels
 

@@ -196,7 +196,7 @@
             FORGE_NS: forge
             BOTBOARD_NS: botboard
             # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
-            EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}"
+            EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', agent_egress_drop) | join(' ') }}"
             FORGE_EGRESS_HOSTS: "{{ forge_egress_hosts | join(' ') }}"
             FORGE_PROXY_AUTH_SHA: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
             EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
@@ -250,6 +250,11 @@
           src: "{{ repo_root }}/manifests/egress-proxy-web.yaml.tmpl"
           values: {AGENTS_NS: "{{ agents_ns }}"}
           replace: []
+
+    # registry cache (#203): gateway registry-cache and, for registry_proxy cluster, the in-cluster caches; off removes
+    # them. Agents read the ConfigMap registry-proxy at pod start.
+    - name: Registry cache for npm, PyPI and Go (#203)
+      ansible.builtin.include_role: {name: registry_cache}
 
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
@@ -376,7 +381,8 @@
             # harness guide (#206): the same list as the agents' egress proxy, for the text only
             AGENT_EGRESS_HOSTS: >-
               {{ (egress_hosts + egress_extra_hosts)
-                 | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}
+                 | reject('in', agent_egress_drop) | join(' ') }}
+            REGISTRY_PROXY: "{{ registry_proxy }}"   # harness guide (#206): names the registry cache (#203)
             SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
             SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
             SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"

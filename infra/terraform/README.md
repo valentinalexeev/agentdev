@@ -11,6 +11,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
 | `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-standard`) |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
+| Registry cache (optional) | `registry_proxy = true` (#203, needs `create_artifact_registry`): remote repositories `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (upstreams npmjs, PyPI, proxy.golang.org; versions not pulled for 30 days are deleted), service account `agentdev-registry-cache` with `roles/artifactregistry.reader` on each repository only, bound to the Kubernetes service account `registry-cache` in `agents_namespace` (Workload Identity). Copy `terraform output registry_proxy` into Ansible `registry_proxy_artifact_registry` |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
 | Managed certificate, SSL policy | only with `public_hosts`: Google-managed certificate for those names, TLS 1.2+ `MODERN` (#120) |
@@ -72,6 +73,13 @@ on `e2-medium`). When Google reclaims the node (at most 30 s notice), the router
 until the pool has a new node and the pods are rescheduled, usually about a minute; longer if the zone has no Spot
 capacity. Webhooks sent in that gap are lost; agents still pick up their issues at the next poll (`poll_seconds`).
 Agents keep their state on PVCs. Switching the variable replaces the node pool.
+
+Registry cache (#203, recorded against #168): the remote repositories have no idle charge. Cost is storage
+(about $0.10 per GB a month after the free 0.5 GB; a few GB for a typical team, the 30-day cleanup keeps it small)
+and network egress out of the region (none for agents in the same region). The gateway pod requests 10m CPU and
+32 MiB on the system pool, so it adds no node. The in-cluster alternative (`registry_proxy: cluster` in Ansible)
+adds three pods (about 60m CPU, 300 MiB) and three 5 GB `pd-standard` volumes (about $0.60 a month), billed also
+while all agents are stopped.
 
 GKE zonal control plane: covered by the free tier credit. `system` pool: one `e2-standard-2` running all month. `agents` pool: Spot, billed only while agents run, scales to zero. Each agent has one persistent disk (`pd-standard`, 10 GB, about $0.40/month each, #173), billed also while the agent is stopped. Plus NAT, the registry and secrets. With `public_hosts`: the static IP (about $7/month, #169) and the load balancer forwarding rule, about $18/month; `cloud_armor` adds about $7/month. Expected range for 2 to 3 agents: about $40 to $90/month, plus Claude usage. The budget alerts at $75, $135 and $150. The budget and its billing IAM cost nothing; with `create_budget = false` you get no alerts.
 

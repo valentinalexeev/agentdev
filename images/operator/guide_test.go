@@ -226,3 +226,37 @@ func TestGuideFailureDoesNotBlockThePod(t *testing.T) {
 	}
 	getSTS(t, base, "ola") // the StatefulSet exists anyway
 }
+
+// #206 with #203 and #205: the guide names the registry cache when it is on, and lists the probe checks of the
+// executors of the agent's repository (not of other repositories, not of paused or SSH-less executors).
+func TestGuideRegistryCacheAndProbes(t *testing.T) {
+	probes := []v1.ExecutorProbe{{Name: "service-status", Command: []string{"ps", "-C", "{service}"},
+		Args: []v1.ExecutorProbeArg{{Name: "service", Pattern: "[a-z]+"}}}, {Name: "uptime", Command: []string{"uptime"}},
+		{Name: "disk", Command: []string{"df"}, Sensitive: true}}
+	r, c := setup(t, agent("gina", nil),
+		guideExec("srv", "prod", "owner/repo", "", func(e *v1.Executor) { e.Spec.SSH = true; e.Spec.Probes = probes }),
+		guideExec("nossh", "dev", "owner/repo", "d", func(e *v1.Executor) { e.Spec.Probes = probes }),
+		guideExec("else", "else", "someone/else", "x", func(e *v1.Executor) { e.Spec.SSH = true; e.Spec.Probes = probes }))
+	r.D.ExecNS, r.D.RegistryProxy = execNS, "cluster"
+	reconcile(t, r, "gina")
+	g, _ := guideOf(t, c, "gina")
+	for _, want := range []string{"agentdev registry cache", "server_checks", "server_check",
+		"  - service-status (executor srv).", "  - uptime (executor srv).", "  - disk (executor srv), needs an approval."} {
+		if !strings.Contains(g, want) {
+			t.Errorf("guide lacks %q:\n%s", want, g)
+		}
+	}
+	for _, not := range []string{"executor nossh", "executor else"} {
+		if strings.Contains(g, not) {
+			t.Errorf("guide has %q", not)
+		}
+	}
+
+	r2, c2 := setup(t, agent("gina", nil))
+	r2.D.RegistryProxy = "off"
+	reconcile(t, r2, "gina")
+	g2, _ := guideOf(t, c2, "gina")
+	if strings.Contains(g2, "registry cache") || strings.Contains(g2, "server_check") {
+		t.Errorf("cache off and no probes, but the guide names them:\n%s", g2)
+	}
+}

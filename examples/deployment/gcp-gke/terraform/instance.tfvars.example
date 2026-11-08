@@ -23,3 +23,4 @@ labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service
 # enable_filestore_csi      = true
 # monitoring_components     = null   # the GKE default list
 # gateway_enabled           = true   # keep the load balancer without public_hosts
+# registry_proxy   = true    # Artifact Registry cache for npm, PyPI, Go (agentdev #203); then set registry_proxy in ansible/instance.yml

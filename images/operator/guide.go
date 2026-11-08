@@ -111,6 +111,11 @@ func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
 	default:
 		fmt.Fprintf(&b, "- Egress allowed to (a leading dot means the domain and its subdomains): %s.\n", strings.Join(hosts, " "))
 	}
+	// registry cache (#203): the package manager settings are already in the environment (ConfigMap registry-proxy)
+	if r.D.RegistryProxy == "cluster" || r.D.RegistryProxy == "artifact_registry" {
+		b.WriteString("- Packages: npm, pip, uv and go use the agentdev registry cache; the settings are already in your " +
+			"environment. Install packages as usual. Do not change the registry settings or download packages with curl.\n")
+	}
 
 	var lines []string
 	for _, e := range execs {
@@ -139,6 +144,33 @@ func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
 		b.WriteString(strings.Join(lines, "\n") + "\n")
 	} else {
 		b.WriteString("- No executor acts on this repository: infrastructure changes are not applied automatically.\n")
+	}
+
+	// probe catalogue (#205): the read-only checks of the executors of this repository, through obs-mcp
+	var checks []string
+	for _, e := range execs {
+		if e.Spec.Repo != a.Spec.Repo || e.Spec.Paused || !e.Spec.SSH || !guideWordRe.MatchString(e.Name) {
+			continue
+		}
+		for _, pr := range e.Spec.Probes {
+			if !guideWordRe.MatchString(pr.Name) {
+				continue
+			}
+			l := fmt.Sprintf("  - %s (executor %s)", pr.Name, e.Name)
+			if pr.Sensitive {
+				l += ", needs an approval"
+			}
+			checks = append(checks, l+".")
+		}
+	}
+	sort.Strings(checks)
+	if len(checks) > guideMaxExecs {
+		checks = checks[:guideMaxExecs]
+	}
+	if len(checks) > 0 {
+		b.WriteString("- Server facts: use the MCP tools server_checks (list) and server_check (run) of obs-mcp. " +
+			"Do not use ssh, curl or /proc for facts about a server. Checks:\n")
+		b.WriteString(strings.Join(checks, "\n") + "\n")
 	}
 
 	out := b.String()

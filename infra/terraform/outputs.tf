@@ -42,3 +42,13 @@ output "budget" {
   description = "Name of the billing budget; null when create_budget is false (#199)."
   value       = one(google_billing_budget.monthly[*].name)
 }
+
+output "registry_proxy" {
+  description = "Values for instance.yml registry_proxy_artifact_registry (#203); null when registry_proxy is false."
+  value = length(google_artifact_registry_repository.proxy) == 0 ? null : {
+    service_account = google_service_account.registry_cache[0].email
+    npm             = "https://${var.region}-npm.pkg.dev/${var.project_id}/${google_artifact_registry_repository.proxy["npm"].repository_id}/"
+    pypi            = "https://${var.region}-python.pkg.dev/${var.project_id}/${google_artifact_registry_repository.proxy["pypi"].repository_id}/"
+    go              = "https://${var.region}-go.pkg.dev/${var.project_id}/${google_artifact_registry_repository.proxy["go"].repository_id}/"
+  }
+}

@@ -12,6 +12,7 @@
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
 #
 # Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
+# New on kind only through Ansible: registry-cache (#203; REGISTRY_PROXY in config.env, run.sh 06 calls it).
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -67,6 +68,15 @@
       vars:
         botboard_context: kind-{{ kind_cluster_name }}
       tags: [botboard, never]
+    - name: Registry cache for npm, PyPI and Go (#203); registry_proxy off removes it
+      ansible.builtin.include_role:
+        name: registry_cache
+        apply: {tags: [registry-cache]}
+      vars:
+        registry_cache_context: kind-{{ kind_cluster_name }}
+        registry_cache_ns: coding-agents
+        registry_cache_fqdn_policy: false
+      tags: [registry-cache]
 
     # Postgres always; ContextForge and mcp-sync only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
     # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager.

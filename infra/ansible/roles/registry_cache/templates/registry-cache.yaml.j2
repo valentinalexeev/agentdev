@@ -1,0 +1,306 @@
+{#- Registry cache (#203): gateway Service registry-cache with one port per ecosystem, and, for registry_proxy cluster,
+    the caches Verdaccio (npm), devpi (PyPI) and Athens (Go). The gateway allows GET and HEAD only (read-only). -#}
+{%- set ns = registry_cache_ns -%}
+{%- set host = 'registry-cache.' ~ ns ~ '.svc.cluster.local' -%}
+{%- set ar = registry_cache_mode == 'artifact_registry' -%}
+{%- set eco = [
+      {'id': 'npm', 'port': 4873, 'backend': 'http://registry-cache-npm:4873/', 'ar': registry_cache_ar.npm | default('')},
+      {'id': 'pypi', 'port': 3141, 'backend': 'http://registry-cache-pypi:3141/', 'ar': registry_cache_ar.pypi | default('')},
+      {'id': 'go', 'port': 3000, 'backend': 'http://registry-cache-go:3000/', 'ar': registry_cache_ar.go | default('')},
+    ] -%}
+{%- set labels = registry_cache_labels -%}
+# package manager settings for the agent container (envFrom, operator #203): URLs only, never a credential
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: registry-proxy, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+data:
+  npm_config_registry: http://{{ host }}:4873/
+  npm_config_audit: "false"          # the audit endpoint is a POST; the read-only cache refuses it
+  PIP_INDEX_URL: http://{{ host }}:3141/{{ 'simple/' if ar else 'root/pypi/+simple/' }}
+  PIP_TRUSTED_HOST: {{ host }}
+  UV_DEFAULT_INDEX: http://{{ host }}:3141/{{ 'simple/' if ar else 'root/pypi/+simple/' }}
+  UV_INSECURE_HOST: {{ host }}
+  GOPROXY: http://{{ host }}:3000
+  GOSUMDB: sum.golang.org http://{{ host }}:3000/sumdb/sum.golang.org
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: registry-cache, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+data:
+  token.js: |
+    // the gateway's own Artifact Registry token (written by the token container); never sent to an agent
+    function bearer(r) {
+      try { return 'Bearer ' + require('fs').readFileSync('/tokens/token', 'utf8').trim(); } catch (e) { return ''; }
+    }
+    export default {bearer};
+  nginx.conf: |
+    load_module modules/ngx_http_js_module.so;
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 512; }
+    http {
+      access_log /dev/stdout;
+      client_body_temp_path /tmp/body;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      scgi_temp_path /tmp/scgi;
+      client_max_body_size 1k;      # read-only: no uploads
+      proxy_read_timeout 300s;
+      js_import token from /etc/nginx/token.js;
+      js_set $ar_auth token.bearer;
+{% for e in eco %}
+      server {
+        listen {{ e.port }};
+        # read-only cache: publishing stays an executor job
+        if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+{%   if ar %}
+{%     set up = e.ar | urlsplit %}
+        location /sumdb/sum.golang.org/ {
+          proxy_pass https://sum.golang.org/;
+          proxy_set_header Host sum.golang.org;
+          proxy_ssl_server_name on;
+          proxy_ssl_verify on;
+          proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        }
+        location / {
+          proxy_pass {{ e.ar }};
+          proxy_set_header Host {{ up.hostname }};
+          proxy_set_header Authorization $ar_auth;
+          proxy_set_header Accept-Encoding "";
+          proxy_ssl_server_name on;
+          proxy_ssl_verify on;
+          proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+          # links to the repository (npm tarballs, PyPI files) point back at this gateway
+          sub_filter_types application/json application/vnd.npm.install-v1+json text/html;
+          sub_filter_once off;
+          sub_filter '{{ e.ar }}' 'http://{{ host }}:{{ e.port }}/';
+          sub_filter '{{ e.ar | regex_replace('^https://[^/]+', '') }}' '/';
+        }
+{%   else %}
+        location / {
+          proxy_pass {{ e.backend }};
+          proxy_set_header Host $http_host;
+          proxy_set_header X-Forwarded-Proto http;
+          proxy_set_header X-Forwarded-Host $http_host;
+          proxy_set_header X-Outside-URL http://$http_host;   # devpi builds its links from it
+        }
+{%   endif %}
+      }
+{% endfor %}
+    }
+{% if not ar %}
+  verdaccio.yaml: |
+    storage: /verdaccio/storage/data
+    listen: 0.0.0.0:4873
+    auth:
+      htpasswd: {file: /verdaccio/storage/htpasswd, max_users: -1}
+    uplinks:
+      npmjs: {url: https://registry.npmjs.org/, cache: true}
+    packages:
+      '**': {access: $all, publish: nobody, unpublish: nobody, proxy: npmjs}
+    server: {keepAliveTimeout: 60}
+    log: {type: stdout, format: json, level: warn}
+{% endif %}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry-cache
+  namespace: {{ ns }}
+  labels: {{ labels | to_json }}
+{% if ar %}
+  annotations: {iam.gke.io/gcp-service-account: {{ registry_cache_ar.service_account }}}
+{% endif %}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata: {name: registry-cache, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  selector: {app: registry-cache}
+  ports:
+{% for e in eco %}
+  - {name: {{ e.id }}, port: {{ e.port }}, targetPort: {{ e.port }}}
+{% endfor %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: registry-cache, namespace: {{ ns }}, labels: {{ labels | combine({'app': 'registry-cache'}) | to_json }}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: registry-cache}}
+  template:
+    metadata:
+      labels: {{ labels | combine({'app': 'registry-cache', 'agentdev/registry-cache-egress': 'true'}) | to_json }}
+      annotations: {agentdev/config: "{{ (registry_cache_mode ~ (registry_cache_ar | to_json)) | hash('sha256') | truncate(16, True, '') }}"}
+    spec:
+      serviceAccountName: registry-cache
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: gateway
+        image: {{ registry_cache_gateway_image }}
+        command: [nginx, -g, daemon off;, -c, /etc/nginx/agentdev/nginx.conf]
+        ports:
+{% for e in eco %}
+        - {name: {{ e.id }}, containerPort: {{ e.port }}}
+{% endfor %}
+        readinessProbe: {tcpSocket: {port: 4873}, periodSeconds: 10}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: conf, mountPath: /etc/nginx/agentdev/nginx.conf, subPath: nginx.conf, readOnly: true}
+        - {name: conf, mountPath: /etc/nginx/token.js, subPath: token.js, readOnly: true}
+        - {name: tokens, mountPath: /tokens, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+        resources:
+          requests: {cpu: 10m, memory: 32Mi}
+          limits: {cpu: 500m, memory: 128Mi}
+{% if ar %}
+      # the Workload Identity token of the gateway's Google service account, renewed every 10 minutes (it lives 1 hour)
+      - name: token
+        image: {{ registry_cache_token_image }}
+        command:
+        - sh
+        - -c
+        - |
+          while true; do
+            curl -sf -H 'Metadata-Flavor: Google' \
+              http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token \
+              | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p' > /tokens/token.new \
+              && [ -s /tokens/token.new ] && mv /tokens/token.new /tokens/token
+            sleep 600
+          done
+        readinessProbe: {exec: {command: [test, -s, /tokens/token]}, periodSeconds: 10}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        volumeMounts: [{name: tokens, mountPath: /tokens}]
+        resources:
+          requests: {cpu: 5m, memory: 16Mi}
+          limits: {cpu: 100m, memory: 64Mi}
+{% endif %}
+      volumes:
+      - {name: conf, configMap: {name: registry-cache}}
+      - {name: tokens, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+      - {name: tmp, emptyDir: {sizeLimit: 512Mi}}
+---
+# only agent pods and chat sessions reach the gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: registry-cache, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  podSelector: {matchLabels: {app: registry-cache}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchExpressions: [{key: app, operator: In, values: [coding-agent, agent-chat]}]}}]
+    ports:
+{% for e in eco %}
+    - {port: {{ e.port }}}
+{% endfor %}
+---
+# egress of the gateway and the caches besides 443 (that comes from the FQDN policy, or registry-cache-web on kind):
+# DNS, the caches (gateway), and the GKE metadata server for the Workload Identity token
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: registry-cache-egress, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  podSelector: {matchLabels: {agentdev/registry-cache-egress: "true"}}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
+    ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+{% if ar %}
+  - to: [{ipBlock: {cidr: 169.254.169.254/32}}]
+    ports: [{port: 80, protocol: TCP}, {port: 988, protocol: TCP}]
+{% else %}
+  - to: [{podSelector: {matchLabels: {agentdev/registry-cache-backend: "true"}}}]
+    ports: [{port: 4873}, {port: 3141}, {port: 3000}]
+{% endif %}
+{% if not ar %}
+---
+# the caches accept the gateway only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: registry-cache-backends, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  podSelector: {matchLabels: {agentdev/registry-cache-backend: "true"}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: registry-cache}}}]
+{% set caches = [
+     {'id': 'npm', 'port': 4873, 'image': registry_cache_verdaccio_image, 'uid': 10001, 'mount': '/verdaccio/storage',
+      'env': {}, 'args': []},
+     {'id': 'pypi', 'port': 3141, 'image': registry_cache_devpi_image, 'uid': 1000, 'mount': '/devpi',
+      'env': {'DEVPISERVER_SERVERDIR': '/devpi/server', 'HOME': '/tmp'}, 'args': []},
+     {'id': 'go', 'port': 3000, 'image': registry_cache_athens_image, 'uid': 1000, 'mount': '/var/lib/athens',
+      'env': {'ATHENS_STORAGE_TYPE': 'disk', 'ATHENS_DISK_STORAGE_ROOT': '/var/lib/athens', 'ATHENS_PORT': ':3000',
+              'ATHENS_GO_BINARY_ENV_VARS': 'GOPROXY=https://proxy.golang.org,direct', 'ATHENS_SUM_DBS': 'https://sum.golang.org',
+              'ATHENS_NETWORK_MODE': 'strict', 'HOME': '/tmp', 'GOPATH': '/tmp/go', 'GOCACHE': '/tmp/go-cache',
+              'GOFLAGS': '-mod=mod'}, 'args': []},
+   ] %}
+{% for c in caches %}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: registry-cache-{{ c.id }}, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  accessModes: [ReadWriteOnce]
+{% if registry_cache_storage_class %}
+  storageClassName: {{ registry_cache_storage_class }}
+{% endif %}
+  resources: {requests: {storage: {{ registry_cache_storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: registry-cache-{{ c.id }}, namespace: {{ ns }}, labels: {{ labels | to_json }}}
+spec:
+  selector: {app: registry-cache-{{ c.id }}}
+  ports: [{name: http, port: {{ c.port }}, targetPort: {{ c.port }}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: registry-cache-{{ c.id }}, namespace: {{ ns }}, labels: {{ labels | combine({'app': 'registry-cache-' ~ c.id}) | to_json }}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # one ReadWriteOnce volume
+  selector: {matchLabels: {app: registry-cache-{{ c.id }}}}
+  template:
+    metadata:
+      labels: {{ labels | combine({'app': 'registry-cache-' ~ c.id, 'agentdev/registry-cache-egress': 'true', 'agentdev/registry-cache-backend': 'true'}) | to_json }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: {{ c.uid }}, runAsGroup: {{ c.uid }}, fsGroup: {{ c.uid }}, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: cache
+        image: {{ c.image }}
+{% if c.args %}
+        command: {{ c.args | to_json }}
+{% endif %}
+{% if c.id == 'pypi' %}
+        env: [{name: DEVPI_PASSWORD, valueFrom: {secretKeyRef: {name: registry-cache-pypi, key: password}}}{% for k, v in c.env.items() %}, {name: {{ k }}, value: {{ v | to_json }}}{% endfor %}]
+{% elif c.env %}
+        env: [{% for k, v in c.env.items() %}{name: {{ k }}, value: {{ v | to_json }}}{{ ', ' if not loop.last }}{% endfor %}]
+{% endif %}
+        ports: [{name: http, containerPort: {{ c.port }}}]
+        readinessProbe: {tcpSocket: {port: http}, periodSeconds: 10}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: data, mountPath: {{ c.mount }}}
+        - {name: tmp, mountPath: /tmp}
+{% if c.id == 'npm' %}
+        - {name: conf, mountPath: /verdaccio/conf/config.yaml, subPath: verdaccio.yaml, readOnly: true}
+{% endif %}
+        resources:
+          requests: {cpu: 20m, memory: 96Mi}
+          limits: {cpu: "1", memory: 512Mi}
+      volumes:
+      - {name: data, persistentVolumeClaim: {claimName: registry-cache-{{ c.id }}}}
+      - {name: tmp, emptyDir: {sizeLimit: 2Gi}}
+{% if c.id == 'npm' %}
+      - {name: conf, configMap: {name: registry-cache}}
+{% endif %}
+{% endfor %}
+{% endif %}
