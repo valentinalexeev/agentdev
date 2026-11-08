@@ -1,0 +1,170 @@
+# Preflight (#314): read-only checks of what can refuse or break a deploy. It changes nothing.
+#
+#   ansible-playbook preflight.yml -e @instance.yml          # or: scripts/upgrade-check.sh instance.yml
+#   ansible-playbook deploy.yml -e @instance.yml --tags preflight
+#
+# deploy.yml imports this play first, so a deploy stops before its first change. Checks:
+#   1. claude: claude-shared and each existing agent-<name>-claude have a recognised KEY=VALUE line (#212).
+#   2. release: the playbook checkout and image_tag are the same release, so the router image and its manifests
+#      move together (#218: the probes use port 8082, an older router image fails them).
+#   3. crds: the cluster serves the CRDs that the instance values need (Gateway API, FQDNNetworkPolicy).
+#   4. images: every agentdev image exists on the registry at image_tag.
+# preflight_checks selects the checks (default all). Secret values are never logged.
+- name: Preflight (read-only)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    preflight_checks: [claude, release, crds, images]
+    preflight_images: "{{ [worker_image, forge_image, router_image, operator_image, credproxy_image] }}"
+  tasks:
+    - name: Preflight needs the instance values (see example.vars.yml)
+      ansible.builtin.assert:
+        that:
+          - gcp_project is defined and gcp_project | length > 0
+          - image_tag is defined and image_tag | string | length > 0
+          - agents is defined and agents | length > 0
+        fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
+        quiet: true
+
+    # 1. Claude credential formats (#212). The message comes from tasks/claude_credential.yml, as before.
+    - name: Claude credentials
+      when: "'claude' in preflight_checks"
+      block:
+        - name: Read claude-shared from Secret Manager (not logged)
+          ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_claude_shared }} --project {{ gcp_project }}
+          register: preflight_claude_shared
+          changed_when: false
+          check_mode: false
+          no_log: true
+
+        - name: Refuse a claude-shared without a recognised key (#212)
+          ansible.builtin.include_tasks: tasks/claude_credential.yml
+          vars:
+            claude_cred_text: "{{ preflight_claude_shared.stdout }}"
+            claude_cred_name: "{{ sm_claude_shared }}"
+
+        - name: Read each agent-<name>-claude that exists (not logged)
+          ansible.builtin.shell: |
+            set -euo pipefail
+            if gcloud secrets describe agent-{{ item.name }}-claude --project {{ gcp_project }} >/dev/null 2>&1; then
+              gcloud secrets versions access latest --secret agent-{{ item.name }}-claude --project {{ gcp_project }}
+            fi
+          args: {executable: /bin/bash}
+          loop: "{{ agents }}"
+          register: preflight_agent_claude
+          changed_when: false
+          check_mode: false
+          no_log: true
+
+        # An agent-<name>-claude that exists but has no recognised key would silently fall back to claude-shared.
+        - name: Refuse an agent-<name>-claude without a recognised key (#212)
+          ansible.builtin.include_tasks: tasks/claude_credential.yml
+          vars:
+            claude_cred_text: "{{ preflight_agent_claude.results[idx].stdout }}"
+            claude_cred_name: "agent-{{ item.name }}-claude"
+          loop: "{{ agents }}"
+          loop_control: {index_var: idx, label: "{{ item.name }}"}
+          when: preflight_agent_claude.results[idx].stdout | trim | length > 0
+
+    # 2. Same release (#218). The manifests come from this checkout, the images from image_tag.
+    - name: Same release for the playbook and the images
+      when: "'release' in preflight_checks"
+      block:
+        - name: Read the release tag of this checkout
+          ansible.builtin.command: git -C {{ repo_root | quote }} describe --tags --exact-match HEAD   # noqa: command-instead-of-module (read only)
+          register: preflight_git_tag
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: The checkout is not on a release tag
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: this agentdev checkout is not on a release tag. Its manifests may not match image_tag
+              {{ image_tag }}. Check out tag v{{ image_tag }} (docs/private-deployment.md, "Upgrade the instance").
+          when: preflight_git_tag.rc != 0
+
+        - name: Refuse manifests and images of different releases (#218)
+          ansible.builtin.assert:
+            that: preflight_git_tag.stdout | trim | regex_replace('^v', '') == image_tag | string
+            fail_msg: >-
+              This agentdev checkout is {{ preflight_git_tag.stdout | trim }}, but image_tag is {{ image_tag }}. The
+              router image and its manifests must come from the same release (#218: an older router image fails the
+              probes on port 8082). Set image_tag and Terraform ref= to the same release and check out that tag.
+            quiet: true
+          when: preflight_git_tag.rc == 0
+
+    # 3. CRDs that the instance values need. agentdev's own CRDs are installed by deploy.yml, so they are not checked.
+    - name: Required CRDs
+      when: "'crds' in preflight_checks"
+      block:
+        - name: Read the required CRDs
+          kubernetes.core.k8s_info:
+            context: "{{ kube_context }}"
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: "{{ item.name }}"
+          loop: >-
+            {{ ([{'name': 'gateways.gateway.networking.k8s.io',
+                  'why': 'ingress.mode gateway (Terraform public_hosts, gateway_api_config)'}]
+                if ((ingress | default({})).host | default('') | length > 0
+                    and (ingress | default({})).mode | default('gateway') == 'gateway') else [])
+               + ([{'name': 'fqdnnetworkpolicies.networking.gke.io',
+                    'why': 'egress_fqdn_policy (Terraform enable_fqdn_network_policy)'}]
+                  if (egress_fqdn_policy | bool) else []) }}
+          loop_control: {label: "{{ item.name }}"}
+          register: preflight_crds
+
+        - name: Refuse a cluster without a required CRD
+          ansible.builtin.assert:
+            that: item.resources | length > 0
+            fail_msg: "The cluster does not serve the CRD {{ item.item.name }}. It is needed by {{ item.item.why }}."
+            quiet: true
+          loop: "{{ preflight_crds.results }}"
+          loop_control: {label: "{{ item.item.name }}"}
+
+    # 4. Images at image_tag. GHCR packages are public: an anonymous pull token reads the manifest.
+    - name: Images exist at image_tag
+      when: "'images' in preflight_checks and image_registry is match('^ghcr\\.io/')"
+      block:
+        - name: Get an anonymous pull token per image
+          ansible.builtin.uri:
+            url: "https://ghcr.io/token?scope=repository:{{ item.split(':')[0] | regex_replace('^ghcr\\.io/', '') }}:pull"
+            return_content: true
+          loop: "{{ preflight_images }}"
+          register: preflight_tokens
+          check_mode: false
+          no_log: true
+
+        - name: Read each image manifest
+          ansible.builtin.uri:
+            url: "https://ghcr.io/v2/{{ item.item.split(':')[0] | regex_replace('^ghcr\\.io/', '') }}/manifests/{{ item.item.split(':')[1] }}"
+            method: HEAD
+            headers:
+              Authorization: "Bearer {{ item.json.token }}"
+              Accept: >-
+                application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json,
+                application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json
+            status_code: [200, 404]
+          loop: "{{ preflight_tokens.results }}"
+          loop_control: {label: "{{ item.item }}"}
+          register: preflight_manifests
+          check_mode: false
+          no_log: true   # the headers hold the pull token; the next task names the image
+
+        - name: Refuse an image_tag that is not published
+          ansible.builtin.assert:
+            that: preflight_missing | length == 0
+            fail_msg: >-
+              These images do not exist on the registry: {{ preflight_missing | join(', ') }}. Check image_tag
+              {{ image_tag }}: it is the git tag without the v, and images.yml must have published it.
+            quiet: true
+          vars:
+            preflight_missing: >-
+              {{ preflight_manifests.results | rejectattr('status', 'equalto', 200)
+                 | map(attribute='item') | map(attribute='item') | list }}
+
+    - name: Preflight passed
+      ansible.builtin.debug:
+        msg: "Preflight passed: {{ preflight_checks | join(', ') }}."

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Fake gcloud for tests/preflight.yml (#314). Serves secrets from $FAKE_SECRETS_DIR/<name>; no file = no secret.
+#   gcloud secrets describe NAME ...                  exit 0 if the file exists, else 1
+#   gcloud secrets versions access latest --secret NAME ...   print the file
+set -euo pipefail
+dir="${FAKE_SECRETS_DIR:?}"
+if [ "${1:-}" = secrets ] && [ "${2:-}" = describe ]; then
+  [ -f "$dir/$3" ]; exit
+fi
+name=""
+prev=""
+for a in "$@"; do [ "$prev" = --secret ] && name="$a"; prev="$a"; done
+[ -n "$name" ] && [ -f "$dir/$name" ] || { echo "fake gcloud: no secret $name" >&2; exit 1; }
+cat "$dir/$name"

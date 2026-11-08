@@ -268,10 +268,13 @@ After `1.0.0`, only a MAJOR version can have changes that are not compatible.
 2. Make a backup (see "Make a backup").
 3. In one pull request, change `ref=vX.Y.Z` in `terraform/main.tf` and `image_tag: "X.Y.Z"` in `ansible/instance.yml`.
 4. Add the input changes of the **BREAKING** entries to the same pull request.
-5. Examine the Terraform plan and the Ansible dry run in the CI.
-6. Merge the pull request.
-7. Do the steps of "Make sure that the instance operates".
-8. After an authentik upgrade, make sure that no prompt writes `attributes.forge_login`
+5. Run the read-only check from a checkout of the new release tag (#314):
+   `scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml`. Correct each problem that it shows.
+   The CI of the template also runs it on `main`, before `terraform apply`.
+6. Examine the Terraform plan and the Ansible dry run in the CI.
+7. Merge the pull request.
+8. Do the steps of "Make sure that the instance operates".
+9. After an authentik upgrade, make sure that no prompt writes `attributes.forge_login`
    (**Flows and Stages > Prompts**, search `forge_login`).
 
 NOTE: Do not deploy from a branch. Use only release tags.

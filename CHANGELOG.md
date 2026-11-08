@@ -6,6 +6,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Ansible preflight (#314): `infra/ansible/preflight.yml` only reads. It checks the Claude secret formats (#212, the
+  same message), that the playbook checkout and `image_tag` are the same release (#218), the CRDs that the instance
+  values need, and that each image exists on ghcr.io at `image_tag`. `deploy.yml` imports it first (tag
+  `preflight`), so a deploy stops before its first change. New `scripts/upgrade-check.sh <instance.yml>`. The
+  deployment template's workflow runs it on `main` before `terraform apply`; copy the new `preflight` job.
+
 ### Changed
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway

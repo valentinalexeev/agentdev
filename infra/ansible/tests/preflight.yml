@@ -1,0 +1,41 @@
+# Check (#314): the preflight play refuses a bad Claude secret with the #212 message, before deploy.yml changes
+# anything. Runs preflight.yml (only the claude check) against a fake gcloud and fake Secret Manager values.
+# Run: ansible-playbook infra/ansible/tests/preflight.yml
+- name: "Preflight refuses a bad Claude secret (#314, #212)"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    work: "{{ preflight_tmp.path }}"
+    preflight_run: >-
+      PATH={{ work }}/bin:$PATH FAKE_SECRETS_DIR={{ work }}/secrets
+      ansible-playbook {{ playbook_dir }}/../preflight.yml -i localhost, -c local
+      -e @{{ playbook_dir }}/../group_vars/all.yml
+      -e '{"gcp_project": "p", "image_tag": "0.0.0", "agents": [{"name": "alice"}, {"name": "bob"}],
+           "preflight_checks": ["claude"]}'
+    cases:
+      - {name: good shared, shared: "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test\n", ok: true}
+      - {name: good shared and good agent, shared: "ANTHROPIC_API_KEY=k\n", alice: "CLAUDE_CODE_OAUTH_TOKEN=t\n", ok: true}
+      - {name: bare shared token, shared: "sk-ant-oat01-baretokenvalue\n", ok: false, secret: claude-shared}
+      - {name: bare agent token, shared: "ANTHROPIC_API_KEY=k\n", bob: "sk-ant-oat01-agentbaretoken\n", ok: false,
+         secret: agent-bob-claude}
+  tasks:
+    - name: Work directory
+      ansible.builtin.tempfile: {state: directory, prefix: agentdev-preflight-}
+      register: preflight_tmp
+
+    - name: Bin directory
+      ansible.builtin.file: {path: "{{ work }}/bin", state: directory, mode: "0700"}
+
+    - name: Fake gcloud on PATH
+      ansible.builtin.copy:
+        src: files/fake-gcloud
+        dest: "{{ work }}/bin/gcloud"
+        mode: "0755"
+
+    - name: Run each case
+      ansible.builtin.include_tasks: includes/preflight_case.yml
+      loop: "{{ cases }}"
+      loop_control: {loop_var: case, label: "{{ case.name }}"}
+
+    - name: Clean up
+      ansible.builtin.file: {path: "{{ work }}", state: absent}
