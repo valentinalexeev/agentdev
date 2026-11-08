@@ -28,6 +28,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   files, `TrustedUserCAKeys`, an empty KRL, sshd settings. The Ansible executor stages follow in part 2. Manuals:
   admin.md "SSH access for executors" (set up the CA, enrol, remove, rotate), troubleshooting; risks R102, R103. kind
   e2e: `scripts/e2e-ssh.sh` with a test SSH server (`tests/e2e/ssh-server`).
+- Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
+  waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
+  from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
+  auth hosts answer without a proxy error. The run fails with the URL and the answer. New instance values
+  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). Not run with `--check`. Test:
+  `infra/ansible/tests/ingress_smoke.yml`. Docs: admin.md "Post-deploy smoke test", troubleshooting.md.
+- Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
+  images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
+  (`tools/claude-stub`) replaces the model, so no credential is needed. Checks: register, idle stop, wake, job, push,
+  PR, reply, proxy usage line. `CLAUDE_REAL=1` uses the real model (nightly or by hand only). `06-agents.sh` pulls
+  `WORKER_IMAGE` and `FORGE_IMAGE` when they are not local `agentdev/*` tags. Reviewer checklist item 7 in `CLAUDE.md`.
 - Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
   scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
   with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
@@ -291,6 +302,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
+  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
+  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
+  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
 - Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):

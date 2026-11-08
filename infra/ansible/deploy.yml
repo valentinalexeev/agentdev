@@ -772,3 +772,12 @@
         label_selectors: ["{{ item }}"]
       loop: ["app=webhook-router", "app=coding-agent"]
       when: not ansible_check_mode
+
+    # post-deploy smoke test (#213): the public hosts answer from outside and the forwarder is Ready. Last, after the
+    # router and the UI are up. Off with ingress.smoke: false.
+    - name: Post-deploy smoke test of the public hosts
+      ansible.builtin.include_role: {name: ingress, tasks_from: smoke.yml}
+      when:
+        - not ansible_check_mode
+        - (ingress | default({})).host | default('') | length > 0
+        - (ingress | default({})).smoke | default(true) | bool
