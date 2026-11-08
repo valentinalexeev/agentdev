@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ func TestGCPValues(t *testing.T) {
 	var mu sync.Mutex
 	var calls []string
 	secrets := map[string][]string{}
+	var destroyed []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -47,6 +49,9 @@ func TestGCPValues(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&b)
 			v, _ := base64.StdEncoding.DecodeString(b.Payload.Data)
 			secrets[id] = append(secrets[id], string(v))
+			fmt.Fprintf(w, `{"name":"projects/123/secrets/%s/versions/%d"}`, id, len(secrets[id]))
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, ":destroy"):
+			destroyed = append(destroyed, strings.TrimPrefix(r.URL.Path, "/v1/projects/p/secrets/"))
 			io.WriteString(w, `{}`)
 		case r.Method == "DELETE":
 			id := strings.TrimPrefix(r.URL.Path, "/v1/projects/p/secrets/")
@@ -72,6 +77,10 @@ func TestGCPValues(t *testing.T) {
 	}
 	if got := secrets["agentdev-ps-npm"]; len(got) != 2 || got[1] != "v2-secret" {
 		t.Fatalf("versions %v", got)
+	}
+	// review of #274: a rotation destroys the previous version, the first write destroys nothing
+	if strings.Join(destroyed, ",") != "agentdev-ps-npm/versions/1:destroy" {
+		t.Errorf("destroyed %v", destroyed)
 	}
 	if err := g.DeleteValue(ctx, "npm"); err != nil {
 		t.Fatal(err)

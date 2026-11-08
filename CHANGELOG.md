@@ -46,7 +46,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   and the API's write-only account (custom role without `versions.access`), with Workload Identity. The automation
   account gets `roles/iam.roleAdmin` for the custom role. The playbook installs External Secrets Operator, the
   policies, the Secret Manager store and the credential broker when `instance.yml` sets `secrets_store` (from
-  `terraform output secrets_store`). Upgrade: apply Terraform, copy the output, run the playbook.
+  `terraform output secrets_store`). Upgrade: apply Terraform, copy the output, run the playbook. Create is a
+  separate custom role whose IAM condition also admits the project (Secret Manager checks create on the parent);
+  rotation destroys the previous version; no workload may run as `agentdev-secrets-reader` (admission policy).
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

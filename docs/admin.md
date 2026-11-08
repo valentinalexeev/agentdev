@@ -1761,6 +1761,21 @@ To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
    kubectl -n coding-agents get secretstore agentdev-secrets
    ```
 
+5. Check the whole path once, as the owner (the GKE half of the acceptance of #202). Add a test project secret in
+   mode `broker` for a running agent in the web UI, wait until its phase is `ready`, then make sure that the value
+   is not in the agent container. Type the value at the prompt; it is not stored in the shell history:
+
+   ```bash
+   read -rs VAL && printf '%s' "$VAL" | kubectl -n coding-agents exec -i agent-<name>-0 -c agent -- sh -c \
+     'v=$(cat); { env; cat /proc/[0-9]*/environ; } 2>/dev/null | tr "\0" "\n" | grep -cF -- "$v"; grep -rIlF -- "$v" / --exclude-dir=proc --exclude-dir=sys 2>/dev/null | head -3'
+   ```
+
+   The output must be `0` and nothing else. Then delete the test secret.
+
+Rotation adds a new Secret Manager version and destroys the previous one, so an old credential is not readable any
+more. If the API logs `previous version ... not destroyed`, destroy it by hand:
+`gcloud secrets versions destroy <n> --secret agentdev-ps-<name>`.
+
 To turn the store off, remove `secrets_store` from `instance.yml`.
 
 ### Add a project secret in the web UI

@@ -23,8 +23,14 @@ resource "google_service_account" "api_secrets" {
 }
 
 locals {
-  # IAM condition on the secret's resource name; secrets are named projects/<number>/secrets/<id>
+  # IAM condition on the secret's resource name; secrets are named projects/<number>/secrets/<id> (versions below it)
   ps_condition = "resource.name.startsWith(\"projects/${data.google_project.this.number}/secrets/agentdev-ps-\")"
+  # secretmanager.secrets.create is checked on the parent, the project, before the secret exists, so the name
+  # condition alone would refuse every create (review of #274). This condition admits the project as the resource
+  # and nothing else: the create role holds only secrets.create, so on the project it can create a secret but not
+  # read, version or delete one. The secret id is always agentdev-ps-<name> (images/api/secrets_gcp.go); a secret
+  # created under another id is unusable to the API (every other permission is under ps_condition).
+  ps_create_condition = "resource.type == \"cloudresourcemanager.googleapis.com/Project\" || ${local.ps_condition}"
 }
 
 resource "google_project_iam_member" "secrets_reader" {
@@ -38,18 +44,38 @@ resource "google_project_iam_member" "secrets_reader" {
   }
 }
 
-# write-only: create the secret, add versions, delete; no versions.access, no list of other secrets
+# write-only: add versions, destroy old ones, delete; no versions.access, no list of other secrets. Create is a
+# separate role because it needs another IAM condition (see ps_create_condition).
 resource "google_project_iam_custom_role" "api_secrets" {
   count       = var.secrets_store ? 1 : 0
   role_id     = "agentdevProjectSecretWriter"
   title       = "agentdev project secret writer"
-  description = "Create, version and delete agentdev-ps-* secrets without reading them (#202)"
+  description = "Version, destroy old versions of and delete agentdev-ps-* secrets without reading them (#202)"
   permissions = [
-    "secretmanager.secrets.create",
     "secretmanager.secrets.delete",
     "secretmanager.secrets.get",
     "secretmanager.versions.add",
+    "secretmanager.versions.destroy",
   ]
+}
+
+resource "google_project_iam_custom_role" "api_secrets_create" {
+  count       = var.secrets_store ? 1 : 0
+  role_id     = "agentdevProjectSecretCreator"
+  title       = "agentdev project secret creator"
+  description = "Create agentdev-ps-* secrets (checked on the project, #202)"
+  permissions = ["secretmanager.secrets.create"]
+}
+
+resource "google_project_iam_member" "api_secrets_create" {
+  count   = var.secrets_store ? 1 : 0
+  project = var.project_id
+  role    = google_project_iam_custom_role.api_secrets_create[0].id
+  member  = "serviceAccount:${google_service_account.api_secrets[0].email}"
+  condition {
+    title      = "agentdev-ps create"
+    expression = local.ps_create_condition
+  }
 }
 
 resource "google_project_iam_member" "api_secrets" {

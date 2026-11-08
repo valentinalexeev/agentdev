@@ -31,7 +31,8 @@ claude_budget_tokens: 0
 secrets_store: {}
 secrets_store_enabled: "{{ (secrets_store.reader_gsa | default('')) | length > 0 }}"
 eso_chart_version: 2.14.0
-eso_ns: external-secrets             # tokens per agent per 24 h (input, cache and output); 0 = no limit
+eso_ns: external-secrets
+eso_sa: external-secrets             # ESO controller ServiceAccount: the only writer of ps-* Secrets (policy)
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts

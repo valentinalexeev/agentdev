@@ -13,8 +13,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -61,9 +64,15 @@ func (g *gcpValues) accessToken(ctx context.Context) (string, error) {
 
 // do sends one request; the body never contains anything but the payload, and errors never echo it.
 func (g *gcpValues) do(ctx context.Context, method, path string, body any) (int, error) {
+	code, _, err := g.doBody(ctx, method, path, body)
+	return code, err
+}
+
+// doBody is do that also returns up to 64 KiB of the response (metadata only: no call here returns a value).
+func (g *gcpValues) doBody(ctx context.Context, method, path string, body any) (int, []byte, error) {
 	tok, err := g.accessToken(ctx)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	var rd io.Reader
 	if body != nil {
@@ -77,11 +86,12 @@ func (g *gcpValues) do(ctx context.Context, method, path string, body any) (int,
 	}
 	resp, err := g.hc.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, nil
+	return resp.StatusCode, out, nil
 }
 
 func (g *gcpValues) secretPath(name string) string {
@@ -100,7 +110,7 @@ func (g *gcpValues) SetValue(ctx context.Context, name, value string) error {
 	if code != http.StatusOK && code != http.StatusConflict {
 		return fmt.Errorf("create secret: status %d", code)
 	}
-	code, err = g.do(ctx, http.MethodPost, g.secretPath(name)+":addVersion",
+	code, out, err := g.doBody(ctx, http.MethodPost, g.secretPath(name)+":addVersion",
 		map[string]any{"payload": map[string]string{"data": base64.StdEncoding.EncodeToString([]byte(value))}})
 	if err != nil {
 		return err
@@ -108,7 +118,30 @@ func (g *gcpValues) SetValue(ctx context.Context, name, value string) error {
 	if code != http.StatusOK {
 		return fmt.Errorf("add version: status %d", code)
 	}
+	g.destroyPrevious(ctx, name, out)
 	return nil
+}
+
+// destroyPrevious destroys the version before the one just added, so a rotated credential is not readable any more
+// (External Secrets Operator reads latest; review of #274). Best effort: a failure is logged, the rotation stands.
+// Each rotation destroys its predecessor, so at most one enabled version exists.
+func (g *gcpValues) destroyPrevious(ctx context.Context, name string, added []byte) {
+	var v struct{ Name string }
+	if json.Unmarshal(added, &v) != nil {
+		return
+	}
+	i := strings.LastIndex(v.Name, "/versions/")
+	if i < 0 {
+		return
+	}
+	n, err := strconv.Atoi(v.Name[i+len("/versions/"):])
+	if err != nil || n < 2 {
+		return
+	}
+	code, err := g.do(ctx, http.MethodPost, g.secretPath(name)+"/versions/"+strconv.Itoa(n-1)+":destroy", map[string]any{})
+	if err != nil || (code != http.StatusOK && code != http.StatusNotFound && code != http.StatusBadRequest) {
+		log.Printf("secret %s: previous version %d not destroyed (status %d, %v); destroy it by hand", name, n-1, code, err)
+	}
 }
 
 // DeleteValue deletes the secret with all its versions.
