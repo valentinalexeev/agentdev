@@ -21,6 +21,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ansible preflight (#314): `infra/ansible/preflight.yml` only reads, and `deploy.yml` imports it first. A deploy
+  now stops before its first change when a Claude secret has the wrong format (the #212 message), when the playbook
+  checkout is on a release tag other than `v<image_tag>` (#218), when the cluster does not serve a CRD the instance
+  values need (Gateway API, FQDNNetworkPolicy), or when an image is not on ghcr.io at `image_tag`. Run it alone with
+  `bash scripts/upgrade-check.sh <instance.yml>` or `deploy.yml --tags preflight`. The deployment example workflow
+  runs it on `main` before `terraform apply`, and now clones the playbook at tag `v<image_tag>`. To apply: copy the
+  new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment repository.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation

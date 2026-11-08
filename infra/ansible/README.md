@@ -105,6 +105,21 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 `reviewer`, `agents`) come from the deployment (`example.vars.yml` shows the shape); the playbook stops with a
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
 
+### Preflight (#314)
+`preflight.yml` only reads. `deploy.yml` imports it first, so a deploy stops before its first change. It checks:
+1. Claude secrets (#212): `claude-shared` and each `agent-<name>-claude` that exists has a `KEY=VALUE` line.
+2. Release (#218): the playbook checkout is on tag `v<image_tag>`, so the router image and its manifests match.
+   A checkout that is not on a release tag gives a warning.
+3. CRDs: the Gateway API (with `ingress.mode: gateway`, the default when `ingress` is set) and FQDNNetworkPolicy
+   (with `egress_fqdn_policy`).
+4. Images: each agentdev image exists on ghcr.io at `image_tag`.
+```bash
+bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml                  # preflight only
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --tags preflight         # the same
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --skip-tags preflight    # deploy without it
+```
+`-e '{"preflight_checks": ["claude", "images"]}'` selects some checks only. Test: `tests/preflight.yml`.
+
 ## kind (#106)
 The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
 with a kind e2e that proves parity (two runs on a fresh kind cluster, the second must report `changed=0`; run by
