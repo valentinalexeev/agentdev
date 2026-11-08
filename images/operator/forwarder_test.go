@@ -36,15 +36,6 @@ func fwdWatch(t *testing.T, objs ...client.Object) (*ForwarderWatch, client.Clie
 	return w, c, &now
 }
 
-func fwdEvents(t *testing.T, c client.Client) []v1.SecurityEvent {
-	t.Helper()
-	var l v1.SecurityEventList
-	if err := c.List(context.Background(), &l, client.InNamespace("coding-agents")); err != nil {
-		t.Fatal(err)
-	}
-	return l.Items
-}
-
 func TestForwarderNotReadyRecordsOneEventPerOutage(t *testing.T) {
 	lbl := map[string]string{"app": "funnel"}
 	p := fwdPod("funnel-0", "tailscale", false, lbl)
