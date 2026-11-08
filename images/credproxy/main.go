@@ -135,8 +135,9 @@ func (s *server) observe(resp *http.Response) error {
 	}
 	m := &tokenMeter{sse: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")}
 	resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(t tokenCounts, model string) {
-		units := s.prices.get().units(model, t)
-		u.Model, u.Units = model, units
+		p := s.prices.get()
+		units := p.units(model, t)
+		u.Model, u.Units, u.Tokens, u.Multiplier = model, units, t.byName(), p.multiplier(model)
 		u.InputTokens, u.OutputTokens = t.input(), t[tokOut]
 		u.CacheRead, u.CacheWrite = t[tokCacheRead], t[tokCacheWrite5m]+t[tokCacheWrite1h]
 		s.budget.add(info.agent, units)
@@ -171,7 +172,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				bs[i].UsedUSD = &usd
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "budgets": bs, "jobs": s.jobs.snapshot(p)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p)})
 		return
 	}
 	agent := verifyKey(s.signing, callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))

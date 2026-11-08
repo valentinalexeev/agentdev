@@ -111,6 +111,15 @@ func (p priceTable) multiplier(model string) float64 {
 	return best
 }
 
+// weightsByName lists the token weights (GET /status), so a check can recompute the units of a usage line.
+func (p priceTable) weightsByName() map[string]float64 {
+	m := make(map[string]float64, tokTypes)
+	for i, n := range tokNames {
+		m[n] = p.weights[i]
+	}
+	return m
+}
+
 // units of one response, rounded up so that any spend counts.
 func (p priceTable) units(model string, t tokenCounts) int64 {
 	var u float64

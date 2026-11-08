@@ -25,19 +25,22 @@ type window struct {
 // usageLine has the schema of #93 (operator usage.go usageLine) plus agent and secret, which the operator takes
 // only from lines of claude-proxy pods.
 type usageLine struct {
-	Agent        string  `json:"agent"`
-	Secret       string  `json:"secret"`
-	Job          string  `json:"job,omitempty"` // X-Agentdev-Job (#196 D3): agent-supplied, attribution only
-	Model        string  `json:"model,omitempty"`
-	InputTokens  int64   `json:"input_tokens"` // all input, cache writes and reads included (#93 schema)
-	OutputTokens int64   `json:"output_tokens"`
-	CacheRead    int64   `json:"cache_read_tokens,omitempty"`
-	CacheWrite   int64   `json:"cache_write_tokens,omitempty"`
-	Units        int64   `json:"units"` // cost units (#196 D2)
-	RateLimited  bool    `json:"rate_limited"`
-	ResetsAt     int64   `json:"resets_at,omitempty"`
-	FiveHour     *window `json:"five_hour,omitempty"`
-	Weekly       *window `json:"seven_day,omitempty"`
+	Agent        string `json:"agent"`
+	Secret       string `json:"secret"`
+	Job          string `json:"job,omitempty"` // X-Agentdev-Job (#196 D3): agent-supplied, attribution only
+	Model        string `json:"model,omitempty"`
+	InputTokens  int64  `json:"input_tokens"` // all input, cache writes and reads included (#93 schema)
+	OutputTokens int64  `json:"output_tokens"`
+	CacheRead    int64  `json:"cache_read_tokens,omitempty"`
+	CacheWrite   int64  `json:"cache_write_tokens,omitempty"`
+	Units        int64  `json:"units"` // cost units (#196 D2)
+	// tokens by type and the model multiplier, so a check can recompute units = ceil(sum(tokens x weight) x multiplier)
+	Tokens      map[string]int64 `json:"tokens,omitempty"`
+	Multiplier  float64          `json:"multiplier,omitempty"`
+	RateLimited bool             `json:"rate_limited"`
+	ResetsAt    int64            `json:"resets_at,omitempty"`
+	FiveHour    *window          `json:"five_hour,omitempty"`
+	Weekly      *window          `json:"seven_day,omitempty"`
 }
 
 func headerWindow(h http.Header, name string, now time.Time, length time.Duration) *window {
