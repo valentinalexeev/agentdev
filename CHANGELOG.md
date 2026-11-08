@@ -21,6 +21,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Forge sidecar interface additions (#236), both forges. Labels `needs-decision`, `in-progress` and `agent:<name>`
+  (only those; `agent:<name>` only on the agent's own PR) on issues given to the agent or its own PRs; draft PRs and a
+  sidecar `POST /repos/{o}/{r}/pulls/{n}/ready_for_review` for the agent's own PR; edits of the agent's own comments;
+  `GET /pulls/{n}/files`; an ETag cache for GET answers (a `304` is served from the cache). The loop opens a draft PR
+  for `STATUS: partial` (GitHub `draft`, Gitea `WIP:` title) and adds `needs-decision` when it asks a question,
+  removed on the next run. New security events `label-not-allowed`, `comment-not-own`. The GitHub App needs no new
+  permission. ADR 0005 proposes a typed `/v1/work` endpoint. Re-run: `./run.sh 06` or the agent role of the playbook
+  (new images only).
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation

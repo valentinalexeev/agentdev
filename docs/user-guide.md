@@ -86,6 +86,9 @@ the process pack) tell the agent to do this.
 2. Read the question of the agent in the issue.
 3. Write your answer in a comment on the issue. The agent starts again on the issue after your comment.
 
+NOTE: When the agent can do only part of an issue, it opens a draft pull request. On Gitea, the title starts with
+`WIP:`. Read the "Partial" note in the description, then answer in a comment.
+
 NOTE: If the agent cannot make a change, the agent writes "could not produce a change" or "I am blocked on this" in
 the issue. Open a new issue with more information.
 

@@ -59,8 +59,22 @@ func fakeGitHub(t *testing.T) (*httptest.Server, func() []ghCall) {
 			w.Write(ghFixture(t, "pull_created.json"))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14/comments":
 			w.Write(ghFixture(t, "review_comments.json"))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/issues/12": // an issue given to alice (#236)
+			w.Write([]byte(`{"number":12,"labels":[{"name":"agent:alice"}]}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/issues/13": // an issue given to bob
+			w.Write([]byte(`{"number":13,"labels":[{"name":"agent:bob"}],"assignees":[{"login":"alice"}]}`))
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/repos/octo-org/repo/issues/1") && len(r.URL.Path) == len("/repos/octo-org/repo/issues/14"):
+			w.Write([]byte(`{"number":1,"pull_request":{"url":"x"}}`)) // 14 to 18: PRs
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/issues/comments/501": // alice's comment
+			w.Write([]byte(`{"id":501,"user":{"login":"my-agentdev[bot]"},"body":"picked up\n\n---\n<sub>🤖 agent ` + "`alice`" + ` (agentdev)</sub>"}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/issues/comments/502": // bob's comment, same App bot
+			w.Write([]byte(`{"id":502,"user":{"login":"my-agentdev[bot]"},"body":"picked up\n\n---\n<sub>🤖 agent ` + "`bob`" + ` (agentdev)</sub>"}`))
+		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/issues/comments/503": // a person's comment
+			w.Write([]byte(`{"id":503,"user":{"login":"octo-dev"},"body":"LGTM"}`))
+		case r.Method == "POST" && r.URL.Path == "/graphql":
+			w.Write([]byte(`{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}`))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/14": // alice's PR (#227)
-			w.Write([]byte(`{"number":14,"head":{"ref":"agent/alice/issue-12","repo":{"full_name":"octo-org/repo"}}}`))
+			w.Write([]byte(`{"number":14,"node_id":"PR_kwDOtest14","head":{"ref":"agent/alice/issue-12","repo":{"full_name":"octo-org/repo"}}}`))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/15": // bob's PR
 			w.Write([]byte(`{"number":15,"head":{"ref":"agent/bob/issue-9","repo":{"full_name":"octo-org/repo"}}}`))
 		case r.Method == "GET" && r.URL.Path == "/repos/octo-org/repo/pulls/16": // a fork that named its branch like alice's
