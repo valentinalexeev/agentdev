@@ -1,39 +1,51 @@
 ---
 # Postgres + ContextForge in {{ platform_ns }} (#14, #51), then scripts/mcp-sync.sh for each project spec.
 # Every task that holds a secret value has no_log.
-- name: Platform secrets exist in Secret Manager (generated once)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    name="{{ platform_sm_prefix }}{{ item }}"
-    p={{ gcp_project }}
-    # an enabled version, not only the container: a create that failed at "versions add" is completed here
-    if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
-      gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
-        || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
-      openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
-      echo created
-    fi
-  args: {executable: /bin/bash}
-  loop: "{{ platform_secret_keys }}"
-  register: platform_sm_created
-  changed_when: "'created' in platform_sm_created.stdout"
-  no_log: true
+# platform_secret_source: secret_manager (GKE, deploy.yml) or files (kind, kind.yml: .secrets/platform, #106).
+- name: Platform images on kind (pull, load)
+  ansible.builtin.include_tasks: kind_images.yml
+  when: platform_kind_cluster | length > 0
 
-- name: Read platform secrets
-  ansible.builtin.command: >-
-    gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
-  loop: "{{ platform_secret_keys }}"
-  register: platform_sm
-  changed_when: false
-  # read-only; in --check on a first run the secrets do not exist yet
-  check_mode: false
-  failed_when: platform_sm.rc != 0 and not ansible_check_mode
-  no_log: true
+- name: Platform secrets from files (kind)
+  ansible.builtin.include_tasks: secrets_files.yml
+  when: platform_secret_source == 'files'
 
-- name: Keep platform secrets in a fact (not logged)
-  ansible.builtin.set_fact:
-    platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
-  no_log: true
+- name: Platform secrets from Secret Manager
+  when: platform_secret_source == 'secret_manager'
+  block:
+    - name: Platform secrets exist in Secret Manager (generated once)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ platform_sm_prefix }}{{ item }}"
+        p={{ gcp_project }}
+        # an enabled version, not only the container: a create that failed at "versions add" is completed here
+        if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
+          gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
+            || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
+          openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+          echo created
+        fi
+      args: {executable: /bin/bash}
+      loop: "{{ platform_secret_keys }}"
+      register: platform_sm_created
+      changed_when: "'created' in platform_sm_created.stdout"
+      no_log: true
+
+    - name: Read platform secrets
+      ansible.builtin.command: >-
+        gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
+      loop: "{{ platform_secret_keys }}"
+      register: platform_sm
+      changed_when: false
+      # read-only; in --check on a first run the secrets do not exist yet
+      check_mode: false
+      failed_when: platform_sm.rc != 0 and not ansible_check_mode
+      no_log: true
+
+    - name: Keep platform secrets in a fact (not logged)
+      ansible.builtin.set_fact:
+        platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
+      no_log: true
 
 # ContextForge (Secret, Deployment, Service, NetworkPolicy, all named contextforge) only when
 # platform_contextforge_enabled (default: mcp_projects is not empty, #172). Postgres always: the API uses it.
@@ -121,7 +133,9 @@
       - (obs_mcp.prometheus_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
       - (obs_mcp.loki_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
       - (obs_mcp.cloud_logging_project | default('')) is match('^([a-z][a-z0-9-]{4,28}[a-z0-9])?$')
-      - (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != '' or (obs_mcp.server_checks | default(true) | bool)
+      - >-
+        (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != ''
+        or (obs_mcp.server_checks | default(true) | bool)
       - (obs_mcp.max_output | default(16384) | string) is match('^[0-9]+$')
       - (obs_mcp.rate_per_min | default(30) | string) is match('^[0-9]+$')
       - (obs_mcp.rate_burst | default(10) | string) is match('^[0-9]+$')
@@ -135,7 +149,8 @@
   changed_when: false
   check_mode: false
   failed_when: platform_obs_token.rc != 0 and not ansible_check_mode
-  when: platform_obs_mcp_enabled | bool and (obs_mcp.token_secret | default('')) | length > 0
+  when: platform_obs_mcp_enabled | bool and platform_secret_source == 'secret_manager'
+    and (obs_mcp.token_secret | default('')) | length > 0
   no_log: true
 
 - name: Observability MCP token Secret (only in obs-mcp's namespace, never in the agents namespace)
@@ -196,6 +211,14 @@
           {{ ('http://agentdev-probe.' + platform_ns + '.svc.cluster.local:8090')
              if (obs_mcp.server_checks | default(true) | bool) else '' }}
       replace: []
+
+# a local operator tag (kind) keeps its name across builds: restart so the pod runs the image just loaded
+- name: Restart obs-mcp after a new local image (kind)
+  ansible.builtin.command: >-
+    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deployment/obs-mcp
+  changed_when: true
+  when: platform_obs_mcp_enabled | bool and not ansible_check_mode and platform_load is defined and
+    (platform_load.results | default([]) | selectattr('item', 'equalto', operator_image) | selectattr('changed') | list | length > 0)
 
 - name: Wait for obs-mcp
   ansible.builtin.command: >-

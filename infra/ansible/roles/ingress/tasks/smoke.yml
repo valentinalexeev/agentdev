@@ -1,0 +1,71 @@
+---
+# Post-deploy smoke test (#213), run from the operator machine (outside the cluster) at the end of deploy.yml, in both
+# ingress modes. It fails the run with a clear message when a public host does not answer, so a broken reverse proxy
+# or forwarder (for example a tailnet funnel whose auth key expired, #160) is seen at deploy time.
+#   - ingress.forwarder with a namespace and pod_selector: its pods are Ready
+#   - webhook host: POST /hook without a signature gives 401 from the router (so the router answers there), and
+#     GET /status gives 404 (the internal endpoints stay private, #214)
+#   - UI host (when the UI is routed) and auth host (with authentik): GET / answers below 500
+# Off with ingress.smoke: false. The list of checks is ingress_smoke_checks (defaults). Used by deploy.yml (role
+# ingress, last step) and tests/ingress_smoke.yml.
+- name: Wait for the forwarder pods to be Ready
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Pod
+    namespace: "{{ ingress_forwarder.namespace }}"
+    label_selectors: "{{ ingress_forwarder.pod_selector | dict2items | map('join', '=') | list }}"
+    wait: true
+    wait_condition: {type: Ready, status: "True"}
+    wait_timeout: "{{ ingress_smoke_timeout | int }}"
+  register: ingress_smoke_fwd
+  failed_when: false
+  when: ingress_smoke_forwarder_pods | bool
+
+- name: Check that the forwarder pods are Ready
+  ansible.builtin.assert:
+    that:
+      - ingress_smoke_fwd.resources | default([]) | length > 0
+      - not (ingress_smoke_fwd.failed | default(false))
+    fail_msg: >-
+      post-deploy smoke test (#213): no Ready pod of the forwarder {{ ingress_forwarder.pod_selector | to_json }} in
+      namespace {{ ingress_forwarder.namespace }} after {{ ingress_smoke_timeout }} s. Examine its log (for a tailnet
+      ingress: an expired auth key). docs/troubleshooting.md. To skip this test, set ingress.smoke: false.
+    quiet: true
+  when: ingress_smoke_forwarder_pods | bool
+
+- name: Ask the public hosts
+  ansible.builtin.uri:
+    url: "{{ item.url }}"
+    method: "{{ item.method }}"
+    body: "{{ '{}' if item.method == 'POST' else omit }}"
+    body_format: "{{ 'raw' if item.method == 'POST' else omit }}"
+    headers: "{{ {'Content-Type': 'application/json', 'X-GitHub-Event': 'ping'} if item.method == 'POST' else {} }}"
+    status_code: "{{ item.want }}"
+    follow_redirects: none
+    timeout: 10
+  loop: "{{ ingress_smoke_checks }}"
+  loop_control: {label: "{{ item.method }} {{ item.url }}"}
+  register: ingress_smoke_res
+  until: ingress_smoke_res.status | default(-1) | int in item.want
+  retries: "{{ [(ingress_smoke_timeout | int / ingress_smoke_delay | int) | int, 1] | max }}"
+  delay: "{{ ingress_smoke_delay | int }}"
+  failed_when: false
+
+- name: Check the answers of the public hosts
+  ansible.builtin.assert:
+    that: ingress_smoke_bad | length == 0
+    fail_msg: >-
+      post-deploy smoke test (#213): {{ ingress_smoke_bad | join('; ') }}. Examine the reverse proxy or forwarder
+      (pods Ready, auth key valid), DNS and the certificate (docs/troubleshooting.md). To skip this test, set
+      ingress.smoke: false.
+    quiet: true
+  vars:
+    ingress_smoke_bad: >-
+      {%- set bad = [] -%}
+      {%- for r in ingress_smoke_res.results -%}
+      {%-   if (r.status | default(-1) | int) not in r.item.want -%}
+      {%-     set _ = bad.append(r.item.method ~ ' ' ~ r.item.url ~ ' gave ' ~ (r.status | default(-1)) ~ ', expected '
+                               ~ (r.item.want | join(' or ')) ~ ((' (' ~ r.msg ~ ')') if (r.status | default(-1) | int) == -1 and r.msg is defined else '')) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ bad }}

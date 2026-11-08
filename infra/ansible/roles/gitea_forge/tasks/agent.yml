@@ -40,7 +40,7 @@
   register: gitea_forge_token_file
 
 # A token file left from an earlier forge (a recreated kind cluster) is rejected by the new one: re-mint it.
-- name: Token of {{ gitea_forge_agent }} still valid
+- name: Check that the agent token is still valid for {{ gitea_forge_agent }}
   ansible.builtin.uri:
     url: "{{ gitea_forge_api }}/user"
     headers: {Authorization: "token {{ lookup('ansible.builtin.file', gitea_forge_secrets_dir ~ '/' ~ gitea_forge_agent ~ '.token') }}"}

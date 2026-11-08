@@ -61,7 +61,9 @@
           - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
           - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
-          - not (item.ssh | default(false) | bool) or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
+          - >-
+            not (item.ssh | default(false) | bool)
+            or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
           - item.snapshot is not defined or ((item.ssh | default(false) | bool) and item.snapshot is sequence and item.snapshot is not string)
           - item.drift is not defined or (item.drift is mapping and (item.drift.changed_pattern | default('')) | length > 0)
           - item.probes is not defined or ((item.ssh | default(false) | bool) and item.probes is sequence and item.probes is not string)
@@ -796,3 +798,12 @@
         label_selectors: ["{{ item }}"]
       loop: ["app=webhook-router", "app=coding-agent"]
       when: not ansible_check_mode
+
+    # post-deploy smoke test (#213): the public hosts answer from outside and the forwarder is Ready. Last, after the
+    # router and the UI are up. Off with ingress.smoke: false.
+    - name: Post-deploy smoke test of the public hosts
+      ansible.builtin.include_role: {name: ingress, tasks_from: smoke.yml}
+      when:
+        - not ansible_check_mode
+        - (ingress | default({})).host | default('') | length > 0
+        - (ingress | default({})).smoke | default(true) | bool
