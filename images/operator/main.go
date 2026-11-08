@@ -149,7 +149,8 @@ func main() {
 	// scoped secrets store (#202): ProjectSecret -> ExternalSecret ps-<name>; off without SECRETS_STORE
 	if store := os.Getenv("SECRETS_STORE"); store != "" {
 		psr := &ProjectSecretReconciler{Client: mgr.GetClient(), NS: ns, Store: store,
-			Refresh: time.Duration(envInt("SECRETS_REFRESH_SECONDS", 60)) * time.Second}
+			Refresh:  time.Duration(envInt("SECRETS_REFRESH_SECONDS", 60)) * time.Second,
+			Property: os.Getenv("SECRETS_REMOTE_PROPERTY")}
 		if err := psr.SetupWithManager(mgr); err != nil {
 			log.Error(err, "projectsecret controller")
 			os.Exit(1)

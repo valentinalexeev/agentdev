@@ -48,6 +48,9 @@ type ProjectSecretReconciler struct {
 	NS      string        // agents namespace: ProjectSecrets, ExternalSecrets and ps-* Secrets live here
 	Store   string        // SecretStore name
 	Refresh time.Duration // ESO refresh interval; a rotated value arrives within it
+	// Property is the key inside the remote value: "value" for the Kubernetes provider (kind: the value Secret has one
+	// key, value), "" for GCP Secret Manager (the payload is the value itself)
+	Property string
 }
 
 // desiredExternalSecret is the ExternalSecret for one ProjectSecret. creationPolicy Owner: ESO owns ps-<name> and
@@ -72,10 +75,18 @@ func (r *ProjectSecretReconciler) desiredExternalSecret(ps *v1.ProjectSecret) *u
 		},
 		"data": []any{map[string]any{
 			"secretKey": ProjectSecretKey,
-			"remoteRef": map[string]any{"key": RemoteKeyPrefix + ps.Name},
+			"remoteRef": r.remoteRef(ps.Name),
 		}},
 	}
 	return u
+}
+
+func (r *ProjectSecretReconciler) remoteRef(name string) map[string]any {
+	ref := map[string]any{"key": RemoteKeyPrefix + name}
+	if r.Property != "" {
+		ref["property"] = r.Property
+	}
+	return ref
 }
 
 // esStatus reads phase and message from the ExternalSecret's Ready condition.

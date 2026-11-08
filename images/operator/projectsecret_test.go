@@ -56,6 +56,13 @@ func TestProjectSecretCreatesExternalSecret(t *testing.T) {
 		t.Fatalf("data %v", data)
 	}
 	rk, _, _ := unstructured.NestedString(data[0].(map[string]any), "remoteRef", "key")
+	if p, ok, _ := unstructured.NestedString(data[0].(map[string]any), "remoteRef", "property"); ok || p != "" {
+		t.Fatalf("property %q set without SECRETS_REMOTE_PROPERTY", p)
+	}
+	r.Property = "value" // kind: the Kubernetes provider reads one key of the value Secret
+	if ref := r.remoteRef("npm"); ref["property"] != "value" || ref["key"] != "agentdev-ps-npm" {
+		t.Fatalf("remoteRef %v", ref)
+	}
 	if rk != "agentdev-ps-npm" {
 		t.Fatalf("remote key %q: must be agentdev-ps-<name>, the key the API writes", rk)
 	}
