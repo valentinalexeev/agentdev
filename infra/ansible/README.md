@@ -117,6 +117,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
+| 12 | `operator` | `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -155,6 +156,15 @@ The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, 
 password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
 `no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
 changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
+```
+The role `operator` does the old step 12: the namespaces with `operator_cost_labels` (#184), the operator image (a
+local `agentdev-operator:*` tag is built and loaded into kind), the six `agentdev.dev` CRDs, `manifests/operator.yaml.tmpl`
+and the executor egress manifests, through `templates/render.j2`. The scoped secrets store is on only when the External
+Secrets Operator CRD exists (step 13). The operator restarts only after a new image or a manifest change. GKE keeps
+the operator tasks in `deploy.yml`.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

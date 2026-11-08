@@ -10,8 +10,9 @@
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
 #   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
+#   ansible-playbook kind.yml --tags operator          # was ./run.sh 12
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08, operator: 12.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -79,3 +80,15 @@
         platform_secret_source: files
         platform_kind_cluster: "{{ kind_cluster_name }}"
       tags: [mcp]
+
+    # Agent CRD and controller (#47); 06-agents.sh runs it when the operator is missing (#57). Needs nothing else.
+    - name: Operator, CRDs and executor egress (was 12-operator.sh)
+      ansible.builtin.include_role:
+        name: operator
+        apply: {tags: [operator]}
+      vars:
+        operator_context: kind-{{ kind_cluster_name }}
+        operator_kind_cluster: "{{ kind_cluster_name }}"
+        operator_platform_ns: "{{ platform_ns }}"
+        operator_agents_ns: "{{ agents_ns }}"
+      tags: [operator]

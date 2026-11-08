@@ -292,6 +292,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
   a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
+- Step 12 (#106): `12-operator.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags operator`
+  (new role `operator`, the same manifests through `templates/render.j2`). Same result (namespace labels, CRDs,
+  operator, executor egress; secrets store on only with External Secrets Operator). A first run over a cluster from the
+  old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
+  run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
