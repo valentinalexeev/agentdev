@@ -70,18 +70,26 @@ type priceTable struct {
 	usd     float64            // USD per million units; 0 = no estimate
 }
 
-// defaultPrices follow the Anthropic list price ratios (2026): cache write 5 min 1.25x, 1 h 2x, cache read 0.1x,
-// output 5x input; the reference model (multiplier 1) is Sonnet at 3 USD per million input tokens.
+// defaultPrices follow the Anthropic list price ratios (November 2026): cache write 5 min 1.25x, 1 h 2x, cache read
+// 0.1x, output 5x input. One unit is one input token at 3 USD per million (Sonnet 4.x); a model's multiplier is its
+// input price / 3 USD. The longest matching prefix wins, so the family prefixes cover new versions at the current
+// family price, and older versions with other prices are listed explicitly. A model outside every family uses the
+// highest multiplier (fail closed). Prices change: override them in ConfigMap claude-proxy-prices.
 func defaultPrices() priceTable {
 	return priceTable{
 		weights: [tokTypes]float64{1, 1.25, 2, 0.1, 5},
 		models: map[string]float64{
-			"claude-sonnet":    1,
-			"claude-haiku":     0.333333,
-			"claude-3-5-haiku": 0.266667,
-			"claude-opus":      5,        // Opus 4 and 4.1: 15 USD
-			"claude-opus-4-5":  1.666667, // Opus 4.5 and later: 5 USD
-			"claude-opus-4-6":  1.666667,
+			"claude-opus":        1.666667, // Opus 4.5 to 5: 5 USD
+			"claude-opus-5-5":    1.333333, // Opus 5.5: 4 USD
+			"claude-opus-4-2025": 5,        // Opus 4 (claude-opus-4-20250514): 15 USD
+			"claude-opus-4-0":    5,
+			"claude-opus-4-1":    5,        // Opus 4.1: 15 USD
+			"claude-sonnet":      1,        // Sonnet 4.x: 3 USD
+			"claude-sonnet-5":    0.666667, // Sonnet 5 and 5.5: 2 USD
+			"claude-haiku":       0.333333, // Haiku 4.5: 1 USD
+			"claude-haiku-5":     0.033333, // Haiku 5.5: 0.10 USD
+			"claude-3-5-haiku":   0.266667,
+			"claude-fable":       3.333333, // Fable 5.x: 10 USD
 		},
 	}
 }
