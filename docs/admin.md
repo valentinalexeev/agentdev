@@ -328,6 +328,55 @@ To keep an add-on, set the Terraform input in the deployment repository:
 NOTE: `gateway_enabled = false` with a `public_hosts` value is refused by Terraform. The managed certificate and the
 Gateway need the GKE load balancer.
 
+## Stop and start an instance (GKE)
+
+You can stop a GKE instance when nobody uses it for some days (#313). The cluster, the data and the configuration
+stay. Only the nodes of the system pool stop.
+
+What stays billed while the instance is stopped:
+- The GKE control plane (the cluster management fee).
+- The persistent disks of the PVCs (agent workspaces, Postgres).
+- Static IP addresses and the load balancer, if `public_hosts` is set.
+- The Terraform state bucket and Secret Manager.
+
+What stays: PVCs, Secrets, ConfigMaps and all Kubernetes objects. Only the replica counts change.
+
+CAUTION: While the instance is stopped, agents do not work and webhooks are lost. Polling finds the missed work
+after the start.
+
+### Stop the instance
+
+1. Make sure that `kubectl` uses the instance cluster:
+   `gcloud container clusters get-credentials agentdev --zone <zone> --project <project>`
+2. Run the stop script from an agentdev checkout:
+   `ZONE=<zone> PROJECT=<project> scripts/cluster-stop.sh`
+3. Make sure that the last line is `stopped: pool system has 0 nodes, no running pods.`
+4. Keep the file `agentdev-stopped-state.env`. It is a copy of the ConfigMap `kube-system/agentdev-stopped-state`.
+5. In the deployment repository, set `system_pool_min_nodes = 0` in `terraform/instance.tfvars`.
+   Merge this change before the next `terraform apply`. If you do not do this step, the next apply sets the
+   autoscaler minimum to 1 again, and one node starts.
+
+The script does these steps:
+1. It records the replicas of all Deployments and StatefulSets in `agentdev-platform`, `coding-agents` and
+   `agentdev-executors`, and the autoscaling of the system pool.
+2. It scales the operator to 0 first, then the webhook router, then all other workloads.
+3. It disables the autoscaling of the system pool and resizes the pool to 0. It tries again until the pool has
+   0 nodes (`RETRIES`, default 10).
+4. It makes sure that no pod runs. If a check fails, it exits 1.
+
+NOTE: The script refuses to stop a stopped instance. Start it first.
+
+### Start the instance
+
+1. In the deployment repository, remove `system_pool_min_nodes = 0` (or set 1). Merge the change.
+2. Run the start script:
+   `ZONE=<zone> PROJECT=<project> scripts/cluster-start.sh`
+3. The script resizes the system pool, restores its autoscaling, and restores the replicas. The operator starts
+   last. Then the script deletes the ConfigMap.
+4. Make sure that the pods run: `kubectl -n coding-agents get pods`
+
+NOTE: If the ConfigMap is not there, the start script reads `agentdev-stopped-state.env` (`STATE_FILE`).
+
 ## Agent dashboard (botboard)
 
 Botboard ([source](https://github.com/valentinalexeev/botboard), `ghcr.io/valentinalexeev/botboard`) shows the work

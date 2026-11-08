@@ -21,6 +21,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Stop and start a GKE instance (#313): `scripts/cluster-stop.sh` records the replicas and the system pool
+  autoscaling in the ConfigMap `kube-system/agentdev-stopped-state`, scales the operator and the router first, then
+  resizes the system pool to 0 with retries. `scripts/cluster-start.sh` restores exactly that state. New Terraform
+  variable `system_pool_min_nodes` (default 1, 0 allowed) keeps a stopped instance at 0 nodes. Procedure:
+  `docs/admin.md` "Stop and start an instance". Re-run: Terraform module only; no change with the default.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
