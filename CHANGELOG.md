@@ -22,6 +22,10 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
    `cloud_armor` and `output "ingress"`. Copy them if your `main.tf` came from an older template.
 
 ### Added
+- UI (#323): Ansible `api.ui_oidc_scopes` (default `openid profile email forge`) and `api.oidc_client_id` (default
+  `agentdev`). The UI gets them as `OIDC_SCOPES` and `OIDC_CLIENT_ID` through `/config.json`. `api.oidc_audience`
+  follows `api.oidc_client_id`. The defaults keep authentik as it is. For Pocket ID, use the scopes
+  `openid profile email groups forge`.
 - `scripts/upgrade-notes.sh <from> <to>` (#315) prints only the `### Upgrade` parts of `CHANGELOG.md` for the
   versions in (from, to], newest first. It reads `CHANGELOG.md` at tag `v<to>` (`CHANGELOG_REF` for another ref)
   of the agentdev repository: the script's own clone, or `--repo <path or URL>`. It works from a deployment repository.

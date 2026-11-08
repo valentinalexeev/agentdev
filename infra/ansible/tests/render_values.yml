@@ -71,3 +71,44 @@
             that:
               - ansible_failed_result.msg is search('no value for \$\{OIDC_ISSUER\}')
               - ansible_failed_result.msg is not search('render.j2 accepted')
+
+    # UI OIDC client and scopes (#323): defaults keep authentik as it is; an override reaches the UI and the API audience
+    - name: Render the UI with the role defaults
+      ansible.builtin.set_fact:
+        ui_default_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                             | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                             | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+      vars:
+        ui_render: &ui_render
+          src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+          values:
+            PLATFORM_NS: "{{ platform_ns }}"
+            UI_IMAGE: img
+            OIDC_ISSUER: "{{ api_oidc_issuer }}"
+            OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+            OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
+          replace: []
+
+    - name: The defaults are the authentik values
+      ansible.builtin.assert:
+        that:
+          - ui_default_env.OIDC_CLIENT_ID == 'agentdev'
+          - ui_default_env.OIDC_SCOPES == 'openid profile email forge'
+          - api_oidc_audience == 'agentdev'
+
+    - name: Render the UI with an override (Pocket ID shape)
+      ansible.builtin.set_fact:
+        ui_override_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                              | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                              | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+        override_audience: "{{ api_oidc_audience }}"
+      vars:
+        api: {oidc_issuer: "https://id.example.com", oidc_client_id: my-client, ui_oidc_scopes: "openid profile email groups forge"}
+        ui_render: *ui_render
+
+    - name: The override reaches the UI, and the API audience follows the client id
+      ansible.builtin.assert:
+        that:
+          - ui_override_env.OIDC_CLIENT_ID == 'my-client'
+          - ui_override_env.OIDC_SCOPES == 'openid profile email groups forge'
+          - override_audience == 'my-client'

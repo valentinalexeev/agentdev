@@ -57,6 +57,11 @@ authentik issuer of the role `authentik`, #114; or any OIDC provider with a publ
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,
   table in `docs/admin.md`); restarts the API when one changes;
 - applies `manifests/api.yaml.tmpl` and waits for the rollout.
+- UI login (#323): `api.oidc_client_id` (default `agentdev`) is the public client of the UI. `api.oidc_audience`
+defaults to the same value. `api.ui_oidc_scopes` is the scope list that the UI requests:
+- authentik: keep the default `openid profile email forge` (the `profile` scope gives `groups`).
+- A provider that gives `groups` only when the scope is requested (for example Pocket ID): `openid profile email groups forge`.
+The UI reads both values from `/config.json` at runtime, so a change needs no new image.
 Claim contract (#322): the API verifies the access token (issuer, signature, `exp`, audience `api.oidc_audience`).
 It reads `groups` (with `agentdev-admins` for admins) and `forge_login_<kind>` or `forge_login` (the forge user)
 from the access token. When the token has none of these claims, the API calls the discovery `userinfo_endpoint`
