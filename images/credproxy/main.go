@@ -147,7 +147,7 @@ func (s *server) observe(resp *http.Response) error {
 		units := p.units(model, t)
 		usd, hasUSD := p.usdOf(units)
 		s.tel.record(resp.Request.Context(), info.agent, info.job, p.modelLabel(model), t, units, usd, hasUSD, info.start, s.now(), resp.StatusCode)
-		u.Model, u.Units = model, units
+		u.Model, u.Units, u.Tokens, u.Multiplier = model, units, t.byName(), p.multiplier(model)
 		u.InputTokens, u.OutputTokens = t.input(), t[tokOut]
 		u.CacheRead, u.CacheWrite = t[tokCacheRead], t[tokCacheWrite5m]+t[tokCacheWrite1h]
 		s.budget.add(info.agent, units)
@@ -182,7 +182,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				bs[i].UsedUSD = &usd
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "budgets": bs, "jobs": s.jobs.snapshot(p)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p)})
 		return
 	}
 	agent := verifyKey(s.signing, callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))
