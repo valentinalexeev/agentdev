@@ -162,7 +162,7 @@ API. The proxy also counts the spend of each agent and stops an agent that used 
 ### Cost units
 
 The budget counts **cost units**, not raw tokens (#196, [ADR 0002](adr/0002-llm-telemetry-and-cost-control.md)).
-One unit is the price of one input token of the reference model (Sonnet). The proxy weights each token type and
+One unit is the price of one input token at 3 USD per million (Sonnet 4.x). The proxy weights each token type and
 the model of the response:
 
 | Token type | Weight |
@@ -173,8 +173,12 @@ the model of the response:
 | cache read | 0.1 |
 | output | 5 |
 
-Model multipliers: Sonnet 1, Haiku 4.5 0.33, Opus 4 and 4.1 5, Opus 4.5 and later 1.67. An unknown model counts
-with the highest multiplier. Claude Code reads most of its context from the cache, so a run uses far fewer units
+Model multipliers (input price / 3 USD, list prices of November 2026): Opus 5.5 1.33, Opus 4.5 to 5 1.67, Opus 4
+and 4.1 5, Sonnet 4.x 1, Sonnet 5 and 5.5 0.67, Haiku 4.5 0.33, Haiku 5.5 0.03, Fable 5.x 3.33. A family name (for
+example `claude-opus`) covers new versions at the current family price. A model outside every family counts with
+the highest multiplier. The token weights are the same for every model; some models price cache reads lower (Opus
+5.5: 0.05), so the units of those models are a little high. Change the multipliers in `claude-proxy-prices` when
+Anthropic changes its prices. Claude Code reads most of its context from the cache, so a run uses far fewer units
 than raw tokens (often less than 20 %).
 
 ### Set the budget of all agents
@@ -211,7 +215,8 @@ The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w
 security event.
 
 1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
-   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`.
+   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`. With 3, the USD
+   estimate follows the list prices, because one unit is priced at 3 USD per million.
 2. Deploy again. The proxy reads the ConfigMap again within one minute.
 
 NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
