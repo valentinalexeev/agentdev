@@ -58,6 +58,9 @@ spec:
         # project secrets (#202): namespace of the value Secrets (kind store); empty = the secrets endpoints are off.
         # The API may create, update and delete there, never read (manifests/secrets-api.yaml.tmpl)
         - {name: SECRETS_VALUES_NS, value: "${SECRETS_VALUES_NS}"}
+        # GKE: values in Secret Manager of this project, written with the write-only account agentdev-api-secrets
+        # (Workload Identity, infra/terraform/secrets.tf); empty = not GKE
+        - {name: SECRETS_GCP_PROJECT, value: "${SECRETS_GCP_PROJECT}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it

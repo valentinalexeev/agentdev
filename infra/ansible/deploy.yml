@@ -294,6 +294,11 @@
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
              agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
 
+    # scoped secrets store (#202): External Secrets Operator, policies, Secret Manager store; tasks/secrets_store.yml
+    - name: Scoped secrets store (External Secrets Operator, Secret Manager)
+      ansible.builtin.include_tasks: tasks/secrets_store.yml
+      when: secrets_store_enabled | bool
+
     - name: Platform namespace
       kubernetes.core.k8s:
         <<: *k8s
@@ -383,10 +388,12 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
-            # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
-            SECRETS_STORE: ""
+            # scoped secrets store (#202): ProjectSecrets apply and the broker serves them (tasks/secrets_store.yml)
+            SECRETS_STORE: "{{ 'agentdev-secrets' if secrets_store_enabled | bool else '' }}"
             SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
-            CREDENTIAL_BROKER_URL: ""   # #202 part 4 deploys the broker on GKE
+            CREDENTIAL_BROKER_URL: >-
+              {{ ('http://credential-broker.' + agents_ns + '.svc.cluster.local:8080')
+                 if (secrets_store_enabled | bool and claude_proxy | bool) else '' }}
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
@@ -639,6 +646,22 @@
           replace: []
       when: claude_proxy | bool
 
+    # credential broker (#202): the credproxy image with MODE=broker; verifies the agents' proxy keys
+    - name: Credential broker for project secrets
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_broker) | from_yaml_all | list }}"
+      vars:
+        vars_broker:
+          src: "{{ repo_root }}/manifests/credential-broker.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
+            IMAGE_PULL_POLICY: IfNotPresent
+            CREDENTIAL_BROKER_URL: "http://credential-broker.{{ agents_ns }}.svc.cluster.local:8080"
+          replace: []
+      when: secrets_store_enabled | bool and claude_proxy | bool
+
     # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
     # template allows HTTPS to any public address; Dataplane V2 enforces this one in addition when the type is served
     # (infra/terraform enable_fqdn_network_policy). Not served: the playbook says so and keeps the plain policy.
@@ -743,7 +766,8 @@
         kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
       loop: "{{ [{'ns': platform_ns, 'name': 'agentdev-operator'}, {'ns': agents_ns, 'name': 'webhook-router'},
                  {'ns': agents_ns, 'name': 'egress-proxy'}, {'ns': exec_ns, 'name': 'executor-egress-proxy'}]
-                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else []) }}"
+                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else [])
+                + ([{'ns': agents_ns, 'name': 'credential-broker'}] if (secrets_store_enabled | bool and claude_proxy | bool) else []) }}"
       loop_control: {label: "{{ item.name }}"}
       changed_when: false
       when: not ansible_check_mode

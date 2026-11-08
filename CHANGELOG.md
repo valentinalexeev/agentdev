@@ -54,6 +54,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agent`, the agent's repository into `spec.project`, and authorizes rotate and delete against the stored
   repository. Mode `env` values shorter than 8 bytes are refused (they would not be redacted). The reserved
   variable names are one expression shared by the API and the CRD (`TestReservedEnvMatchesCRD`).
+- Scoped secrets store, part 4 (#202): GKE parity. Terraform `secrets_store` (default `true`) adds two service
+  accounts limited by IAM condition to Secret Manager secrets `agentdev-ps-*`: the External Secrets Operator reader
+  and the API's write-only account (custom role without `versions.access`), with Workload Identity. The automation
+  account gets `roles/iam.roleAdmin` for the custom role. The playbook installs External Secrets Operator, the
+  policies, the Secret Manager store and the credential broker when `instance.yml` sets `secrets_store` (from
+  `terraform output secrets_store`). Upgrade: apply Terraform, copy the output, run the playbook. Create is a
+  separate custom role whose IAM condition also admits the project (Secret Manager checks create on the parent);
+  rotation destroys the previous version; no workload may run as `agentdev-secrets-reader` (admission policy).
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

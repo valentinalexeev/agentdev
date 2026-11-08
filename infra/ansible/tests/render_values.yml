@@ -40,6 +40,7 @@
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             SECRETS_VALUES_NS: ""
+            SECRETS_GCP_PROJECT: ""
           replace: []
 
     - name: The API container gets the values

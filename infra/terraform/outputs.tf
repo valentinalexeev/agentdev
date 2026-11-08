@@ -42,3 +42,11 @@ output "budget" {
   description = "Name of the billing budget; null when create_budget is false (#199)."
   value       = one(google_billing_budget.monthly[*].name)
 }
+
+output "secrets_store" {
+  description = "Google service accounts of the scoped secrets store (#202) for instance.yml `secrets_store`; null when secrets_store is false."
+  value = var.secrets_store ? {
+    reader_gsa = google_service_account.secrets_reader[0].email
+    api_gsa    = google_service_account.api_secrets[0].email
+  } : null
+}

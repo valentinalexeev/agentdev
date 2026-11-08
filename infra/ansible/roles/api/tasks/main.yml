@@ -41,12 +41,27 @@
         APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
-        SECRETS_VALUES_NS: ""   # #202: the GKE backend (Secret Manager) follows in part 4
+        SECRETS_VALUES_NS: ""   # #202: kind only; on GKE the values go to Secret Manager (SECRETS_GCP_PROJECT)
+        SECRETS_GCP_PROJECT: "{{ gcp_project if secrets_store_enabled | default(false) | bool else '' }}"
       replace: []
   register: api_applied
 
 # a changed Secret does not change the pod template, and the apply may have changed only a Service, RBAC or a
 # NetworkPolicy: restart on every Secret change so the API reads the new values
+# project secrets (#202): the API's Kubernetes service account acts as the write-only Google account (Workload
+# Identity); Terraform binds it (infra/terraform/secrets.tf)
+- name: Workload Identity of the API for project secrets
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: agentdev-api
+        namespace: "{{ platform_ns }}"
+        annotations: {iam.gke.io/gcp-service-account: "{{ secrets_store.api_gsa }}"}
+  when: secrets_store_enabled | default(false) | bool and (secrets_store.api_gsa | default('')) | length > 0
+
 - name: Restart the API after a Secret change
   ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
   when: (api_secrets_changed | default(false)) and not ansible_check_mode

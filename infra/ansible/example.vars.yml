@@ -12,6 +12,10 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #   oidc_audience: agentdev
 #   db_retention_days: 365
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
+# Optional project secrets (#202): values from `terraform output secrets_store`. Omit: the store stays off.
+# secrets_store:
+#   reader_gsa: agentdev-secrets-reader@my-project.iam.gserviceaccount.com
+#   api_gsa: agentdev-api-secrets@my-project.iam.gserviceaccount.com
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate

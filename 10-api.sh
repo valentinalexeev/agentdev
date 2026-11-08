@@ -113,7 +113,7 @@ disc="http://authentik-server.${PLATFORM_NS}.svc.cluster.local/application/o/age
 PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" API_IMAGE="${API_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
   OIDC_DISCOVERY_URL="${disc}" OIDC_AUDIENCE=agentdev APPROVALS="${APPROVALS:-false}" APPROVAL_DENY_ACCOUNTS="${APPROVAL_DENY_ACCOUNTS:-}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" GITHUB_URL="${GITHUB_URL:-https://github.com}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
-  SECRETS_VALUES_NS="$(k get namespace "${SECRETS_VALUES_NS}" >/dev/null 2>&1 && echo "${SECRETS_VALUES_NS}")" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
+  SECRETS_GCP_PROJECT="" SECRETS_VALUES_NS="$(k get namespace "${SECRETS_VALUES_NS}" >/dev/null 2>&1 && echo "${SECRETS_VALUES_NS}")" envsubst < "${SPIKE_DIR}/manifests/api.yaml.tmpl" | k apply -f - >/dev/null
 # restart: local images keep their tag, and the token Secret may have changed (env is read at start only). The
 # annotation records the Secret's hash (not its value), so a changed token is visible in the pod template too.
 fh=$( { k -n "${PLATFORM_NS}" get secret agentdev-api-forge -o jsonpath='{.data}' 2>/dev/null

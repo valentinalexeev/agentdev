@@ -11,6 +11,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
 | `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-standard`) |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
+| Project secrets (#202) | `secrets_store` (default `true`): service accounts `agentdev-secrets-reader` (External Secrets Operator, `secretAccessor`) and `agentdev-api-secrets` (API, custom role `agentdevProjectSecretWriter`: create, add version, delete, no read), both by IAM condition on secrets `agentdev-ps-*` only, with Workload Identity for `agents_namespace`/`agentdev-secrets-reader` and `platform_namespace`/`agentdev-api`. Output `secrets_store` goes into `instance.yml`. No cost (Secret Manager bills per active version, about $0.06 each a month) |
 | Secret Manager | empty containers only (`claude-shared`, `github-app-*`, `router-register-token`); values never pass through Terraform |
 | Static IP | only with `public_hosts`: public entry point, GKE Gateway of the Ansible role `ingress` (#120). Without `public_hosts`, `webhook_ip` is `null` and `ingress.static_ip_name` is empty (#169) |
 | Managed certificate, SSL policy | only with `public_hosts`: Google-managed certificate for those names, TLS 1.2+ `MODERN` (#120) |
@@ -110,3 +111,6 @@ Migration: if your deployment repository has the workaround resource
 - Or move the state to the module address:
   `terraform state rm google_billing_account_iam_member.ci_budgets`, then
   `terraform import 'module.agentdev.google_billing_account_iam_member.automation_budgets[0]' "<billing_account_id> roles/billing.costsManager serviceAccount:<automation_service_account>"`.
+
+Tests: `terraform init -backend=false && terraform test` checks the secret store IAM (plan only, mocked provider, no
+credentials; `tests/secrets.tftest.hcl`).

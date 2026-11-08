@@ -90,7 +90,11 @@ func main() {
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
 	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents}
-	if vns := os.Getenv("SECRETS_VALUES_NS"); vns != "" { // #202: kind backend (Kubernetes Secrets); GKE: part 4
+	switch vns, gp := os.Getenv("SECRETS_VALUES_NS"), os.Getenv("SECRETS_GCP_PROJECT"); { // project secrets (#202)
+	case gp != "": // GKE: Secret Manager through Workload Identity, write-only IAM (secrets_gcp.go)
+		wr.secrets = &secretsAPI{w: wr, ps: agents, values: newGCPValues(gp), agents: agents}
+		log.Printf("project secrets on, values in Secret Manager of %s", gp)
+	case vns != "": // kind: Kubernetes Secrets, write-only RBAC
 		wr.secrets = &secretsAPI{w: wr, ps: agents, values: &kubeValues{k: agents, ns: vns}, agents: agents}
 		log.Printf("project secrets on, values in namespace %s", vns)
 	}
