@@ -194,6 +194,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
+  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
