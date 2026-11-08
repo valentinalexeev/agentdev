@@ -33,3 +33,20 @@ ingress_cidr_re: '^(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(\.(25[0-5]|2[0-4][0-9]|1?[
 ingress_forwarder_watch_ns: "{{ ingress_forwarder.namespace | default('') if ingress_forwarder is mapping else '' }}"
 ingress_forwarder_watch: >-
   {{ ingress_forwarder_watch_ns | length > 0 and (ingress_forwarder.pod_selector | default({})) | length > 0 }}
+# post-deploy smoke test (#213, tasks/smoke.yml): at the end of deploy.yml, ask the public hosts from the operator
+# machine and wait for the forwarder pods. ingress.smoke: false turns it off; ingress.smoke_timeout (seconds) is the
+# wait per check (a new managed certificate can take longer on the first deploy: re-run, or turn the test off once).
+ingress_smoke: "{{ (ingress | default({})).smoke | default(true) }}"
+ingress_smoke_timeout: "{{ (ingress | default({})).smoke_timeout | default(300) }}"
+ingress_smoke_delay: 10   # seconds between two tries of one check
+ingress_smoke_forwarder_pods: >-
+  {{ ingress_forwarder_on | bool and (ingress_forwarder.namespace | default('')) | length > 0
+     and (ingress_forwarder.pod_selector | default({})) | length > 0 }}
+# any answer of the application, no proxy error (502, 503, 504) and no connection error
+ingress_smoke_scheme: "{{ (ingress | default({})).smoke_scheme | default('https') }}"   # http only in tests/ingress_smoke.yml
+ingress_smoke_page_codes: [200, 301, 302, 303, 307, 308, 401, 403]
+ingress_smoke_checks: >-
+  {{ [{'method': 'POST', 'url': ingress_smoke_scheme ~ '://' ~ ingress_webhook_host ~ '/hook', 'want': [401]},
+      {'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_webhook_host ~ '/status', 'want': [404]}]
+     + ([{'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_host ~ '/', 'want': ingress_smoke_page_codes}] if ingress_ui | bool else [])
+     + ([{'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_auth_host ~ '/', 'want': ingress_smoke_page_codes}] if ingress_auth | bool else []) }}
