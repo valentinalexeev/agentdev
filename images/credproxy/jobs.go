@@ -16,12 +16,15 @@ var jobRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 const (
 	jobHeader    = "X-Agentdev-Job"
 	jobRetention = 7 * 24 * time.Hour
-	jobsPerAgent = 200 // oldest jobs are dropped first
+	jobsPerAgent = 200 // then the cheapest job is folded into otherJob
+	// otherJob collects the jobs evicted past jobsPerAgent, so many fresh ids (a loop, or a model inventing ids) cannot
+	// push the real, expensive jobs out of the report (review of #275)
+	otherJob = "other"
 )
 
-// cleanJob returns the job id if it matches jobRe, else "" (dropped).
+// cleanJob returns the job id if it matches jobRe, else "" (dropped). otherJob is reserved for evicted jobs.
 func cleanJob(v string) string {
-	if jobRe.MatchString(v) {
+	if jobRe.MatchString(v) && v != otherJob {
 		return v
 	}
 	return ""
@@ -103,13 +106,31 @@ func (j *jobs) pruneLocked(agent string, now time.Time) {
 		}
 	}
 	for len(a) >= jobsPerAgent {
-		var oldest string
+		var cheapest string
 		for k, e := range a {
-			if oldest == "" || e.Last.Before(a[oldest].Last) {
-				oldest = k
+			if k == otherJob {
+				continue
+			}
+			if cheapest == "" || e.Units < a[cheapest].Units || (e.Units == a[cheapest].Units && e.Last.Before(a[cheapest].Last)) {
+				cheapest = k
 			}
 		}
-		delete(a, oldest)
+		if cheapest == "" {
+			return
+		}
+		e := a[cheapest]
+		delete(a, cheapest)
+		o := a[otherJob]
+		if o == nil {
+			o = &jobTotal{Agent: agent, Job: otherJob, First: e.First}
+			a[otherJob] = o
+		}
+		o.Units += e.Units
+		o.tokens.add(e.tokens)
+		o.Requests += e.Requests
+		if e.Last.After(o.Last) {
+			o.Last = e.Last
+		}
 	}
 }
 

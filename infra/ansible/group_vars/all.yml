@@ -38,6 +38,7 @@ claude_code_telemetry: {enabled: false, otlp_url: ""}
 # scraper namespace (Managed Service for Prometheus: gmp-system). otlp_url: https OTLP endpoint for metrics and spans.
 telemetry:
   scraper_ns: gmp-system
+  scraper_selector: {app.kubernetes.io/name: collector}   # the GMP collector pods; only they reach 9464
   otlp_url: ""
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
