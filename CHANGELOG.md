@@ -16,6 +16,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
+  scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
+  with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
+  admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
+  for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
+  `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
+  part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
+  repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
+  variable (`ESO_SA`) for the chart and the policy.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

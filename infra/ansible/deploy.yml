@@ -283,7 +283,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent, SecurityEvent, Approval, Executor and ExecutorRun CRDs (#47, #70, #67, #69)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -292,7 +292,7 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml]
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -383,6 +383,9 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
+            SECRETS_STORE: ""
+            SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
