@@ -64,7 +64,11 @@
 
     - name: PodMonitoring renders for both pods on port metrics (#196 D5)
       vars:
-        pm: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars={'src': repo_root + '/manifests/telemetry/podmonitoring.yaml.tmpl', 'values': {'AGENTS_NS': agents_ns, 'PLATFORM_NS': platform_ns}, 'replace': []}) | from_yaml_all | list }}"
+        pm_vars:
+          src: "{{ repo_root }}/manifests/telemetry/podmonitoring.yaml.tmpl"
+          values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}"}
+          replace: []
+        pm: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=pm_vars) | from_yaml_all | list }}"
       ansible.builtin.assert:
         that:
           - pm | map(attribute='kind') | unique | list == ['PodMonitoring']
