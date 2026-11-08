@@ -16,6 +16,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
+  images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
+  (`tools/claude-stub`) replaces the model, so no credential is needed. Checks: register, idle stop, wake, job, push,
+  PR, reply, proxy usage line. `CLAUDE_REAL=1` uses the real model (nightly or by hand only). `06-agents.sh` pulls
+  `WORKER_IMAGE` and `FORGE_IMAGE` when they are not local `agentdev/*` tags. Reviewer checklist item 7 in `CLAUDE.md`.
 - Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
   scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
   with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
