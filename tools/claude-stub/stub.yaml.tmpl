@@ -1,0 +1,36 @@
+# Fake Anthropic API for the compatibility e2e (#178, scripts/e2e-compat.sh). Test only.
+# claude-proxy gets UPSTREAM=http://claude-stub.${AGENTS_NS}.svc.cluster.local:8080 and ALLOW_HTTP_UPSTREAM=true.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: claude-stub, namespace: ${AGENTS_NS}, labels: {app: claude-stub}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: claude-stub}}
+  template:
+    metadata: {labels: {app: claude-stub}}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: stub
+        image: ${CLAUDE_STUB_IMAGE}
+        imagePullPolicy: Never
+        ports: [{name: http, containerPort: 8080}]
+        readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: claude-stub, namespace: ${AGENTS_NS}}
+spec:
+  selector: {app: claude-stub}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# the claude-proxy policy allows only public 443; policies add up, so this adds the in-cluster stub
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: claude-proxy-stub, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: claude-proxy}}
+  policyTypes: [Egress]
+  egress:
+  - to: [{podSelector: {matchLabels: {app: claude-stub}}}]
+    ports: [{port: 8080}]
