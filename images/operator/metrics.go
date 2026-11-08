@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,9 +27,16 @@ import (
 
 // newOperatorMetrics returns the /metrics handler and a shutdown function. paused lists the current pauses.
 func newOperatorMetrics(otlpURL string, paused func() map[string]Pause) (http.Handler, func(context.Context) error, error) {
-	res := resource.NewSchemaless(semconv.ServiceName("agentdev-operator"), attribute.String("service.namespace", "agentdev"))
+	inst, err := telemetryInstance(os.Getenv("TELEMETRY_INSTANCE"))
+	if err != nil {
+		return nil, nil, err
+	}
+	res := resource.NewSchemaless(semconv.ServiceName("agentdev-operator"), attribute.String("service.namespace", "agentdev"),
+		attribute.String(instanceAttr, inst))
 	reg := prometheus.NewRegistry()
-	promExp, err := otelprom.New(otelprom.WithRegisterer(reg), otelprom.WithoutScopeInfo())
+	// agentdev_instance on every series, so one external Prometheus and Grafana can tell instances apart (#278 review)
+	promExp, err := otelprom.New(otelprom.WithRegisterer(reg), otelprom.WithoutScopeInfo(),
+		otelprom.WithResourceAsConstantLabels(attribute.NewAllowKeysFilter(instanceAttr)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -95,4 +104,20 @@ func serveOperatorMetrics(ctx context.Context, addr string, h http.Handler, shut
 		return err
 	}
 	return nil
+}
+
+// instanceAttr names the agentdev instance (TELEMETRY_INSTANCE, default "agentdev"). Prometheus label:
+// agentdev_instance (the label "instance" belongs to the scrape target).
+const instanceAttr = "agentdev.instance"
+
+var instanceRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func telemetryInstance(v string) (string, error) {
+	if v == "" {
+		return "agentdev", nil
+	}
+	if !instanceRe.MatchString(v) {
+		return "", errors.New("TELEMETRY_INSTANCE must be a DNS label (a-z, 0-9, -; at most 63 characters)")
+	}
+	return v, nil
 }

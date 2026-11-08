@@ -32,12 +32,12 @@ func TestMetricsGenAI(t *testing.T) {
 	tel.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
-		`gen_ai_client_token_usage_count{agentdev_agent="alice",agentdev_cache="read",gen_ai_operation_name="chat",gen_ai_provider_name="anthropic",gen_ai_response_model="claude-sonnet-4-5",gen_ai_token_type="input"`,
+		`gen_ai_client_token_usage_count{agentdev_agent="alice",agentdev_cache="read",agentdev_instance="agentdev",gen_ai_operation_name="chat",gen_ai_provider_name="anthropic",gen_ai_response_model="claude-sonnet-4-5",gen_ai_token_type="input"`,
 		`gen_ai_client_operation_duration_seconds_count{`,
-		`agentdev_cost_units_total{agentdev_agent="alice",gen_ai_operation_name="chat",gen_ai_provider_name="anthropic",gen_ai_response_model="claude-sonnet-4-5"} 30`,
-		`agentdev_budget_used{agentdev_agent="alice"} 30`,
-		`agentdev_budget_limit{agentdev_agent="alice"} 1000`,
-		`agentdev_requests_refused_total{agentdev_agent="",agentdev_reason="bad_key"} 1`,
+		`agentdev_cost_units_total{agentdev_agent="alice",agentdev_instance="agentdev",gen_ai_operation_name="chat",gen_ai_provider_name="anthropic",gen_ai_response_model="claude-sonnet-4-5"} 30`,
+		`agentdev_budget_used{agentdev_agent="alice",agentdev_instance="agentdev"} 30`,
+		`agentdev_budget_limit{agentdev_agent="alice",agentdev_instance="agentdev"} 1000`,
+		`agentdev_requests_refused_total{agentdev_agent="",agentdev_instance="agentdev",agentdev_reason="bad_key"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %s in\n%s", want, body)
@@ -63,9 +63,30 @@ func TestMetricNamesWithUSD(t *testing.T) {
 	tel.window("claude-shared", "5h", &window{Utilization: 0.3})
 	rec := httptest.NewRecorder()
 	tel.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	for _, want := range []string{"agentdev_cost_usd_total{", `agentdev_ratelimit_utilization{agentdev_subscription="claude-shared",agentdev_window="5h"} 0.3`} {
+	for _, want := range []string{"agentdev_cost_usd_total{", `agentdev_ratelimit_utilization{agentdev_instance="agentdev",agentdev_subscription="claude-shared",agentdev_window="5h"} 0.3`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("missing %s in\n%s", want, rec.Body)
+		}
+	}
+}
+
+// TELEMETRY_INSTANCE names the instance on every series (#278 review: external Prometheus and Grafana).
+func TestTelemetryInstanceLabel(t *testing.T) {
+	t.Setenv("TELEMETRY_INSTANCE", "prod-eu")
+	tel, err := newTelemetry("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tel.units.Add(t.Context(), 1)
+	rec := httptest.NewRecorder()
+	tel.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `agentdev_cost_units_total{agentdev_instance="prod-eu"} 1`) {
+		t.Errorf("instance label missing:\n%s", rec.Body.String())
+	}
+	for _, bad := range []string{"Prod", "a b", "-x", strings.Repeat("a", 64), `x"}`} {
+		t.Setenv("TELEMETRY_INSTANCE", bad)
+		if _, err := newTelemetry("", nil); err == nil {
+			t.Errorf("instance %q accepted", bad)
 		}
 	}
 }

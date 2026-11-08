@@ -25,7 +25,7 @@ func TestOperatorPausedMetric(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := rec.Body.String()
-	if !strings.Contains(body, `agentdev_usage_paused{agentdev_agent="alice",agentdev_reason="five-hour"} 1`) {
+	if !strings.Contains(body, `agentdev_usage_paused{agentdev_agent="alice",agentdev_instance="agentdev",agentdev_reason="five-hour"} 1`) {
 		t.Errorf("paused gauge missing:\n%s", body)
 	}
 	if strings.Contains(body, `"bob"`) {
@@ -33,6 +33,10 @@ func TestOperatorPausedMetric(t *testing.T) {
 	}
 	if _, _, err := newOperatorMetrics("http://c:4318", u.pausedNow); err == nil {
 		t.Error("plain http OTLP accepted")
+	}
+	t.Setenv("TELEMETRY_INSTANCE", "Bad Name")
+	if _, _, err := newOperatorMetrics("", u.pausedNow); err == nil {
+		t.Error("bad TELEMETRY_INSTANCE accepted")
 	}
 }
 
@@ -42,7 +46,7 @@ func TestOperatorPausedMetric(t *testing.T) {
 func TestMetricsPortOnlyFromScraper(t *testing.T) {
 	vals := map[string]string{"AGENTS_NS": "coding-agents", "PLATFORM_NS": "agentdev-platform", "EXEC_NS": "agentdev-executors",
 		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}",
-		"TELEMETRY_OTLP_URL": "", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_SECRET_SOURCES": "[]"}
+		"TELEMETRY_OTLP_URL": "", "TELEMETRY_INSTANCE": "agentdev", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_SECRET_SOURCES": "[]"}
 	docs := append(renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals), renderTmpl(t, "../../manifests/operator.yaml.tmpl", vals)...)
 	seen := 0
 	for _, d := range docs {
