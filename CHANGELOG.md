@@ -33,6 +33,26 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
+  waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
+  from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
+  auth hosts answer without a proxy error. The run fails with the URL and the answer. New instance values
+  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). Not run with `--check`. Test:
+  `infra/ansible/tests/ingress_smoke.yml`. Docs: admin.md "Post-deploy smoke test", troubleshooting.md.
+- Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
+  images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
+  (`tools/claude-stub`) replaces the model, so no credential is needed. Checks: register, idle stop, wake, job, push,
+  PR, reply, proxy usage line. `CLAUDE_REAL=1` uses the real model (nightly or by hand only). `06-agents.sh` pulls
+  `WORKER_IMAGE` and `FORGE_IMAGE` when they are not local `agentdev/*` tags. Reviewer checklist item 7 in `CLAUDE.md`.
+- Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
+  scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
+  with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
+  admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
+  for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
+  `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
+  part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
+  repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
+  variable (`ESO_SA`) for the chart and the policy.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
@@ -131,6 +151,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
+  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
+  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
+  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
 - `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
   to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
   events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
@@ -211,6 +235,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
+  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
@@ -281,6 +307,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
+  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
+  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
+  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
+- Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
+  (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
+  Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
+  a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
