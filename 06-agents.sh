@@ -93,8 +93,8 @@ proxy_key() { printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -
 [[ "${CLAUDE_BUDGET_UNITS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_UNITS must be a number of cost units (0 = no limit)"
 # #196: CLAUDE_PRICES ("key=value ...") becomes the ConfigMap claude-proxy-prices; the proxy checks the values again
 CLAUDE_PRICES_DATA="{"
-read -r -a prices_kv <<< "${CLAUDE_PRICES}"   # no globbing of the entries
-for kv in "${prices_kv[@]}"; do
+read -r -a prices_kv <<< "${CLAUDE_PRICES} "   # no globbing of the entries
+for kv in ${prices_kv[@]+"${prices_kv[@]}"}; do   # empty array: bash 3.2 with set -u
   [[ "${kv}" =~ ^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\.[a-z0-9][a-z0-9.-]{0,62})=[0-9]+(\.[0-9]{1,6})?$ ]] \
     || die "CLAUDE_PRICES: bad entry '${kv}' (key=number, docs/admin.md)"
   CLAUDE_PRICES_DATA+="\"${kv%%=*}\": \"${kv#*=}\", "
