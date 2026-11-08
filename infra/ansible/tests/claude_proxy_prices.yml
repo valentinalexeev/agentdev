@@ -50,7 +50,10 @@
     - name: The deploy.yml assert accepts these values and refuses bad ones
       ansible.builtin.assert:
         that:
-          - claude_prices.keys() | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$') | list | length == 0
+          - >-
+            claude_prices.keys()
+            | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$')
+            | list | length == 0
           - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
           - bad.keys() | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$') | list | length == 1
           - bad.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 2
