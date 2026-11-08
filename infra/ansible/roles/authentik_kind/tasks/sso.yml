@@ -93,12 +93,13 @@
 - name: The SSO blueprint of the repo reached the worker
   ansible.builtin.shell: |
     set -euo pipefail
-    want=$(openssl dgst -sha256 -r {{ (repo_root ~ '/manifests/authentik-blueprint-sso.yaml') | quote }} | cut -d' ' -f1)
+    # compare without trailing newlines: the ConfigMap value may lose the final newline of the file
+    want=$(printf '%s' "$(cat {{ (repo_root ~ '/manifests/authentik-blueprint-sso.yaml') | quote }})" | openssl dgst -sha256 -r | cut -d' ' -f1)
     k="kubectl --context {{ kube_context }} -n {{ platform_ns }}"
     wp=$($k get pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=worker \
          --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
     for _ in $(seq 1 60); do
-      have=$($k exec "$wp" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null \
+      have=$(printf '%s' "$($k exec "$wp" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null)" \
              | openssl dgst -sha256 -r | cut -d' ' -f1)
       [ "$have" = "$want" ] && { echo "$wp"; exit 0; }
       sleep 3
