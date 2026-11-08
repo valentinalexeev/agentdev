@@ -14,6 +14,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -55,18 +57,31 @@ type brokerRoute struct {
 // allowedAgents: the agents that may use a ProjectSecret, sorted.
 func allowedAgents(ps *v1.ProjectSecret, agents []v1.Agent) []string {
 	out := []string{}
-	for _, a := range agents {
-		if (ps.Spec.Scope == "agent" && a.Name == ps.Spec.Agent) || (ps.Spec.Scope == "project" && a.Spec.Repo == ps.Spec.Project) {
-			out = append(out, a.Name)
+	for i := range agents {
+		if usableBy(ps, &agents[i]) {
+			out = append(out, agents[i].Name)
 		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// usableBy: the ProjectSecret applies to agent a.
+func orGitea(f string) string {
+	if f == "" {
+		return "gitea"
+	}
+	return f
+}
+
+// usableBy: the ProjectSecret applies to agent a. A repository is (forge, owner/name): acme/app on in-cluster Gitea,
+// where anyone may create the org, is not acme/app on GitHub. Scope agent also needs the agent to still work on the
+// repository recorded at creation, so an agent recreated under the same name for another repository does not
+// inherit the secret (review of #272).
 func usableBy(ps *v1.ProjectSecret, a *v1.Agent) bool {
-	return (ps.Spec.Scope == "agent" && ps.Spec.Agent == a.Name) || (ps.Spec.Scope == "project" && ps.Spec.Project == a.Spec.Repo)
+	if ps.Spec.Project == "" || ps.Spec.Project != a.Spec.Repo || orGitea(ps.Spec.Forge) != orGitea(a.Spec.Forge) {
+		return false
+	}
+	return ps.Spec.Scope == "project" || (ps.Spec.Scope == "agent" && ps.Spec.Agent == a.Name)
 }
 
 // brokerRoutes renders routes.json and the value sources for all broker secrets.
@@ -188,15 +203,17 @@ func (r *AgentReconciler) brokerEnv(n string) []corev1.EnvVar {
 
 // secretEnv: ProjectSecrets in mode env for this agent become variables of the agent container (explicit opt-in,
 // riskAccepted, ADR 0003 D2). Optional: a value not synced yet never blocks the pod. Sorted by variable name; when two
-// secrets name the same variable the first by name wins and the other is left out.
-func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.EnvVar {
+// secrets name the same variable the first by name wins and the other is left out. Names in taken (the variables
+// agentdev renders itself) are always left out, whatever the CRD rule lets through; shadowedSecrets reports them.
+func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret, taken map[string]bool) []corev1.EnvVar {
 	sorted := append([]v1.ProjectSecret(nil), secrets...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	seen := map[string]bool{}
 	var out []corev1.EnvVar
 	for i := range sorted {
 		ps := &sorted[i]
-		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !ps.Spec.Env.RiskAccepted || !usableBy(ps, a) || seen[ps.Spec.Env.Name] {
+		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !ps.Spec.Env.RiskAccepted || !usableBy(ps, a) || seen[ps.Spec.Env.Name] ||
+			taken[ps.Spec.Env.Name] || taken[strings.ToLower(ps.Spec.Env.Name)] {
 			continue
 		}
 		seen[ps.Spec.Env.Name] = true
@@ -205,6 +222,49 @@ func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.EnvVar {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func envNames(env []corev1.EnvVar) map[string]bool {
+	m := make(map[string]bool, len(env))
+	for _, e := range env {
+		m[e.Name] = true
+	}
+	return m
+}
+
+// shadowedSecrets: the mode-env secrets of agent a that name a variable agentdev sets itself on the rendered
+// container c, so secretEnv left them out.
+func shadowedSecrets(a *v1.Agent, secrets []v1.ProjectSecret, c *corev1.Container) []v1.ProjectSecret {
+	var out []v1.ProjectSecret
+	for _, ps := range secrets {
+		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !usableBy(&ps, a) {
+			continue
+		}
+		for _, e := range c.Env {
+			if strings.EqualFold(e.Name, ps.Spec.Env.Name) && (e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+				!strings.HasPrefix(e.ValueFrom.SecretKeyRef.Name, ProjectSecretPrefix)) {
+				out = append(out, ps)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// reportShadowed records one SecurityEvent per ProjectSecret that tried to override a platform variable (high: only
+// a repository admin can create one, and the CRD rule should have refused it).
+func (r *AgentReconciler) reportShadowed(ctx context.Context, a *v1.Agent, secrets []v1.ProjectSecret, c *corev1.Container) {
+	for _, ps := range shadowedSecrets(a, secrets, c) {
+		h := sha256.Sum256([]byte("secret-env-reserved\x00" + string(a.UID) + "\x00" + string(ps.UID) + "\x00" + ps.Spec.Env.Name))
+		spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "secret-env-reserved", Severity: "high",
+			Agent: a.Name, Action: "ProjectSecret " + ps.Name + " names " + ps.Spec.Env.Name + ", a variable agentdev sets: left out",
+			Time: metav1.Now(), Pod: "agent-" + a.Name + "-0", Container: "agent", Hash: hex.EncodeToString(h[:])}
+		ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: a.Namespace,
+			Labels: map[string]string{"agent": a.Name, "agentdev/severity": spec.Severity, "agentdev/source": spec.Source}}, Spec: spec}
+		if err := r.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
+			log.FromContext(ctx).Error(err, "security event not recorded", "rule", spec.Rule, "projectsecret", ps.Name)
+		}
+	}
 }
 
 // secretsFor lists the ProjectSecrets that apply to agent a; none when the store is off.
@@ -284,7 +344,7 @@ const redactDir = "/var/run/agentdev/redact"
 // redactSources: one optional projected source per mode-env ProjectSecret of the agent, same order as secretEnv.
 func redactSources(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.VolumeProjection {
 	var out []corev1.VolumeProjection
-	for _, e := range secretEnv(a, secrets) {
+	for _, e := range secretEnv(a, secrets, nil) { // every mode-env value, also a shadowed one: redacting more is safe
 		ref := e.ValueFrom.SecretKeyRef
 		out = append(out, corev1.VolumeProjection{Secret: &corev1.SecretProjection{LocalObjectReference: ref.LocalObjectReference,
 			Optional: ptr.To(true), Items: []corev1.KeyToPath{{Key: ProjectSecretKey, Path: ref.Name}}}})

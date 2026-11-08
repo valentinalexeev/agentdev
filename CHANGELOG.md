@@ -22,12 +22,18 @@ While the version is `0.x`, breaking changes bump MINOR.
   admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
   for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
   `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
-  part 4).
+  part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
+  repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
+  variable (`ESO_SA`) for the chart and the policy.
 - Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
   `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
   base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
   request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
-  agent container. The harness guide lists the agent's broker secrets.
+  agent container. The harness guide lists the agent's broker secrets. A mode `env` secret never overrides a
+  variable agentdev sets (the operator drops it and records `secret-env-reserved`), and the reserved names now cover
+  every rendered variable (`JOB_TIMEOUT`, `REPO`, `NO_PROXY`, ...) and loader and trust hooks. Scope matching uses
+  the forge. The broker redacts the value from binary bodies, refuses unrequested encodings and dials public
+  addresses only.
 - Scoped secrets store, part 3 (#202): write-only API (`GET/POST /api/secrets`, `PUT /api/secrets/<name>/value`,
   `DELETE /api/secrets/<name>`; repository admins or `agentdev-admins`, audit-logged without the value) and a
   **Secrets** page in the web UI. The forge sidecar removes mode `env` values from approval text. The API can create, update and delete value Secrets but never read them. Re-run:

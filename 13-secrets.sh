@@ -14,15 +14,15 @@ helm repo update external-secrets >/dev/null
 # cluster-wide stores, ClusterExternalSecrets or PushSecrets. ESO itself reads and writes Secrets cluster-wide by design.
 helm --kube-context "kind-${CLUSTER_NAME}" upgrade --install external-secrets external-secrets/external-secrets \
   --version "${ESO_CHART_VERSION}" --namespace "${ESO_NS}" --create-namespace --wait --timeout 5m \
-  --set installCRDs=true --set webhook.create=false --set certController.create=false \
+  --set installCRDs=true --set serviceAccount.name="${ESO_SA}" --set webhook.create=false --set certController.create=false \
   --set processClusterStore=false --set processClusterExternalSecret=false --set processPushSecret=false --set processClusterPushSecret=false \
   --set resources.requests.cpu=10m --set resources.requests.memory=64Mi --set resources.limits.memory=256Mi >/dev/null
 k wait --for=condition=Established crd/externalsecrets.external-secrets.io crd/secretstores.external-secrets.io --timeout=60s >/dev/null
 ok "ESO ready"
 
 log "Policies and store (values in ${SECRETS_VALUES_NS})"
-AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" ESO_NS="${ESO_NS}" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${ESO_NS}' < "${SPIKE_DIR}/manifests/secrets-policy.yaml.tmpl" | k apply -f - >/dev/null
+AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" ESO_NS="${ESO_NS}" ESO_SA="${ESO_SA}" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${ESO_NS} ${ESO_SA}' < "${SPIKE_DIR}/manifests/secrets-policy.yaml.tmpl" | k apply -f - >/dev/null
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 AGENTS_NS="${AGENTS_NS}" SECRETS_VALUES_NS="${SECRETS_VALUES_NS}" \
   envsubst '${AGENTS_NS} ${SECRETS_VALUES_NS}' < "${SPIKE_DIR}/manifests/secrets-store-kubernetes.yaml.tmpl" | k apply -f - >/dev/null

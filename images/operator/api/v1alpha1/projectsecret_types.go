@@ -35,9 +35,13 @@ type ProjectSecretBroker struct {
 // model. Explicit opt-in (owner decision on #202): riskAccepted must be true, the risk is recorded (docs/security.md),
 // and the value is redacted from approval text.
 type ProjectSecretEnv struct {
-	// Variable name. AGENTDEV_*, ANTHROPIC_*, CLAUDE_*, FORGE_*, GIT_*, HTTP(S)_PROXY and the like are refused.
+	// Variable name. Reserved names are refused (one regular expression, the same in the API, images/api/secrets.go,
+	// checked by TestReservedEnvMatchesCRD): every variable agentdev sets on the agent container (REPO, JOB_TIMEOUT,
+	// MAX_BUDGET_USD, NO_PROXY, ...), the prefixes AGENTDEV_, ANTHROPIC_, CLAUDE_, FORGE_, GIT_, OTEL_ and the like, and
+	// loader and trust hooks (LD_*, NODE_*, JAVA_*, PYTHONSTARTUP, SSL_CERT_FILE, PROMPT_COMMAND, ...). The operator
+	// also drops any name it already renders, whatever this list says (secretEnv).
 	// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
-	// +kubebuilder:validation:XValidation:rule="!self.matches('^(AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES)_') && !(self in ['PATH','HOME','HTTP_PROXY','HTTPS_PROXY','NO_PROXY','LD_PRELOAD','LD_LIBRARY_PATH','NODE_OPTIONS','BASH_ENV','ENV'])",message="reserved variable name"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^((AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES|OTEL|EGRESS|LD|DYLD|NPM_CONFIG|PIP|SSL|CURL|REQUESTS|JAVA|JDK|NODE|PYTHON|PERL|RUBY|BUNDLE|GEM)_[A-Z0-9_]*|PATH|HOME|SHELL|USER|TMPDIR|ENV|BASH_ENV|PROMPT_COMMAND|PS[0-4]|IFS|CDPATH|EDITOR|VISUAL|PAGER|GNUPGHOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|AGENT_NAME|REPO|REVIEWER|READY_ISSUE|POLL_SECONDS|IDLE_SECONDS|MAX_CONCURRENT|SCALE_TO_ZERO|ROUTER_URL|BOTBOARD_URL|APPROVALS|APPROVALS_URL|APPROVAL_TIMEOUT_MINUTES|WAKE_FILE|SELF_URL|MIRROR_DIR|USAGE_REPORTS|JOB_TIMEOUT|MAX_BUDGET_USD)$')",message="reserved variable name"
 	Name string `json:"name"`
 	// Must be true: the person who sets it accepts that the model can read the value.
 	// +kubebuilder:validation:XValidation:rule="self == true",message="mode env needs riskAccepted: true"
@@ -47,14 +51,22 @@ type ProjectSecretEnv struct {
 // ProjectSecretSpec is written by the API for project maintainers (or by admins). Scope, owner and mode never change:
 // delete and add again.
 // +kubebuilder:validation:XValidation:rule="self.scope != 'project' || (has(self.project) && !has(self.agent))",message="scope project needs spec.project and no spec.agent"
-// +kubebuilder:validation:XValidation:rule="self.scope != 'agent' || (has(self.agent) && !has(self.project))",message="scope agent needs spec.agent and no spec.project"
+// +kubebuilder:validation:XValidation:rule="self.scope != 'agent' || (has(self.agent) && has(self.project))",message="scope agent needs spec.agent and spec.project (the agent's repository)"
 // +kubebuilder:validation:XValidation:rule="self.mode != 'broker' || (has(self.broker) && !has(self.env))",message="mode broker needs spec.broker and no spec.env"
 // +kubebuilder:validation:XValidation:rule="self.mode != 'env' || (has(self.env) && !has(self.broker))",message="mode env needs spec.env and no spec.broker"
-// +kubebuilder:validation:XValidation:rule="self.scope == oldSelf.scope && self.mode == oldSelf.mode && (has(self.project) ? has(oldSelf.project) && self.project == oldSelf.project : !has(oldSelf.project)) && (has(self.agent) ? has(oldSelf.agent) && self.agent == oldSelf.agent : !has(oldSelf.agent))",message="scope, project, agent and mode are immutable"
+// +kubebuilder:validation:XValidation:rule="self.scope == oldSelf.scope && self.mode == oldSelf.mode && (has(self.project) ? has(oldSelf.project) && self.project == oldSelf.project : !has(oldSelf.project)) && (has(self.agent) ? has(oldSelf.agent) && self.agent == oldSelf.agent : !has(oldSelf.agent)) && (has(self.forge) ? has(oldSelf.forge) && self.forge == oldSelf.forge : !has(oldSelf.forge))",message="scope, project, agent, forge and mode are immutable"
 type ProjectSecretSpec struct {
 	// +kubebuilder:validation:Enum=project;agent
 	Scope string `json:"scope"`
-	// Repository whose agents may use it, owner/name (scope project).
+	// Forge of spec.project. A repository is identified by (forge, owner/name): acme/app on in-cluster Gitea, where
+	// anyone may create the org, is not acme/app on GitHub.
+	// +kubebuilder:validation:Enum=gitea;github
+	// +kubebuilder:default=gitea
+	// +optional
+	Forge string `json:"forge,omitempty"`
+	// Repository whose agents may use it, owner/name. Scope project: every agent of it. Scope agent: the agent's
+	// repository when the secret was created; the secret applies only while the agent still works on it, so an agent
+	// recreated under the same name for another repository does not inherit it.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`
 	// +kubebuilder:validation:MaxLength=201

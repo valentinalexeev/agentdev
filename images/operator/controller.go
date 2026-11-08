@@ -141,6 +141,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("statefulset "+string(op), "agent", a.Name)
 	}
 
+	for i := range sts.Spec.Template.Spec.Containers {
+		if c := &sts.Spec.Template.Spec.Containers[i]; c.Name == "agent" && len(psecs) > 0 {
+			r.reportShadowed(ctx, &a, psecs, c)
+		}
+	}
+
 	if err := r.updateStatus(ctx, &a, sts); err != nil {
 		return ctrl.Result{}, err
 	}
