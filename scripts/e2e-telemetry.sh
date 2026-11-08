@@ -7,16 +7,21 @@
 # Prints PASS/FAIL lines; exit code 1 if any FAIL.
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
+set +e   # report every check, do not stop at the first failure
 agent="${1:-$(k -n "${AGENTS_NS}" get agents -o jsonpath='{.items[0].metadata.name}')}"
-mon="${TELEMETRY_SCRAPER_NS}"
 fail=0
 pass() { printf 'PASS %s\n' "$*"; }
 bad()  { printf 'FAIL %s\n' "$*"; fail=1; }
-inpod() { k -n "${AGENTS_NS}" exec deploy/webhook-router -- node -e "$1"; }   # the router has node and reaches the proxy
+# GET /status through a port-forward: the proxy's NetworkPolicy admits only agents and the API on 8080
+k -n "${AGENTS_NS}" port-forward deploy/claude-proxy 18080:8080 >/dev/null 2>&1 & pf=$!
+k -n "${TELEMETRY_SCRAPER_NS}" port-forward svc/prometheus-server 19090:80 >/dev/null 2>&1 & pf2=$!
+k -n "${TELEMETRY_SCRAPER_NS}" port-forward svc/grafana 13001:80 >/dev/null 2>&1 & pf3=$!   # distroless: no shell inside
+trap 'kill "${pf}" "${pf2}" "${pf3}" 2>/dev/null' EXIT
+sleep 3
 
 # 1. GET /status: units, jobs, tokens by type
-st=$(inpod "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))")
-[[ $(jq -r .unit <<<"${st}") == units ]] && pass "status reports cost units" || bad "status unit: ${st:0:200}"
+st=$(curl -s -m 10 http://localhost:18080/status)
+if [[ $(jq -r .unit <<<"${st}") == units ]]; then pass "status reports cost units"; else bad "status unit: ${st:0:200}"; fi
 jobs=$(jq --arg a "${agent}" '[.jobs[] | select(.agent==$a)]' <<<"${st}")
 n=$(jq length <<<"${jobs}")
 (( n > 0 )) && pass "GET /status lists ${n} job(s) of ${agent} with units: $(jq -c '[.[] | {job, units, requests}]' <<<"${jobs}")" \
@@ -30,7 +35,7 @@ if (( raw > 0 )); then
 else bad "no tokens counted"; fi
 
 # 3. Prometheus has the metrics
-q() { k -n "${mon}" exec deploy/prometheus-server -c prometheus-server -- wget -qO- "http://localhost:9090/api/v1/query?query=$1"; }
+q() { curl -s -m 10 --data-urlencode "query=$1" http://localhost:19090/api/v1/query; }
 for m in agentdev_cost_units_total gen_ai_client_token_usage_count agentdev_budget_used agentdev_ratelimit_utilization; do
   c=$(q "${m}" | jq '.data.result | length')
   (( c > 0 )) && pass "Prometheus has ${m} (${c} series)" || bad "Prometheus has no ${m}"
@@ -42,12 +47,12 @@ up=$(q 'up{job="agentdev"}' | jq '[.data.result[] | select(.value[1]=="1")] | le
 
 # 4. Grafana has the dashboard
 pw=$(cat "${SPIKE_DIR}/.secrets/platform/grafana-admin")
-d=$(k -n "${mon}" exec deploy/grafana -c grafana -- sh -c "wget -qO- --header 'Authorization: Basic $(printf 'admin:%s' "${pw}" | base64)' http://localhost:3000/api/dashboards/uid/agentdev-llm-cost" 2>/dev/null | jq -r .dashboard.title)
+d=$(curl -s -m 10 -u "admin:${pw}" http://localhost:13001/api/dashboards/uid/agentdev-llm-cost | jq -r .dashboard.title)
 [[ "${d}" == "agentdev: Claude cost and usage" ]] && pass "Grafana dashboard loaded" || bad "Grafana dashboard: ${d}"
 
 # 5. agent pods cannot reach port 9464 (proxy and operator)
 pod=$(k -n "${AGENTS_NS}" get pod -l "agent=${agent}" -o jsonpath='{.items[0].metadata.name}')
-for target in "claude-proxy.${AGENTS_NS}" ; do
+for target in claude-proxy; do
   ip=$(k -n "${AGENTS_NS}" get pod -l app=claude-proxy -o jsonpath='{.items[0].status.podIP}')
   if k -n "${AGENTS_NS}" exec "${pod}" -c agent -- curl -sS -m 5 --noproxy '*' "http://${ip}:9464/metrics" >/dev/null 2>&1; then
     bad "agent pod reached ${target}:9464"; else pass "agent pod cannot reach ${target}:9464"; fi
