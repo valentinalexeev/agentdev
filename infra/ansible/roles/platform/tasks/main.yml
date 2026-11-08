@@ -113,6 +113,71 @@
   loop: "{{ platform_mcp_secrets.resources | default([]) | map(attribute='metadata.name') | list }}"
   when: not platform_contextforge_enabled | bool
 
+# Read-only observability MCP tools (#205): same manifest as 08-mcp.sh. Values are checked like the binary checks them,
+# so a bad value stops the run here, not in a crash-looping pod.
+- name: Observability MCP settings are valid
+  ansible.builtin.assert:
+    that:
+      - (obs_mcp.prometheus_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
+      - (obs_mcp.loki_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
+      - (obs_mcp.cloud_logging_project | default('')) is match('^([a-z][a-z0-9-]{4,28}[a-z0-9])?$')
+      - (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != ''
+      - (obs_mcp.max_output | default(16384) | string) is match('^[0-9]+$')
+      - (obs_mcp.rate_per_min | default(30) | string) is match('^[0-9]+$')
+      - (obs_mcp.rate_burst | default(10) | string) is match('^[0-9]+$')
+    fail_msg: "obs_mcp: URLs http(s)://host[:port][/path] without credentials, a GCP project id, at least one backend, numbers only"
+  when: platform_obs_mcp_enabled | bool
+
+- name: Observability MCP backend token from Secret Manager
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest --secret {{ obs_mcp.token_secret }} --project {{ gcp_project }}
+  register: platform_obs_token
+  changed_when: false
+  check_mode: false
+  failed_when: platform_obs_token.rc != 0 and not ansible_check_mode
+  when: platform_obs_mcp_enabled | bool and (obs_mcp.token_secret | default('')) | length > 0
+  no_log: true
+
+- name: Observability MCP token Secret (only in obs-mcp's namespace, never in the agents namespace)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: "{{ 'present' if platform_obs_token.stdout | default('') | length > 0 else 'absent' }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: obs-mcp-token, namespace: "{{ platform_ns }}"}
+      stringData: {token: "{{ platform_obs_token.stdout | default('') }}"}
+  when: platform_obs_mcp_enabled | bool
+  no_log: true
+
+- name: Observability MCP server (obs-mcp)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: "{{ 'present' if platform_obs_mcp_enabled | bool else 'absent' }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=obs_render) | from_yaml_all | list }}"
+  vars:
+    obs_render:
+      src: "{{ repo_root }}/manifests/obs-mcp.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        OPERATOR_IMAGE: "{{ operator_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        PROMETHEUS_URL: "{{ obs_mcp.prometheus_url | default('') }}"
+        LOKI_URL: "{{ obs_mcp.loki_url | default('') }}"
+        LOKI_TENANT: "{{ obs_mcp.loki_tenant | default('') }}"
+        CLOUD_LOGGING_PROJECT: "{{ obs_mcp.cloud_logging_project | default('') }}"
+        OBS_GSA: "{{ obs_mcp.cloud_logging_gsa | default('') }}"
+        OBS_MCP_MAX_OUTPUT: "{{ obs_mcp.max_output | default(16384) }}"
+        OBS_MCP_RATE_PER_MIN: "{{ obs_mcp.rate_per_min | default(30) }}"
+        OBS_MCP_RATE_BURST: "{{ obs_mcp.rate_burst | default(10) }}"
+      replace: []
+
+- name: Wait for obs-mcp
+  ansible.builtin.command: >-
+    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deployment/obs-mcp --timeout=300s
+  changed_when: false
+  when: platform_obs_mcp_enabled | bool and not ansible_check_mode
+
 - name: MCP sync for each project spec
   when: mcp_projects | length > 0 and platform_contextforge_enabled | bool and not ansible_check_mode
   block:
