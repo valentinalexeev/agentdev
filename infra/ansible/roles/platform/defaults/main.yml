@@ -21,3 +21,7 @@ platform_secret_keys:
   - cf-default-user
   - cf-basic-auth
 # mcp_projects (project specs for scripts/mcp-sync.sh) is in group_vars/all.yml
+
+# Read-only observability MCP tools (#205): settings are `obs_mcp` in group_vars/all.yml. The Deployment uses the
+# operator image (operator_image) and is applied before mcp-sync, so a project spec can register it.
+platform_obs_mcp_enabled: "{{ obs_mcp.enabled | default(false) | bool }}"
