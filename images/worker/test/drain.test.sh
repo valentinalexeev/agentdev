@@ -71,4 +71,19 @@ mkdir -p "${STATE}/jobs"; echo "${tmp}/elsewhere" > "${STATE}/jobs/issue-8.dir";
   save_work
 )
 check "a forged job dir outside /state/work is ignored" "[[ -z \$(git -C '${tmp}/elsewhere' log --oneline 2>/dev/null) ]]"
+
+# ---- idle stop (#35): after the router stopped the agent, SIGTERM exits 0 at once (no exec'd sleep that ignores it)
+mkdir -p "${tmp}/bin"; real_sleep=$(command -v sleep)
+printf '#!/bin/sh\necho $$ > %s\nexec %s "$@"\n' "${tmp}/idle.sleep" "${real_sleep}" > "${tmp}/bin/sleep"; chmod +x "${tmp}/bin/sleep"
+cat > "${tmp}/idle.sh" <<EOF
+source <(sed -n '/^idle_wait() {/,/^}/p' "${loop}")
+idle_wait
+EOF
+PATH="${tmp}/bin:${PATH}" bash "${tmp}/idle.sh" & idle_pid=$!
+sleep 1
+start=$(date +%s); kill -TERM "${idle_pid}"; wait "${idle_pid}"; rc=$?; took=$(( $(date +%s) - start ))
+check "idle stop: SIGTERM exits 0 in less than 5 s" "[[ ${rc} == 0 && ${took} -lt 5 ]]"
+sleep 0.5
+check "idle stop: no sleep is left" "! kill -0 \$(cat '${tmp}/idle.sleep') 2>/dev/null"
+check "idle stop: the loop does not exec sleep" "! grep -q 'exec sleep infinity' '${loop}'"
 exit ${fail}
