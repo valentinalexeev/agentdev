@@ -80,6 +80,19 @@ else
   if [ $r = 0 ]; then echo 200; else c=$(echo "$o" | grep -o "HTTP/1.[01] [0-9]*" | tail -1 | cut -d" " -f2); echo "${c:-000}"; fi
 fi'
 probe() { kexec "$1" sh -c "$PROBE" probe "$2" "${3:-}" "${4:-}" 2>/dev/null | tail -1; }
+# FORGE_TUNNEL (#211): opens a CONNECT tunnel to github.com from the forge sidecar with git, which sends
+# Proxy-Authorization preemptively (http.proxyAuthMethod=basic, as images/forge/git.go). $1 = wrong: replace the
+# proxy password with a wrong one. Prints open (the tunnel opened: GitHub answered, even 401 for a private repo),
+# refused (the proxy answered 403/407) or other: <first error line>. The credential is never printed.
+# shellcheck disable=SC2016  # expanded in the container
+FORGE_TUNNEL='p=${HTTPS_PROXY:-$https_proxy}
+[ -n "$p" ] || { echo "other: no HTTPS_PROXY"; exit 0; }
+if [ "$1" = wrong ]; then p=$(echo "$p" | sed -E "s#^(https?://[^:/@]+):[^@]*@#\\1:wrong-credential@#"); fi
+o=$(HTTPS_PROXY=$p https_proxy=$p GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+  timeout 20 git -c http.proxyAuthMethod=basic -c credential.helper= ls-remote https://github.com/git/git HEAD 2>&1); r=$?
+if [ $r = 0 ] || echo "$o" | grep -qiE "could not read Username|Authentication failed|returned error: 40[134]"; then echo open
+elif echo "$o" | grep -qiE "from proxy|CONNECT tunnel failed|proxy.*40[37]"; then echo refused
+else echo "other: $(echo "$o" | sed -E "s#//[^/@ ]*@#//***@#g" | head -1)"; fi'
 reached() { case "$1" in 2??|3??) return 0 ;; *) return 1 ;; esac; }   # the target answered with content
 
 echo "agentdev e2e security checklist: context $CTX, $(${KIND} && echo kind || echo GKE), $(date -u +%FT%TZ)"
@@ -178,8 +191,12 @@ if section egress; then
   if [ "$FORGE_KIND" = github ]; then
     code=$(probe agent https://api.github.com/)
     ! reached "$code"; check $? "agent: GitHub is refused for the agent container (forge-only host)" "HTTP $code"
-    code=$(probe forge https://api.github.com/)
-    reached "$code"; check $? "forge: GitHub works for the sidecar (proxy credential)" "HTTP $code"
+    # #211: squid has no auth_param, so it never sends a 407 and busybox wget never sends the proxy credential.
+    # Use the sidecar's own client (git with http.proxyAuthMethod=basic, #162), which sends it on the first CONNECT.
+    res=$(kexec forge sh -c "$FORGE_TUNNEL" tunnel 2>/dev/null | tail -1)
+    [ "$res" = open ]; check $? "forge: GitHub works for the sidecar (proxy credential)" "$res"
+    res=$(kexec forge sh -c "$FORGE_TUNNEL" tunnel wrong 2>/dev/null | tail -1)
+    [ "$res" = refused ]; check $? "forge: GitHub is refused with a wrong proxy credential" "$res"
   else skip "GitHub egress split (forge is ${FORGE_KIND:-unknown}, not github)"; fi
   if [ -n "$REPO" ]; then
     code=$(kexec agent sh -c 'curl -s -o /dev/null -m 10 -w "%{http_code}" "$FORGE_API/api/v1/repos/'"$REPO"'"' 2>/dev/null)
