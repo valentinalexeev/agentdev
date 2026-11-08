@@ -10,7 +10,7 @@ terraform {
 }
 
 module "agentdev" {
-  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v0.1.0"
+  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.0.0"
 
   project_id         = var.project_id
   region             = var.region
@@ -23,9 +23,9 @@ module "agentdev" {
   budget_alert_emails  = var.budget_alert_emails
   agent_pool_max_nodes = var.agent_pool_max_nodes
 
-  # public HTTPS entry point (agentdev #120): uncomment with a ref= that contains #120
-  # public_hosts = var.public_hosts
-  # cloud_armor  = var.cloud_armor
+  # public HTTPS entry point (agentdev #120)
+  public_hosts = var.public_hosts
+  cloud_armor  = var.cloud_armor
 
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
@@ -84,7 +84,7 @@ variable "agent_pool_max_nodes" {
 
 output "get_credentials" { value = module.agentdev.get_credentials }
 output "webhook_ip" { value = module.agentdev.webhook_ip }
-# output "ingress" { value = module.agentdev.ingress }   # agentdev #120: values for instance.yml `ingress`
+output "ingress" { value = module.agentdev.ingress } # agentdev #120: values for instance.yml `ingress`
 output "github_actions_auth" { value = module.agentdev.github_actions_auth }
 
 variable "public_hosts" {

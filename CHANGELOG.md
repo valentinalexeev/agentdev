@@ -6,11 +6,30 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.0.0] - YYYY-MM-DD
+
+### Upgrade
+Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
+1. **Claude secrets (#212).** Each `claude-shared` and `agent-<name>-claude` secret must have a line
+   `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. Otherwise the playbook stops. Check the format before you
+   merge (docs/admin.md, "Give an agent its own Claude credential").
+2. **Router port 8082 (#218).** The probes and the GKE load balancer health check now use port 8082. Deploy the
+   router image and the manifests of the same release in one run. An old router image with the new manifests fails
+   its probe.
+3. **Deployment template (#207).** Copy the new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the
+   deployment repository. The old copy tries GCP authentication on PRs and fails.
+4. **Public entry point (#120).** `examples/deployment/gcp-gke/terraform/main.tf` now sets `public_hosts`,
+   `cloud_armor` and `output "ingress"`. Copy them if your `main.tf` came from an older template.
+
 ### Added
 - UI (#323): Ansible `api.ui_oidc_scopes` (default `openid profile email forge`) and `api.oidc_client_id` (default
   `agentdev`). The UI gets them as `OIDC_SCOPES` and `OIDC_CLIENT_ID` through `/config.json`. `api.oidc_audience`
   follows `api.oidc_client_id`. The defaults keep authentik as it is. For Pocket ID, use the scopes
   `openid profile email groups forge`.
+- `scripts/upgrade-notes.sh <from> <to>` (#315) prints only the `### Upgrade` parts of `CHANGELOG.md` for the
+  versions in (from, to], newest first. It reads `CHANGELOG.md` at tag `v<to>` (`CHANGELOG_REF` for another ref)
+  of the agentdev repository: the script's own clone, or `--repo <path or URL>`. It works from a deployment repository.
+  Test: `scripts/test/upgrade-notes-test.sh`.
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
   the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
@@ -67,6 +86,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- API (#322): OIDC providers with minimal access tokens (for example Pocket ID) now work. When the access
+  token has no `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo_endpoint`.
+  The userinfo `sub` must be the token's `sub`. An error or a different subject refuses the token. Results are
+  cached per token until it expires. authentik tokens have the claims, so authentik does not change.
 - Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
   `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
   `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
@@ -150,6 +173,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Risk entries R116 (chat session pods not verified on GKE) and R117 (SSO domain restriction not verified on GKE),
+  status accepted: known gaps of 1.0.0 by owner decision on #125.
 - The router has a health-only port 8082 (`HEALTH_PORT`, #218). It serves only `GET /healthz`. The kubelet probes,
   the GKE HealthCheckPolicy and the Google Front End rule of the NetworkPolicy `webhook-router-from-forwarder` use it,
   so the Google ranges no longer reach the internal port 8081 (`/status`, `/register`, `/idle`). Upgrade: deploy the
@@ -633,5 +658,6 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0

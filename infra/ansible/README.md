@@ -57,11 +57,16 @@ authentik issuer of the role `authentik`, #114; or any OIDC provider with a publ
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,
   table in `docs/admin.md`); restarts the API when one changes;
 - applies `manifests/api.yaml.tmpl` and waits for the rollout.
-UI login (#323): `api.oidc_client_id` (default `agentdev`) is the public client of the UI. `api.oidc_audience`
+- UI login (#323): `api.oidc_client_id` (default `agentdev`) is the public client of the UI. `api.oidc_audience`
 defaults to the same value. `api.ui_oidc_scopes` is the scope list that the UI requests:
 - authentik: keep the default `openid profile email forge` (the `profile` scope gives `groups`).
 - A provider that gives `groups` only when the scope is requested (for example Pocket ID): `openid profile email groups forge`.
 The UI reads both values from `/config.json` at runtime, so a change needs no new image.
+Claim contract (#322): the API verifies the access token (issuer, signature, `exp`, audience `api.oidc_audience`).
+It reads `groups` (with `agentdev-admins` for admins) and `forge_login_<kind>` or `forge_login` (the forge user)
+from the access token. When the token has none of these claims, the API calls the discovery `userinfo_endpoint`
+with the token and uses the claims from there. The userinfo `sub` must be the token's `sub`. A userinfo error or a
+different `sub` refuses the request (401). authentik puts the claims into the access token, so it makes no userinfo call.
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
 (`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
