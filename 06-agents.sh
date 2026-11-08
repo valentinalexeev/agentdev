@@ -10,8 +10,12 @@ source "$(dirname "$0")/lib.sh"
 need envsubst; need jq
 
 log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE}, ${ROUTER_IMAGE} and ${CLAUDE_PROXY_IMAGE}"
-"${CONTAINER_ENGINE}" build -q -t "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker" >/dev/null
-"${CONTAINER_ENGINE}" build -q -t "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge" >/dev/null
+# local tags (agentdev/...) are built from this checkout; a published image (the compatibility e2e, #178, runs the
+# previous release's worker and forge) is pulled and loaded as it is
+build_or_pull() { if [[ "$1" == agentdev/* ]]; then "${CONTAINER_ENGINE}" build -q -t "$1" "$2" >/dev/null
+                  else "${CONTAINER_ENGINE}" pull -q "$1" >/dev/null; fi; }
+build_or_pull "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker"
+build_or_pull "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge"
 "${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
 "${CONTAINER_ENGINE}" build -q -t "${CLAUDE_PROXY_IMAGE}" "${SPIKE_DIR}/images/credproxy" >/dev/null
 kind load docker-image "${WORKER_IMAGE}" "${FORGE_IMAGE}" "${ROUTER_IMAGE}" "${CLAUDE_PROXY_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
