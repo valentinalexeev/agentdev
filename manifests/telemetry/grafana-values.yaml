@@ -3,6 +3,11 @@
 # The dashboard is grafana/agentdev-llm-cost.json, loaded from the ConfigMap grafana-dashboard-agentdev.
 admin: {existingSecret: grafana-admin, userKey: admin-user, passwordKey: admin-password}
 persistence: {enabled: false}
+# explicit, not the chart defaults (review of #278): reachable only by port-forward, and every user logs in
+service: {type: ClusterIP}
+grafana.ini:
+  auth.anonymous: {enabled: false}
+  users: {allow_sign_up: false}
 resources:
   requests: {cpu: 20m, memory: 192Mi}
   limits: {memory: 512Mi}   # Grafana 13 is OOM-killed at 256Mi during start (kind e2e)

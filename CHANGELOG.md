@@ -35,7 +35,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   Collector, Prometheus and Grafana (pinned charts) in `monitoring` on kind, with the dashboard
   `grafana/agentdev-llm-cost.json`. Off by default (`./run.sh` does not run step 14). On GKE,
   `telemetry.pod_monitoring: true` (with Terraform `enable_managed_prometheus = true`) creates `PodMonitoring`
-  objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents.
+  objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents. It sets
+  `agentdev.agent` from the sending pod, limits requests to 1 MiB, and Grafana is ClusterIP without anonymous access.
 - Run guards (#196, ADR 0002 D6/D7): `JOB_TIMEOUT` (default 3600 s, 0 = off) stops a Claude run that takes too long;
   `MAX_BUDGET_USD` adds `--max-budget-usd` per run; `CLAUDE_JOB_BUDGET_UNITS` makes `claude-proxy` refuse a job id
   after that many units (loop guard, event `job-budget-exhausted`, `stopped` on `GET /status`). The worker sends the

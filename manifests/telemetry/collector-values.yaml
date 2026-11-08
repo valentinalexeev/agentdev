@@ -5,7 +5,9 @@
 # the agentdev_* or gen_ai_* series that the proxy and the operator export (they are scraped, not pushed).
 mode: deployment
 image: {repository: otel/opentelemetry-collector-contrib}
-presets: {}
+# kubernetesAttributes: read-only watch of pods (chart ClusterRole), so the collector can name the sending pod
+presets:
+  kubernetesAttributes: {enabled: true}
 ports:
   otlp: {enabled: false}
   otlp-http: {enabled: true}
@@ -25,8 +27,21 @@ config:
     otlp:
       protocols:
         grpc: null
-        http: {endpoint: "0.0.0.0:4318"}
+        # an agent can reach this receiver: bound the request size (memory_limiter, the chart default at 80% of the
+        # 256Mi limit, refuses data under memory pressure)
+        http: {endpoint: "0.0.0.0:4318", max_request_body_size: 1048576}
   processors:
+    # agentdev.agent is a resource attribute the sender sets, so an agent could claim another agent's name (review of
+    # #278). Drop the claimed value, then set it from the pod that opened the connection (its label agent): a
+    # claude_code.* series is attributed to the pod that really sent it; a sender that is not an agent pod gets none.
+    resource/drop-claimed-agent:
+      attributes: [{key: agentdev.agent, action: delete}]
+    k8s_attributes:
+      passthrough: false
+      pod_association: [{sources: [{from: connection}]}]
+      extract:
+        metadata: [k8s.namespace.name, k8s.pod.name]
+        labels: [{tag_name: agentdev.agent, key: agent, from: pod}]
     filter/claude-code-only:
       error_mode: ignore
       metrics:
@@ -39,6 +54,6 @@ config:
   service:
     telemetry: {metrics: {level: none}}
     pipelines:
-      metrics: {receivers: [otlp], processors: [memory_limiter, filter/claude-code-only, batch], exporters: [otlphttp/prometheus]}
+      metrics: {receivers: [otlp], processors: [memory_limiter, filter/claude-code-only, resource/drop-claimed-agent, k8s_attributes, batch], exporters: [otlphttp/prometheus]}
       logs: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [debug]}
       traces: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [debug]}
