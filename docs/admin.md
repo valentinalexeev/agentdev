@@ -335,8 +335,8 @@ of the agents. It shows one card for each issue.
 
 ### Deploy botboard
 
-1. Run run.sh step 07: `./run.sh 07`
-   The script deploys botboard in the namespace `botboard`.
+1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml --tags botboard`
+   The playbook deploys botboard in the namespace `botboard`. The old command `./run.sh 07` does the same (deprecated, #106).
 2. Run run.sh step 06 again: `./run.sh 06`
    The script finds botboard and sets `BOTBOARD_URL` on each agent.
 
@@ -1936,6 +1936,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
+| botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |

@@ -259,6 +259,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
+  (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
+  Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
+  a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
