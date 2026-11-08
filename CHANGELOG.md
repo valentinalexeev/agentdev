@@ -32,6 +32,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   `DELETE /api/secrets/<name>`; repository admins or `agentdev-admins`, audit-logged without the value) and a
   **Secrets** page in the web UI. The forge sidecar removes mode `env` values from approval text. The API can create, update and delete value Secrets but never read them. Re-run:
   `./run.sh 13` (sets `SECRETS_VALUES_NS` on the API).
+- Scoped secrets store, part 4 (#202): GKE parity. Terraform `secrets_store` (default `true`) adds two service
+  accounts limited by IAM condition to Secret Manager secrets `agentdev-ps-*`: the External Secrets Operator reader
+  and the API's write-only account (custom role without `versions.access`), with Workload Identity. The automation
+  account gets `roles/iam.roleAdmin` for the custom role. The playbook installs External Secrets Operator, the
+  policies, the Secret Manager store and the credential broker when `instance.yml` sets `secrets_store` (from
+  `terraform output secrets_store`). Upgrade: apply Terraform, copy the output, run the playbook.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

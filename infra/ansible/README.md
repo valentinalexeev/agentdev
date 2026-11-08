@@ -64,6 +64,14 @@ With `forge_kind: github` the API checks GitHub permissions and decides approval
 (#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
 API mints only read-only installation tokens.
 
+## Project secrets (#202)
+When `instance.yml` sets `secrets_store` (`reader_gsa`, `api_gsa` from `terraform output secrets_store`),
+`tasks/secrets_store.yml` installs External Secrets Operator (`eso_chart_version`, controller only: no webhook, no
+cluster-wide kinds) in `eso_ns`, the admission policies (`manifests/secrets-policy.yaml.tmpl`) and the SecretStore
+`agentdev-secrets` on Secret Manager with Workload Identity (`manifests/secrets-store-gcp.yaml.tmpl`). The operator
+gets `SECRETS_STORE`, the credential broker is deployed next to `claude-proxy`, and the API's service account is bound
+to `api_gsa` (write-only) with `SECRETS_GCP_PROJECT` set. Values never pass through Ansible.
+
 ## authentik (#114)
 The `authentik` role runs after `platform` and before `authentik_sso` and `api` when `ingress.auth_host` is set (or
 `authentik.enabled: true`). Like `./run.sh 09` it makes the database `authentik`, the Secret `authentik` (same keys,

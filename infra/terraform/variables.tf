@@ -209,3 +209,21 @@ variable "agent_disk_type" {
     error_message = "agent_disk_type must be pd-standard, pd-balanced or pd-ssd."
   }
 }
+
+variable "secrets_store" {
+  description = "Scoped secrets store (#202): Google service accounts for External Secrets Operator (read) and the API (write-only), limited to Secret Manager secrets agentdev-ps-*."
+  type        = bool
+  default     = true
+}
+
+variable "agents_namespace" {
+  description = "Kubernetes namespace of the agents (Ansible agents_ns); used for Workload Identity bindings."
+  type        = string
+  default     = "coding-agents"
+}
+
+variable "platform_namespace" {
+  description = "Kubernetes namespace of the platform (Ansible platform_ns); used for Workload Identity bindings."
+  type        = string
+  default     = "agentdev-platform"
+}

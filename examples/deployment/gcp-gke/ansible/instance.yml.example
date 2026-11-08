@@ -23,6 +23,10 @@ mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.loca
 #   token_secret: ""              # Secret Manager name of a read-only bearer token; empty: none
 #   cloud_logging_project: ""     # add-on: GCP project for cloud_logging_query
 #   cloud_logging_gsa: ""         # Google service account with roles/logging.viewer only
+# project secrets (agentdev #202): values from `terraform output secrets_store`; omit to keep the store off
+# secrets_store:
+#   reader_gsa: agentdev-secrets-reader@my-project.iam.gserviceaccount.com
+#   api_gsa: agentdev-api-secrets@my-project.iam.gserviceaccount.com
 # GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
 github_app:
   name: my-agentdev                              # unique on GitHub

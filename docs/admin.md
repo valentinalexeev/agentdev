@@ -1716,8 +1716,7 @@ is in the secret store, never in the object.
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
 into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
 
-> **Status:** parts 1 to 3 of #202: the object, the store, the copy, the credential broker, and the write-only API
-> and web UI. The playbook tasks for GKE come in part 4. Until then, only kind has the store.
+The store is on kind (`./run.sh 13`) and on GKE (Terraform `secrets_store` and the playbook, see below).
 
 ### Set up the secret store (kind)
 
@@ -1736,6 +1735,32 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
    The column `READY` shows `True`.
 
 To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
+
+### Set up the secret store (GKE)
+
+1. Apply Terraform with `secrets_store = true` (the default). It makes two Google service accounts. Both can only
+   use Secret Manager secrets whose names start with `agentdev-ps-`. External Secrets Operator reads values with
+   `agentdev-secrets-reader`. The API writes values with `agentdev-api-secrets`, and it cannot read them.
+2. Copy the output into `instance.yml`:
+
+   ```bash
+   terraform output secrets_store
+   ```
+
+   ```yaml
+   secrets_store:
+     reader_gsa: agentdev-secrets-reader@my-project.iam.gserviceaccount.com
+     api_gsa: agentdev-api-secrets@my-project.iam.gserviceaccount.com
+   ```
+
+3. Run the playbook. It installs External Secrets Operator, the rules, the store and the credential broker.
+4. Make sure that the store is ready:
+
+   ```bash
+   kubectl -n coding-agents get secretstore agentdev-secrets
+   ```
+
+To turn the store off, remove `secrets_store` from `instance.yml`.
 
 ### Add a project secret in the web UI
 
