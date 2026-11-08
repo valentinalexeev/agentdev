@@ -5,6 +5,9 @@ troubleshooting (`troubleshooting.md`) and the private-deployment guide (`privat
 **ASD-STE100 Simplified Technical English** (STE). The design pages (`concepts.md`, `security.md`,
 `security-model.md`, `release.md`, `adr/`) are for engineers and use normal technical English.
 
+Text on GitHub tickets also uses STE: issue bodies, issue and PR comments, PR descriptions and review comments
+(`CLAUDE.md` §2). Code, commands, file names and quoted output stay as they are.
+
 STE makes the manuals easy to read for people whose first language is not English, and easy to translate. Each
 word has one meaning, and each procedure gives one action per step.
 
@@ -161,6 +164,11 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | subscription | one Claude login (a Claude credential Secret). Agents that use the same Secret use the same subscription |
 | usage window | a period in which Claude counts the use of a subscription: 5 hours or 7 days |
 | usage limit | a percent of a usage window. When the use is more, agents start no new runs |
+| credential broker | the service that adds the value of a project secret to the requests of an agent; the agent does not get the value (#202) |
+| External Secrets Operator | the program that copies a value from the secret store into a Kubernetes Secret |
+| project secret | a credential that the agents of one project, or one agent, can use (`ProjectSecret` object, #202) |
+| rotate | to replace the value of a credential with a new value |
+| secret store | the place that keeps the values of project secrets: GCP Secret Manager on GKE, a Kubernetes namespace on `kind` |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // driver is what differs between forges (#2). The sidecar's policy (loopback only, repo allow-list, push rules,
@@ -65,8 +66,11 @@ func (d *giteaDriver) gitCredential(context.Context) (string, string, error) {
 func (d *giteaDriver) remoteURL(repo string) string { return d.c.ForgeURL + "/" + repo + ".git" }
 
 // exactly the calls agent-loop.sh makes (issues, PRs, comments, reviews, review requests)
+// Path numbers are bounded to [1-9][0-9]{0,15} like the GitHub driver (#250).
 func (d *giteaDriver) rules() []rule {
-	r := mkRule
+	r := func(m, p string, chk func(*server, []byte) error) rule {
+		return mkRule(m, strings.ReplaceAll(p, "[0-9]+", "[1-9][0-9]{0,15}"), chk)
+	}
 	return append([]rule{
 		r("GET", `/user`, nil),
 		r("GET", repoRe, nil),

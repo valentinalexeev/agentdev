@@ -9,12 +9,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 export FORGE_USER=alice REPO=o/r FORGE_URL=http://forge STATE="${tmp}/state" MY_LOGIN=alice-bot FORGE_KIND=github REVIEWER=owner
 mkdir -p "${STATE}/seen" "${STATE}/jobs"
+WORK="${tmp}/nowork"   # issue_job looks for a pushed job branch there (#175); none in this test
 log() { echo "LOG $*" >> "${tmp}/log"; }
 loop="${here}/../agent-loop.sh"
 # shellcheck disable=SC1090
 source <(sed -n '/^# ---------- forge flavour (#2)/,/^# botboard (#26)/p' "${loop}" | sed '$d')
 # shellcheck disable=SC1090
-source <(sed -n '/^untrusted() /p' "${loop}")
+source <(sed -n '/^untrusted() /p; /^lgit() /p' "${loop}")
 # shellcheck disable=SC1090
 source <(sed -n '/^# ---------- 1. new issues -> PRs/,/^# ---------- security advisory threads/p' "${loop}" | sed '$d')
 fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }

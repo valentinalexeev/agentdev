@@ -36,6 +36,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - Statuses: not started = open without `in-progress`; in progress = `in-progress`; done = closed as completed
   **only** when the acceptance criterion is met, with a comment (what was done, checks, PR); partial = stays open
   with a list of what remains; rejected = closed as not planned with a reason.
+- **Tickets use ASD-STE100 Simplified Technical English.** Issue bodies, issue and PR comments, PR descriptions and
+  review comments on GitHub follow the rules and word list in [`docs/writing.md`](docs/writing.md): one topic per
+  sentence, max. 25 words per description sentence, numbered one-instruction steps for things the owner must do,
+  approved words plus the project's technical names. Code, commands, file names and quoted output stay as they are.
 - Commits and PRs reference the issue (`#NN`). `Closes #NN` only when the acceptance criterion is met, otherwise `Refs #NN`.
 - **Every question to the owner goes on an issue** (open one if none fits), in the form of §3 *Questions*, even when
   it is also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the
@@ -202,6 +206,9 @@ The independent reviewer checks these items on every PR, and lists the result pe
 5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
    shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
 6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+7. **Internal interfaces:** a change to an internal interface (worker and forge images against router, operator,
+   Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
+   (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
 
 ## Coordination and resource limits
 

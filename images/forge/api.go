@@ -301,6 +301,17 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("forge sidecar: %s %s is not an allowed call", r.Method, p), http.StatusForbidden)
 		return
 	}
+	// #250: query checks run first, before any body, path or serve-rule check, so no later check can depend on an
+	// unchecked query.
+	drv := s.driver()
+	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
+		if err := qc.checkQuery(r.URL.Query()); err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20+1))
 	if err != nil || len(body) > 1<<20 {
 		http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
@@ -348,7 +359,6 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	drv := s.driver()
 	if match.serve != nil {
 		code, out, err := match.serve(s, r.Context(), groups, body)
 		if err != nil {
@@ -361,14 +371,6 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(code)
 		_, _ = w.Write(out)
 		return
-	}
-	if qc, ok := drv.(interface{ checkQuery(url.Values) error }); ok {
-		if err := qc.checkQuery(r.URL.Query()); err != nil {
-			s.logf("refused %s %s: %v", r.Method, p, err)
-			s.policyEvent(r, err, r.Method+" "+p)
-			fail(w, err)
-			return
-		}
 	}
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
