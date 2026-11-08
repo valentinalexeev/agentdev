@@ -1,0 +1,53 @@
+name: Re-pin dependencies
+
+# Monthly check of the pins that Dependabot does not see (#repin): Helm charts, GitHub releases and gVisor in
+# config.env, and the digests of container images pinned as <image>:<tag>@sha256:<digest> (config.env, workflows).
+# Dependabot (.github/dependabot.yml) covers GitHub Actions, Dockerfile base images, Go modules and npm.
+# The job rewrites the pins with scripts/repin.sh --write and opens (or updates) one PR, branch chore/repin.
+# A new major version is only listed in the PR, never written. The PR runs the normal CI; a person merges it.
+on:
+  schedule:
+    - cron: "23 4 1 * *"   # 04:23 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: repin
+  cancel-in-progress: false
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: find and write newer pins
+        env:
+          REPIN_SUMMARY: ${{ runner.temp }}/repin.md
+          GH_TOKEN: ${{ github.token }}   # GitHub API rate limit for the release lookups
+        run: |
+          scripts/repin.sh --write
+          cat "$REPIN_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+      - name: open or update the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY: ${{ runner.temp }}/repin.md
+        run: |
+          if git diff --quiet; then echo "all pins are current"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git switch -C chore/repin
+          git commit -qam "chore(deps): monthly re-pin $(date -u +%Y-%m)"
+          git push -f origin chore/repin
+          body=$(printf '%s\n\n%s\n\n%s\n' \
+            "Monthly re-pin (workflow \`repin.yml\`, script \`scripts/repin.sh\`)." \
+            "$(cat "$SUMMARY")" \
+            "Rows \"major\" and \"newer tag\" are not written: bump them by hand. Check the CHANGELOG of each updated pin before you merge.")
+          if gh pr view chore/repin --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit chore/repin --body "$body"
+          else
+            gh pr create --base main --head chore/repin --title "chore(deps): monthly re-pin $(date -u +%Y-%m)" --body "$body"
+          fi
