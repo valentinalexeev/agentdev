@@ -2060,6 +2060,36 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
 
+### Show the plan on deployment pull requests
+
+Do this task once per deployment repository on GKE. Then each pull request gets a `terraform plan` comment (#291).
+The plan uses the read-only service account `agentdev-plan`. This account cannot change resources.
+
+1. Use an agentdev release that contains #291 (`ref=` and `image_tag`).
+2. Run `terraform plan`, then apply it. You (the owner) do the apply. The apply makes `agentdev-plan`, the
+   Workload Identity pool `github-pr` and the read grants.
+3. Run `terraform output github_actions_auth`.
+4. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
+   `plan_workload_identity_provider`.
+5. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
+6. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
+7. In the branch protection of `main`, require the `plan` check.
+8. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
+   repository can read the Terraform state (docs/security.md R115).
+9. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
+
+What the plan identity can do:
+
+- It can read all resources of the project (`roles/viewer`) and their IAM policies (`roles/iam.securityReviewer`).
+- It can read the Terraform state bucket (`roles/storage.objectViewer`). It cannot lock or write the state, so the
+  plan runs with `-lock=false`.
+- It can read the budget (`roles/billing.viewer`, only with `create_budget`).
+- It cannot read Secret Manager values. It cannot change resources or IAM.
+- Only `pull_request` runs of `github_repository` get it. A pull request from a fork gets no token.
+
+To check that the identity cannot apply, run `terraform apply` with it once. The apply must fail with `403`.
+To remove the identity, set `create_plan_identity = false`, then apply.
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.

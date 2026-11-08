@@ -1,8 +1,12 @@
 # Deployment repository CI (copied from agentdev examples/deployment/gcp-gke).
 # PRs: checks without cloud credentials (terraform fmt + validate, ansible --syntax-check at the pinned release).
-# main: terraform plan + apply, then the playbook. A PR does not get a plan (read-only plan identity: agentdev #291).
+# PRs with the read-only plan identity (agentdev #291): terraform plan with -lock=false, posted as a PR comment.
+#   Needs repository variables GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT; without them the plan job is skipped.
+#   The plan account can read resources and the state, it cannot change them. No ansible --check on PRs.
+# main: terraform plan + apply, then the playbook.
 # Auth: Workload Identity Federation (no keys); values from `terraform output github_actions_auth`,
-# stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT.
+# stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT (apply, main only) and
+# GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT (plan, PRs only).
 # Protect main (required review + this check), so nothing is applied without the owner's approval.
 name: deploy
 on:
@@ -32,6 +36,62 @@ jobs:
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml --syntax-check
+  plan:   # PRs: read-only identity; a fork PR gets no OIDC token, so this job runs only for same-repository PRs
+    if: >-
+      github.event_name == 'pull_request' && vars.GCP_PLAN_WIF_PROVIDER != '' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    concurrency: {group: "plan-${{ github.event.pull_request.number }}", cancel-in-progress: true}
+    permissions: {contents: read, id-token: write, pull-requests: write}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: terraform}}
+    env:
+      GOOGLE_BILLING_PROJECT: ${{ vars.GCP_PROJECT }}
+      USER_PROJECT_OVERRIDE: "true"
+      GOOGLE_CLOUD_QUOTA_PROJECT: ${{ vars.GCP_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_PLAN_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PLAN_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+        with: {terraform_wrapper: false}
+      - run: terraform init -input=false -backend-config="bucket=${{ vars.GCP_PROJECT }}-tfstate"
+      - name: terraform plan (read only, no state lock)
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -no-color -var-file=instance.tfvars -out=plan.bin > plan.txt 2>&1
+          rc=$?
+          cat plan.txt
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: post the plan as a PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RC: ${{ steps.plan.outputs.rc }}
+        run: |
+          marker='<!-- agentdev-plan -->'
+          { echo "$marker"
+            echo "### terraform plan (read-only identity, exit $RC)"
+            echo; echo '```'
+            grep -E '^(Plan:|No changes|Error|  # )' plan.txt | head -200 || true
+            echo '```'
+            echo; echo "<details><summary>full plan (last 60000 characters)</summary>"; echo; echo '```'
+            tail -c 60000 plan.txt
+            echo '```'; echo "</details>"; } > comment.md
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            -q ".[] | select(.body | startswith(\"$marker\")) | .id" | tail -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi
+      - if: steps.plan.outputs.rc != '0'
+        run: |
+          echo "terraform plan failed (exit ${{ steps.plan.outputs.rc }})"
+          exit 1
   infra:
     if: github.event_name == 'push'
     permissions: {contents: read, id-token: write}

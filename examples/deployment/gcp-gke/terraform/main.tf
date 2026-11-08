@@ -61,7 +61,7 @@ variable "region" { type = string }
 variable "zone" { type = string }
 variable "billing_account_id" { type = string }
 variable "github_repository" {
-  description = "This deployment repository (owner/name); its main-branch workflows get Workload Identity access."
+  description = "This deployment repository (owner/name); its main-branch workflows get the apply identity, its pull_request runs the read-only plan identity (agentdev #291)."
   type        = string
 }
 variable "budget_amount_usd" {
