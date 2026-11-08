@@ -282,16 +282,30 @@ If you use another scraper, set both: the namespace and the labels of its pods.
 
 ### Dashboards: Prometheus and Grafana
 
-On `kind` an optional step installs an OpenTelemetry Collector, Prometheus and Grafana in namespace `monitoring`
-(#196, ADR 0002 D5). It is off by default.
+agentdev collects the metrics. You show them in a Grafana of your choice. The dashboard
+`grafana/agentdev-llm-cost.json` shows units and USD per agent and model, the cache-read share, budget used and
+limit, the 5 h and 7 d utilization, pauses and refused requests.
 
-1. Run `TELEMETRY_STACK=true ./run.sh 14`.
-2. Run `kubectl -n monitoring port-forward svc/grafana 3001:80` and open `http://localhost:3001`. The user is
-   `admin`, the password is in `.secrets/platform/grafana-admin`.
-3. Open the dashboard **agentdev: Claude cost and usage** (folder agentdev). It shows units and USD per agent and
-   model, the cache-read share, budget used and limit, the 5 h and 7 d utilization, pauses and refused requests.
+To use an external Grafana (recommended):
 
-To remove the stack, run `./run.sh 14` again without `TELEMETRY_STACK=true`.
+1. Make sure that your Prometheus scrapes port 9464 of `claude-proxy` and the operator (see Metrics above).
+2. In Grafana, open **Dashboards**, **New**, **Import**. Upload `grafana/agentdev-llm-cost.json`.
+3. Select the data source **Prometheus** variable: the Prometheus with the agentdev metrics.
+4. Select the **Instance** variable. Its values come from the label `agentdev_instance` (`TELEMETRY_INSTANCE` /
+   `telemetry.instance`). One Grafana can show many agentdev instances.
+
+On `kind` an optional step installs an OpenTelemetry Collector and Prometheus in namespace `monitoring` (#196,
+ADR 0002 D5). It is off by default. Grafana in this stack is also off by default.
+
+1. Run `TELEMETRY_STACK=true ./run.sh 14`. Prometheus is then at
+   `kubectl -n monitoring port-forward svc/prometheus-server 9090:80`.
+2. Optional: to add a Grafana with the dashboard, run `TELEMETRY_STACK=true TELEMETRY_GRAFANA=true ./run.sh 14`.
+3. Run `kubectl -n monitoring port-forward svc/grafana 3001:80` and open `http://localhost:3001`. The user is
+   `admin`, the password is in `.secrets/platform/grafana-admin`. Open **agentdev: Claude cost and usage** (folder
+   agentdev).
+
+To remove the stack, run `./run.sh 14` again without `TELEMETRY_STACK=true`. To remove only Grafana, run it with
+`TELEMETRY_STACK=true` and without `TELEMETRY_GRAFANA=true`.
 
 The stack is hardened against the agents, which can reach the collector when `CLAUDE_CODE_TELEMETRY=true`. Grafana
 is a ClusterIP Service without anonymous access. The collector accepts at most 1 MiB per request and refuses data under
@@ -308,11 +322,19 @@ On GKE, Managed Service for Prometheus collects the metrics:
    so the NetworkPolicies (namespace `gmp-system`, label `app.kubernetes.io/name: collector`) admit them. In Cloud
    Monitoring, Metrics Explorer, run the PromQL query `up{job=~"claude-proxy|agentdev-operator"}`. Both series must
    be `1`. If a series is `0`, check `telemetry.scraper_ns` and `telemetry.scraper_selector`.
-4. Import `grafana/agentdev-llm-cost.json` into your Grafana (data source: Managed Service for Prometheus), or use
-   Cloud Monitoring with PromQL.
+4. Import `grafana/agentdev-llm-cost.json` into your external Grafana (data source: Managed Service for
+   Prometheus), or use Cloud Monitoring with PromQL. agentdev does not install Grafana on GKE.
 
 The billing truth stays in the Anthropic Console (Usage and Cost pages). For instances that bill by API key, a
 workspace spend limit in the Console is a second fuse behind the proxy (ADR 0002, U4).
+
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
 
 The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
 with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set

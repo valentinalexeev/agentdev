@@ -40,8 +40,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   existing agent). New `GET /api/costs`: only jobs of agents whose repository the caller can read (admins: all),
   marked as agent-reported; the proxy status is cached for 15 s. Re-run: `./run.sh 10` and `11`, or the playbook (api role); new API and UI images.
 - Optional telemetry backends (#196, ADR 0002 D5): `TELEMETRY_STACK=true ./run.sh 14` installs an OpenTelemetry
-  Collector, Prometheus and Grafana (pinned charts) in `monitoring` on kind, with the dashboard
-  `grafana/agentdev-llm-cost.json`. Off by default (`./run.sh` does not run step 14). On GKE,
+  Collector and Prometheus (pinned charts) in `monitoring` on kind. Off by default (`./run.sh` does not run step 14).
+  Grafana is optional and off by default (`TELEMETRY_GRAFANA=true` adds it). The dashboard
+  `grafana/agentdev-llm-cost.json` imports into any external Grafana: the data source and the agentdev instance
+  (label `agentdev_instance`) are variables. On GKE,
   `telemetry.pod_monitoring: true` (with Terraform `enable_managed_prometheus = true`) creates `PodMonitoring`
   objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents. It sets
   `agentdev.agent` from the sending pod, limits requests to 1 MiB, and Grafana is ClusterIP without anonymous access.
@@ -58,7 +60,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agentdev.requests.refused`, `agentdev.usage.paused`. NetworkPolicy: only the scraper namespace
   (`TELEMETRY_SCRAPER_NS`, Ansible `telemetry.scraper_ns`), and in it only the scraper pods (`TELEMETRY_SCRAPER_SELECTOR`,
   `telemetry.scraper_selector`), reach the port. Unknown models are labelled `unknown`. Optional OTLP export of metrics and
-  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Re-run: `./run.sh 06` and `12`, or the playbook.
+  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Every series has the label `agentdev_instance`
+  (`TELEMETRY_INSTANCE` / `telemetry.instance`, default `agentdev`), so one external Prometheus and Grafana can show
+  many instances. Re-run: `./run.sh 06` and `12`, or the playbook.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
