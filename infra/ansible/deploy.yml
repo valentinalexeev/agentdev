@@ -391,7 +391,9 @@
             # scoped secrets store (#202): ProjectSecrets apply and the broker serves them (tasks/secrets_store.yml)
             SECRETS_STORE: "{{ 'agentdev-secrets' if secrets_store_enabled | bool else '' }}"
             SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
-            CREDENTIAL_BROKER_URL: "{{ ('http://credential-broker.' + agents_ns + '.svc.cluster.local:8080') if (secrets_store_enabled | bool and claude_proxy | bool) else '' }}"
+            CREDENTIAL_BROKER_URL: >-
+              {{ ('http://credential-broker.' + agents_ns + '.svc.cluster.local:8080')
+                 if (secrets_store_enabled | bool and claude_proxy | bool) else '' }}
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
