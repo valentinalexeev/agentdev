@@ -376,6 +376,8 @@
             APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
             APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
             APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
+            AGENT_GRACE_SECONDS: "{{ rollout.grace_seconds | default(300) }}"
+            DRAIN_MAX_MINUTES: "{{ rollout.drain_max_minutes | default(60) }}"
             EXEC_NS: "{{ exec_ns }}"
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
             EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"

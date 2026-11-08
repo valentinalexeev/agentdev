@@ -16,6 +16,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
+  operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
+  when no job runs, and the operator then replaces the pod (at once when the pod does not run; after
+  `DRAIN_MAX_MINUTES`, default 60, in any case). On SIGTERM the loop saves the work in progress of running jobs as a
+  local commit and the job continues on the next pod (#175); `terminationGracePeriodSeconds` is `AGENT_GRACE_SECONDS`
+  (default 300). Agent condition `Updated` shows the state. New settings: `config.env` `AGENT_GRACE_SECONDS`,
+  `DRAIN_MAX_MINUTES`; Ansible `rollout.grace_seconds`, `rollout.drain_max_minutes`. The operator Role gets `patch` and
+  `delete` on pods. Re-run: `./run.sh 06 12` (kind) or the playbook (GKE). The upgrade to this release itself still
+  replaces agent pods at once (the old StatefulSets use `RollingUpdate`); later upgrades drain.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
