@@ -124,19 +124,25 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: health, containerPort: 8081}]
+        ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 64Mi}
           limits: {memory: 256Mi}
 ---
-# no inbound traffic (it only calls the Kubernetes API)
+# no inbound traffic except the metrics scraper (it only calls the Kubernetes API)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
 spec:
   podSelector: {matchLabels: {app: agentdev-operator}}
   policyTypes: [Ingress]
-  ingress: []
+  ingress:
+  # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper's namespace (kind: monitoring, GKE Managed
+  # Prometheus: gmp-system); agent pods never reach it
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${TELEMETRY_SCRAPER_NS}}}
+    ports: [{port: 9464}]

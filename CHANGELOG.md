@@ -30,6 +30,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
+  9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
+  `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,
+  `agentdev.requests.refused`, `agentdev.usage.paused`. NetworkPolicy: only the scraper namespace
+  (`TELEMETRY_SCRAPER_NS`, Ansible `telemetry.scraper_ns`) reaches the port. Optional OTLP export of metrics and
+  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Re-run: `./run.sh 06` and `12`, or the playbook.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

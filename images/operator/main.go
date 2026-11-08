@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -105,6 +107,20 @@ func main() {
 	if err := mgr.Add(usage); err != nil {
 		log.Error(err, "usage")
 		os.Exit(1)
+	}
+	// #196 (ADR 0002 D4): OpenTelemetry metrics on a separate port (9464), scraper only; "off" disables
+	if addr := env("METRICS_LISTEN", ":9464"); addr != "off" {
+		h, shutdown, err := newOperatorMetrics(os.Getenv("TELEMETRY_OTLP_URL"), usage.pausedNow)
+		if err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return serveOperatorMetrics(ctx, addr, h, shutdown)
+		})); err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",

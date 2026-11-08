@@ -27,6 +27,11 @@ claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the pr
 claude_budget_units: 0              # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); 0 = no limit
 claude_prices: {}                   # #196: ConfigMap claude-proxy-prices (w_in, w_cw5, w_cw1h, w_cr, w_out, model.<prefix>,
                                     # usd_per_million_units); {} = built-in weights, no USD estimate
+# Telemetry (#196, ADR 0002 D4/D5): claude-proxy and the operator serve metrics on 9464, reachable only from the
+# scraper namespace (Managed Service for Prometheus: gmp-system). otlp_url: https OTLP endpoint for metrics and spans.
+telemetry:
+  scraper_ns: gmp-system
+  otlp_url: ""
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts

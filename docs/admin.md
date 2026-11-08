@@ -221,6 +221,28 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
    units, tokens by type and number of requests, most expensive first. The worker names the job in the header
    `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
 
+### Metrics and OpenTelemetry
+
+`claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
+(#196, ADR 0002 D4). A NetworkPolicy lets only the namespace of the metrics scraper reach this port: `monitoring` on
+kind (`TELEMETRY_SCRAPER_NS`), `gmp-system` on GKE (`telemetry.scraper_ns`). Agent pods cannot reach it.
+
+| Metric (Prometheus name) | What it shows |
+|---|---|
+| `gen_ai_client_token_usage` | tokens per request, by `gen_ai_token_type` (`input`, `output`) and `agentdev_cache` (`read`, `write`) |
+| `gen_ai_client_operation_duration_seconds` | time of a model request |
+| `agentdev_cost_units_total` | cost units by agent and model |
+| `agentdev_cost_usd_total` | estimated USD, only when `usd_per_million_units` is set |
+| `agentdev_budget_used`, `agentdev_budget_limit` | units of the agent in 24 hours, and its budget |
+| `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
+| `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
+| `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
+with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
+`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
+
 ### Reference: the Claude proxy
 
 | Item | Value |

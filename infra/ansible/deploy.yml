@@ -88,6 +88,8 @@
           - claude_budget_tokens is not defined
           - (claude_budget_units | string) is match('^[0-9]+$')
           - claude_prices is mapping
+          - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
+          - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
           - claude_prices.keys() | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$') | list | length == 0
           - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
         fail_msg: >-
@@ -399,6 +401,8 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
@@ -646,6 +650,8 @@
             CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
             CLAUDE_BUDGET_UNITS: "{{ claude_budget_units | int }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
             # values as strings; the proxy checks each key and value again (#196)
             CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)

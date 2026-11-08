@@ -171,7 +171,7 @@ func TestChatSessionUsesClaudeProxy(t *testing.T) {
 	// the NetworkPolicies of egress.yaml.tmpl and claude-proxy.yaml.tmpl
 	vals := map[string]string{"AGENTS_NS": ns, "PLATFORM_NS": "agentdev-platform", "FORGE_NS": "forge", "BOTBOARD_NS": "botboard",
 		"EGRESS_HOSTS": ".github.com", "FORGE_EGRESS_HOSTS": "github.com", "EGRESS_PROXY_IMAGE": "img", "FORGE_PROXY_AUTH_SHA": "x",
-		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}", "CLAUDE_SECRET_SOURCES": "[]"}
+		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}", "TELEMETRY_OTLP_URL": "", "TELEMETRY_SCRAPER_NS": "monitoring", "CLAUDE_SECRET_SOURCES": "[]"}
 	docs = append(renderTmpl(t, "../../manifests/egress.yaml.tmpl", vals), renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals)...)
 	podLabels := labels.Set(job.Spec.Template.Labels)
 	// "agent" selects the agent Service (controller.go) and is the security attribution (security.go): not on a chat pod
