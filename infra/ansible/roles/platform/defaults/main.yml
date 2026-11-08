@@ -21,3 +21,16 @@ platform_secret_keys:
   - cf-default-user
   - cf-basic-auth
 # mcp_projects (project specs for scripts/mcp-sync.sh) is in group_vars/all.yml
+
+# Read-only observability MCP tools (#205): settings are `obs_mcp` in group_vars/all.yml. The Deployment uses the
+# operator image (operator_image) and is applied before mcp-sync, so a project spec can register it.
+platform_obs_mcp_enabled: "{{ obs_mcp.enabled | default(false) | bool }}"
+
+# kind (#106, kind.yml): secrets as files instead of Secret Manager, images loaded into the kind nodes.
+platform_secret_source: secret_manager     # files: platform_secrets_dir (kind)
+platform_secrets_dir: "{{ repo_root }}/.secrets/platform"
+# jwt and enc are two files each on kind (08-mcp.sh wrote jwt + jwt2, enc + enc2); a redeploy keeps them
+platform_file_keys: [pg-admin, pg-contextforge, pg-agentdev, pg-authentik, jwt, jwt2, enc, enc2, cf-admin, cf-default-user, cf-basic-auth]
+platform_kind_cluster: ""                  # kind cluster name: pull and kind-load the images; empty on GKE
+platform_container_engine: docker
+platform_kind_images: "{{ [platform_postgres_image] + ([platform_contextforge_image] if platform_contextforge_enabled | bool else []) }}"
