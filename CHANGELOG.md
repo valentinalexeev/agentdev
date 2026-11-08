@@ -18,7 +18,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Added
 - Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi
   with its git mirror `emptyDir` capped at 4Gi, `state-init` 64Mi. A pod past a limit is evicted by the kubelet and
-  the StatefulSet recreates it; the work tree on the state volume is not counted. Re-run: Ansible `operator` role
+  the StatefulSet recreates it; the work tree on the state volume is not counted. The values are settings with these
+  defaults: `AGENT_EPHEMERAL_REQUEST`, `AGENT_EPHEMERAL_LIMIT`, `FORGE_MIRROR_LIMIT`, `FORGE_EPHEMERAL_LIMIT`
+  (`config.env`, operator env; Ansible `agent_ephemeral_request`, `agent_ephemeral_limit`, `forge_mirror_limit`,
+  `forge_ephemeral_limit`). An empty or invalid value gives the default. Re-run: Ansible `operator` role
   (new operator image), agent pods roll on the next reconcile.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses

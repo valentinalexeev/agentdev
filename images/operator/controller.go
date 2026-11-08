@@ -42,6 +42,9 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// ephemeral-storage of agent pods (#251 part 3): agent request and limit, forge mirror emptyDir and forge limit;
+	// empty or invalid: the defaults in render.go
+	AgentEphemeralRequest, AgentEphemeralLimit, ForgeMirrorLimit, ForgeEphemeralLimit string
 }
 
 type AgentReconciler struct {

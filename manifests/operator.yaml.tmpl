@@ -101,6 +101,10 @@ spec:
         - {name: IDLE_SECONDS, value: "${IDLE_SECONDS}"}
         - {name: AGENT_STORAGE_CLASS, value: "${AGENT_STORAGE_CLASS}"}   # #173: the one state volume per agent; empty = cluster default
         - {name: AGENT_STATE_STORAGE, value: "${AGENT_STATE_STORAGE}"}
+        - {name: AGENT_EPHEMERAL_REQUEST, value: "${AGENT_EPHEMERAL_REQUEST}"}   # #251: ephemeral-storage of agent pods
+        - {name: AGENT_EPHEMERAL_LIMIT, value: "${AGENT_EPHEMERAL_LIMIT}"}
+        - {name: FORGE_MIRROR_LIMIT, value: "${FORGE_MIRROR_LIMIT}"}
+        - {name: FORGE_EPHEMERAL_LIMIT, value: "${FORGE_EPHEMERAL_LIMIT}"}
         - {name: EGRESS_PROXY, value: "${EGRESS_PROXY}"}   # agents' HTTPS_PROXY (#65); empty = none
         - {name: AGENT_EGRESS_HOSTS, value: "${AGENT_EGRESS_HOSTS}"}   # #206: listed in the harness guide; the proxy enforces its own list
         - {name: CLAUDE_PROXY_URL, value: "${CLAUDE_PROXY_URL}"}   # #66; empty = credential in the agent pod (deprecated)
