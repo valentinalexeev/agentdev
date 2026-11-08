@@ -52,6 +52,7 @@ type AgentReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=agentdev.dev,resources=projects,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
@@ -91,8 +92,16 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	// the StatefulSet: it is logged and retried, and the pod starts with the security rules only meanwhile.
 	guideRetry := false
 	execs, err := r.executorsFor(ctx, &a)
+	var proj *v1.Project
 	if err == nil {
-		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs))
+		var why string
+		proj, why, err = r.projectOf(ctx, &a)
+		if err == nil {
+			setProjectCondition(&a, why)
+		}
+	}
+	if err == nil {
+		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideWithProject(&a, execs, proj))
 	}
 	if err != nil {
 		l.Error(err, "harness guide not written, will retry", "agent", a.Name)
@@ -239,7 +248,39 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// an Executor changes the harness guide of the agents on its repository (#206)
 		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))
 	}
+	// a Project changes the guide and the ProjectValid condition of the agents that name it (#54)
+	b = b.Watches(&v1.Project{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfProject))
 	return b.Named("agent").Complete(r)
+}
+
+// agentsOfProject: the Agents whose spec.project names the Project.
+func (r *AgentReconciler) agentsOfProject(ctx context.Context, o client.Object) []ctrlreconcile.Request {
+	var l v1.AgentList
+	if err := r.List(ctx, &l, client.InNamespace(o.GetNamespace())); err != nil {
+		log.FromContext(ctx).Error(err, "project: cannot list agents", "project", o.GetName())
+		return nil
+	}
+	var out []ctrlreconcile.Request
+	for _, a := range l.Items {
+		if a.Spec.Project == o.GetName() {
+			out = append(out, ctrlreconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+		}
+	}
+	return out
+}
+
+// setProjectCondition records whether spec.project is in use: no condition without a project, False with the reason.
+func setProjectCondition(a *v1.Agent, why string) {
+	switch {
+	case a.Spec.Project == "":
+		meta.RemoveStatusCondition(&a.Status.Conditions, "ProjectValid")
+	case why != "":
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "ProjectValid", Status: metav1.ConditionFalse,
+			Reason: "NotInProject", Message: why, ObservedGeneration: a.Generation})
+	default:
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "ProjectValid", Status: metav1.ConditionTrue,
+			Reason: "InProject", Message: "spec.repo is a repository of project " + a.Spec.Project, ObservedGeneration: a.Generation})
+	}
 }
 
 // agentsOfExecutor: the Agents that work on the Executor's repository.

@@ -1,0 +1,88 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: projects.agentdev.dev
+spec:
+  group: agentdev.dev
+  names:
+    kind: Project
+    listKind: ProjectList
+    plural: projects
+    shortNames:
+    - proj
+    singular: project
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.forge
+      name: Forge
+      type: string
+    - jsonPath: .spec.repos
+      name: Repos
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Project is a group of repositories of one owner with its own
+          harness guide section.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ProjectSpec is the desired project.
+            properties:
+              forge:
+                default: gitea
+                description: Forge kind of all repositories.
+                enum:
+                - gitea
+                - github
+                type: string
+              guideAppend:
+                description: |-
+                  Text that project members add to the harness guide of every agent of the project. Appended under its own
+                  heading after the fixed agentdev part; it never replaces that part. Plain text, at most 8 KiB.
+                maxLength: 8192
+                type: string
+              repos:
+                description: Repositories of the project, owner/name, all of the same
+                  owner.
+                items:
+                  maxLength: 201
+                  pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+                  type: string
+                maxItems: 20
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+            required:
+            - repos
+            type: object
+            x-kubernetes-validations:
+            - message: all repos of a project must have the same owner (one App installation)
+              rule: self.repos.all(r, r.split('/')[0] == self.repos[0].split('/')[0])
+        type: object
+    served: true
+    storage: true
+    subresources: {}

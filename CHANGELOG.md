@@ -16,6 +16,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Project object, part 1 (#54): new CRD `Project` (`agentdev.dev/v1alpha1`, short name `proj`) with `spec.forge`,
+  `spec.repos` (1 to 20 repositories of one owner) and `spec.guideAppend` (max. 8 KiB). New optional Agent field
+  `spec.project`. The operator appends the project text to the harness guide of each agent of the project, under its
+  own heading after the fixed agentdev part, with control characters removed. Condition `ProjectValid` on the Agent
+  shows a project that is missing, on another forge or without the agent's repository; the agent then runs without
+  the project section. The loop now reads up to 16000 bytes of the guide (was 8000). Re-run: the playbook or
+  `./run.sh 12` (new CRD and Role rule). One agent on several repositories and the UI editor follow in later parts.
+  admin.md "Add a project guide for the agents of a project".
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and

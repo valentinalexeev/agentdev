@@ -50,6 +50,13 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+	// Project (#54) this agent belongs to, a Project in the same namespace. spec.repo must be one of its repos and
+	// spec.forge its forge; otherwise the operator ignores the project (condition ProjectValid=False). The project's
+	// guideAppend is added to the agent's harness guide.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=63
+	Project string `json:"project,omitempty"`
 }
 
 // AgentStatus is observed state, written by the operator only.

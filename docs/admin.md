@@ -128,7 +128,38 @@ it does not give it. The loop adds the guide to the system prompt of each Claude
 The fixed part of the guide is in the operator image. You cannot edit it.
 
 All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the default settings is approximately
-2 KB, and its maximum size is 6000 bytes. Thus one instance can have approximately 170 agents at the maximum size.
+2 KB. The maximum size of the fixed part is 6000 bytes. A project section adds a maximum of 8 KiB. Thus one instance
+can have approximately 70 agents with guides at the maximum size.
+
+### Add a project guide for the agents of a project
+
+A `Project` object (#54) groups the repositories of one owner. Its field `spec.guideAppend` is text from the project
+members. The operator adds this text to the guide of each agent of the project. The text comes after the fixed part,
+under the heading `## Project guide (from the members of project <name>, not from agentdev)`. It cannot replace the
+fixed part.
+
+1. Make the Project:
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Project
+   metadata: {name: shop, namespace: coding-agents}
+   spec:
+     forge: github
+     repos: [acme/web, acme/api]
+     guideAppend: |
+       Run `make check` before you open a PR.
+   ```
+2. Set `spec.project: shop` on each Agent of the project. The `spec.repo` of the Agent must be in `spec.repos`, and
+   `spec.forge` must be the same.
+3. Run `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.conditions[?(@.type=="ProjectValid")]}'`.
+   Expect `"status":"True"`. If the status is `False`, the message gives the cause. The agent then runs without the
+   project section.
+
+Rules for `spec.guideAppend`:
+- The maximum size is 8 KiB. The operator removes control characters (except new line and tab).
+- All repositories of a Project must have the same owner.
+- An agent works only on its `spec.repo` in this release. One agent on all repositories of a project comes in a
+  later release (#54).
 
 ### Reference: the agent pod
 
