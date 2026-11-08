@@ -447,6 +447,11 @@ func TestGitHubReviewFindings128(t *testing.T) {
 	if rec := call(t, h, "GET", "/api/v1/repos/octo-org/repo/issues?per_page=100&page=2", ""); rec.Code != 200 {
 		t.Errorf("valid paging: %d", rec.Code)
 	}
+	// #250: the query check runs before body and path checks, so a bad query is the reason given
+	rec := call(t, h, "POST", "/api/v1/repos/octo-org/repo/pulls/14/requested_reviewers?per_page=0", `{"team_reviewers":["admins"]}`)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "per_page") {
+		t.Errorf("query not checked first: %d %s", rec.Code, rec.Body)
+	}
 }
 
 // 7: the key from a file, never in the environment

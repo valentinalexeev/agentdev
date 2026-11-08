@@ -23,6 +23,20 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`config.env`, operator env; Ansible `agent_ephemeral_request`, `agent_ephemeral_limit`, `forge_mirror_limit`,
   `forge_ephemeral_limit`). An empty or invalid value gives the default. Re-run: Ansible `operator` role
   (new operator image), agent pods roll on the next reconcile.
+- Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
+  scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
+  with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
+  admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
+  for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
+  `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
+  part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
+  repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
+  variable (`ESO_SA`) for the chart and the policy.
+- Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
+  `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
+  project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
+  bounded, output redacted, clipped and fenced as untrusted, calls are rate limited (docs/security.md R99). Off by
+  default: `OBS_MCP=true` and `./run.sh 08` on kind, `obs_mcp.enabled` and the playbook (role `platform`) on GKE.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
@@ -116,6 +130,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
+  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
+  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
+  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
 - `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
   to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
   events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
@@ -196,6 +214,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
+  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
@@ -266,6 +286,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
+  (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
+  Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
+  a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

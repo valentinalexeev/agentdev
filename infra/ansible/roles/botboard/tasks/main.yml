@@ -1,0 +1,26 @@
+---
+# Same result as the old 07-botboard.sh: manifests/botboard.yaml.tmpl rendered with the shared render template, then
+# a wait for the rollout. A second run reports changed=0.
+- name: Botboard manifest (namespace, deployment, service)
+  kubernetes.core.k8s:
+    context: "{{ botboard_context }}"
+    definition: "{{ lookup('ansible.builtin.template', '../../../templates/render.j2', template_vars=botboard_render) | from_yaml_all | select | list }}"
+  vars:
+    botboard_render:
+      src: "{{ botboard_manifest }}"
+      values: {BOTBOARD_NS: "{{ botboard_ns }}", BOTBOARD_IMAGE: "{{ botboard_image }}"}
+      replace: []
+
+- name: Botboard rollout is complete
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ botboard_context }}", -n, "{{ botboard_ns }}", rollout, status, deploy/botboard,
+           "--timeout={{ botboard_timeout }}s"]
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Botboard address
+  ansible.builtin.debug:
+    msg: >-
+      botboard up: http://botboard.{{ botboard_ns }}.svc.cluster.local/ . View: kubectl --context {{ botboard_context }}
+      -n {{ botboard_ns }} port-forward svc/botboard 8090:80, then open http://localhost:8090. Agents get BOTBOARD_URL
+      from ./run.sh 06 when this namespace exists.

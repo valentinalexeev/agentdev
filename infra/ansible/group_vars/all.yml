@@ -92,6 +92,21 @@ mcp_projects: []
 # Allow-list of MCP server hosts (host or host:port) that project specs may register (docs/security.md R51).
 # MCP tool metadata and outputs reach the model, so list trusted servers only. Empty: no server is registered.
 mcp_allowed_hosts: []
+# Read-only observability MCP tools (#205, docs/admin.md "Give agents the observability tools"): the gateway pod
+# obs-mcp holds the backend credential, agents call it through ContextForge only. Off by default. After enabling, add
+# {name: obs, url: http://obs-mcp.<platform_ns>.svc.cluster.local:8080/mcp} to a project spec and the host to
+# mcp_allowed_hosts. URLs: the instance's Prometheus and Loki (cluster Service range: ContextForge SSRF guard).
+obs_mcp:
+  enabled: false
+  prometheus_url: ""                # for example http://prometheus-server.monitoring.svc.cluster.local
+  loki_url: ""                      # for example http://loki-gateway.monitoring.svc.cluster.local
+  loki_tenant: ""                   # X-Scope-OrgID, multi-tenant Loki only
+  token_secret: ""                  # Secret Manager name of a read-only bearer token for both; empty: none
+  cloud_logging_project: ""         # add-on, off when empty: the Cloud Logging tool reads this project
+  cloud_logging_gsa: ""             # Google service account with roles/logging.viewer only (Workload Identity)
+  max_output: 16384                 # bytes of output per call
+  rate_per_min: 30                  # calls per minute per tool, all agents together
+  rate_burst: 10
 approvals:                          # #67: agents ask a project member on the forge (docs/security-model.md)
   enabled: true                     # default on GKE (the API is expected there); needs api.oidc_issuer (#115),
                                     # deploy.yml checks it. kind keeps APPROVALS=false (config.env): no API by default

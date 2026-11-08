@@ -40,6 +40,10 @@ func main() {
 	if code, ok := planHelper(os.Args[1:], os.Stdout); ok {
 		os.Exit(code)
 	}
+	// read-only observability MCP tools (#205): same image, own Deployment (manifests/obs-mcp.yaml.tmpl)
+	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
+		os.Exit(runObsMCP(os.Stdout))
+	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -146,6 +150,17 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("deterministic executors on", "namespace", execNS)
+	}
+	// scoped secrets store (#202): ProjectSecret -> ExternalSecret ps-<name>; off without SECRETS_STORE
+	if store := os.Getenv("SECRETS_STORE"); store != "" {
+		psr := &ProjectSecretReconciler{Client: mgr.GetClient(), NS: ns, Store: store,
+			Refresh:  time.Duration(envInt("SECRETS_REFRESH_SECONDS", 60)) * time.Second,
+			Property: os.Getenv("SECRETS_REMOTE_PROPERTY")}
+		if err := psr.SetupWithManager(mgr); err != nil {
+			log.Error(err, "projectsecret controller")
+			os.Exit(1)
+		}
+		log.Info("scoped secrets store on", "store", store)
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
