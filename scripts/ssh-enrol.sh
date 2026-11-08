@@ -41,9 +41,81 @@ re_user='^[a-z_][a-z0-9_-]{0,31}$'
 while read -r l; do [[ "$l" =~ ^(ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\ [A-Za-z0-9+/=]+$ ]] || { echo "invalid CA key" >&2; exit 1; }; done <<<"${USER_CA}"
 [[ -z "${HOST_CERT}" || "${HOST_CERT}" =~ ^ssh-ed25519-cert-v01@openssh.com\ [A-Za-z0-9+/=]+$ ]] || { echo "invalid host certificate" >&2; exit 1; }
 
+# The probe catalogue (#205): the checks of Executor spec.probes become this server's own allow-list. agentdev-probe
+# runs only what is in /etc/agentdev/probes, whatever certificate the caller has. One file per check:
+#   pattern <ERE of argument n>   (one line per argument, in order)
+#   argv <element>                (one line per element; {n} is argument n)
+PROBES_JSON=$(kubectl -n "${NS}" get executor "${EXECUTOR}" -o json 2>/dev/null | jq -c '.spec.probes // []' || echo '[]')
+[[ -n "${PROBES_JSON}" ]] || PROBES_JSON='[]'
+probe_files() { # prints shell lines that write $1/<name> for every check
+  local n i j name p el pat
+  n=$(jq length <<<"${PROBES_JSON}")
+  for ((i = 0; i < n; i++)); do
+    p=$(jq -c ".[$i]" <<<"${PROBES_JSON}")
+    name=$(jq -r .name <<<"${p}")
+    [[ "${name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "invalid probe name" >&2; exit 1; }
+    printf "cat > %s/%s <<'CHECK'\n" "$1" "${name}"
+    while IFS= read -r pat; do
+      [[ -n "${pat}" && "${pat}" != *CHECK* ]] || { echo "probe ${name}: invalid pattern" >&2; exit 1; }
+      printf 'pattern %s\n' "${pat}"
+    done < <(jq -r '.args // [] | .[].pattern' <<<"${p}")
+    while IFS= read -r el; do
+      [[ "${el}" =~ ^[A-Za-z0-9._@:=/+,{}%-]+$ ]] || { echo "probe ${name}: invalid command element" >&2; exit 1; }
+      if [[ "${el}" =~ ^\{([a-z][a-z0-9_]*)\}$ ]]; then
+        j=$(jq -r --arg a "${BASH_REMATCH[1]}" '[.args // [] | .[].name] | index($a) // empty' <<<"${p}")
+        [[ -n "${j}" ]] || { echo "probe ${name}: unknown placeholder ${el}" >&2; exit 1; }
+        el="{$((j + 1))}"
+      fi
+      printf 'argv %s\n' "${el}"
+    done < <(jq -r '.command[]' <<<"${p}")
+    printf 'CHECK\n'
+  done
+}
+PROBE_FILES=$(probe_files /etc/agentdev/probes.new) || exit 1
 PROBE='#!/bin/sh
-# agentdev-probe (#204): the only command of the agentdev-probe certificate (force-command). Prints one line.
-echo "agentdev-probe ok host=$(hostname) user=$(id -un) sshd=$(/usr/sbin/sshd -V 2>&1 | head -n1 | tr -d "\n" | cut -c1-60)"'
+# agentdev-probe (#204, #205): the only command of the agentdev-probe certificate (force-command). Without a request
+# it prints one line (the enrolment probe). "check <name> <values...>" runs a check of the allow-list of this server
+# (/etc/agentdev/probes/<name>) as this user (no sudo), under timeout 20 s, output capped at 64 KiB.
+set -u
+set -f
+cmd=${SSH_ORIGINAL_COMMAND:-}
+refuse() { echo "agentdev-probe: refused: $1" >&2; command -v logger >/dev/null && logger -p auth.warning -t agentdev-probe "refused: $1"; exit 77; }
+case "$cmd" in
+  ""|probe) echo "agentdev-probe ok host=$(hostname) user=$(id -un) sshd=$(/usr/sbin/sshd -V 2>&1 | head -n1 | tr -d "\n" | cut -c1-60)"; exit 0 ;;
+esac
+case "$cmd" in *[!A-Za-z0-9._@:=/+\ -]*) refuse "characters outside the allowed set" ;; esac
+set -- $cmd
+[ "${1:-}" = check ] || refuse "unknown request"
+[ $# -ge 2 ] && [ $# -le 6 ] || refuse "wrong number of words"
+name=$2; shift 2
+case "$name" in ""|*[!a-z0-9-]*) refuse "invalid check name" ;; esac
+f=/etc/agentdev/probes/$name
+[ -f "$f" ] || refuse "check $name is not in the allow-list of this server"
+want=$(grep -c "^pattern " "$f")
+[ $# -eq "$want" ] || refuse "check $name takes $want argument(s)"
+i=0
+for v in "$@"; do
+  i=$((i + 1))
+  case "$v" in -*) refuse "argument $i starts with -" ;; esac
+  pat=$(sed -n "s/^pattern //p" "$f" | sed -n "${i}p")
+  printf "%s\n" "$v" | grep -Eqx -- "$pat" || refuse "argument $i does not match its pattern"
+done
+v1=${1:-} v2=${2:-} v3=${3:-} v4=${4:-}
+set --
+while IFS= read -r line; do
+  case "$line" in
+    "argv {1}") set -- "$@" "$v1" ;;
+    "argv {2}") set -- "$@" "$v2" ;;
+    "argv {3}") set -- "$@" "$v3" ;;
+    "argv {4}") set -- "$@" "$v4" ;;
+    "argv "*) set -- "$@" "${line#argv }" ;;
+  esac
+done < "$f"
+[ $# -ge 1 ] || refuse "check $name has no command"
+command -v logger >/dev/null && logger -p auth.info -t agentdev-probe "check $name by $(id -un)"
+out=$(timeout 20 "$@" 2>&1); rc=$?
+printf "%s\n" "$out" | head -c 65536
+exit $rc'
 SSHD_CONF="# agentdev (#204): certificates of the agentdev CA for the agentdev users only
 TrustedUserCAKeys /etc/ssh/agentdev_user_ca.pub
 RevokedKeys /etc/ssh/agentdev_revoked_keys
@@ -89,6 +161,11 @@ cat > /usr/local/sbin/agentdev-probe <<'PROBE'
 ${PROBE}
 PROBE
 chmod 0755 /usr/local/sbin/agentdev-probe
+# probe catalogue (#205): the allow-list of this server, replaced as a whole (a removed check stops working)
+rm -rf /etc/agentdev/probes.new && install -d -m 0755 /etc/agentdev/probes.new
+${PROBE_FILES}
+chmod 0644 /etc/agentdev/probes.new/* 2>/dev/null || true
+rm -rf /etc/agentdev/probes && mv /etc/agentdev/probes.new /etc/agentdev/probes
 cat > /etc/sudoers.d/agentdev <<'SUDO'
 ${SUDOERS}
 SUDO

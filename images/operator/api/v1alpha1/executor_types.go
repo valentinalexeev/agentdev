@@ -31,6 +31,65 @@ type ExecutorSnapshot struct {
 	IntervalHours int32 `json:"intervalHours,omitempty"`
 }
 
+// ExecutorDrift is the scheduled drift check of an executor (#205): the merge-plan command (or its own) on the head of
+// spec.branch, with the read-only plan credentials and, with spec.ssh, the check certificate. Drift opens (or comments
+// on) one forge issue and is published for the agents in ConfigMap agentdev-drift.
+type ExecutorDrift struct {
+	// Command; empty: spec.plan (for Ansible: --check --diff).
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=1024
+	Command []string `json:"command,omitempty"`
+	// ChangedPattern: a regular expression (RE2) on the output that means drift, for example "changed=[1-9]" (Ansible)
+	// or "Plan: [0-9]+ to" (Terraform). A failed run is reported as an error, never as drift.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=200
+	ChangedPattern string `json:"changedPattern"`
+	// Hours between two drift checks.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=168
+	// +kubebuilder:default=24
+	// +optional
+	IntervalHours int32 `json:"intervalHours,omitempty"`
+}
+
+// ExecutorProbeArg is one argument of a probe: the caller's value must match the pattern completely.
+type ExecutorProbeArg struct {
+	// Placeholder name: the element "{name}" of spec.probes[].command is replaced by the value.
+	// +kubebuilder:validation:Pattern=`^[a-z][a-z0-9_]{0,30}$`
+	Name string `json:"name"`
+	// RE2 pattern, anchored by the operator (^(?:pattern)$). Values are also limited to [A-Za-z0-9._@:=/+-], 1..128
+	// characters, on the operator and on the server.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=200
+	Pattern string `json:"pattern"`
+}
+
+// ExecutorProbe is one read-only check agents may run on the executor's servers (#205, tool server_check). The server
+// runs it only if scripts/ssh-enrol.sh put the same name and command into its allow-list.
+type ExecutorProbe struct {
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=40
+	Name string `json:"name"`
+	// What the check shows, for the agent.
+	// +optional
+	// +kubebuilder:validation:MaxLength=200
+	Description string `json:"description,omitempty"`
+	// Command template, an argv. An element "{name}" is an argument; nothing else is substituted. It runs as the check
+	// user (no sudo) under timeout 20.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=200
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9._@:=/+,{}%-]+$`
+	Command []string `json:"command"`
+	// +optional
+	// +kubebuilder:validation:MaxItems=4
+	Args []ExecutorProbeArg `json:"args,omitempty"`
+	// Sensitive: each call needs an Approval by a person with write access to spec.repo (decision 2 of #205).
+	// +optional
+	Sensitive bool `json:"sensitive,omitempty"`
+}
+
 // ExecutorCredentials are what one phase (plan or apply) of the tool runs with. The Secret's keys become the tool
 // container's environment; the service account carries the cloud identity (GKE Workload Identity annotation). The
 // Kubernetes API token is never mounted.
@@ -93,6 +152,15 @@ type ExecutorSpec struct {
 	// control decision.
 	// +optional
 	Snapshot *ExecutorSnapshot `json:"snapshot,omitempty"`
+	// Drift: scheduled --check --diff (or plan) of the branch head (#205 decision 4).
+	// +optional
+	Drift *ExecutorDrift `json:"drift,omitempty"`
+	// Probes: the probe catalogue (#205). Needs ssh.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=map
+	// +listMapKey=name
+	Probes []ExecutorProbe `json:"probes,omitempty"`
 	// Read-only credentials, used for every plan (also of unreviewed pull requests).
 	// +optional
 	PlanCredentials ExecutorCredentials `json:"planCredentials,omitempty"`
@@ -137,6 +205,12 @@ type ExecutorStatus struct {
 	LastPoll *metav1.Time `json:"lastPoll,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Open forge issue the drift check reports to (#205); 0: none yet.
+	// +optional
+	DriftIssue int64 `json:"driftIssue,omitempty"`
+	// Forge issue where approvals of sensitive probes are requested (#205); 0: none yet.
+	// +optional
+	ProbeIssue int64 `json:"probeIssue,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -154,6 +228,7 @@ type ExecutorStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.applyCredentials) || !has(self.spec.applyCredentials.secretName) || self.spec.applyCredentials.secretName == 'exec-' + self.metadata.name + '-apply'",message="spec.applyCredentials.secretName must be exec-<name>-apply"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.planCredentials) || !has(self.spec.planCredentials.serviceAccountName) || !has(self.spec.applyCredentials) || !has(self.spec.applyCredentials.serviceAccountName) || self.spec.planCredentials.serviceAccountName != self.spec.applyCredentials.serviceAccountName",message="plan and apply must use different service accounts"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.snapshot) || (has(self.spec.ssh) && self.spec.ssh)",message="spec.snapshot needs spec.ssh"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.probes) || size(self.spec.probes) == 0 || (has(self.spec.ssh) && self.spec.ssh)",message="spec.probes needs spec.ssh"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.ssh) || !self.spec.ssh || has(self.spec.prPlan)",message="spec.ssh needs spec.prPlan: pull request heads never get server credentials"
 type Executor struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -174,14 +249,28 @@ type ExecutorRunSpec struct {
 	// Executor name.
 	// +kubebuilder:validation:MaxLength=40
 	Executor string `json:"executor"`
-	// plan | apply | snapshot
-	// +kubebuilder:validation:Enum=plan;apply;snapshot
+	// plan | apply | snapshot | probe
+	// +kubebuilder:validation:Enum=plan;apply;snapshot;probe
 	Action string `json:"action"`
 	// pr: plan of a pull request head (unreviewed code, result informative only). merge: plan of a merge commit of
 	// the protected branch (the only plan that can be applied). apply: apply of an approved merge plan. snapshot:
-	// scheduled fact gathering (no commit, no PR, #205).
-	// +kubebuilder:validation:Enum=pr;merge;apply;snapshot
+	// scheduled fact gathering (no commit, no PR, #205). drift: scheduled plan of the branch head (commit, no PR).
+	// probe: one catalogue check on one server (no commit, no PR), run by the operator itself; a record.
+	// +kubebuilder:validation:Enum=pr;merge;apply;snapshot;drift;probe
 	Stage string `json:"stage"`
+	// probe: SSHTarget name.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	Target string `json:"target,omitempty"`
+	// probe: check name (spec.probes[].name).
+	// +optional
+	// +kubebuilder:validation:MaxLength=40
+	Check string `json:"check,omitempty"`
+	// probe: argument values, checked against the patterns.
+	// +optional
+	// +kubebuilder:validation:MaxItems=4
+	// +kubebuilder:validation:items:MaxLength=128
+	Args []string `json:"args,omitempty"`
 	// Commit, 40 hex characters (from the forge API, checked by the operator). Empty for snapshot runs.
 	// +kubebuilder:validation:Pattern=`^([0-9a-f]{40})?$`
 	// +optional
@@ -243,7 +332,7 @@ type ExecutorRunStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.spec == oldSelf.spec",message="ExecutorRun spec is immutable"
-// +kubebuilder:validation:XValidation:rule="self.spec.stage == 'snapshot' ? (self.spec.action == 'snapshot' && !has(self.spec.commit) && !has(self.spec.pr)) : (self.spec.action != 'snapshot' && has(self.spec.commit) && size(self.spec.commit) == 40 && has(self.spec.pr) && self.spec.pr >= 1)",message="snapshot runs have no commit and no PR; other runs need both"
+// +kubebuilder:validation:XValidation:rule="self.spec.stage in ['snapshot', 'probe'] ? (self.spec.action == self.spec.stage && !has(self.spec.commit) && !has(self.spec.pr)) : self.spec.stage == 'drift' ? (self.spec.action == 'plan' && has(self.spec.commit) && size(self.spec.commit) == 40 && !has(self.spec.pr)) : (!(self.spec.action in ['snapshot', 'probe']) && has(self.spec.commit) && size(self.spec.commit) == 40 && has(self.spec.pr) && self.spec.pr >= 1)",message="snapshot and probe runs have no commit and no PR, drift runs a commit and no PR, other runs need both"
 type ExecutorRun struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

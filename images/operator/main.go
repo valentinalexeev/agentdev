@@ -144,6 +144,18 @@ func main() {
 			log.Error(err, "executor poller")
 			os.Exit(1)
 		}
+		// probe catalogue (#205): server_check of obs-mcp, only with PROBE_LISTEN and a token file
+		ex.Forge = ex.defaultForge
+		if ps, listen, err := probeServerFromEnv(ex); err != nil {
+			log.Error(err, "probe server")
+			os.Exit(1)
+		} else if ps != nil {
+			if err := mgr.Add(probeRunnable{s: ps, listen: listen}); err != nil {
+				log.Error(err, "probe server")
+				os.Exit(1)
+			}
+			log.Info("probe catalogue on", "listen", listen)
+		}
 		log.Info("deterministic executors on", "namespace", execNS)
 		// SSH server enrolment (#204): SSHTargets in EXEC_NS; idle until scripts/ssh-ca-init.sh made the CA Secrets
 		if err := mgr.Add(newSSHEnroller(mgr.GetClient(), mgr.GetAPIReader(), execNS)); err != nil {

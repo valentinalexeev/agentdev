@@ -101,6 +101,35 @@ spec:
                 maxLength: 100
                 pattern: ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$
                 type: string
+              drift:
+                description: 'Drift: scheduled --check --diff (or plan) of the branch
+                  head (#205 decision 4).'
+                properties:
+                  changedPattern:
+                    description: |-
+                      ChangedPattern: a regular expression (RE2) on the output that means drift, for example "changed=[1-9]" (Ansible)
+                      or "Plan: [0-9]+ to" (Terraform). A failed run is reported as an error, never as drift.
+                    maxLength: 200
+                    minLength: 1
+                    type: string
+                  command:
+                    description: 'Command; empty: spec.plan (for Ansible: --check
+                      --diff).'
+                    items:
+                      maxLength: 1024
+                      type: string
+                    maxItems: 32
+                    type: array
+                  intervalHours:
+                    default: 24
+                    description: Hours between two drift checks.
+                    format: int32
+                    maximum: 168
+                    minimum: 1
+                    type: integer
+                required:
+                - changedPattern
+                type: object
               egressHosts:
                 description: |-
                   EgressHosts: the hosts the Job may reach through the executor egress proxy (#135), in addition to the
@@ -189,6 +218,68 @@ spec:
                 required:
                 - command
                 type: object
+              probes:
+                description: 'Probes: the probe catalogue (#205). Needs ssh.'
+                items:
+                  description: |-
+                    ExecutorProbe is one read-only check agents may run on the executor's servers (#205, tool server_check). The server
+                    runs it only if scripts/ssh-enrol.sh put the same name and command into its allow-list.
+                  properties:
+                    args:
+                      items:
+                        description: 'ExecutorProbeArg is one argument of a probe:
+                          the caller''s value must match the pattern completely.'
+                        properties:
+                          name:
+                            description: 'Placeholder name: the element "{name}" of
+                              spec.probes[].command is replaced by the value.'
+                            pattern: ^[a-z][a-z0-9_]{0,30}$
+                            type: string
+                          pattern:
+                            description: |-
+                              RE2 pattern, anchored by the operator (^(?:pattern)$). Values are also limited to [A-Za-z0-9._@:=/+-], 1..128
+                              characters, on the operator and on the server.
+                            maxLength: 200
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        - pattern
+                        type: object
+                      maxItems: 4
+                      type: array
+                    command:
+                      description: |-
+                        Command template, an argv. An element "{name}" is an argument; nothing else is substituted. It runs as the check
+                        user (no sudo) under timeout 20.
+                      items:
+                        maxLength: 200
+                        pattern: ^[A-Za-z0-9._@:=/+,{}%-]+$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                    description:
+                      description: What the check shows, for the agent.
+                      maxLength: 200
+                      type: string
+                    name:
+                      maxLength: 40
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    sensitive:
+                      description: 'Sensitive: each call needs an Approval by a person
+                        with write access to spec.repo (decision 2 of #205).'
+                      type: boolean
+                  required:
+                  - command
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               repo:
                 description: Repository, owner/name.
                 maxLength: 201
@@ -291,6 +382,11 @@ spec:
                   - type
                   type: object
                 type: array
+              driftIssue:
+                description: 'Open forge issue the drift check reports to (#205);
+                  0: none yet.'
+                format: int64
+                type: integer
               lastPoll:
                 format: date-time
                 type: string
@@ -300,6 +396,11 @@ spec:
               phase:
                 description: ready | paused | invalid | error
                 type: string
+              probeIssue:
+                description: 'Forge issue where approvals of sensitive probes are
+                  requested (#205); 0: none yet.'
+                format: int64
+                type: integer
             type: object
         required:
         - spec
@@ -323,6 +424,9 @@ spec:
             || self.spec.planCredentials.serviceAccountName != self.spec.applyCredentials.serviceAccountName'
         - message: spec.snapshot needs spec.ssh
           rule: '!has(self.spec.snapshot) || (has(self.spec.ssh) && self.spec.ssh)'
+        - message: spec.probes needs spec.ssh
+          rule: '!has(self.spec.probes) || size(self.spec.probes) == 0 || (has(self.spec.ssh)
+            && self.spec.ssh)'
         - message: 'spec.ssh needs spec.prPlan: pull request heads never get server
             credentials'
           rule: '!has(self.spec.ssh) || !self.spec.ssh || has(self.spec.prPlan)'

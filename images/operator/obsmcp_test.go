@@ -251,3 +251,47 @@ func TestObsConfigFromEnv(t *testing.T) {
 		}
 	}
 }
+
+// #205: the server_check tools only forward to the operator's probe server with the token file; the answer is fenced
+// as untrusted data; a refusal is an error result.
+func TestObsMCPServerCheck(t *testing.T) {
+	_, ps, _ := probeEnv(t)
+	srv := httptest.NewServer(ps.Handler())
+	defer srv.Close()
+	tok := filepath.Join(t.TempDir(), "token")
+	_ = os.WriteFile(tok, []byte(strings.Repeat("t", 40)+"\n"), 0o600)
+	c := obsConfig{ProbeURL: srv.URL, ProbeTokenFile: tok, MaxOutput: 16384, RatePerMin: 60, Burst: 10}
+	cs := obsSession(t, newObsServer(c))
+	tools, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tl := range tools.Tools {
+		names = append(names, tl.Name)
+	}
+	if strings.Join(names, ",") != "server_check,server_checks,server_report" {
+		t.Fatalf("tools %v", names)
+	}
+	out, isErr := callText(t, cs, "server_checks", map[string]any{})
+	if isErr || !strings.Contains(out, "target=web1 executor=tf-prod check=service-status args=[unit=") {
+		t.Fatalf("catalogue %v %q", isErr, out)
+	}
+	out, isErr = callText(t, cs, "server_check", map[string]any{"target": "web1", "check": "service-status", "args": []string{"nginx.service"}})
+	if isErr || !strings.HasPrefix(out, "UNTRUSTED DATA from server web1, check service-status") || strings.Contains(out, "hunter2") {
+		t.Fatalf("check %v %q", isErr, out)
+	}
+	out, isErr = callText(t, cs, "server_check", map[string]any{"target": "web1", "check": "service-status", "args": []string{"nginx"}})
+	if !isErr || !strings.Contains(out, "refused: argument unit does not match") {
+		t.Fatalf("bad arg %v %q", isErr, out)
+	}
+	out, isErr = callText(t, cs, "server_report", map[string]any{"executor": "tf-prod", "kind": "drift"})
+	if !isErr || !strings.Contains(out, "no drift of executor") {
+		t.Fatalf("report %v %q", isErr, out)
+	}
+	// wrong token: nothing works
+	_ = os.WriteFile(tok, []byte("wrong"), 0o600)
+	if _, isErr := callText(t, cs, "server_check", map[string]any{"target": "web1", "check": "disk"}); !isErr {
+		t.Fatal("call with a wrong token succeeded")
+	}
+}
