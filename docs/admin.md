@@ -2055,9 +2055,10 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
-- The router has two ports (#214). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and `POST /`)
-  and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
-  `/register` and `/idle` to the agents, the probes and the operators of the instance. Publish only the public port.
+- The router has three ports (#214, #218). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and
+  `POST /`) and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
+  `/register` and `/idle` to the agents and the operators of the instance. The health port 8082 (`HEALTH_PORT`) gives
+  only `GET /healthz` to the probes and to the health check of the load balancer. Publish only the public port.
 - For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
   URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The

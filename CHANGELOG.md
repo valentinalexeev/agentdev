@@ -148,6 +148,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
   with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
   Gitea already routed comments by the PR author; a router test now covers it.
+- Ansible refuses a Secret Manager `claude-shared` or `agent-<name>-claude` without a recognised key (#212). A bare
+  token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
+  `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
+  `ANTHROPIC_API_KEY=...`; the message names the format, never the value. Test: `infra/ansible/tests/claude_credential.yml`.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
@@ -220,6 +224,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Security
 - Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
   query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
+- The router has a health-only port 8082 (`HEALTH_PORT`, #218). It serves only `GET /healthz`. The kubelet probes,
+  the GKE HealthCheckPolicy and the Google Front End rule of the NetworkPolicy `webhook-router-from-forwarder` use it,
+  so the Google ranges no longer reach the internal port 8081 (`/status`, `/register`, `/idle`). Upgrade: deploy the
+  router image and the manifests of the same release together (kind: `./run.sh 06`; GKE: the playbook, roles
+  `ingress` and the router in `deploy.yml`). A new router image with old manifests keeps working on 8081.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
