@@ -40,6 +40,10 @@ func main() {
 	if code, ok := planHelper(os.Args[1:], os.Stdout); ok {
 		os.Exit(code)
 	}
+	// read-only observability MCP tools (#205): same image, own Deployment (manifests/obs-mcp.yaml.tmpl)
+	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
+		os.Exit(runObsMCP(os.Stdout))
+	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()

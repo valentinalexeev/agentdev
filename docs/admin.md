@@ -436,6 +436,78 @@ NOTE: The dry run (`--check`) does not run the sync.
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
 
+### Give agents the observability tools
+
+The observability tools let agents read metrics and logs. They cannot change data. The pod `obs-mcp` in
+`agentdev-platform` gives these tools:
+
+- `prometheus_query`: reads metrics from Prometheus with a PromQL query.
+- `loki_query`: reads logs from Loki with a LogQL query.
+- `cloud_logging_query` (add-on, GKE only): reads Cloud Logging entries of one GCP project.
+
+The pod keeps the credential of each backend. Agents use the tools through ContextForge with their own token.
+The agent pod never gets a backend credential.
+
+Before you start, make sure that Prometheus or Loki operates in the cluster. agentdev does not install them.
+
+1. Set the backend addresses:
+   - On kind: in `config.env`, set `OBS_MCP=true`, `PROMETHEUS_URL` and `LOKI_URL`.
+   - On GKE: in `ansible/instance.yml`, set `obs_mcp.enabled: true`, `obs_mcp.prometheus_url` and `obs_mcp.loki_url`.
+
+   Use addresses in the cluster Service range, for example `http://prometheus-server.monitoring.svc.cluster.local`.
+   An address with a user name or a password is refused.
+2. Optional: give a read-only bearer token for Prometheus and Loki.
+   - On kind: write the token to `.secrets/platform/obs-token`.
+   - On GKE: put the token in Secret Manager. Set `obs_mcp.token_secret` to the name of the secret.
+
+   WARNING: Use a token that can only read. Do not use an admin token.
+3. Deploy the tools:
+   - On kind: run run.sh step 08: `./run.sh 08`
+   - On GKE: run the playbook.
+4. In the project specification, add the server:
+
+   ```yaml
+   mcp:
+     servers:
+       - {name: obs, url: http://obs-mcp.agentdev-platform.svc.cluster.local:8080/mcp}
+   ```
+
+5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
+6. Run the sync: `scripts/mcp-sync.sh <spec>`
+7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
+
+CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
+output. This filter does not find all secrets. Do not write secrets to logs. Refer to R99 in `docs/security.md`.
+
+NOTE: The tools of a project are the same for all its agents. Every agent of the project can read all the logs and
+metrics that the backend token can read. To limit the data, give a token that can read less, or set `LOKI_TENANT`.
+
+To use the Cloud Logging tool on GKE, do these steps:
+
+1. Make a Google service account with the role `roles/logging.viewer` only.
+2. Let the Kubernetes service account `agentdev-platform/obs-mcp` use it (Workload Identity, `roles/iam.workloadIdentityUser`).
+3. In `ansible/instance.yml`, set `obs_mcp.cloud_logging_project` and `obs_mcp.cloud_logging_gsa`.
+4. Run the playbook.
+
+#### Reference: the observability tools
+
+| Setting (kind / GKE `obs_mcp.`) | Default | Meaning |
+|---|---|---|
+| `OBS_MCP` / `enabled` | `false` | Deploy the pod `obs-mcp` |
+| `PROMETHEUS_URL` / `prometheus_url` | empty | Prometheus address; empty: no `prometheus_query` tool |
+| `LOKI_URL` / `loki_url` | empty | Loki address; empty: no `loki_query` tool |
+| `LOKI_TENANT` / `loki_tenant` | empty | Loki tenant (`X-Scope-OrgID`) |
+| - / `cloud_logging_project` | empty | GCP project for `cloud_logging_query`; empty: no tool |
+| `OBS_MCP_MAX_OUTPUT` / `max_output` | `16384` | Maximum bytes of output for one call |
+| `OBS_MCP_RATE_PER_MIN` / `rate_per_min` | `30` | Calls for each minute, for each tool (all agents together) |
+| `OBS_MCP_RATE_BURST` / `rate_burst` | `10` | Calls at the same time before the limit starts |
+
+Limits for each call: the query has a maximum of 2000 characters. The time range is a maximum of 7 days. A log query
+gives a maximum of 500 lines. A range query of Prometheus gives a maximum of 1100 points for each series.
+
+The tool output starts with `UNTRUSTED DATA`. Each line has a prefix, and backticks are replaced. Thus the output
+cannot close its code block. The output goes only to the model. agentdev does not use it for a decision.
+
 ### Open the ContextForge admin UI
 
 1. Start the port-forward: `kubectl -n agentdev-platform port-forward svc/contextforge 4444:4444`
