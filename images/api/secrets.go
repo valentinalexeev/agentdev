@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -32,19 +33,20 @@ var projectSecretsGVR = schema.GroupVersionResource{Group: "agentdev.dev", Versi
 
 const (
 	secretValueMax = 8192
+	minEnvValue    = 8 // the forge sidecar redacts values of at least this length
 	// remoteKeyPrefix: the store key of ProjectSecret <n> is agentdev-ps-<n> (operator projectsecret.go, CEL policy)
 	remoteKeyPrefix = "agentdev-ps-"
 	forgeAnnotation = "agentdev.dev/forge"
 )
 
 var (
-	psNameRe      = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,48}[a-z0-9])?$`)
-	envNameRe     = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
-	envReservedRe = regexp.MustCompile(`^(AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES)_`)
-	envReserved   = map[string]bool{"PATH": true, "HOME": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
-		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "NODE_OPTIONS": true, "BASH_ENV": true, "ENV": true}
-	upstreamRe = regexp.MustCompile(`^https://[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$`)
-	headerNmRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,63}$`)
+	psNameRe  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,48}[a-z0-9])?$`)
+	envNameRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+	// envReservedRe is the CRD rule of spec.env.name, character for character (TestReservedEnvMatchesCRD): every
+	// variable agentdev sets on the agent container, its prefixes, and loader and trust hooks (review of #272/#273).
+	envReservedRe = regexp.MustCompile(`^((AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES|OTEL|EGRESS|LD|DYLD|NPM_CONFIG|PIP|SSL|CURL|REQUESTS|JAVA|JDK|NODE|PYTHON|PERL|RUBY|BUNDLE|GEM)_[A-Z0-9_]*|PATH|HOME|SHELL|USER|TMPDIR|ENV|BASH_ENV|PROMPT_COMMAND|PS[0-4]|IFS|CDPATH|EDITOR|VISUAL|PAGER|GNUPGHOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|AGENT_NAME|REPO|REVIEWER|READY_ISSUE|POLL_SECONDS|IDLE_SECONDS|MAX_CONCURRENT|SCALE_TO_ZERO|ROUTER_URL|BOTBOARD_URL|APPROVALS|APPROVALS_URL|APPROVAL_TIMEOUT_MINUTES|WAKE_FILE|SELF_URL|MIRROR_DIR|USAGE_REPORTS|WAKE_TOKEN|REGISTER_TOKEN|REDACT_DIR|JOB_TIMEOUT|MAX_BUDGET_USD)$`)
+	upstreamRe    = regexp.MustCompile(`^https://[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$`)
+	headerNmRe    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,63}$`)
 )
 
 // valueStore writes values; it cannot read them.
@@ -133,10 +135,13 @@ type projectSecret struct {
 func fromPSObject(u unstructured.Unstructured) projectSecret {
 	str := func(f ...string) string { v, _, _ := unstructured.NestedString(u.Object, f...); return v }
 	p := projectSecret{Name: u.GetName(), Scope: str("spec", "scope"), Project: str("spec", "project"), Agent: str("spec", "agent"),
-		Forge: u.GetAnnotations()[forgeAnnotation], Mode: str("spec", "mode"), Upstream: str("spec", "broker", "upstream"),
+		Forge: str("spec", "forge"), Mode: str("spec", "mode"), Upstream: str("spec", "broker", "upstream"),
 		Header: str("spec", "broker", "header"), Scheme: str("spec", "broker", "scheme"), EnvName: str("spec", "env", "name"),
 		Description: str("spec", "description"), Phase: str("status", "phase"), Message: str("status", "message"),
 		SyncedAt: str("status", "syncedAt")}
+	if p.Forge == "" { // objects from before spec.forge: the annotation, else gitea (the CRD default)
+		p.Forge = u.GetAnnotations()[forgeAnnotation]
+	}
 	if p.Forge == "" {
 		p.Forge = "gitea"
 	}
@@ -153,14 +158,22 @@ type secretsAPI struct {
 	agents agentLister
 }
 
-// repoOf: the repository whose admins manage the secret (scope agent: the agent's repository) and its forge.
-func (s *secretsAPI) repoOf(ctx context.Context, p projectSecret) (repo, forge string, err error) {
-	if p.Scope == "project" {
-		return p.Project, p.Forge, nil
+// repoOf: the repository whose admins manage the secret, and its forge. Both are stored in the spec (scope agent:
+// the agent's repository at creation, review of #273), so a later agent of the same name changes nothing, and the
+// operator delivers to exactly the (forge, repository) that was authorized.
+func (s *secretsAPI) repoOf(p projectSecret) (repo, forge string, err error) {
+	if p.Project == "" {
+		return "", "", invalid("project secret without a repository")
 	}
+	return p.Project, p.Forge, nil
+}
+
+// bindAgent fills the repository and forge of a new scope-agent secret from the live Agent. A forge in the request
+// must match the agent's.
+func (s *secretsAPI) bindAgent(ctx context.Context, p *projectSecret, forgeGiven bool) error {
 	list, err := s.agents.List(ctx)
 	if err != nil {
-		return "", "", err
+		return err
 	}
 	for _, a := range list {
 		if a.Name == p.Agent && len(a.Repos) > 0 {
@@ -168,16 +181,20 @@ func (s *secretsAPI) repoOf(ctx context.Context, p projectSecret) (repo, forge s
 			if f == "" {
 				f = "gitea"
 			}
-			return a.Repos[0], f, nil
+			if forgeGiven && f != p.Forge {
+				return invalid("agent " + p.Agent + " works on " + f + ", not " + p.Forge)
+			}
+			p.Project, p.Forge = a.Repos[0], f
+			return nil
 		}
 	}
-	return "", "", invalid("no such agent: " + p.Agent)
+	return invalid("no such agent: " + p.Agent)
 }
 
 func (s *secretsAPI) audit(e auditEntry, p *projectSecret) auditEntry {
 	if p != nil {
 		e.Request = map[string]any{"secret": p.Name, "scope": p.Scope, "project": p.Project, "agent": p.Agent, "mode": p.Mode,
-			"upstream": p.Upstream, "envName": p.EnvName}
+			"forge": p.Forge, "upstream": p.Upstream, "envName": p.EnvName}
 	}
 	return e
 }
@@ -194,7 +211,7 @@ func (s *secretsAPI) list(rw http.ResponseWriter, r *http.Request) {
 	for _, u := range items {
 		p := fromPSObject(u)
 		if !s.w.isAdmin(id) {
-			repo, forge, err := s.repoOf(r.Context(), p)
+			repo, forge, err := s.repoOf(p)
 			if err != nil {
 				continue
 			}
@@ -241,6 +258,17 @@ func str(m map[string]json.RawMessage, k string) (string, bool) {
 
 // parseNew validates a create body into the object (without the value).
 func parseNew(m map[string]json.RawMessage) (projectSecret, bool, error) {
+	p, risk, err := parseNewFields(m)
+	if err == nil && p.Mode == "env" {
+		// a shorter value is not redacted from approval text (images/forge/approvals.go), so mode env refuses it
+		if v, verr := readValue(m); verr == nil && len(v) < minEnvValue {
+			return p, false, invalid(fmt.Sprintf("mode env: the value must be at least %d bytes (shorter values are not redacted from approval text)", minEnvValue))
+		}
+	}
+	return p, risk, err
+}
+
+func parseNewFields(m map[string]json.RawMessage) (projectSecret, bool, error) {
 	var p projectSecret
 	risk := false
 	for k := range m {
@@ -308,7 +336,7 @@ func parseNew(m map[string]json.RawMessage) (projectSecret, bool, error) {
 		if m["broker"] != nil || json.Unmarshal(m["env"], &e) != nil {
 			return p, false, invalid("mode env needs env {name, riskAccepted} and no broker")
 		}
-		if !envNameRe.MatchString(e.Name) || envReservedRe.MatchString(e.Name) || envReserved[e.Name] {
+		if !envNameRe.MatchString(e.Name) || envReservedRe.MatchString(e.Name) {
 			return p, false, invalid("env.name must be an upper-case variable name that agentdev does not use")
 		}
 		if !e.RiskAccepted {
@@ -322,7 +350,7 @@ func parseNew(m map[string]json.RawMessage) (projectSecret, bool, error) {
 }
 
 func psObject(p projectSecret, risk bool) *unstructured.Unstructured {
-	spec := map[string]any{"scope": p.Scope, "mode": p.Mode}
+	spec := map[string]any{"scope": p.Scope, "mode": p.Mode, "forge": p.Forge}
 	if p.Project != "" {
 		spec["project"] = p.Project
 	}
@@ -381,7 +409,14 @@ func (s *secretsAPI) create(rw http.ResponseWriter, r *http.Request) {
 		s.w.fail(rw, e, err)
 		return
 	}
-	repo, forge, err := s.repoOf(r.Context(), p)
+	if p.Scope == "agent" {
+		if err := s.bindAgent(r.Context(), &p, m["forge"] != nil); err != nil {
+			s.w.fail(rw, e, err)
+			return
+		}
+		e = s.audit(e, &p)
+	}
+	repo, forge, err := s.repoOf(p)
 	if err != nil {
 		s.w.fail(rw, e, err)
 		return
@@ -390,14 +425,19 @@ func (s *secretsAPI) create(rw http.ResponseWriter, r *http.Request) {
 		s.w.fail(rw, e, err)
 		return
 	}
-	p.Forge = forge
 	out, err := s.ps.CreatePS(r.Context(), psObject(p, risk))
 	if err != nil {
 		s.w.fail(rw, e, kubeInvalid(err))
 		return
 	}
 	if err := s.values.SetValue(r.Context(), p.Name, value); err != nil {
-		_ = s.ps.DeletePS(r.Context(), p.Name, string(out.GetUID())) // no object without a value from this request
+		// no object without a value from this request; if that fails too, say so (the object stays pending)
+		if derr := s.ps.DeletePS(r.Context(), p.Name, string(out.GetUID())); derr != nil && !apierrors.IsNotFound(derr) {
+			log.Printf("secret %s: value not written and the object not removed, delete it: %v", p.Name, derr)
+			s.w.fail(rw, e, &httpErr{http.StatusBadGateway, "error",
+				"the value was not stored and the project secret " + p.Name + " stays pending; delete it and try again"})
+			return
+		}
 		s.w.fail(rw, e, fmt.Errorf("write value: %w", err))
 		return
 	}
@@ -422,9 +462,9 @@ func (s *secretsAPI) managed(r *http.Request, e *auditEntry) (*unstructured.Unst
 	}
 	p := fromPSObject(*u)
 	*e = s.audit(*e, &p)
-	repo, forge, err := s.repoOf(r.Context(), p)
+	repo, forge, err := s.repoOf(p)
 	if err != nil {
-		if s.w.isAdmin(id) { // the agent is gone: admins can still clean up
+		if s.w.isAdmin(id) { // an object without a repository (written by hand): admins can still clean up
 			e.Grant = "admin-group"
 			return u, p, nil
 		}

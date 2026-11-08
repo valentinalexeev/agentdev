@@ -37,7 +37,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Scoped secrets store, part 3 (#202): write-only API (`GET/POST /api/secrets`, `PUT /api/secrets/<name>/value`,
   `DELETE /api/secrets/<name>`; repository admins or `agentdev-admins`, audit-logged without the value) and a
   **Secrets** page in the web UI. The forge sidecar removes mode `env` values from approval text. The API can create, update and delete value Secrets but never read them. Re-run:
-  `./run.sh 13` (sets `SECRETS_VALUES_NS` on the API).
+  `./run.sh 13` (sets `SECRETS_VALUES_NS` on the API). The API writes the forge into `spec.forge` and, for scope
+  `agent`, the agent's repository into `spec.project`, and authorizes rotate and delete against the stored
+  repository. Mode `env` values shorter than 8 bytes are refused (they would not be redacted). The reserved
+  variable names are one expression shared by the API and the CRD (`TestReservedEnvMatchesCRD`).
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

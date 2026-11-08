@@ -34,7 +34,11 @@ func envPS(name, scope, owner, variable string) *v1.ProjectSecret {
 
 func TestBrokerRoutesScopes(t *testing.T) {
 	agents := []v1.Agent{*agent("alice", nil), *agent("bob", nil), *agent("carol", func(a *v1.Agent) { a.Spec.Repo = "other/repo" })}
-	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret { p := brokerPS("mine", "agent", "carol"); p.Spec.Project = "other/repo"; return *p }(),
+	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret {
+		p := brokerPS("mine", "agent", "carol")
+		p.Spec.Project = "other/repo"
+		return *p
+	}(),
 		*envPS("db", "project", "owner/repo", "DB_PASSWORD")}
 	routes, src := brokerRoutes(secrets, agents)
 	var m map[string]brokerRoute
