@@ -1,0 +1,94 @@
+# Check (#213): the post-deploy smoke test passes when the public hosts answer as expected and fails clearly when a
+# host does not answer or exposes /status. The "public hosts" are local servers: the real router (images/router) for
+# the webhook host and a small page server for the UI and auth hosts. Both ingress modes use the same checks.
+# Run: ansible-playbook infra/ansible/tests/ingress_smoke.yml
+- name: Post-deploy smoke test (#213)
+  hosts: localhost
+  gather_facts: false
+  vars_files: [../roles/ingress/defaults/main.yml]
+  vars:
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    kube_context: none
+    authentik_enabled: true
+    api: {oidc_issuer: "https://auth.example.com/"}
+    router: 127.0.0.1:18480
+    page: 127.0.0.1:18490
+    dead: 127.0.0.1:18499
+  tasks:
+    - name: Start the router (public port only) and a page server
+      ansible.builtin.shell: |
+        export PORT=18480 INTERNAL_PORT=18481 HEALTH_PORT=18482 FORGE_SECRETS=github=s
+        nohup node {{ playbook_dir }}/../../../images/router/router.js >/dev/null 2>&1 &
+        echo $! > /tmp/ingress-smoke-router.pid
+        nohup node -e "require('http').createServer((q,s)=>s.writeHead(q.url==='/status'?200:302,{location:'/x'}).end()).listen(18490)" >/dev/null 2>&1 &
+        echo $! > /tmp/ingress-smoke-page.pid
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          curl -s -o /dev/null http://127.0.0.1:18490/ && curl -s -o /dev/null -X POST http://127.0.0.1:18480/hook && break
+          sleep 0.3
+        done
+      changed_when: false
+
+    - name: The default list (gateway mode) has the webhook, UI and auth checks
+      ansible.builtin.assert:
+        that:
+          - ingress_smoke | bool
+          - ingress_smoke_checks | length == 4
+          - ingress_smoke_checks[0].method == 'POST'
+          - ingress_smoke_checks[0].url == 'http://hooks.example.com/hook'
+          - ingress_smoke_checks[0].want | map('int') | list == [401]
+          - ingress_smoke_checks[1].want | map('int') | list == [404]
+          - not (ingress_smoke_forwarder_pods | bool)
+        quiet: true
+      vars:
+        ingress: {host: agentdev.example.com, webhook_host: hooks.example.com, auth_host: auth.example.com, smoke_scheme: http}
+
+    - name: Without the UI and authentik only the webhook host is asked
+      ansible.builtin.assert:
+        that: ingress_smoke_checks | map(attribute='url') | list == ['http://agentdev.example.com/hook', 'http://agentdev.example.com/status']
+        quiet: true
+      vars:
+        authentik_enabled: false
+        ingress: {host: agentdev.example.com, ui: false, smoke_scheme: http}
+
+    - name: A forwarder with a pod selector is waited for; CIDRs only are not
+      ansible.builtin.assert:
+        that:
+          - ingress_smoke_forwarder_pods | bool
+        quiet: true
+      vars:
+        ingress: {mode: external, host: agentdev.example.com, forwarder: {namespace: tailscale, pod_selector: {app: ts}}}
+
+    - name: A forwarder with CIDRs only is not waited for (no pods to select)
+      ansible.builtin.assert:
+        that: not (ingress_smoke_forwarder_pods | bool)
+        quiet: true
+      vars:
+        ingress: {mode: external, host: agentdev.example.com, forwarder: {cidrs: [100.64.0.0/10]}}
+
+    - name: Healthy hosts pass (gateway and external mode)
+      ansible.builtin.include_tasks: ../roles/ingress/tasks/smoke.yml
+      loop: [gateway, external]
+      loop_control: {loop_var: mode}
+      vars:
+        ingress_smoke_delay: 1   # task vars outrank the role defaults loaded with vars_files
+        ingress: {mode: "{{ mode }}", host: "{{ page }}", webhook_host: "{{ router }}", auth_host: "{{ page }}", smoke_timeout: 1, smoke_scheme: http}
+
+    - name: Broken hosts are refused with a clear message
+      ansible.builtin.include_tasks: includes/ingress_smoke_refused.yml
+      loop:
+        - name: webhook host does not answer
+          ingress: {host: "{{ page }}", webhook_host: "{{ dead }}", smoke_timeout: 1, smoke_scheme: http}
+          want: /hook gave -1
+        - name: webhook host exposes /status
+          ingress: {host: "{{ page }}", webhook_host: "{{ page }}", smoke_timeout: 1, smoke_scheme: http}
+          want: /status gave 200
+        - name: UI host does not answer
+          ingress: {mode: external, host: "{{ dead }}", webhook_host: "{{ router }}", smoke_timeout: 1, smoke_scheme: http}
+          want: "{{ dead }}/ gave -1"
+      vars: {ingress_smoke_delay: 1}
+      loop_control: {loop_var: case, label: "{{ case.name }}"}
+
+    - name: Stop the local servers
+      ansible.builtin.shell: kill "$(cat /tmp/ingress-smoke-router.pid)" "$(cat /tmp/ingress-smoke-page.pid)"; rm -f /tmp/ingress-smoke-*.pid
+      changed_when: false

@@ -56,3 +56,8 @@ go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName
 (short name `exe`) in that namespace and runs `ExecutorRun`s (short name `exr`): a plan of each PR head, a plan of each
 merge commit, and an apply after an `Approval` of that plan. The same binary runs `hash-plan <file>` and
 `verify-plan <file> <sha256>` inside the Jobs. Admin guide: `docs/admin.md`, "Deterministic executors".
+
+**Project secrets (#202, ADR 0003).** With `SECRETS_STORE` set (`./run.sh 13`), the operator keeps one
+`ExternalSecret ps-<name>` per `ProjectSecret` (short name `psec`) and mirrors its sync state into the status
+(`pending`, `ready`, `error`). It never reads the value. An ExternalSecret of the same name that it does not own is
+never taken over. Field rules: `api/v1alpha1/projectsecret_types.go`; name rules: `manifests/secrets-policy.yaml.tmpl`.
