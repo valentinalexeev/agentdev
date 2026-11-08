@@ -111,3 +111,6 @@ Migration: if your deployment repository has the workaround resource
 - Or move the state to the module address:
   `terraform state rm google_billing_account_iam_member.ci_budgets`, then
   `terraform import 'module.agentdev.google_billing_account_iam_member.automation_budgets[0]' "<billing_account_id> roles/billing.costsManager serviceAccount:<automation_service_account>"`.
+
+Tests: `terraform init -backend=false && terraform test` checks the secret store IAM (plan only, mocked provider, no
+credentials; `tests/secrets.tftest.hcl`).
