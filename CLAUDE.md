@@ -206,6 +206,9 @@ The independent reviewer checks these items on every PR, and lists the result pe
 5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
    shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
 6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+7. **Internal interfaces:** a change to an internal interface (worker and forge images against router, operator,
+   Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
+   (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
 
 ## Coordination and resource limits
 

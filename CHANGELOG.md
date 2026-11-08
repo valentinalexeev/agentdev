@@ -22,6 +22,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agentdev/created-by` (OIDC subject) on agents the API makes. Ansible `api.max_agents` / `api.max_agents_per_user`
   (validated as whole numbers), `config.env` `MAX_AGENTS` / `MAX_AGENTS_PER_USER`. An invalid env value stops the API
   at start. To apply: kind `./run.sh 10`; GKE the playbook (role `api`). Docs: admin.md "Limit the number of agents".
+=======
+- Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
+  images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
+  (`tools/claude-stub`) replaces the model, so no credential is needed. Checks: register, idle stop, wake, job, push,
+  PR, reply, proxy usage line. `CLAUDE_REAL=1` uses the real model (nightly or by hand only). `06-agents.sh` pulls
+  `WORKER_IMAGE` and `FORGE_IMAGE` when they are not local `agentdev/*` tags. Reviewer checklist item 7 in `CLAUDE.md`.
 - Scoped secrets store, part 1 (#202, ADR 0003 now on `main`): `ProjectSecret` resource (`agentdev.dev/v1alpha1`,
   scopes `project` and `agent`, modes `broker` and opt-in `env`; no value in the object), External Secrets Operator
   with a namespaced `SecretStore` (Kubernetes provider on kind, GCP Secret Manager template for GKE), and CEL
@@ -285,6 +291,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
+  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
+  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
+  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
 - Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
