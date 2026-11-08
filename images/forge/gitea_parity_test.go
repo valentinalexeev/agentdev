@@ -107,3 +107,24 @@ func TestGiteaOwnPRLabel(t *testing.T) {
 		t.Fatalf("refused label calls reached Gitea: %v", writes[1:])
 	}
 }
+
+// #250: Gitea path numbers are bounded like the GitHub driver's
+func TestGiteaPathNumbersBounded(t *testing.T) {
+	forge, calls := fakeForge(t)
+	s := newServer(&Config{ForgeURL: forge.URL, ForgeUser: "alice", Token: "s3cret", Repos: []string{"owner/repo"}})
+	h := s.routes()
+	for _, p := range []string{"/issues/0", "/issues/012", "/issues/12345678901234567",
+		"/pulls/7/reviews/0/comments", "/pulls/99999999999999999999"} {
+		if rec := call(t, h, "GET", "/api/v1/repos/owner/repo"+p, ""); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: want 403, got %d", p, rec.Code)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("refused calls reached the forge: %v", *calls)
+	}
+	for _, p := range []string{"/issues/1", "/issues/1234567890123456", "/pulls/7/reviews/9/comments"} {
+		if rec := call(t, h, "GET", "/api/v1/repos/owner/repo"+p, ""); rec.Code != 200 {
+			t.Errorf("%s: %d", p, rec.Code)
+		}
+	}
+}
