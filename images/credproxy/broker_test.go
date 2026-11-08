@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 type brokerFixture struct {
@@ -181,3 +183,59 @@ func TestTarget(t *testing.T) {
 }
 
 func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }
+
+// Review of #272: an upstream that echoes the credential in a binary body, or in an encoded body the broker did not
+// ask for, never returns the value to the agent.
+func TestBrokerRedactsBinaryAndRefusesEncoded(t *testing.T) {
+	f := newBrokerFixture(t)
+	alice := "Bearer " + agentKey(testSigning, "alice")
+	f.resp = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(bytes.Repeat([]byte("x"), 40000)) // the value straddles the redactor's read boundary
+		io.WriteString(w, "echo:"+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")+":end")
+	}
+	resp, body := f.get(t, "/s/npm/bin", alice, nil)
+	if resp.StatusCode != 200 || strings.Contains(body, "s3cr3t") || !strings.Contains(body, "echo:[redacted]:end") {
+		t.Errorf("binary echo: status %d, leaked %v", resp.StatusCode, strings.Contains(body, "s3cr3t"))
+	}
+	f.resp = func(w http.ResponseWriter, r *http.Request) {
+		var gz bytes.Buffer
+		zw := gzip.NewWriter(&gz)
+		io.WriteString(zw, "token="+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		zw.Close()
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Encoding", "br") // not decoded by the client: must not pass
+		w.Write(gz.Bytes())
+	}
+	f.logs.Reset()
+	resp, body = f.get(t, "/s/npm/gz", alice, nil)
+	if resp.StatusCode != http.StatusBadGateway || strings.Contains(body, "token=") {
+		t.Errorf("encoded echo: status %d body %q", resp.StatusCode, body)
+	}
+	if !strings.Contains(f.logs.String(), `"rule":"broker-encoded-response"`) {
+		t.Errorf("no event: %s", f.logs)
+	}
+}
+
+func TestRedactStreamSmallReads(t *testing.T) {
+	src := strings.Repeat("ab", 10) + "s3cr3t-value" + "tail" + "s3cr3t-value"
+	r := redactStream(io.NopCloser(iotest.OneByteReader(strings.NewReader(src))), "s3cr3t-value")
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != strings.Repeat("ab", 10)+"[redacted]tail[redacted]" {
+		t.Errorf("%q %v", got, err)
+	}
+}
+
+func TestPublicOnly(t *testing.T) {
+	for _, a := range []string{"127.0.0.1:443", "10.1.2.3:443", "172.16.0.1:443", "192.168.1.1:443", "169.254.169.254:80",
+		"100.64.0.1:443", "[::1]:443", "[fe80::1]:443", "[fd00::1]:443", "0.0.0.0:443"} {
+		if publicOnly("tcp", a, nil) == nil {
+			t.Errorf("%s allowed", a)
+		}
+	}
+	for _, a := range []string{"93.184.216.34:443", "[2606:2800:220:1::1]:443"} {
+		if err := publicOnly("tcp", a, nil); err != nil {
+			t.Errorf("%s refused: %v", a, err)
+		}
+	}
+}

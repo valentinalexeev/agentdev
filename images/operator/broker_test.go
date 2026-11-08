@@ -19,8 +19,8 @@ func brokerPS(name, scope, owner string) *v1.ProjectSecret {
 		Spec: v1.ProjectSecretSpec{Scope: scope, Mode: "broker", Broker: &v1.ProjectSecretBroker{Upstream: "https://npm.example.com/base"}}}
 	if scope == "project" {
 		ps.Spec.Project = owner
-	} else {
-		ps.Spec.Agent = owner
+	} else { // scope agent records the agent's repository (fixtures: owner/repo, see agent())
+		ps.Spec.Agent, ps.Spec.Project = owner, "owner/repo"
 	}
 	return ps
 }
@@ -34,7 +34,11 @@ func envPS(name, scope, owner, variable string) *v1.ProjectSecret {
 
 func TestBrokerRoutesScopes(t *testing.T) {
 	agents := []v1.Agent{*agent("alice", nil), *agent("bob", nil), *agent("carol", func(a *v1.Agent) { a.Spec.Repo = "other/repo" })}
-	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), *brokerPS("mine", "agent", "carol"),
+	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret {
+		p := brokerPS("mine", "agent", "carol")
+		p.Spec.Project = "other/repo"
+		return *p
+	}(),
 		*envPS("db", "project", "owner/repo", "DB_PASSWORD")}
 	routes, src := brokerRoutes(secrets, agents)
 	var m map[string]brokerRoute
@@ -164,4 +168,69 @@ func envOfC(c *corev1.Container, k string) string {
 		}
 	}
 	return ""
+}
+
+// Review of #272: a repository is (forge, name), and scope agent is bound to the agent's repository at creation.
+func TestUsableByForgeAndRecreatedAgent(t *testing.T) {
+	gh := agent("alice", func(a *v1.Agent) { a.Spec.Forge = "github" })
+	if usableBy(brokerPS("npm", "project", "owner/repo"), gh) {
+		t.Error("a Gitea project secret reached the GitHub agent of the same repository name")
+	}
+	ps := brokerPS("npm", "project", "owner/repo")
+	ps.Spec.Forge = "github"
+	if !usableBy(ps, gh) || usableBy(ps, agent("bob", nil)) {
+		t.Error("forge github: wrong agents")
+	}
+	recreated := agent("carol", func(a *v1.Agent) { a.Spec.Repo = "else/where" })
+	if usableBy(brokerPS("mine", "agent", "carol"), recreated) {
+		t.Error("an agent recreated under the same name for another repository inherited the secret")
+	}
+	if !usableBy(brokerPS("mine", "agent", "carol"), agent("carol", nil)) || usableBy(brokerPS("mine", "agent", "carol"), agent("dave", nil)) {
+		t.Error("scope agent: wrong agents")
+	}
+	if usableBy(&v1.ProjectSecret{Spec: v1.ProjectSecretSpec{Scope: "agent", Agent: "carol"}}, agent("carol", nil)) {
+		t.Error("scope agent without a recorded repository applied")
+	}
+}
+
+// Review of #272 (and #277): a mode-env secret named like a variable agentdev sets never overrides it, even when
+// the CRD rule does not refuse the name; the attempt is a SecurityEvent.
+func TestSecretEnvCannotOverridePlatformEnv(t *testing.T) {
+	r, c := setup(t, agent("alice", nil), envPS("a-repo", "project", "owner/repo", "REPO"),
+		envPS("b-poll", "project", "owner/repo", "POLL_SECONDS"), envPS("c-noproxy", "project", "owner/repo", "NO_PROXY"),
+		envPS("d-db", "project", "owner/repo", "DB_PASSWORD"))
+	r.D.Secrets, r.D.EgressProxy = true, "http://egress:3128"
+	reconcile(t, r, "alice")
+	ag := container(getSTS(t, c, "alice"), "agent")
+	count := map[string]int{}
+	for _, e := range ag.Env {
+		count[e.Name]++
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && strings.HasPrefix(e.ValueFrom.SecretKeyRef.Name, "ps-") && e.Name != "DB_PASSWORD" {
+			t.Errorf("%s comes from %s", e.Name, e.ValueFrom.SecretKeyRef.Name)
+		}
+	}
+	for _, n := range []string{"REPO", "POLL_SECONDS", "NO_PROXY", "no_proxy", "DB_PASSWORD"} {
+		if count[n] != 1 {
+			t.Errorf("%s rendered %d times", n, count[n])
+		}
+	}
+	if envOf(getSTS(t, c, "alice"), "POLL_SECONDS") != "20" || envOf(getSTS(t, c, "alice"), "REPO") != "owner/repo" {
+		t.Error("platform value lost")
+	}
+	var evs v1.SecurityEventList
+	_ = c.List(context.Background(), &evs)
+	rules := 0
+	for _, e := range evs.Items {
+		if e.Spec.Rule == "secret-env-reserved" && e.Spec.Agent == "alice" && e.Spec.Severity == "high" {
+			rules++
+		}
+	}
+	if rules != 3 {
+		t.Errorf("%d secret-env-reserved events, want 3", rules)
+	}
+	reconcile(t, r, "alice") // idempotent
+	_ = c.List(context.Background(), &evs)
+	if len(evs.Items) != 3 {
+		t.Errorf("%d events after a second reconcile", len(evs.Items))
+	}
 }
