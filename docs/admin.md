@@ -1664,6 +1664,10 @@ The next `./run.sh 12` or playbook run makes it again.
    The output shows the stage (`pr`, `merge` or `apply`), the pull request, the commit and the phase.
 2. To read the output of a run, run `kubectl -n agentdev-executors logs job/<run name> -c tool`.
 
+NOTE: The runs of stage `merge`, `apply` and `snapshot` of one executor run one at a time. A run with an empty PHASE
+waits for the active run. An approved apply starts first. Then the merge plans start in the order of the merges.
+Runs of stage `pr` do not wait.
+
 ### Stop an executor
 
 1. Run `kubectl -n agentdev-executors patch executor tf-prod --type merge -p '{"spec":{"paused":true}}'`.

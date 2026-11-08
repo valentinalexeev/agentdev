@@ -16,6 +16,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Executor run order (#271 review): the merge plans, applies and snapshots of one Executor run one at a time. A
+  waiting run starts at the next poll after the active run ends. Order: an approved apply first, then merge plans by
+  merge time (annotation `agentdev.dev/merged-at`), then the snapshot. PR head plans do not wait.
 - Ansible executor stages over SSH certificates, and server snapshots (#204 part 2, #205 decision 4; ADR 0007).
   `Executor.spec.ssh` gives the merge plan a new 15-minute certificate of principal `agentdev-<executor>-check` (user
   `agentdev-check`, no sudo) and the apply after the approval one of `agentdev-<executor>-apply` (user `agentdev`),
