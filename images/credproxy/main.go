@@ -209,7 +209,7 @@ func main() {
 	if os.Getenv("MODE") == "broker" { // credential broker for project secrets (#202, broker.go)
 		eventSource = "credential-broker"
 		bk := newBroker(signing, envOr("ROUTES_FILE", "/etc/credential-broker/routes/routes.json"),
-			envOr("VALUES_DIR", "/etc/credential-broker/values"), os.Getenv("SELF_URL"), http.DefaultTransport)
+			envOr("VALUES_DIR", "/etc/credential-broker/values"), os.Getenv("SELF_URL"), brokerTransport())
 		serve(&http.Server{Addr: envOr("LISTEN", ":8080"), Handler: bk, ReadHeaderTimeout: 10 * time.Second}, "credential-broker")
 		return
 	}

@@ -29,7 +29,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
   base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
   request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
-  agent container. The harness guide lists the agent's broker secrets.
+  agent container. The harness guide lists the agent's broker secrets. A mode `env` secret never overrides a
+  variable agentdev sets (the operator drops it and records `secret-env-reserved`), and the reserved names now cover
+  every rendered variable (`JOB_TIMEOUT`, `REPO`, `NO_PROXY`, ...) and loader and trust hooks. Scope matching uses
+  the forge. The broker redacts the value from binary bodies, refuses unrequested encodings and dials public
+  addresses only.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

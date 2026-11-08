@@ -15,8 +15,11 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -203,6 +207,9 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			log.Printf("broker %s: upstream error: %v", name, err)
+			if errors.Is(err, errUnsolicitedEncoding) {
+				emitEvent(agent, "broker-encoded-response", "medium", r.Method+" /s/"+name+": upstream answered with an unrequested Content-Encoding")
+			}
 			b.fail(w, http.StatusBadGateway, "upstream not reachable")
 		},
 	}
@@ -233,7 +240,14 @@ func rewriteBody(resp *http.Response, upstream, self, value string) error {
 	if loc := resp.Header.Get("Location"); strings.HasPrefix(loc, upstream) {
 		resp.Header.Set("Location", self+strings.TrimPrefix(loc, upstream))
 	}
-	if !text || resp.ContentLength > maxRewrite || resp.Header.Get("Content-Encoding") != "" {
+	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
+		// the broker strips Accept-Encoding (and Go's transport decodes the gzip it asked for itself): an encoded body
+		// was not requested, and a value inside it could not be redacted (review of #272)
+		resp.Body.Close()
+		return errUnsolicitedEncoding
+	}
+	if !text || resp.ContentLength > maxRewrite {
+		resp.Body = redactStream(resp.Body, value)
 		return nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRewrite+1))
@@ -241,8 +255,11 @@ func rewriteBody(resp *http.Response, upstream, self, value string) error {
 		resp.Body.Close()
 		return err
 	}
-	if len(body) > maxRewrite { // larger than announced: pass it on unchanged
-		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), resp.Body))
+	if len(body) > maxRewrite { // larger than announced: pass it on, links unchanged, the value still redacted
+		resp.Body = redactStream(struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), resp.Body), resp.Body}, value)
 		return nil
 	}
 	resp.Body.Close()
@@ -254,4 +271,83 @@ func rewriteBody(resp *http.Response, upstream, self, value string) error {
 	resp.ContentLength = int64(len(body))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
+}
+
+var errUnsolicitedEncoding = errors.New("upstream sent an encoded body the broker did not ask for")
+
+// redactStream replaces the value in a body that is not rewritten as a whole (binary, or larger than maxRewrite).
+// It holds back len(value)-1 bytes between reads, so a value split across two reads is still found; the length of
+// the body changes, so Content-Length must not be trusted by the caller (ReverseProxy streams it chunked).
+func redactStream(rc io.ReadCloser, value string) io.ReadCloser {
+	if len(value) < 8 {
+		return rc
+	}
+	return &redactor{rc: rc, v: []byte(value)}
+}
+
+type redactor struct {
+	rc   io.ReadCloser
+	v    []byte
+	buf  []byte // read but not yet returned
+	out  []byte // ready to return
+	done bool
+}
+
+func (r *redactor) Read(p []byte) (int, error) {
+	for len(r.out) == 0 {
+		if r.done {
+			return 0, io.EOF
+		}
+		chunk := make([]byte, 32<<10)
+		n, err := r.rc.Read(chunk)
+		r.buf = append(r.buf, chunk[:n]...)
+		r.buf = bytes.ReplaceAll(r.buf, r.v, []byte("[redacted]"))
+		if err != nil {
+			r.out, r.buf, r.done = r.buf, nil, true
+			if err != io.EOF {
+				return 0, err
+			}
+			continue
+		}
+		if keep := len(r.v) - 1; len(r.buf) > keep {
+			r.out = append(r.out, r.buf[:len(r.buf)-keep]...)
+			r.buf = append([]byte(nil), r.buf[len(r.buf)-keep:]...)
+		}
+	}
+	n := copy(p, r.out)
+	r.out = r.out[n:]
+	return n, nil
+}
+
+func (r *redactor) Close() error { return r.rc.Close() }
+
+// publicOnly refuses connections to loopback, private, link-local, CGNAT and unspecified addresses, checked on the
+// address actually dialled (after DNS, so a public name resolving to 10.x or a rebinding answer is refused too). The
+// NetworkPolicy says the same on GKE; this holds on any CNI (review of #272).
+func publicOnly(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !publicIP(ip) {
+		return fmt.Errorf("credential-broker: upstream address %s is not public", host)
+	}
+	return nil
+}
+
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+func publicIP(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || cgnat.Contains(ip))
+}
+
+// brokerTransport is http.DefaultTransport with publicOnly on every dial.
+func brokerTransport() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: publicOnly}
+	t.DialContext = d.DialContext
+	t.Proxy = nil // the broker is the egress for its upstreams; it never goes through another proxy
+	return t
 }

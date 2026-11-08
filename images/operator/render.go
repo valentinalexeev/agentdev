@@ -126,6 +126,17 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
 	}}
+	agentEnv := append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
+		env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
+		env("ROUTER_URL", routerURL(ns)),
+		env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
+		env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
+		corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
+	), append(r.claudeProxyEnv(n), r.brokerEnv(n)...)...)
+	// project secrets last, and never under a name rendered above: with duplicate names the kubelet uses the last
+	// entry, so a secret named like a platform variable (JOB_TIMEOUT, NO_PROXY) would override it (review of #272)
+	agentEnv = append(agentEnv, secretEnv(a, psecs, envNames(agentEnv))...)
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -133,14 +144,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
-			env("ROUTER_URL", routerURL(ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
-			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
-			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(r.claudeProxyEnv(n), r.brokerEnv(n)...), secretEnv(a, psecs)...)...),
+		Env:     agentEnv,
 		EnvFrom: r.claudeEnvFrom(a),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
