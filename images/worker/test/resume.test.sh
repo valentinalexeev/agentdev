@@ -126,6 +126,27 @@ check "no session: the fresh run gets a new session id" "! grep -q 11111111 '${J
 MODE=edit; JOB=issue-6 RESUMING=1 run_claude "${WORK}" "P" >/dev/null
 check "a session file that is not a uuid is ignored" "! grep -q -- '--resume' '${CALLS}' && ! grep -q dangerously '${CALLS}'"
 
+# ---- 4b. #177: the run fails while the Claude proxy is down: resumed once when the loop's own probe sees it back
+: > "${CALLS}"; PROBES="${tmp}/probes"; : > "${PROBES}"
+# the stub run takes the proxy down (DOWN file); the probe after it fails once, then the proxy is back
+DOWN="${tmp}/down"; rm -f "${DOWN}"; export DOWN
+curl() { echo probe >> "${PROBES}"; if [[ -e "${DOWN}" ]]; then rm -f "${DOWN}"; return 7; fi; return 0; }
+cat > "${tmp}/bin/claude" <<'EOF2'
+#!/bin/bash
+echo "$*" >> "${CALLS}"
+if [[ " $* " == *" --resume "* ]]; then echo '{"type":"result","result":"resumed\nSTATUS: done"}'; else [[ -n "${DOWN_ON:-}" ]] && touch "${DOWN}"; exit 1; fi
+EOF2
+rm -f "${JOBS}/issue-9.session"
+export DOWN_ON=1
+out=$(ANTHROPIC_BASE_URL=http://claude-proxy:8080 CLAUDE_PROXY_WAIT=10 JOB=issue-9 RESUMING=0 run_claude "${WORK}" "P")
+check "proxy lost during the run: the session is resumed once and the job goes on" \
+  "[[ \"\${out}\" == resumed* && \$(grep -c -- '--output-format' '${CALLS}') == 2 ]] && grep -q 'lost the proxy' '${tmp}/log'"
+# the proxy is up: a failed run is a failure (no retry, whatever the run printed)
+: > "${CALLS}"; unset DOWN_ON; curl() { return 0; }
+JOB=issue-9 RESUMING=0 ANTHROPIC_BASE_URL=http://claude-proxy:8080 run_claude "${WORK}" "P" >/dev/null; rc=$?
+check "proxy up: a failed run is not retried" "[[ ${rc} != 0 && \$(grep -c -- '--output-format' '${CALLS}') == 1 ]]"
+unset -f curl
+
 # ---- 5. feedback: kill after the reply, before the cursor write: no second reply, the cursor moves
 : > "${API_LOG}"; : > "${CALLS}"; rm -f "${STATE}/seen/pr-42"
 touch "${JOBS}/pr-42.active" "${JOBS}/pr-42.replying"; echo 2026-11-07T12:00:00Z > "${JOBS}/pr-42.now"

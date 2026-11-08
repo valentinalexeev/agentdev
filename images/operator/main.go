@@ -56,7 +56,14 @@ func main() {
 		Scheme:                 scheme,
 		Cache:                  cacheOptions(ns, execNS), // per kind: agents namespace, executor kinds in EXEC_NS (#161)
 		Metrics:                metricsserver.Options{BindAddress: "0"},
-		HealthProbeBindAddress: ":8081", // one replica, no leader election (add a Lease Role first if that changes)
+		HealthProbeBindAddress: ":8081",
+		// #177: during an operator update the old and the new pod run side by side; only the holder of the Lease
+		// reconciles and runs the collector, usage and executor loops (all leader-only runnables). Released on a clean
+		// stop, so the new pod takes over at once instead of after the lease duration.
+		LeaderElection:                leaderElection(),
+		LeaderElectionID:              "agentdev-operator",
+		LeaderElectionNamespace:       os.Getenv("OPERATOR_NAMESPACE"),
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		log.Error(err, "manager")
@@ -158,6 +165,11 @@ func main() {
 		log.Error(err, "run")
 		os.Exit(1)
 	}
+}
+
+// leaderElection: on unless LEADER_ELECT=false (local runs outside a cluster) or no OPERATOR_NAMESPACE is known.
+func leaderElection() bool {
+	return os.Getenv("LEADER_ELECT") != "false" && os.Getenv("OPERATOR_NAMESPACE") != ""
 }
 
 // envPct reads a percent 1..100; any other value keeps def.

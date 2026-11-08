@@ -384,8 +384,24 @@ new_session_id() {
   local u; u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null) || return 1
   u=${u,,}; [[ "${u}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && echo "${u}"
 }
+# Claude proxy restarts (#177): the proxy is one pod and is replaced on a platform update. Before a run the loop waits
+# until it answers (at most CLAUDE_PROXY_WAIT seconds, default 60); a run that failed because the proxy was not
+# reachable is resumed once (same session, #175) after the proxy is back, instead of failing the job.
+CLAUDE_PROXY_WAIT="${CLAUDE_PROXY_WAIT:-60}"
+[[ "${CLAUDE_PROXY_WAIT}" =~ ^[0-9]{1,4}$ ]] || CLAUDE_PROXY_WAIT=60
+wait_claude_proxy() {
+  [[ -n "${ANTHROPIC_BASE_URL:-}" ]] || return 0
+  local i
+  for (( i = 0; i < CLAUDE_PROXY_WAIT; i += 2 )); do
+    curl -fsS -m 2 "${ANTHROPIC_BASE_URL%/}/healthz" >/dev/null 2>&1 && return 0
+    (( i == 0 )) && log "Claude proxy not reachable: waiting up to ${CLAUDE_PROXY_WAIT}s"
+    sleep 2
+  done
+  log "Claude proxy still not reachable after ${CLAUDE_PROXY_WAIT}s"; return 1
+}
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
   local dir=$1 prompt=$2 sess=() sf="" sid=""
+  wait_claude_proxy || true   # the run itself fails and is retried with backoff if the proxy stays down
   if [[ -n "${JOB:-}" ]]; then
     sf="${STATE}/jobs/${JOB}.session"
     [[ -r "${sf}" ]] && read -r sid < "${sf}"
@@ -399,7 +415,16 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
     fi
     sid=$(new_session_id) && echo "${sid}" > "${sf}" && sess=(--session-id "${sid}")
   fi
-  run_claude_once "${dir}" "${prompt}" "${sess[@]}"
+  local out rc=0
+  out=$(run_claude_once "${dir}" "${prompt}" "${sess[@]}") || rc=$?
+  # #177: the run failed while the proxy is down (a platform update replaces it): resume the same session once when it
+  # is back. Decided by the loop's own probe of the proxy, never by text from the run (the model can print anything).
+  if (( rc != 0 && rc != 75 )) && [[ -n "${sid}" && -n "${ANTHROPIC_BASE_URL:-}" ]] &&
+     ! curl -fsS -m 2 "${ANTHROPIC_BASE_URL%/}/healthz" >/dev/null 2>&1 && wait_claude_proxy; then
+    log "Claude run lost the proxy: resuming the session"
+    rc=0; out=$(run_claude_once "${dir}" "${RESUME_PROMPT}" --resume "${sid}") || rc=$?
+  fi
+  printf '%s' "${out}"; return ${rc}
 }
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   local dir=$1 out rc err mcp=() prompt=$2; shift 2

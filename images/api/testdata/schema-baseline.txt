@@ -1,0 +1,28 @@
+# Columns of the previous release (ADR 0006, #177). Add new columns after a release; remove one only in the
+# release that drops it, one MINOR after the code stopped using it.
+api_audit.action
+api_audit.agent
+api_audit.entry
+api_audit.id
+api_audit.result
+api_audit.stored_at
+api_audit.time
+api_audit.username
+security_events.action
+security_events.agent
+security_events.chain
+security_events.container
+security_events.hash
+security_events.id
+security_events.job
+security_events.pod
+security_events.prev
+security_events.rule
+security_events.schema
+security_events.severity
+security_events.source
+security_events.stored_at
+security_events.time
+security_events.untrusted
+security_settings.id
+security_settings.retention_days

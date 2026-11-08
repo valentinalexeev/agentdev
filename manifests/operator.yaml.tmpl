@@ -75,11 +75,29 @@ spec:
   policyTypes: [Ingress]
   ingress: []
 ---
+# leader election (#177): during an update the old and the new operator pod run side by side; only the Lease holder
+# reconciles. Own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator-leader, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [coordination.k8s.io], resources: [leases], verbs: [create]}
+- {apiGroups: [coordination.k8s.io], resources: [leases], resourceNames: [agentdev-operator], verbs: [get, update, patch]}
+- {apiGroups: [""], resources: [events], verbs: [create, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator-leader, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator-leader}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}, labels: {app: agentdev-operator}}
 spec:
   replicas: 1
+  # new pod first (#177): the new operator waits for the Lease; the old one releases it when it stops
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 1, maxUnavailable: 0}}
   selector: {matchLabels: {app: agentdev-operator}}
   template:
     metadata: {labels: {app: agentdev-operator}}
@@ -91,6 +109,8 @@ spec:
         image: ${OPERATOR_IMAGE}
         env:   # cluster-wide agent defaults, as 06-agents.sh takes them from config.env
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - name: OPERATOR_NAMESPACE   # leader election Lease (#177)
+          valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
         - {name: COST_LABELS, value: "${COST_LABELS}"}   # #184: service/environment on agent and executor pods
         - {name: WORKER_IMAGE, value: "${WORKER_IMAGE}"}
         - {name: FORGE_IMAGE, value: "${FORGE_IMAGE}"}
