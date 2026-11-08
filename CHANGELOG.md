@@ -7,6 +7,20 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Changed
+- **BREAKING** Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
+  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (Sonnet 1, Haiku
+  0.33, Opus 4/4.1 5, Opus 4.5+ 1.67; unknown = highest), so cache reads no longer dominate the budget.
+  `CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens` are replaced by `CLAUDE_BUDGET_UNITS` / `claude_budget_units`;
+  `./run.sh 06`, the playbook and the proxy stop when the old variable is set. Weights, model multipliers and an
+  optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
+  pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
+  stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
+  `model`, `job`, `units` and cache token counts. Migration: (1) rename the variable; as a rule of thumb divide the
+  old token value by 4 for typical Claude Code traffic (old values are 2 to 10 times too high as units), or start
+  with 0 and set the limit after a day of `GET /status`; (2) convert per-agent values in ConfigMap
+  `claude-proxy-budgets` the same way (`kubectl -n coding-agents edit configmap claude-proxy-budgets`); (3) re-run
+  `./run.sh 06` on kind, or the playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
+  tokens and resets with the new proxy pod.
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`

@@ -153,22 +153,43 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
 | Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
-## Claude proxy and token budget
+## Claude proxy and budget
 
 The Claude proxy (`claude-proxy`) is the only pod that has the Claude credentials (#66). An agent sends its model
 requests to the proxy with its proxy key. The proxy adds the real credential and sends the request to the Anthropic
-API. The proxy also counts the tokens of each agent and stops an agent that used its budget.
+API. The proxy also counts the spend of each agent and stops an agent that used its budget.
 
-### Set the token budget of all agents
+### Cost units
 
-The budget is the number of tokens (input, cache and output) that one agent can use in 24 hours.
+The budget counts **cost units**, not raw tokens (#196, [ADR 0002](adr/0002-llm-telemetry-and-cost-control.md)).
+One unit is the price of one input token of the reference model (Sonnet). The proxy weights each token type and
+the model of the response:
 
-1. On `kind`: set `CLAUDE_BUDGET_TOKENS` in `config.env`. On GKE: set `claude_budget_tokens` in `instance.yml`.
+| Token type | Weight |
+|---|---|
+| input | 1 |
+| cache write, 5 minutes | 1.25 |
+| cache write, 1 hour | 2 |
+| cache read | 0.1 |
+| output | 5 |
+
+Model multipliers: Sonnet 1, Haiku 4.5 0.33, Opus 4 and 4.1 5, Opus 4.5 and later 1.67. An unknown model counts
+with the highest multiplier. Claude Code reads most of its context from the cache, so a run uses far fewer units
+than raw tokens (often less than 20 %).
+
+### Set the budget of all agents
+
+The budget is the number of cost units that one agent can use in 24 hours.
+
+1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `config.env`. On GKE: set `claude_budget_units` in `instance.yml`.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
 NOTE: The value 0 means no limit. This is the default.
 
-### Set the token budget of one agent
+NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` were removed in 1.2.0. The deploy stops when they are set.
+See the CHANGELOG for the conversion.
+
+### Set the budget of one agent
 
 1. Run this command (use 0 for no limit):
    `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
@@ -176,11 +197,29 @@ NOTE: The value 0 means no limit. This is the default.
 
 NOTE: A deploy does not change this value. The template of the ConfigMap has no data.
 
-### Look at the token use
+### Change the weights or show USD
 
-1. Open the web UI. The column **Claude tokens (24 h)** shows the tokens of each agent and the budget.
+The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w_cw1h`, `w_cr`, `w_out`,
+`model.<name prefix>` (the longest prefix wins) and `usd_per_million_units`. Each value is a number with at most
+6 decimals. The proxy ignores a bad key or value, keeps the built-in value and writes a `proxy-price-invalid`
+security event.
+
+1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
+   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`.
+2. Deploy again. The proxy reads the ConfigMap again within one minute.
+
+NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
+`usd_per_million_units` only when the instance bills by API key. Without it, the web UI shows units only.
+
+### Look at the spend
+
+1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
+
+   `budgets` lists units per agent. `jobs` lists each job (issue or pull request) of the last 7 days with its
+   units, tokens by type and number of requests, most expensive first. The worker names the job in the header
+   `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
 
 ### Reference: the Claude proxy
 

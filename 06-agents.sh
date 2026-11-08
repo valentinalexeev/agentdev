@@ -86,11 +86,21 @@ PROXY_SIGNING=$(secret_file "${SPIKE_DIR}/.secrets/claude-proxy-signing.key")
 printf '%s' "${PROXY_SIGNING}" | k -n "${AGENTS_NS}" create secret generic claude-proxy-signing --from-file=key=/dev/stdin \
   --dry-run=client -o yaml | k apply -f - >/dev/null
 proxy_key() { printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "${PROXY_SIGNING}" -r | cut -d' ' -f1; }
-[[ "${CLAUDE_BUDGET_TOKENS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_TOKENS must be a number of tokens (0 = no limit)"
+[[ -z "${CLAUDE_BUDGET_TOKENS:-}" ]] || die "CLAUDE_BUDGET_TOKENS was replaced by CLAUDE_BUDGET_UNITS (cost units, #196): see CHANGELOG"
+[[ "${CLAUDE_BUDGET_UNITS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_UNITS must be a number of cost units (0 = no limit)"
+# #196: CLAUDE_PRICES ("key=value ...") becomes the ConfigMap claude-proxy-prices; the proxy checks the values again
+CLAUDE_PRICES_DATA="{"
+read -r -a prices_kv <<< "${CLAUDE_PRICES}"   # no globbing of the entries
+for kv in "${prices_kv[@]}"; do
+  [[ "${kv}" =~ ^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\.[a-z0-9][a-z0-9.-]{0,62})=[0-9]+(\.[0-9]{1,6})?$ ]] \
+    || die "CLAUDE_PRICES: bad entry '${kv}' (key=number, docs/admin.md)"
+  CLAUDE_PRICES_DATA+="\"${kv%%=*}\": \"${kv#*=}\", "
+done
+CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA%, }}"
 # shellcheck disable=SC2086 # AGENTS is a space-separated list
 AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
-  CLAUDE_BUDGET_TOKENS="${CLAUDE_BUDGET_TOKENS}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_TOKENS} ${CLAUDE_SECRET_SOURCES}' \
+  CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS}" CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${CLAUDE_SECRET_SOURCES}' \
   < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"

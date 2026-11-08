@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +27,13 @@ type window struct {
 type usageLine struct {
 	Agent        string  `json:"agent"`
 	Secret       string  `json:"secret"`
-	InputTokens  int64   `json:"input_tokens"`
+	Job          string  `json:"job,omitempty"` // X-Agentdev-Job (#196 D3): agent-supplied, attribution only
+	Model        string  `json:"model,omitempty"`
+	InputTokens  int64   `json:"input_tokens"` // all input, cache writes and reads included (#93 schema)
 	OutputTokens int64   `json:"output_tokens"`
+	CacheRead    int64   `json:"cache_read_tokens,omitempty"`
+	CacheWrite   int64   `json:"cache_write_tokens,omitempty"`
+	Units        int64   `json:"units"` // cost units (#196 D2)
 	RateLimited  bool    `json:"rate_limited"`
 	ResetsAt     int64   `json:"resets_at,omitempty"`
 	FiveHour     *window `json:"five_hour,omitempty"`
@@ -62,10 +68,29 @@ type apiUsage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreation            *struct {
+		Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
+		Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
 }
 
-func (a *apiUsage) input() int64 {
-	return clampTok(a.InputTokens) + clampTok(a.CacheCreationInputTokens) + clampTok(a.CacheReadInputTokens)
+// counts splits the usage by token type (#196). Cache writes without the 5 min / 1 h breakdown count as 5 min.
+func (a *apiUsage) counts() tokenCounts {
+	var t tokenCounts
+	t[tokIn] = clampTok(a.InputTokens)
+	t[tokCacheRead] = clampTok(a.CacheReadInputTokens)
+	t[tokOut] = clampTok(a.OutputTokens)
+	cw := clampTok(a.CacheCreationInputTokens)
+	if c := a.CacheCreation; c != nil {
+		h1 := clampTok(c.Ephemeral1h)
+		if h1 > cw {
+			h1 = cw
+		}
+		t[tokCacheWrite1h] = h1
+		cw -= h1
+	}
+	t[tokCacheWrite5m] = cw
+	return t
 }
 
 func clampTok(n int64) int64 {
@@ -78,15 +103,27 @@ func clampTok(n int64) int64 {
 	return n
 }
 
+// modelRe: the model name taken from the response; anything else counts as unknown (highest multiplier).
+var modelRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.@:_-]{0,99}$`)
+
+func cleanModel(m string) string {
+	if modelRe.MatchString(m) {
+		return m
+	}
+	return ""
+}
+
 // tokenMeter counts the tokens of one response while the body streams to the client. It understands both a JSON
-// body ({"usage":{...}}) and server-sent events (message_start carries input usage, message_delta the cumulative
-// output tokens). It never buffers more than one line (capped) and never changes the bytes passed through.
+// body ({"model":...,"usage":{...}}) and server-sent events (message_start carries the model and input usage,
+// message_delta the cumulative output tokens). It never buffers more than one line (capped) and never changes the
+// bytes passed through.
 type tokenMeter struct {
-	sse     bool
-	mu      sync.Mutex
-	in, out int64
-	buf     bytes.Buffer // JSON body (capped) or the current SSE line
-	over    bool
+	sse   bool
+	mu    sync.Mutex
+	t     tokenCounts
+	model string
+	buf   bytes.Buffer // JSON body (capped) or the current SSE line
+	over  bool
 }
 
 const meterCap = 1 << 20
@@ -126,6 +163,7 @@ func (m *tokenMeter) sseLine(line []byte) {
 	var ev struct {
 		Type    string `json:"type"`
 		Message struct {
+			Model string   `json:"model"`
 			Usage apiUsage `json:"usage"`
 		} `json:"message"`
 		Usage apiUsage `json:"usage"`
@@ -135,35 +173,43 @@ func (m *tokenMeter) sseLine(line []byte) {
 	}
 	switch ev.Type {
 	case "message_start":
-		m.in += ev.Message.Usage.input()
-		m.out = clampTok(ev.Message.Usage.OutputTokens)
-	case "message_delta":
-		if i := ev.Usage.input(); i > 0 { // newer API versions repeat the input usage here
-			m.in = i
+		c := ev.Message.Usage.counts()
+		for i := tokIn; i < tokOut; i++ {
+			m.t[i] += c[i]
 		}
-		if o := clampTok(ev.Usage.OutputTokens); o > m.out { // cumulative
-			m.out = o
+		m.t[tokOut] = c[tokOut]
+		if ev.Message.Model != "" {
+			m.model = cleanModel(ev.Message.Model)
+		}
+	case "message_delta":
+		c := ev.Usage.counts()
+		if c.input() > 0 { // newer API versions repeat the input usage here
+			copy(m.t[:tokOut], c[:tokOut])
+		}
+		if c[tokOut] > m.t[tokOut] { // cumulative
+			m.t[tokOut] = c[tokOut]
 		}
 	}
 }
 
-// totals returns the counted input and output tokens (after the body ended).
-func (m *tokenMeter) totals() (int64, int64) {
+// totals returns the counted tokens by type and the model (after the body ended).
+func (m *tokenMeter) totals() (tokenCounts, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.sse && !m.over {
 		var body struct {
+			Model string   `json:"model"`
 			Usage apiUsage `json:"usage"`
 		}
 		if json.Unmarshal(m.buf.Bytes(), &body) == nil {
-			return body.Usage.input(), clampTok(body.Usage.OutputTokens)
+			return body.Usage.counts(), cleanModel(body.Model)
 		}
 	}
 	if m.sse && m.buf.Len() > 0 { // last line without a newline
 		m.sseLine(m.buf.Bytes())
 		m.buf.Reset()
 	}
-	return m.in, m.out
+	return m.t, m.model
 }
 
 // meteredBody passes the upstream body through and calls done once with the totals at EOF or Close.
@@ -171,7 +217,7 @@ type meteredBody struct {
 	io.ReadCloser
 	m    *tokenMeter
 	once sync.Once
-	done func(in, out int64)
+	done func(t tokenCounts, model string)
 }
 
 func (b *meteredBody) Read(p []byte) (int, error) {

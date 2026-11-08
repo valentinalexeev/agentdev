@@ -1,0 +1,52 @@
+# Render check (#196): the playbook renders manifests/claude-proxy.yaml.tmpl with the budget in cost units and the
+# prices ConfigMap (values as strings), and the assert of deploy.yml refuses the old token variable and bad prices.
+# Run: ansible-playbook infra/ansible/tests/claude_proxy_prices.yml
+- name: Claude proxy units and prices (#196)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    agents_ns: coding-agents
+    platform_ns: agentdev-platform
+    claude_budget_units: 2000000
+    claude_prices: {w_cr: 0.1, model.claude-opus: 5, usd_per_million_units: 3}
+  tasks:
+    - name: Render as deploy.yml does
+      ansible.builtin.set_fact:
+        docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=vars_proxy) | from_yaml_all | list }}"
+      vars:
+        vars_proxy:
+          src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"
+          values:
+            AGENTS_NS: "{{ agents_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            CLAUDE_PROXY_IMAGE: img
+            IMAGE_PULL_POLICY: IfNotPresent
+            CLAUDE_BUDGET_UNITS: "{{ claude_budget_units | int }}"
+            CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
+            CLAUDE_SECRET_SOURCES: "[]"
+          replace: []
+
+    - name: Units and prices reach the cluster objects
+      vars:
+        cm: "{{ docs | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.name', 'equalto', 'claude-proxy-prices') | first }}"
+        env: "{{ (docs | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                 | items2dict(key_name='name', value_name='value') }}"
+      ansible.builtin.assert:
+        that:
+          - cm.data['w_cr'] == '0.1'
+          - cm.data['model.claude-opus'] == '5'
+          - cm.data['usd_per_million_units'] == '3'
+          - env.CLAUDE_BUDGET_UNITS == '2000000'
+          - env.PRICES_DIR == '/etc/claude-proxy/prices'
+          - "'CLAUDE_BUDGET_TOKENS' not in env"
+
+    - name: The deploy.yml assert accepts these values and refuses bad ones
+      ansible.builtin.assert:
+        that:
+          - claude_prices.keys() | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$') | list | length == 0
+          - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
+          - bad.keys() | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$') | list | length == 1
+          - bad.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 2
+      vars:
+        bad: {"$(id)": 1, w_out: "1e9", w_in: "-1"}

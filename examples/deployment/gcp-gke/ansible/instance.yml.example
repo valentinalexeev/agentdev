@@ -82,6 +82,10 @@ github_app:
 # authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
 # usage: {five_hour: 80, weekly: 90}
+# Optional (#196): Claude budget per agent per 24 h in cost units (input-token equivalents of Sonnet; 0 = no limit),
+# and the prices ConfigMap. Set usd_per_million_units to show an estimated USD spend in the web UI.
+# claude_budget_units: 2000000
+# claude_prices: {usd_per_million_units: 3}
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
 # Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
 # security:

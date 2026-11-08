@@ -254,7 +254,7 @@ func TestBudget(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("bob: %d", resp.StatusCode)
 	}
-	os.WriteFile(filepath.Join(f.b.dir, "alice"), []byte("1000\n"), 0o644)
+	os.WriteFile(filepath.Join(f.b.dir, "alice"), []byte("100000\n"), 0o644) // units: unknown model counts x5
 	resp = f.post("/v1/messages", key, `{}`, nil)
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -296,7 +296,7 @@ func TestBudgetWindowAndState(t *testing.T) {
 func TestMeterCapsJSON(t *testing.T) {
 	m := &tokenMeter{}
 	m.Write(bytes.Repeat([]byte("x"), meterCap+1))
-	if in, o := m.totals(); in != 0 || o != 0 {
+	if tc, _ := m.totals(); tc != (tokenCounts{}) {
 		t.Error("oversized body counted")
 	}
 }
