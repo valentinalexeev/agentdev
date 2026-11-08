@@ -419,7 +419,10 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
   # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
   if [[ ${rc} -ne 0 ]]; then
     local why=error; grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
-    [[ ${rc} -eq 124 || ${rc} -eq 137 ]] && (( ${#GUARD[@]} > 0 )) && why="JOB_TIMEOUT of ${GUARD[-1]} s"
+    if [[ ${rc} -eq 124 || ${rc} -eq 137 ]] && (( ${#GUARD[@]} > 0 )); then
+      why="JOB_TIMEOUT of ${GUARD[-1]} s"
+      log "run stopped: ${why} (#196)" >&2   # stderr: stdout of run_claude is the result text
+    fi
     log "claude exited ${rc} (${why}; stderr not logged)"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
