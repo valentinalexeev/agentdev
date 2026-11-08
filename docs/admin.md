@@ -229,8 +229,10 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
 ### Metrics and OpenTelemetry
 
 `claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
-(#196, ADR 0002 D4). A NetworkPolicy lets only the namespace of the metrics scraper reach this port: `monitoring` on
-kind (`TELEMETRY_SCRAPER_NS`), `gmp-system` on GKE (`telemetry.scraper_ns`). Agent pods cannot reach it.
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
 
 | Metric (Prometheus name) | What it shows |
 |---|---|

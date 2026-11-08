@@ -26,11 +26,13 @@
             CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             TELEMETRY_OTLP_URL: ""
             TELEMETRY_SCRAPER_NS: gmp-system
+            TELEMETRY_SCRAPER_SELECTOR: '{"app.kubernetes.io/name": "collector"}'
             CLAUDE_SECRET_SOURCES: "[]"
           replace: []
 
     - name: Units and prices reach the cluster objects
       vars:
+        np: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy') | first }}"
         cm: "{{ docs | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.name', 'equalto', 'claude-proxy-prices') | first }}"
         env: "{{ (docs | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
                  | items2dict(key_name='name', value_name='value') }}"
@@ -42,6 +44,8 @@
           - env.CLAUDE_BUDGET_UNITS == '2000000'
           - env.PRICES_DIR == '/etc/claude-proxy/prices'
           - "'CLAUDE_BUDGET_TOKENS' not in env"
+          - np.spec.ingress[1].from[0].podSelector.matchLabels['app.kubernetes.io/name'] == 'collector'
+          - np.spec.ingress[1].from[0].namespaceSelector.matchLabels['kubernetes.io/metadata.name'] == 'gmp-system'
 
     - name: The deploy.yml assert accepts these values and refuses bad ones
       ansible.builtin.assert:

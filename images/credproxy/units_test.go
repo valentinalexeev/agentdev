@@ -190,3 +190,11 @@ func TestJobsChurnKeepsExpensiveJobs(t *testing.T) {
 		t.Error("an agent may send the reserved job id")
 	}
 }
+
+func TestModelLabelBounded(t *testing.T) {
+	p := defaultPrices()
+	if p.modelLabel("claude-sonnet-4-5-20250929") != "claude-sonnet-4-5-20250929" || p.modelLabel("gpt-x") != "unknown" ||
+		p.modelLabel("") != "unknown" || p.modelLabel("zzz-"+strings.Repeat("a", 90)) != "unknown" {
+		t.Error("model label not bounded to known families")
+	}
+}

@@ -93,10 +93,12 @@ spec:
     - podSelector: {matchExpressions: [{key: app, operator: In, values: [coding-agent, agent-chat]}]}   # agents and chat sessions (#118)
     - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}
     ports: [{port: 8080}]
-  # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper's namespace (kind: monitoring, GKE Managed
-  # Prometheus: gmp-system); agent pods never reach it
+  # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper pods (TELEMETRY_SCRAPER_SELECTOR) in its
+  # namespace (kind: Prometheus in monitoring, GKE Managed Prometheus: the collector in gmp-system); not from other
+  # pods of that namespace (Grafana, the OTLP collector), and never from agent pods
   - from:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${TELEMETRY_SCRAPER_NS}}}
+      podSelector: {matchLabels: ${TELEMETRY_SCRAPER_SELECTOR}}
     ports: [{port: 9464}]
   egress:
   # DNS only (port 53): kube-dns, and the NodeLocal DNSCache (GKE, #163): its pods and its link-local address

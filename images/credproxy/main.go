@@ -145,7 +145,7 @@ func (s *server) observe(resp *http.Response) error {
 		p := s.prices.get()
 		units := p.units(model, t)
 		usd, hasUSD := p.usdOf(units)
-		s.tel.record(resp.Request.Context(), info.agent, info.job, model, t, units, usd, hasUSD, info.start, s.now(), resp.StatusCode)
+		s.tel.record(resp.Request.Context(), info.agent, info.job, p.modelLabel(model), t, units, usd, hasUSD, info.start, s.now(), resp.StatusCode)
 		u.Model, u.Units = model, units
 		u.InputTokens, u.OutputTokens = t.input(), t[tokOut]
 		u.CacheRead, u.CacheWrite = t[tokCacheRead], t[tokCacheWrite5m]+t[tokCacheWrite1h]
