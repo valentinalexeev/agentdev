@@ -31,7 +31,7 @@ jobs:
       - name: ansible syntax-check at the pinned release
         working-directory: ansible
         run: |
-          tag=$(awk '/^image_tag:/{print $2}' instance.yml)
+          tag=v$(sed -nE 's/^image_tag:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' instance.yml)   # "1.1.0" -> v1.1.0
           git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
@@ -128,7 +128,7 @@ jobs:
         with: {install_components: gke-gcloud-auth-plugin}
       - name: agentdev playbook at the pinned release
         run: |
-          tag=$(awk '/^image_tag:/{print $2}' instance.yml)
+          tag=v$(sed -nE 's/^image_tag:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' instance.yml)   # "1.1.0" -> v1.1.0
           git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
