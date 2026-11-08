@@ -62,6 +62,19 @@ type AgentStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Rollout of a new platform version to this agent (#176). Written by the operator only.
+	// +optional
+	Rollout *RolloutStatus `json:"rollout,omitempty"`
+}
+
+// RolloutStatus is where this agent is in the rollout of the operator's current agent template (#176).
+type RolloutStatus struct {
+	// Version: short hash of the operator settings the agent's template is rendered from.
+	Version string `json:"version,omitempty"`
+	// Current | Waiting | Updating | Failed | Halted
+	Phase string `json:"phase,omitempty"`
+	// Why, for Waiting, Failed and Halted.
+	Reason string `json:"reason,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -69,6 +82,7 @@ type AgentStatus struct {
 // +kubebuilder:resource:shortName=ag
 // +kubebuilder:printcolumn:name="Repo",type=string,JSONPath=`.spec.repo`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Rollout",type=string,JSONPath=`.status.rollout.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="agent name must be at most 40 characters"

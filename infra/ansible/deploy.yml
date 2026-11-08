@@ -378,6 +378,10 @@
             APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
             AGENT_GRACE_SECONDS: "{{ rollout.grace_seconds | default(300) }}"
             DRAIN_MAX_MINUTES: "{{ rollout.drain_max_minutes | default(60) }}"
+            ROLLOUT_CANARY: "{{ rollout.canary | default('') }}"
+            ROLLOUT_MAX_UNAVAILABLE: "{{ rollout.max_unavailable | default(1) }}"
+            ROLLOUT_GATE_SECONDS: "{{ rollout.gate_seconds | default(120) }}"
+            ROLLOUT_GATE_TIMEOUT_MINUTES: "{{ rollout.gate_timeout_minutes | default(15) }}"
             EXEC_NS: "{{ exec_ns }}"
             EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
             EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
@@ -745,6 +749,15 @@
       loop_control: {label: "{{ item.name }}"}
       changed_when: false
       when: not ansible_check_mode
+
+    # rolling agent rollout (#176): wait until every agent runs the new version, or fail with the agent that stopped it
+    - name: Wait for the agent rollout (canary, then batches)
+      ansible.builtin.command: >-
+        {{ repo_root }}/scripts/rollout-wait.sh --context {{ kube_context }} --namespace {{ agents_ns }}
+        --timeout-minutes {{ rollout.wait_minutes | default(180) }}
+      register: rollout_wait
+      changed_when: false
+      when: not ansible_check_mode and (rollout.wait | default(true) | bool)
 
     - name: Wait for the router and agents
       kubernetes.core.k8s_info:

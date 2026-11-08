@@ -35,6 +35,18 @@ loop stops its jobs and saves their work in progress as a local commit on the jo
 `AGENT_GRACE_SECONDS` (default 300); nothing is pushed then, and the job continues on the next pod as below. The
 Agent's condition `Updated` shows the state: `Current`, `Draining`, `Drained`, `Forced`, `NotRunning` or `Replacing`.
 
+**Rolling rollout** (#176). The agent template has a version: a short hash of the operator's settings (images,
+URLs, limits). When it changes, agents move a few at a time. The canary (`ROLLOUT_CANARY`, default the first agent by
+name) moves first, and its new pod must stay ready with no container restart for `ROLLOUT_GATE_SECONDS` (default
+120). The worker exits at start when its forge identity, forge access or Claude fails, so a broken image or setting
+fails this gate. The operator reads only the pod status from the kubelet, nothing the model can write. Then the other
+agents move, `ROLLOUT_MAX_UNAVAILABLE` (default 1) at a time, each drained first. Stopped agents move at once after the
+canary; a stopped canary is started once for the gate. A failed gate (a restart, or not ready within
+`ROLLOUT_GATE_TIMEOUT_MINUTES`) stops the rollout: that agent is `Failed`, every agent not yet moved keeps its old
+template (`Halted`). Each Agent shows `status.rollout` (`version`, `phase`, `reason`); `scripts/rollout-wait.sh` waits
+for it and fails with the agent and reason. A rollback is the previous settings, which is a new version: the same
+rollout runs back.
+
 **An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
 started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
 (`/state/jobs/<job>.*`). When the pod starts again, the job:

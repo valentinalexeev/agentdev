@@ -85,7 +85,11 @@ func main() {
 		ExecNS:           execNS,
 		GraceSeconds:     env("AGENT_GRACE_SECONDS", "300"),
 		DrainMaxMinutes:  env("DRAIN_MAX_MINUTES", "60"),
-	}, Drains: &DrainSignals{}, ns: ns}
+	}, Drains: &DrainSignals{}, ns: ns,
+		// rolling rollout of a new agent template (#176)
+		Rollout: RolloutConfig{Canary: os.Getenv("ROLLOUT_CANARY"), MaxUnavailable: envInt("ROLLOUT_MAX_UNAVAILABLE", 1),
+			Gate:        envDuration("ROLLOUT_GATE_SECONDS", time.Second, 120*time.Second),
+			GateTimeout: envDuration("ROLLOUT_GATE_TIMEOUT_MINUTES", time.Minute, 15*time.Minute)}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)

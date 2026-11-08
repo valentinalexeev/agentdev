@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.rollout.phase
+      name: Rollout
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -171,6 +174,21 @@ spec:
                 description: Ready pods (0 or 1).
                 format: int32
                 type: integer
+              rollout:
+                description: Rollout of a new platform version to this agent (#176).
+                  Written by the operator only.
+                properties:
+                  phase:
+                    description: Current | Waiting | Updating | Failed | Halted
+                    type: string
+                  reason:
+                    description: Why, for Waiting, Failed and Halted.
+                    type: string
+                  version:
+                    description: 'Version: short hash of the operator settings the
+                      agent''s template is rendered from.'
+                    type: string
+                type: object
             type: object
         type: object
         x-kubernetes-validations:

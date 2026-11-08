@@ -16,6 +16,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Rolling agent rollout with canary and health gate (#176). The agent template has a version (hash of the operator
+  settings, pod annotation `agentdev/version`); on a change the canary moves first (`ROLLOUT_CANARY`, default the
+  first agent by name) and must stay ready without a container restart for `ROLLOUT_GATE_SECONDS` (120); then the
+  others, `ROLLOUT_MAX_UNAVAILABLE` (1) at a time, each drained (#174). A failed gate stops the rollout: the agent is
+  `Failed`, the rest keep their template (`Halted`). New Agent status field `status.rollout` (version, phase, reason)
+  and printer column **Rollout** (additive CRD change). New `scripts/rollout-wait.sh`; the playbook waits for the
+  rollout and fails with the stopped agent (`rollout.wait`, `rollout.wait_minutes`). Ansible `rollout.canary`,
+  `max_unavailable`, `gate_seconds`, `gate_timeout_minutes`; `config.env` `ROLLOUT_*`. Re-run: `./run.sh 06 12` (kind,
+  CRD update) or the playbook (GKE).
 - Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
   operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
   when no job runs, and the operator then replaces the pod (at once when the pod does not run; after
