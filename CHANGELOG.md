@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
+  waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
+  from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
+  auth hosts answer without a proxy error. The run fails with the URL and the answer. New instance values
+  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). Not run with `--check`. Test:
+  `infra/ansible/tests/ingress_smoke.yml`. Docs: admin.md "Post-deploy smoke test", troubleshooting.md.
 - Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
   images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
   (`tools/claude-stub`) replaces the model, so no credential is needed. Checks: register, idle stop, wake, job, push,
