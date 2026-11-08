@@ -118,6 +118,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
 | 12 | `operator` | `operator` |
+| 13 | `secrets` | `secrets_store`, then `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test

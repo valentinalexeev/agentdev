@@ -31,7 +31,8 @@ vars=$(jq -nc --argjson lb "${labels}" --argjson eh "$(json_list "${EGRESS_HOSTS
     operator_approvals: {enabled: ($ap == "true"), timeout_minutes: $at, retention_days: $ar},
     operator_executor: {poll_seconds: $xp, retention_days: $xr, apply_start_minutes: $xa},
     operator_usage: {five_hour: $u5, weekly: $uw}}')
-ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags operator \
+# 13-secrets.sh calls this script with KIND_TAGS=secrets and its own -e values as arguments (one list of operator settings)
+ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags "${KIND_TAGS:-operator}" "$@" \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \
   -e "operator_image=${OPERATOR_IMAGE}" -e "operator_container_engine=${CONTAINER_ENGINE}" \
   -e "operator_exec_ns=${EXEC_NS}" -e "operator_forge_ns=${FORGE_NS}" -e "operator_botboard_ns=${BOTBOARD_NS}" \

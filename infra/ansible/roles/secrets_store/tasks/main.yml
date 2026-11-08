@@ -1,0 +1,77 @@
+---
+# Same result as the old 13-secrets.sh. The playbook kind.yml runs the role operator after this role (tag secrets), so the
+# operator turns the ProjectSecret controller on.
+- name: External Secrets Operator {{ secrets_store_eso_chart_version }}
+  # only the controller and its CRDs: no webhook or cert-controller (the CEL policies below validate instead), no
+  # cluster-wide stores, ClusterExternalSecrets or PushSecrets. ESO itself reads and writes Secrets cluster-wide by design.
+  kubernetes.core.helm:
+    kube_context: "{{ secrets_store_context }}"
+    name: external-secrets
+    chart_ref: external-secrets
+    chart_repo_url: https://charts.external-secrets.io
+    chart_version: "{{ secrets_store_eso_chart_version }}"
+    release_namespace: "{{ secrets_store_eso_ns }}"
+    create_namespace: true
+    wait: true
+    timeout: 5m0s
+    values:
+      installCRDs: true
+      serviceAccount: {name: "{{ secrets_store_eso_sa }}"}
+      webhook: {create: false}
+      certController: {create: false}
+      processClusterStore: false
+      processClusterExternalSecret: false
+      processPushSecret: false
+      processClusterPushSecret: false
+      resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+
+- name: ESO CRDs are established
+  kubernetes.core.k8s_info:
+    context: "{{ secrets_store_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
+  loop: [externalsecrets.external-secrets.io, secretstores.external-secrets.io]
+  when: not ansible_check_mode
+
+- name: Namespace {{ secrets_store_agents_ns }}
+  kubernetes.core.k8s:
+    context: "{{ secrets_store_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ secrets_store_agents_ns }}"}}
+
+- name: CEL policies and the Kubernetes SecretStore
+  kubernetes.core.k8s:
+    context: "{{ secrets_store_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=item) | from_yaml_all | list }}"
+  loop:
+    - src: "{{ repo_root }}/manifests/secrets-policy.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ secrets_store_agents_ns }}"
+        PLATFORM_NS: "{{ secrets_store_platform_ns }}"
+        ESO_NS: "{{ secrets_store_eso_ns }}"
+        ESO_SA: "{{ secrets_store_eso_sa }}"
+      replace: []
+    - src: "{{ repo_root }}/manifests/secrets-store-kubernetes.yaml.tmpl"
+      values: {AGENTS_NS: "{{ secrets_store_agents_ns }}", SECRETS_VALUES_NS: "{{ secrets_store_values_ns }}"}
+      replace: []
+  loop_control: {label: "{{ item.src | basename }}"}
+  when: not ansible_check_mode   # the policy and store types are unknown before ESO is installed
+
+- name: SecretStore agentdev-secrets is ready
+  kubernetes.core.k8s_info:
+    context: "{{ secrets_store_context }}"
+    api_version: external-secrets.io/v1
+    kind: SecretStore
+    namespace: "{{ secrets_store_agents_ns }}"
+    name: agentdev-secrets
+  register: secrets_store_state
+  until: >-
+    secrets_store_state.resources | length > 0 and
+    (secrets_store_state.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Ready')
+     | selectattr('status', 'equalto', 'True') | list | length > 0)
+  retries: 30
+  delay: 2
+  when: not ansible_check_mode
