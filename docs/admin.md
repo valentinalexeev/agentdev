@@ -1716,8 +1716,8 @@ is in the secret store, never in the object.
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
 into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
 
-> **Status:** part 1 of #202. This part adds the object, the store and the copy. The broker, the write-only API and
-> the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
+> **Status:** parts 1 and 2 of #202: the object, the store, the copy and the credential broker. The write-only API
+> and the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
 
 ### Set up the secret store (kind)
 
@@ -1771,12 +1771,46 @@ To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
 To rotate the value, replace the Secret in step 2. To remove the project secret, delete the ProjectSecret object and
 then the Secret `agentdev-ps-<n>`.
 
+### Use a secret through the broker
+
+The credential broker (`credential-broker` in the agents namespace) is the credential proxy image in mode broker.
+`./run.sh 13` starts it when the credential proxy is on. The agent calls the broker in place of the upstream:
+
+| Upstream (`spec.broker.upstream`) | Base URL for the agent |
+|---|---|
+| `https://npm.pkg.github.com` | `$AGENTDEV_BROKER_URL/s/npm-registry/` |
+
+The agent authenticates with `$AGENTDEV_BROKER_KEY`, as a Bearer token or as the password of basic auth. The broker
+then does these steps:
+
+1. It checks that the secret is in the scope of the agent. If not, it refuses with 403.
+2. It removes the credential headers of the agent and adds the value in `spec.broker.header` (default
+   `Authorization`), in the form `spec.broker.scheme` (`bearer`, `basic` or `raw`).
+3. It sends the request to the upstream, https only, and does not let the path leave the upstream base path.
+4. In text responses, it replaces the upstream base URL with its own, so that links in a registry index also go
+   through the broker.
+
+The harness guide of each agent lists the broker secrets that the agent can use. The broker records one
+SecurityEvent `broker-use` per agent, secret and hour, and one for each refusal (`broker-secret-denied`,
+`broker-key-invalid`, `broker-unknown-secret`, `broker-path`). The value is never in a log.
+
+Example for npm, in the project's `.npmrc` (the agent can write it):
+
+```ini
+@myorg:registry=${AGENTDEV_BROKER_URL}/s/npm-registry/
+//credential-broker.coding-agents.svc.cluster.local:8080/s/npm-registry/:_authToken=${AGENTDEV_BROKER_KEY}
+```
+
+A new or removed broker secret restarts the broker once. A rotated value does not restart it.
+
 ### Mode env
 
 In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
 it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
 database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
-`HTTPS_PROXY` are not permitted.
+`HTTPS_PROXY` are not permitted. Only the agent container gets the variable, not the forge sidecar. A new or changed
+`env` secret restarts the agents in its scope. If two secrets set the same variable for an agent, the first by name
+is used.
 
 ### Rules in the cluster
 

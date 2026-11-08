@@ -23,6 +23,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
   `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
   part 4).
+- Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
+  `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
+  base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
+  request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
+  agent container. The harness guide lists the agent's broker secrets.
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

@@ -21,7 +21,7 @@ func (d Defaults) approvals() string {
 
 // render fills the StatefulSet from the Agent. It is the only definition of an agent's pod (the shell template it
 // replaced is gone since #57); changes here reach every agent on the next reconcile.
-func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
+func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1.ProjectSecret) {
 	n, ns := a.Name, a.Namespace
 	forgeSecret := a.Spec.ForgeSecret
 	if forgeSecret == "" {
@@ -140,7 +140,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
+		), append(append(r.claudeProxyEnv(n), r.brokerEnv(n)...), secretEnv(a, psecs)...)...),
 		EnvFrom: r.claudeEnvFrom(a),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
