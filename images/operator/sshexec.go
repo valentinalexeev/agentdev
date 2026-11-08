@@ -242,3 +242,11 @@ func (p *ExecutorPoller) addRunSSH(job *batchv1.Job, r *v1.ExecutorRun) {
 		corev1.EnvVar{Name: "ANSIBLE_SSH_PIPELINING", Value: "True"},
 		corev1.EnvVar{Name: "ANSIBLE_SSH_USETTY", Value: "False"}) // the certificates permit no PTY
 }
+
+// applyUser is the local user for the apply stage (default agentdev).
+func applyUser(t *v1.SSHTarget) string {
+	if t.Spec.ApplyUser == "" {
+		return "agentdev"
+	}
+	return t.Spec.ApplyUser
+}
