@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
+  The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
+  Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.
+
 ### Changed
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
@@ -21,6 +26,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   and changes additively; a breaking internal change takes two releases. Operator unit test
   `TestPodTemplateIsAdditive` fails when the rendered agent pod loses an environment variable, mount, volume or
   container listed in `images/operator/testdata/pod-contract.txt`.
+- Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
+  `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
+  audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
+  `agentdev/created-by` (OIDC subject) on agents the API makes. Ansible `api.max_agents` / `api.max_agents_per_user`
+  (validated as whole numbers), `config.env` `MAX_AGENTS` / `MAX_AGENTS_PER_USER`. An invalid env value stops the API
+  at start. To apply: kind `./run.sh 10`; GKE the playbook (role `api`). Docs: admin.md "Limit the number of agents".
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
@@ -299,6 +310,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
   the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
   `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
+- Step 09 (#106): `09-authentik.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags authentik`:
+  the role `authentik` of `deploy.yml` with the secrets in `.secrets/platform` (files, as before), then the new kind-only
+  role `authentik_kind` (akadmin in `agentdev-admins` and the membership check, the company SSO stand-in, its blueprint
+  and `scripts/sso-check.py`). Same result; `SSO_STANDIN` and `SSO_CHECK` still apply. GKE does not change.
 - Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
