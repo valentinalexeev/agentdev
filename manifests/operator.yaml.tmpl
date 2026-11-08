@@ -30,6 +30,11 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 # harness guide (#206): one key per agent, written by the operator only; agent pods mount their own key read-only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
+# scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
+# its fields); the operator never reads the synced Secrets
+- {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
+- {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -128,6 +133,8 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
+        - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
