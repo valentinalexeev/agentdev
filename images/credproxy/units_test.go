@@ -15,7 +15,7 @@ func TestUnitsWeighted(t *testing.T) {
 	p := defaultPrices()
 	// a cache-read-heavy response: 100 input, 10000 cache read, 200 output on the reference model
 	tc := tokenCounts{tokIn: 100, tokCacheRead: 10000, tokOut: 200}
-	got := p.units("claude-sonnet-4-5-20250929", tc)
+	got := p.units("claude-sonnet-4-5-20250929", tc) // reference model
 	if got != 100+1000+1000 {
 		t.Errorf("units %d", got)
 	}
@@ -23,11 +23,12 @@ func TestUnitsWeighted(t *testing.T) {
 	if got*100/raw >= 25 { // far below the raw count (acceptance: cache-heavy run well under its raw tokens)
 		t.Errorf("units %d not well below raw %d", got, raw)
 	}
-	if p.units("claude-opus-4-1", tc) != 5*got {
-		t.Error("opus multiplier")
-	}
-	if p.units("claude-opus-4-5-20251101", tc) <= got || p.units("claude-opus-4-5-20251101", tc) >= 2*got {
-		t.Error("opus 4.5 multiplier (longest prefix)")
+	for model, m := range map[string]float64{"claude-opus-4-1-20250805": 5, "claude-opus-4-20250514": 5, "claude-opus-4-5-20251101": 1.666667,
+		"claude-opus-5": 1.666667, "claude-opus-5-5": 1.333333, "claude-sonnet-5-5": 0.666667, "claude-haiku-4-5": 0.333333,
+		"claude-haiku-5-5": 0.033333, "claude-fable-5-1": 3.333333} {
+		if p.multiplier(model) != m {
+			t.Errorf("%s: multiplier %v, want %v", model, p.multiplier(model), m)
+		}
 	}
 	if p.units("gpt-oops", tc) != 5*got || p.units("", tc) != 5*got {
 		t.Error("unknown model must use the highest multiplier")
@@ -52,7 +53,7 @@ func TestPricesConfigMap(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "..data"), 0o755)                  // ConfigMap internals are skipped
 	p := newPrices(dir)
 	pt := p.get()
-	if pt.weights[tokCacheRead] != 0.2 || pt.weights[tokOut] != 5 || pt.weights[tokIn] != 1 || pt.multiplier("claude-sonnet-4") != 2 {
+	if pt.weights[tokCacheRead] != 0.2 || pt.weights[tokOut] != 5 || pt.weights[tokIn] != 1 || pt.multiplier("claude-sonnet-4") != 2 || pt.multiplier("claude-sonnet-5") != 0.666667 {
 		t.Errorf("prices %+v", pt)
 	}
 	if usd, ok := pt.usdOf(2_000_000); !ok || usd != 6 {
