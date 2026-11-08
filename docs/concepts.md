@@ -195,7 +195,7 @@ runner can start any program. So the security boundary is the pod, not the list 
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
   the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
-  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a budget per agent in cost units (tokens weighted by type and model, #196)
   for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
   come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
