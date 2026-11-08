@@ -4,8 +4,8 @@
 admin: {existingSecret: grafana-admin, userKey: admin-user, passwordKey: admin-password}
 persistence: {enabled: false}
 resources:
-  requests: {cpu: 20m, memory: 96Mi}
-  limits: {memory: 256Mi}
+  requests: {cpu: 20m, memory: 192Mi}
+  limits: {memory: 512Mi}   # Grafana 13 is OOM-killed at 256Mi during start (kind e2e)
 datasources:
   datasources.yaml:
     apiVersion: 1
