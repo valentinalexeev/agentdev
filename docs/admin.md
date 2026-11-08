@@ -304,6 +304,14 @@ On GKE, Managed Service for Prometheus collects the metrics:
 The billing truth stays in the Anthropic Console (Usage and Cost pages). For instances that bill by API key, a
 workspace spend limit in the Console is a second fuse behind the proxy (ADR 0002, U4).
 
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
+
 The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
 with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
 `TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be

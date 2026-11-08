@@ -42,6 +42,7 @@ telemetry:
   scraper_selector: {app.kubernetes.io/name: collector}   # the GMP collector pods; only they reach 9464
   otlp_url: ""
   pod_monitoring: false
+  instance: agentdev   # label agentdev_instance on every metric (#278): one external Grafana for many instances
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts
