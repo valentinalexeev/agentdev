@@ -38,8 +38,8 @@ ok "SecretStore agentdev-secrets ready"
 # agents' proxy keys with claude-proxy-signing, so it needs the credential proxy (06, CLAUDE_PROXY=true).
 if [[ "${CLAUDE_PROXY:-true}" == true ]] && k -n "${AGENTS_NS}" get secret claude-proxy-signing >/dev/null 2>&1; then
   log "Credential broker"
-  AGENTS_NS="${AGENTS_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
-    CREDENTIAL_BROKER_URL="http://credential-broker.${AGENTS_NS}.svc.cluster.local:8080" \
+  broker_url="http://credential-broker.${AGENTS_NS}.svc.cluster.local:8080"
+  AGENTS_NS="${AGENTS_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never CREDENTIAL_BROKER_URL="${broker_url}" \
     envsubst '${AGENTS_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CREDENTIAL_BROKER_URL}' \
     < "${SPIKE_DIR}/manifests/credential-broker.yaml.tmpl" | k apply -f - >/dev/null
   k -n "${AGENTS_NS}" rollout status deploy/credential-broker --timeout=120s >/dev/null || die "credential-broker did not become ready"
