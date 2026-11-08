@@ -1824,7 +1824,8 @@ A new or removed broker secret restarts the broker once. A rotated value does no
 In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
 it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
 database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
-`HTTPS_PROXY` are not permitted. Only the agent container gets the variable, not the forge sidecar. A new or changed
+`HTTPS_PROXY` are not permitted. Only the agent container gets the variable. The forge sidecar gets the value as a read-only file and removes it
+from approval text (comments, the Approval object and the web UI), also after a rotation. A new or changed
 `env` secret restarts the agents in its scope. If two secrets set the same variable for an agent, the first by name
 is used.
 

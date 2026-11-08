@@ -106,6 +106,13 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 			secretKey("GITHUB_INSTALLATION_ID", forgeSecret, true)}
 	}
 	forgeMounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}}
+	// #202: mode-env secret values, for the sidecar's redaction of approval text only (never the agent container)
+	if src := redactSources(a, psecs); len(src) > 0 {
+		p.Volumes = append(p.Volumes, corev1.Volume{Name: "redact", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			DefaultMode: ptr.To[int32](0o440), Sources: src}}})
+		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "redact", MountPath: redactDir, ReadOnly: true})
+		forgeCreds = append(forgeCreds, env("REDACT_DIR", redactDir))
+	}
 	if forge == "github" {
 		p.Volumes = append(p.Volumes, corev1.Volume{Name: "github-app", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName: forgeSecret, DefaultMode: ptr.To[int32](0o400),

@@ -108,8 +108,27 @@ func TestSecretEnvAndBrokerEnv(t *testing.T) {
 	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || !hasEnv(ag, "AGENTDEV_BROKER_KEY") {
 		t.Error("broker env missing")
 	}
-	if fc := container(s, "forge"); hasEnv(fc, "DB_PASSWORD") {
+	fc := container(s, "forge")
+	if hasEnv(fc, "DB_PASSWORD") {
 		t.Error("env secret in the forge container")
+	}
+	// #202: the sidecar gets the value as a file for redaction; the agent container does not mount it
+	if envOfC(fc, "REDACT_DIR") != redactDir {
+		t.Error("REDACT_DIR missing in the forge container")
+	}
+	for _, m := range ag.VolumeMounts {
+		if m.Name == "redact" {
+			t.Error("redact volume in the agent container")
+		}
+	}
+	var redact *corev1.Volume
+	for i := range s.Spec.Template.Spec.Volumes {
+		if s.Spec.Template.Spec.Volumes[i].Name == "redact" {
+			redact = &s.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if redact == nil || len(redact.Projected.Sources) != 1 || redact.Projected.Sources[0].Secret.Name != "ps-db" {
+		t.Errorf("redact volume %+v", redact)
 	}
 	var cm corev1.ConfigMap
 	c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: guidesCM}, &cm)
@@ -136,4 +155,13 @@ func TestBrokerEventLineSource(t *testing.T) {
 	if spec.Agent != "credential-broker" {
 		t.Errorf("agent %q", spec.Agent)
 	}
+}
+
+func envOfC(c *corev1.Container, k string) string {
+	for _, e := range c.Env {
+		if e.Name == k {
+			return e.Value
+		}
+	}
+	return ""
 }
