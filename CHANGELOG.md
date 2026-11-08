@@ -8,8 +8,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Changed
 - **BREAKING** Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
-  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (Sonnet 1, Haiku
-  0.33, Opus 4/4.1 5, Opus 4.5+ 1.67; unknown = highest), so cache reads no longer dominate the budget.
+  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
+  Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
   `CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens` are replaced by `CLAUDE_BUDGET_UNITS` / `claude_budget_units`;
   `./run.sh 06`, the playbook and the proxy stop when the old variable is set. Weights, model multipliers and an
   optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
