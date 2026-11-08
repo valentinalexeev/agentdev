@@ -3,6 +3,9 @@
 #   scripts/e2e-ssh.sh [enrol]   CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
 #   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (./run.sh 05): PR head without SSH,
 #                                merge plan with the check certificate, apply after the approval, snapshot
+#   scripts/e2e-ssh.sh probes    ansible, then drift and the probe catalogue (#205): server_check through obs-mcp, a
+#                                bad argument refused, the server's allow-list against a valid probe certificate, no
+#                                SSH credential on the agent side
 # Every check prints PASS or FAIL; the exit code is the number of failures. Idempotent: reuses the CA and server.
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
@@ -32,6 +35,13 @@ fi
 k -n "${EXEC_NS}" rollout restart deploy/step-ca >/dev/null 2>&1
 k -n "${EXEC_NS}" rollout status deploy/step-ca --timeout=180s >/dev/null; check $? "step-ca running"
 k -n "${EXEC_NS}" get secret step-ca-provisioner >/dev/null; check $? "provisioner Secret for the operator"
+
+# Executor Jobs check out the repo with the forge image (pull policy Never on kind). A fresh cluster
+# from `run.sh 01 12 05` skips 06-agents.sh, so build and load it here.
+if [[ "${FORGE_IMAGE}" == agentdev/* ]]; then
+  "${CONTAINER_ENGINE}" build -q -t "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge" >/dev/null
+  kind load docker-image "${FORGE_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
+fi
 
 log "Test SSH server (${SRV_IMAGE}) in ${SRV_NS}"
 if [[ "${SRV_IMAGE}" == agentdev-test-sshd:* ]]; then
@@ -100,9 +110,13 @@ code=$(k -n "${SRV_NS}" logs e2e-curl 2>/dev/null || true)
 k -n "${SRV_NS}" delete pod e2e-curl --wait=false >/dev/null
 rc=1; [[ "${code}" == 000 ]] && rc=0; check "${rc}" "another pod cannot reach step-ca (curl: ${code:-none}, 000 = no connection)"
 
-if [[ "${1:-enrol}" == ansible ]]; then
+if [[ "${1:-enrol}" == ansible || "${1:-enrol}" == probes ]]; then
   # shellcheck source=/dev/null
   source "${SPIKE_DIR}/scripts/e2e-ssh-ansible.sh"
+fi
+if [[ "${1:-enrol}" == probes ]]; then
+  # shellcheck source=/dev/null
+  source "${SPIKE_DIR}/scripts/e2e-ssh-probes.sh"
 fi
 
 printf '\n%d failure(s)\n' "${fails}"

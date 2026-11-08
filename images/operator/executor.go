@@ -266,6 +266,10 @@ func validExecutor(e *v1.Executor) string {
 		return "invalid spec.path"
 	case e.Spec.SSH && (e.Spec.PRPlan == nil || len(e.Spec.PRPlan.Command) == 0):
 		return "spec.ssh needs spec.prPlan: pull request heads never get server credentials"
+	case validDrift(e) != "":
+		return validDrift(e)
+	case validProbes(e) != "":
+		return validProbes(e)
 	}
 	return ""
 }
@@ -331,6 +335,9 @@ func (p *ExecutorPoller) Poll(ctx context.Context, e *v1.Executor) error {
 	if err := p.ensureSnapshot(ctx, e); err != nil { // #205: scheduled server snapshot
 		return err
 	}
+	if err := p.ensureDrift(ctx, e, f); err != nil { // #205: scheduled drift check
+		return err
+	}
 	p.setPhase(ctx, e, "ready", "Polled", "forge polled")
 	return nil
 }
@@ -376,7 +383,7 @@ func (p *ExecutorPoller) discover(ctx context.Context, e *v1.Executor, f forgeAP
 // serialStage reports whether a run touches the environment. Only one such run of an Executor is Running at a time.
 // PR head plans run in parallel: they have no environment credentials.
 func serialStage(r *v1.ExecutorRun) bool {
-	return r.Spec.Stage == "merge" || r.Spec.Stage == "apply" || r.Spec.Stage == "snapshot"
+	return r.Spec.Stage == "merge" || r.Spec.Stage == "apply" || r.Spec.Stage == "snapshot" || r.Spec.Stage == "drift"
 }
 
 // sortRuns gives the start order of waiting runs: an apply first (its start window runs), then merge plans in merge
@@ -388,7 +395,7 @@ func sortRuns(rs []v1.ExecutorRun) {
 			return 0
 		case "merge":
 			return 1
-		case "snapshot":
+		case "snapshot", "drift": // #205: a drift plan during an apply reports false drift
 			return 2
 		}
 		return 3
@@ -465,13 +472,33 @@ func (p *ExecutorPoller) createOwnedRun(ctx context.Context, e *v1.Executor, r *
 	return nil
 }
 
+// validRunSpec repeats the CRD rule of ExecutorRun spec (stage, action, commit and PR belong together).
+func validRunSpec(e *v1.Executor, r *v1.ExecutorRun) bool {
+	s := r.Spec
+	if s.Executor != e.Name {
+		return false
+	}
+	switch s.Stage {
+	case "snapshot", "probe":
+		return s.Action == s.Stage && s.Commit == "" && s.PR == 0
+	case "drift":
+		return s.Action == "plan" && shaRE.MatchString(s.Commit) && s.PR == 0
+	case "pr", "merge":
+		return s.Action == "plan" && shaRE.MatchString(s.Commit) && s.PR >= 1
+	case "apply":
+		return s.Action == "apply" && shaRE.MatchString(s.Commit) && s.PR >= 1
+	}
+	return false
+}
+
 // syncRun moves one run forward: start its Job, collect its result, then (merge) request and follow the approval.
 func (p *ExecutorPoller) syncRun(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun) error {
 	// the spec is checked again: an ExecutorRun is only ever written by this operator, but never trust it blindly
-	if r.Spec.Executor != e.Name || (r.Spec.Stage == "snapshot") != (r.Spec.Action == "snapshot") ||
-		(r.Spec.Stage == "snapshot" && (r.Spec.Commit != "" || r.Spec.PR != 0)) ||
-		(r.Spec.Stage != "snapshot" && (!shaRE.MatchString(r.Spec.Commit) || r.Spec.PR < 1)) {
+	if !validRunSpec(e, r) {
 		return p.finish(ctx, e, r, "Failed", "invalid run spec", false)
+	}
+	if r.Spec.Stage == "probe" {
+		return nil // run by the probe server itself (probe.go); the ExecutorRun is its record
 	}
 	switch r.Status.Phase {
 	case "", "Pending":
@@ -538,8 +565,8 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 		return err
 	}
 	rule := "executor.plan"
-	if r.Spec.Stage == "snapshot" {
-		if err := p.event(ctx, e, r, "executor.snapshot", "low", "start snapshot"); err != nil {
+	if r.Spec.Stage == "snapshot" || r.Spec.Stage == "drift" {
+		if err := p.event(ctx, e, r, "executor."+r.Spec.Stage, "low", "start "+r.Spec.Stage); err != nil {
 			log.FromContext(ctx).Error(err, "snapshot event")
 		}
 		return nil
@@ -601,6 +628,9 @@ func (p *ExecutorPoller) collect(ctx context.Context, e *v1.Executor, f forgeAPI
 	}
 	if r.Spec.Stage == "snapshot" {
 		return p.finishSnapshot(ctx, e, r, !failed, out)
+	}
+	if r.Spec.Stage == "drift" {
+		return p.finishDrift(ctx, e, f, r, !failed, out)
 	}
 	if failed {
 		return p.report(ctx, e, f, r, "Failed", "the job failed", out)
@@ -868,8 +898,8 @@ func (p *ExecutorPoller) requestApproval(ctx context.Context, e *v1.Executor, f 
 // event records a SecurityEvent for an executor run in the agents namespace, where the API copies it to Postgres.
 func (p *ExecutorPoller) event(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun, rule, severity, action string) error {
 	job := fmt.Sprintf("pr-%d", r.Spec.PR)
-	if r.Spec.Stage == "snapshot" {
-		job = "" // no issue or PR (SecurityEvent job is issue-N, pr-N or empty)
+	if r.Spec.PR < 1 {
+		job = "" // snapshot, drift, probe: no issue or PR (SecurityEvent job is issue-N, pr-N or empty)
 	}
 	return p.record(ctx, e, job, r.Name, rule, severity, action)
 }
@@ -927,8 +957,8 @@ func (p *ExecutorPoller) ensurePlanVolume(ctx context.Context, e *v1.Executor, r
 }
 
 func (p *ExecutorPoller) dropPlanVolumeOf(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun) {
-	if r.Spec.Stage == "pr" {
-		return
+	if r.Spec.Stage != "merge" && r.Spec.Stage != "apply" {
+		return // only merge plans have a plan volume (and drift shares a commit with them: never touch theirs)
 	}
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: planVolumeName(e, r.Spec.Commit), Namespace: p.C.NS}}
 	if err := p.Delete(ctx, pvc); client.IgnoreNotFound(err) != nil {
@@ -971,6 +1001,10 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	snapshot := r.Spec.Stage == "snapshot"
 	if snapshot && e.Spec.Snapshot != nil {
 		cmd = e.Spec.Snapshot.Command // #205: fixed fact gathering, read-only credentials, no checkout
+	}
+	drift := r.Spec.Stage == "drift"
+	if drift {
+		cmd = driftCommand(e) // #205: the branch head, read-only credentials, no plan file kept
 	}
 	if apply {
 		creds, cmd = e.Spec.ApplyCredentials, e.Spec.Apply.Command
@@ -1028,6 +1062,8 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	var inits, main []corev1.Container
 	if snapshot {
 		main = []corev1.Container{tool} // no checkout (no repository code runs), no plan file
+	} else if drift {
+		inits, main = []corev1.Container{checkout}, []corev1.Container{tool} // no hash: a drift run is never applied
 	} else if apply {
 		// the plan is checked before the tool starts; a different file never reaches the tool
 		inits = []corev1.Container{checkout, helper("verify", "verify-plan", planFile, r.Spec.PlanHash)}
@@ -1038,7 +1074,7 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 		main = []corev1.Container{helper("hash", "hash-plan", planFile)}
 	}
 	planVol := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
-	if r.Spec.Stage != "pr" && r.Spec.Stage != "snapshot" {
+	if r.Spec.Stage == "merge" || r.Spec.Stage == "apply" {
 		planVol = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: planVolumeName(e, r.Spec.Commit), ReadOnly: apply}}
 	}
 	labels := withCostLabels(map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}, p.C.CostLabels)

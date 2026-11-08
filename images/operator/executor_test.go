@@ -34,6 +34,9 @@ type fakeForge struct {
 	files        map[int64][]string
 	statuses     []string
 	comments     []string
+	head         string
+	issues       []string
+	closed       map[int64]bool
 }
 
 func (f *fakeForge) OpenPRs(context.Context) ([]pullRequest, error)   { return f.open, nil }
@@ -50,6 +53,26 @@ func (f *fakeForge) Comment(_ context.Context, pr int64, body string) error {
 	return nil
 }
 func (f *fakeForge) SelfID(context.Context) (int64, error) { return 42, nil }
+func (f *fakeForge) BranchHead(context.Context, string) (string, error) {
+	if f.head == "" {
+		return mergeSH, nil
+	}
+	return f.head, nil
+}
+func (f *fakeForge) OpenIssue(_ context.Context, title, body string) (int64, error) {
+	f.issues = append(f.issues, title+"\n"+body)
+	return int64(100 + len(f.issues)), nil
+}
+func (f *fakeForge) IssueOpen(_ context.Context, n int64) (bool, error) {
+	return n > 0 && !f.closed[n], nil
+}
+func (f *fakeForge) CloseIssue(_ context.Context, n int64) error {
+	if f.closed == nil {
+		f.closed = map[int64]bool{}
+	}
+	f.closed[n] = true
+	return nil
+}
 
 type execEnv struct {
 	p    *ExecutorPoller

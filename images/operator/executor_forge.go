@@ -39,6 +39,11 @@ type forgeAPI interface {
 	SetStatus(ctx context.Context, sha, state, description string) error
 	Comment(ctx context.Context, pr int64, body string) error
 	SelfID(ctx context.Context) (int64, error)
+	// drift reports (#205)
+	BranchHead(ctx context.Context, branch string) (string, error)
+	OpenIssue(ctx context.Context, title, body string) (int64, error)
+	IssueOpen(ctx context.Context, n int64) (bool, error)
+	CloseIssue(ctx context.Context, n int64) error
 }
 
 // forgeAPIBase is the REST base: Gitea <url>/api/v1, GitHub https://api.github.com (or GITHUB_API_URL).
@@ -209,4 +214,61 @@ func touches(files []string, dir string) bool {
 		}
 	}
 	return false
+}
+
+// BranchHead returns the head commit of a branch (drift check, #205). Gitea answers commit.id, GitHub commit.sha.
+func (f *restForge) BranchHead(ctx context.Context, branch string) (string, error) {
+	var b struct {
+		Commit struct {
+			ID  string `json:"id"`
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := f.do(ctx, http.MethodGet, "/repos/"+f.repo+"/branches/"+url.PathEscape(branch), nil, &b); err != nil {
+		return "", err
+	}
+	sha := b.Commit.SHA
+	if sha == "" {
+		sha = b.Commit.ID
+	}
+	if !shaRE.MatchString(sha) {
+		return "", fmt.Errorf("branch %s: invalid head commit", branch)
+	}
+	return sha, nil
+}
+
+// OpenIssue opens an issue and returns its number (drift report, #205).
+func (f *restForge) OpenIssue(ctx context.Context, title, body string) (int64, error) {
+	var out struct {
+		Number int64 `json:"number"`
+	}
+	if err := f.do(ctx, http.MethodPost, "/repos/"+f.repo+"/issues", map[string]string{"title": clip(title, 200), "body": body}, &out); err != nil {
+		return 0, err
+	}
+	if out.Number < 1 {
+		return 0, fmt.Errorf("forge returned no issue number")
+	}
+	return out.Number, nil
+}
+
+// IssueOpen reports whether issue n is still open.
+func (f *restForge) IssueOpen(ctx context.Context, n int64) (bool, error) {
+	if n < 1 {
+		return false, nil
+	}
+	var out struct {
+		State string `json:"state"`
+	}
+	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d", f.repo, n), nil, &out); err != nil {
+		return false, err
+	}
+	return out.State == "open", nil
+}
+
+// CloseIssue closes issue n.
+func (f *restForge) CloseIssue(ctx context.Context, n int64) error {
+	if n < 1 {
+		return fmt.Errorf("invalid issue number %d", n)
+	}
+	return f.do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", f.repo, n), map[string]string{"state": "closed"}, nil)
 }

@@ -39,8 +39,19 @@
     path: "{{ gitea_forge_secrets_dir }}/{{ gitea_forge_agent }}.token"
   register: gitea_forge_token_file
 
+# A token file left from an earlier forge (a recreated kind cluster) is rejected by the new one: re-mint it.
+- name: Check that the agent token is still valid for {{ gitea_forge_agent }}
+  ansible.builtin.uri:
+    url: "{{ gitea_forge_api }}/user"
+    headers: {Authorization: "token {{ lookup('ansible.builtin.file', gitea_forge_secrets_dir ~ '/' ~ gitea_forge_agent ~ '.token') }}"}
+    status_code: [200, 401]
+  register: gitea_forge_token_check
+  when: gitea_forge_token_file.stat.exists and gitea_forge_token_file.stat.size > 0
+  no_log: true
+
 - name: Mint and store the token of {{ gitea_forge_agent }}
   when: not gitea_forge_token_file.stat.exists or gitea_forge_token_file.stat.size == 0
+        or gitea_forge_token_check.status | default(200) == 401
   block:
     - name: Mint a token
       ansible.builtin.command:

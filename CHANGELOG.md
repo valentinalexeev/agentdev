@@ -16,9 +16,26 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Drift reports and the probe catalogue (#205 parts 2 and 3). `Executor.spec.drift` (`changedPattern`, `intervalHours`,
+  optional `command`) runs the plan command on the head of the protected branch with the read-only credentials and,
+  with `spec.ssh`, the check certificate (new `ExecutorRun` stage `drift`: no plan file, no approval, no apply). Drift
+  opens one forge issue (`status.driftIssue`), comments while it stays and closes it after a clean run; a failed run is
+  never clean. The redacted report is in ConfigMap `agentdev-drift`. `Executor.spec.probes` is the probe catalogue
+  (name, argv template with `{arg}` elements, argument patterns, `sensitive`; needs `spec.ssh`). New obs-mcp tools
+  `server_checks`, `server_check(target, check, args)` and `server_report(executor, kind)` forward to the operator's
+  probe server (`PROBE_LISTEN :8090`, Service `agentdev-probe`, token Secret `agentdev-probe-token`, NetworkPolicy:
+  obs-mcp only). The operator rate-limits (`PROBE_RATE_PER_MIN`, `PROBE_RATE_BURST`), checks each argument, records an
+  `ExecutorRun` stage `probe` and a SecurityEvent (`executor.probe`, `executor.probe-refused`), requests an Approval
+  (tool `probe`, single use, one hour) for a `sensitive` check, and connects with a 5-minute certificate (principal
+  `agentdev-probe`, `force-command`, key ID `check/<run>`); output is clipped to 64 KiB and redacted.
+  `scripts/ssh-enrol.sh` now writes the server's own allow-list `/etc/agentdev/probes` and an `agentdev-probe` that
+  runs only listed checks with checked arguments (timeout 20 s); the principals file forces that command. Re-apply the
+  snippet on enrolled servers. Ansible: executor vars `drift`, `probes`; `obs_mcp.server_checks`; `probes.rate_*`.
+  Manuals: admin.md "Find drift on the servers", "Add a server check"; risk R108. kind e2e: `scripts/e2e-ssh.sh probes`.
 - Executor run order (#271 review): the merge plans, applies and snapshots of one Executor run one at a time. A
   waiting run starts at the next poll after the active run ends. Order: an approved apply first, then merge plans by
-  merge time (annotation `agentdev.dev/merged-at`), then the snapshot. PR head plans do not wait.
+  merge time (annotation `agentdev.dev/merged-at`), then the snapshot and the drift run. PR head plans and
+  probes do not wait.
 - Ansible executor stages over SSH certificates, and server snapshots (#204 part 2, #205 decision 4; ADR 0007).
   `Executor.spec.ssh` gives the merge plan a new 15-minute certificate of principal `agentdev-<executor>-check` (user
   `agentdev-check`, no sudo) and the apply after the approval one of `agentdev-<executor>-apply` (user `agentdev`),

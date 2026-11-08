@@ -17,8 +17,10 @@ json_list() { if [[ -z "${1// }" ]]; then echo '[]'; else printf '%s\n' $1 | jq 
 vars=$(jq -nc --argjson p "$(json_list "${MCP_PROJECTS:-}")" --argjson h "$(json_list "${MCP_ALLOWED_HOSTS:-}")" \
   --arg obs "${OBS_MCP:-false}" --arg pu "${PROMETHEUS_URL:-}" --arg lu "${LOKI_URL:-}" --arg lt "${LOKI_TENANT:-}" \
   --arg mo "${OBS_MCP_MAX_OUTPUT}" --arg rm "${OBS_MCP_RATE_PER_MIN}" --arg rb "${OBS_MCP_RATE_BURST}" \
+  --arg sc "${OBS_SERVER_CHECKS:-true}" \
   '{mcp_projects: $p, mcp_allowed_hosts: $h, obs_mcp: {enabled: ($obs == "true"), prometheus_url: $pu, loki_url: $lu,
-    loki_tenant: $lt, max_output: $mo, rate_per_min: $rm, rate_burst: $rb}}')
+    loki_tenant: $lt, max_output: $mo, rate_per_min: $rm, rate_burst: $rb,
+    server_checks: ($sc == "true")}}')   # probe catalogue (#205)
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags mcp \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \
   -e "platform_service_cidr=${SERVICE_CIDR}" -e "platform_postgres_image=${POSTGRES_IMAGE}" \

@@ -6,7 +6,7 @@
 #     "metadata":{"name":"carol"},"spec":{"repo":"owner/playground","claudeSecret":"claude-shared"}}'
 # Its forge token Secret agent-<name> (FORGE_TOKEN) must exist; 05/06 create them for the agents in config.env.
 source "$(dirname "$0")/lib.sh"
-need envsubst
+need envsubst; need openssl
 k create namespace "${PLATFORM_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 k create namespace "${AGENTS_NS}" --dry-run=client -o yaml | k apply -f - >/dev/null
 # labels (#184), as the GKE playbook sets them: COST_LABELS="k=v,k=v" from config.env
@@ -35,6 +35,10 @@ EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agent
 # harness guide (#206): the agents' egress list as 06-agents.sh builds it, for the text only
 AGENT_EGRESS_HOSTS=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
   { if [[ "${CLAUDE_PROXY:-true}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
+# probe catalogue (#205): the token only obs-mcp and the operator share (random, made once, never in the agents namespace)
+if ! k -n "${PLATFORM_NS}" get secret agentdev-probe-token >/dev/null 2>&1; then
+  k -n "${PLATFORM_NS}" create secret generic agentdev-probe-token --from-literal=token="$(openssl rand -hex 32)" >/dev/null
+fi
 # scoped secrets store (#202): on only once ./run.sh 13 installed External Secrets Operator (its CRD must be served,
 # or the operator's cache never syncs); 13 re-runs this step
 SECRETS_STORE=""
@@ -55,6 +59,7 @@ COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
   EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
   SECRETS_STORE="${SECRETS_STORE}" SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY}" USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
+  PROBE_RATE_PER_MIN="${PROBE_RATE_PER_MIN:-20}" PROBE_RATE_BURST="${PROBE_RATE_BURST:-5}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 label_ns "${EXEC_NS}"   # created by the operator manifest

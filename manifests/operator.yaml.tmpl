@@ -30,6 +30,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
 # server snapshots (#205, #204): one key per executor, written by the operator only, read by the agents' tools
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-snapshots], verbs: [get, update]}
+# drift reports (#205): one key per executor, written by the operator only
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-drift], verbs: [get, update]}
 # scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
 # its fields); the operator never reads the synced Secrets
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
@@ -93,7 +95,8 @@ spec:
     metadata: {labels: {app: agentdev-operator}}
     spec:
       serviceAccountName: agentdev-operator
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      # fsGroup: the probe token (#205) is mounted 0440 for this group
+      securityContext: {runAsNonRoot: true, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: operator
         image: ${OPERATOR_IMAGE}
@@ -134,21 +137,40 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # probe catalogue (#205): server_check of obs-mcp; off without Secret agentdev-probe-token
+        - {name: PROBE_LISTEN, value: ":8090"}
+        - {name: PROBE_TOKEN_FILE, value: /var/run/agentdev-probe/token}
+        - {name: PROBE_RATE_PER_MIN, value: "${PROBE_RATE_PER_MIN}"}
+        - {name: PROBE_RATE_BURST, value: "${PROBE_RATE_BURST}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: health, containerPort: 8081}]
+        ports: [{name: health, containerPort: 8081}, {name: probe, containerPort: 8090}]
+        volumeMounts: [{name: probe-token, mountPath: /var/run/agentdev-probe, readOnly: true}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 64Mi}
           limits: {memory: 256Mi}
+      volumes:
+      # shared with obs-mcp only (#205); optional: without it the probe server stays off
+      - name: probe-token
+        secret: {secretName: agentdev-probe-token, optional: true, defaultMode: 0440}
 ---
-# no inbound traffic (it only calls the Kubernetes API)
+apiVersion: v1
+kind: Service
+metadata: {name: agentdev-probe, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: agentdev-operator}
+  ports: [{name: probe, port: 8090, targetPort: probe}]
+---
+# inbound only to the probe server (#205), only from obs-mcp; the agents never reach the operator
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
 spec:
   podSelector: {matchLabels: {app: agentdev-operator}}
   policyTypes: [Ingress]
-  ingress: []
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: obs-mcp}}}]
+    ports: [{port: 8090}]

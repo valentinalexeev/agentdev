@@ -11,7 +11,8 @@
       src: "{{ repo_root }}/manifests/obs-mcp.yaml.tmpl"
       values: {PLATFORM_NS: agentdev-platform, OPERATOR_IMAGE: img, IMAGE_PULL_POLICY: IfNotPresent,
                PROMETHEUS_URL: "{{ obs_mcp.prometheus_url }}", LOKI_URL: "", LOKI_TENANT: "", CLOUD_LOGGING_PROJECT: "",
-               OBS_GSA: "", OBS_MCP_MAX_OUTPUT: "16384", OBS_MCP_RATE_PER_MIN: "30", OBS_MCP_RATE_BURST: "10"}
+               OBS_GSA: "", OBS_MCP_MAX_OUTPUT: "16384", OBS_MCP_RATE_PER_MIN: "30", OBS_MCP_RATE_BURST: "10",
+               PROBE_URL: "http://agentdev-probe.agentdev-platform.svc.cluster.local:8090"}
       replace: []
     docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=obs_render) | from_yaml_all | list }}"
     role_tasks: "{{ lookup('ansible.builtin.file', '../roles/platform/tasks/main.yml') }}"
@@ -44,6 +45,8 @@
           # the token is a file from a Secret in this namespace, never an env value
           - pod.containers[0].env | selectattr('valueFrom', 'defined') | list | length == 0
           - pod.volumes[0].secret.secretName == 'obs-mcp-token'
+          - pod.volumes[1].secret.secretName == 'agentdev-probe-token'   # #205: shared with the operator only
+          - pod.containers[0].env | selectattr('name', 'equalto', 'PROBE_URL') | map(attribute='value') | first is match('^http://agentdev-probe\\.')
           - np.spec.ingress | length == 1
           - np.spec.ingress[0].from[0].podSelector.matchLabels.app == 'contextforge'
           - np.spec.ingress[0].from | length == 1
