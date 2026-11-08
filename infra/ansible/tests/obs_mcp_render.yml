@@ -1,0 +1,63 @@
+# Observability MCP tools (#205): the platform role renders manifests/obs-mcp.yaml.tmpl with every placeholder filled,
+# the backend token stays in the platform namespace, and only ContextForge may call the pod.
+# Run: ansible-playbook infra/ansible/tests/obs_mcp_render.yml
+- name: Obs-mcp render of the platform role (#205)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    obs_mcp: {enabled: true, prometheus_url: "http://prometheus.monitoring.svc:9090", loki_url: "", cloud_logging_project: ""}
+    obs_render:
+      src: "{{ repo_root }}/manifests/obs-mcp.yaml.tmpl"
+      values: {PLATFORM_NS: agentdev-platform, OPERATOR_IMAGE: img, IMAGE_PULL_POLICY: IfNotPresent,
+               PROMETHEUS_URL: "{{ obs_mcp.prometheus_url }}", LOKI_URL: "", LOKI_TENANT: "", CLOUD_LOGGING_PROJECT: "",
+               OBS_GSA: "", OBS_MCP_MAX_OUTPUT: "16384", OBS_MCP_RATE_PER_MIN: "30", OBS_MCP_RATE_BURST: "10"}
+      replace: []
+    docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=obs_render) | from_yaml_all | list }}"
+    role_tasks: "{{ lookup('ansible.builtin.file', '../roles/platform/tasks/main.yml') }}"
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/platform/defaults/main.yml
+
+    - name: Off by default
+      vars: {obs_mcp: {}}
+      ansible.builtin.assert: {that: [not platform_obs_mcp_enabled | bool]}
+
+    - name: The role renders the same template with the same value names
+      ansible.builtin.assert:
+        that:
+          - "'manifests/obs-mcp.yaml.tmpl' in role_tasks"
+          - obs_render['values'].keys() | reject('in', role_tasks) | list | length == 0
+
+    - name: Objects, isolation and secret handling
+      vars:
+        deploy: "{{ docs | selectattr('kind', 'equalto', 'Deployment') | first }}"
+        np: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | first }}"
+        pod: "{{ deploy.spec.template.spec }}"
+      ansible.builtin.assert:
+        that:
+          - docs | map(attribute='kind') | sort | list == ['Deployment', 'NetworkPolicy', 'Service', 'ServiceAccount']
+          - docs | map(attribute='metadata.namespace') | unique | list == ['agentdev-platform']
+          - pod.automountServiceAccountToken == false
+          - pod.containers[0].args == ['obs-mcp']
+          - pod.containers[0].securityContext.readOnlyRootFilesystem
+          # the token is a file from a Secret in this namespace, never an env value
+          - pod.containers[0].env | selectattr('valueFrom', 'defined') | list | length == 0
+          - pod.volumes[0].secret.secretName == 'obs-mcp-token'
+          - np.spec.ingress | length == 1
+          - np.spec.ingress[0].from[0].podSelector.matchLabels.app == 'contextforge'
+          - np.spec.ingress[0].from | length == 1
+        fail_msg: "{{ docs | to_json }}"
+
+    - name: The secret tasks have no_log
+      ansible.builtin.assert:
+        that: "role_tasks | regex_search('Observability MCP backend token[\\s\\S]*?no_log: true') is not none"
+
+    - name: A URL with credentials is refused by the role's check
+      vars:
+        url_re: '^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$'
+      ansible.builtin.assert:
+        that:
+          - "'http://user:pw@prom:9090' is not match(url_re)"
+          - "'http://prometheus.monitoring.svc:9090' is match(url_re)"
+          - "url_re in role_tasks"

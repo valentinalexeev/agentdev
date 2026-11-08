@@ -335,8 +335,8 @@ of the agents. It shows one card for each issue.
 
 ### Deploy botboard
 
-1. Run run.sh step 07: `./run.sh 07`
-   The script deploys botboard in the namespace `botboard`.
+1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml --tags botboard`
+   The playbook deploys botboard in the namespace `botboard`. The old command `./run.sh 07` does the same (deprecated, #106).
 2. Run run.sh step 06 again: `./run.sh 06`
    The script finds botboard and sets `BOTBOARD_URL` on each agent.
 
@@ -374,7 +374,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
    Separate the paths with spaces.
 3. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres.
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
+   The playbook deploys the namespace `agentdev-platform` with Postgres.
    If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
@@ -435,6 +436,78 @@ NOTE: The dry run (`--check`) does not run the sync.
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
+
+### Give agents the observability tools
+
+The observability tools let agents read metrics and logs. They cannot change data. The pod `obs-mcp` in
+`agentdev-platform` gives these tools:
+
+- `prometheus_query`: reads metrics from Prometheus with a PromQL query.
+- `loki_query`: reads logs from Loki with a LogQL query.
+- `cloud_logging_query` (add-on, GKE only): reads Cloud Logging entries of one GCP project.
+
+The pod keeps the credential of each backend. Agents use the tools through ContextForge with their own token.
+The agent pod never gets a backend credential.
+
+Before you start, make sure that Prometheus or Loki operates in the cluster. agentdev does not install them.
+
+1. Set the backend addresses:
+   - On kind: in `config.env`, set `OBS_MCP=true`, `PROMETHEUS_URL` and `LOKI_URL`.
+   - On GKE: in `ansible/instance.yml`, set `obs_mcp.enabled: true`, `obs_mcp.prometheus_url` and `obs_mcp.loki_url`.
+
+   Use addresses in the cluster Service range, for example `http://prometheus-server.monitoring.svc.cluster.local`.
+   An address with a user name or a password is refused.
+2. Optional: give a read-only bearer token for Prometheus and Loki.
+   - On kind: write the token to `.secrets/platform/obs-token`.
+   - On GKE: put the token in Secret Manager. Set `obs_mcp.token_secret` to the name of the secret.
+
+   WARNING: Use a token that can only read. Do not use an admin token.
+3. Deploy the tools:
+   - On kind: run run.sh step 08: `./run.sh 08`
+   - On GKE: run the playbook.
+4. In the project specification, add the server:
+
+   ```yaml
+   mcp:
+     servers:
+       - {name: obs, url: http://obs-mcp.agentdev-platform.svc.cluster.local:8080/mcp}
+   ```
+
+5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
+6. Run the sync: `scripts/mcp-sync.sh <spec>`
+7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
+
+CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
+output. This filter does not find all secrets. Do not write secrets to logs. Refer to R99 in `docs/security.md`.
+
+NOTE: The tools of a project are the same for all its agents. Every agent of the project can read all the logs and
+metrics that the backend token can read. To limit the data, give a token that can read less, or set `LOKI_TENANT`.
+
+To use the Cloud Logging tool on GKE, do these steps:
+
+1. Make a Google service account with the role `roles/logging.viewer` only.
+2. Let the Kubernetes service account `agentdev-platform/obs-mcp` use it (Workload Identity, `roles/iam.workloadIdentityUser`).
+3. In `ansible/instance.yml`, set `obs_mcp.cloud_logging_project` and `obs_mcp.cloud_logging_gsa`.
+4. Run the playbook.
+
+#### Reference: the observability tools
+
+| Setting (kind / GKE `obs_mcp.`) | Default | Meaning |
+|---|---|---|
+| `OBS_MCP` / `enabled` | `false` | Deploy the pod `obs-mcp` |
+| `PROMETHEUS_URL` / `prometheus_url` | empty | Prometheus address; empty: no `prometheus_query` tool |
+| `LOKI_URL` / `loki_url` | empty | Loki address; empty: no `loki_query` tool |
+| `LOKI_TENANT` / `loki_tenant` | empty | Loki tenant (`X-Scope-OrgID`) |
+| - / `cloud_logging_project` | empty | GCP project for `cloud_logging_query`; empty: no tool |
+| `OBS_MCP_MAX_OUTPUT` / `max_output` | `16384` | Maximum bytes of output for one call |
+| `OBS_MCP_RATE_PER_MIN` / `rate_per_min` | `30` | Calls for each minute, for each tool (all agents together) |
+| `OBS_MCP_RATE_BURST` / `rate_burst` | `10` | Calls at the same time before the limit starts |
+
+Limits for each call: the query has a maximum of 2000 characters. The time range is a maximum of 7 days. A log query
+gives a maximum of 500 lines. A range query of Prometheus gives a maximum of 1100 points for each series.
+
+The tool output starts with `UNTRUSTED DATA`. Each line has a prefix, and backticks are replaced. Thus the output
+cannot close its code block. The output goes only to the model. agentdev does not use it for a decision.
 
 ### Open the ContextForge admin UI
 
@@ -1184,6 +1257,24 @@ playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider tha
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
+### Post-deploy smoke test
+
+At the end of each run, the playbook sends requests to the public hosts from the operator computer (#213). It does
+this in the two ingress modes. The run fails when one of these checks does not pass in `ingress.smoke_timeout`
+seconds (default 300):
+
+| Check | Expected answer |
+|---|---|
+| Forwarder pods (only with `ingress.forwarder.namespace` and `pod_selector`) | Ready |
+| `POST https://<ingress.webhook_host>/hook` without a signature | 401 from the router |
+| `GET https://<ingress.webhook_host>/status` | 404 (the internal endpoints are not public) |
+| `GET https://<ingress.host>/` (when the UI is routed) | 200, a redirect, 401 or 403 |
+| `GET https://<ingress.auth_host>/` (with authentik) | 200, a redirect, 401 or 403 |
+
+The failure message gives the URL and the answer. A new managed certificate can need more time on the first run.
+Then run the playbook again, or set a larger `ingress.smoke_timeout`. To turn the test off, set `ingress.smoke: false`.
+The test does not operate in check mode (`--check`).
+
 ### Reference: the public entry point
 
 | Control | Where | Value |
@@ -1629,6 +1720,93 @@ The next `./run.sh 12` or playbook run makes it again.
   [Add a host for an executor](#add-a-host-for-an-executor).
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
+## Project secrets
+
+A project secret is a credential that the agents of one project, or one agent, can use (#202, ADR 0003). An
+example is the token of a private package registry. The agent does not get the value. The credential broker adds
+the value to the requests of the agent. A `ProjectSecret` object tells who can use the secret and how. The value
+is in the secret store, never in the object.
+
+| Field | Values |
+|---|---|
+| `scope` | `project` (all agents of `spec.project` on `spec.forge`) or `agent` (only `spec.agent`, and only while it works on `spec.project` on `spec.forge`) |
+| `forge` | `gitea` (default) or `github`. A repository is the pair of forge and name: `acme/app` on Gitea is not `acme/app` on GitHub |
+| `mode` | `broker` (the broker adds the value to requests for `spec.broker.upstream`) or `env` (the agent can read the value, see below) |
+
+Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
+into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
+
+> **Status:** part 1 of #202. This part adds the object, the store and the copy. The broker, the write-only API and
+> the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
+
+### Set up the secret store (kind)
+
+1. Install External Secrets Operator, the store and the rules:
+
+   ```bash
+   ./run.sh 13
+   ```
+
+2. Make sure that the store is ready:
+
+   ```bash
+   kubectl -n coding-agents get secretstore agentdev-secrets
+   ```
+
+   The column `READY` shows `True`.
+
+To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
+
+### Add a project secret (kind, before the API part)
+
+1. Apply the ProjectSecret object:
+
+   ```bash
+   kubectl -n coding-agents apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: ProjectSecret
+   metadata: {name: npm-registry}
+   spec:
+     scope: project
+     project: owner/repo
+     mode: broker
+     broker: {upstream: "https://npm.pkg.github.com", scheme: bearer}
+   EOF
+   ```
+
+2. Write the value into the store. Do not write the value on the command line: read it from a file.
+
+   ```bash
+   kubectl -n agentdev-secret-values create secret generic agentdev-ps-npm-registry --from-file=value=token.txt
+   ```
+
+3. Make sure that the copy is ready:
+
+   ```bash
+   kubectl -n coding-agents get projectsecret npm-registry
+   ```
+
+   The column `PHASE` shows `ready` after one minute or less (`SECRETS_REFRESH_SECONDS`, default 60).
+
+To rotate the value, replace the Secret in step 2. To remove the project secret, delete the ProjectSecret object and
+then the Secret `agentdev-ps-<n>`.
+
+### Mode env
+
+In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
+it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
+database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
+`HTTPS_PROXY` are not permitted.
+
+### Rules in the cluster
+
+ValidatingAdmissionPolicies (`manifests/secrets-policy.yaml.tmpl`) make sure that:
+
+- An ExternalSecret in the agents namespace has the name `ps-<n>`, uses only the store `agentdev-secrets` and reads
+  only the key `agentdev-ps-<n>`.
+- Only External Secrets Operator writes a Secret `ps-*` in the agents namespace.
+- No agentdev service account writes a SecretStore or a ClusterSecretStore.
+
 ## Subscription usage limits
 
 Each Claude subscription has a 5-hour usage window and a weekly usage window. After each Claude run, the agent loop
@@ -1982,11 +2160,12 @@ a run.sh step or a manual `kubectl` command on GKE.
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
+| botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
-| Platform namespace | 08 | role `platform` |
+| Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
