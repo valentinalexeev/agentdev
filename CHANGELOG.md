@@ -114,6 +114,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- `images/worker/test/jobs.test.sh` failed the case "after the backoff it runs again" on Alpine (`bash:5`) (#281).
+  BusyBox `sed` has no `-u`, so every stub job failed. The worker image uses GNU `sed` and is not affected. The test
+  now checks its prerequisites (GNU `sed -u`, `flock`) first and names the missing package.
 - `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
   to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
   events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
