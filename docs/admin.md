@@ -221,6 +221,28 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
    units, tokens by type and number of requests, most expensive first. The worker names the job in the header
    `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
 
+### Stop a run that takes too long or costs too much
+
+Three guards stop one Claude run (#196, ADR 0002 D6). Set them in `config.env` (kind) or `instance.yml` (GKE), then
+run `./run.sh 06` and `./run.sh 12`, or the playbook.
+
+| kind (`config.env`) | GKE (`instance.yml`) | Default | What it does |
+|---|---|---|---|
+| `JOB_TIMEOUT` | `job_timeout` | 3600 | Seconds for one run. Then the run stops and counts as failed. 0 = no limit. |
+| `MAX_BUDGET_USD` | `max_budget_usd` | empty | USD for one run (Claude Code `--max-budget-usd`). Use it when the instance bills by API key. |
+| `CLAUDE_JOB_BUDGET_UNITS` | `claude_job_budget_units` | 0 | Cost units for one job id in the proxy. Then the proxy answers 429 and writes `job-budget-exhausted`. 0 = off. |
+
+NOTE: The job id comes from the agent container, so the model can change it. `CLAUDE_JOB_BUDGET_UNITS` stops a run
+that loops. It does not protect the instance. The budget of the agent does.
+
+### Claude Code telemetry (optional)
+
+Claude Code can send its own metrics and events (tool use, sessions, commits) to an OpenTelemetry Collector (#196,
+ADR 0002 D7). It is off by default. Turn it on with `CLAUDE_CODE_TELEMETRY=true` and `CLAUDE_CODE_OTLP_URL` (kind),
+or `claude_code_telemetry: {enabled: true, otlp_url: ...}` (GKE). agentdev uses this data for dashboards only,
+never for a limit or a pause, because the model can send data to the same endpoint. Prompts and tool details are
+never logged.
+
 ### Metrics and OpenTelemetry
 
 `claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`

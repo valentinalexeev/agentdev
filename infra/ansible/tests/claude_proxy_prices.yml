@@ -25,6 +25,7 @@
             CLAUDE_BUDGET_UNITS: "{{ claude_budget_units | int }}"
             CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             TELEMETRY_OTLP_URL: ""
+            CLAUDE_JOB_BUDGET_UNITS: "0"
             TELEMETRY_SCRAPER_NS: gmp-system
             CLAUDE_SECRET_SOURCES: "[]"
           replace: []

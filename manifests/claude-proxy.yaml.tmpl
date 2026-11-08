@@ -41,6 +41,7 @@ spec:
         env:
         - {name: CLAUDE_BUDGET_UNITS, value: "${CLAUDE_BUDGET_UNITS}"}
         - {name: PRICES_DIR, value: /etc/claude-proxy/prices}
+        - {name: CLAUDE_JOB_BUDGET_UNITS, value: "${CLAUDE_JOB_BUDGET_UNITS}"}   # #196: loop guard per job id; 0 = off
         - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         - {name: BUDGET_DIR, value: /etc/claude-proxy/budgets}
         - {name: STATE_FILE, value: /var/lib/claude-proxy/spend.json}

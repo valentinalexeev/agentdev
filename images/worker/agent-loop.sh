@@ -354,6 +354,39 @@ system_prompt() {  # the security rules, then the harness guide
   return 0
 }
 
+# ---------- run guards (#196, ADR 0002 D6) ----------
+# JOB_TIMEOUT (seconds, default 3600, 0 = off) wraps claude in timeout: a run that loops ends like a failed run.
+# MAX_BUDGET_USD (empty = off, at most 2 decimals) adds --max-budget-usd, for instances that bill by API key.
+# The job id goes to claude-proxy as X-Agentdev-Job (ANTHROPIC_CUSTOM_HEADERS) for per-job cost; the proxy strips it.
+# Every value passes a pattern first: they reach argv and the environment of claude.
+# CLAUDE_CODE_TELEMETRY=true (D7, default false) turns on Claude Code's own OpenTelemetry export to
+# CLAUDE_CODE_OTLP_URL (an http(s) collector URL) for dashboards only; prompts and tool details are never logged.
+# The model can send OTLP to the same endpoint, so this data never feeds a limit or a pause.
+JOB_TIMEOUT="${JOB_TIMEOUT:-3600}"
+MAX_BUDGET_USD="${MAX_BUDGET_USD:-}"
+run_guards() {  # sets GUARD (command prefix), GUARD_ARGS (claude flags), GUARD_ENV (env assignments)
+  GUARD=() GUARD_ARGS=() GUARD_ENV=()
+  local t=${JOB_TIMEOUT}
+  if ! [[ "${t}" =~ ^[0-9]{1,7}$ ]]; then log "JOB_TIMEOUT is not a number of seconds: using 3600" >&2; t=3600; fi
+  (( 10#${t} > 0 )) && GUARD=(timeout --kill-after=30 "$((10#${t}))")
+  if [[ -n "${MAX_BUDGET_USD}" ]]; then
+    if [[ "${MAX_BUDGET_USD}" =~ ^[0-9]{1,6}(\.[0-9]{1,2})?$ ]]; then GUARD_ARGS=(--max-budget-usd "${MAX_BUDGET_USD}")
+    else log "MAX_BUDGET_USD is not an amount (^[0-9]+(.[0-9]{1,2})?$): ignored" >&2; fi
+  fi
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] && GUARD_ENV=("ANTHROPIC_CUSTOM_HEADERS=X-Agentdev-Job: ${JOB}")
+  if [[ "${CLAUDE_CODE_TELEMETRY:-false}" == true ]]; then
+    if [[ "${CLAUDE_CODE_OTLP_URL:-}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]]; then
+      GUARD_ENV+=(CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
+        OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf "OTEL_EXPORTER_OTLP_ENDPOINT=${CLAUDE_CODE_OTLP_URL%/}"
+        OTEL_LOG_USER_PROMPTS=0 OTEL_LOG_TOOL_DETAILS=0 "OTEL_RESOURCE_ATTRIBUTES=agentdev.agent=${FORGE_USER:-unknown}")
+    else
+      log "CLAUDE_CODE_TELEMETRY is on but CLAUDE_CODE_OTLP_URL is not an http(s) URL: telemetry off" >&2
+    fi
+  fi
+  return 0
+}
+# ---------- end run guards ----------
+
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
   local dir=$1 out rc err mcp=()
   err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
@@ -368,9 +401,10 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
     mode=(--permission-mode default --permission-prompt-tool mcp__agentdev__approve)
   fi
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
+  run_guards
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
-          GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-          claude -p "$2" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
+          GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${GUARD_ENV[@]}" \
+          "${GUARD[@]}" claude -p "$2" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" "${GUARD_ARGS[@]}" \
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
@@ -385,6 +419,7 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
   # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
   if [[ ${rc} -ne 0 ]]; then
     local why=error; grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
+    [[ ${rc} -eq 124 || ${rc} -eq 137 ]] && (( ${#GUARD[@]} > 0 )) && why="JOB_TIMEOUT of ${GUARD[-1]} s"
     log "claude exited ${rc} (${why}; stderr not logged)"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75

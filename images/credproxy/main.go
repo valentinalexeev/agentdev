@@ -79,6 +79,7 @@ type server struct {
 	prices   *prices
 	jobs     *jobs
 	tel      *telemetry // nil = no metrics (tests)
+	jobLimit int64      // CLAUDE_JOB_BUDGET_UNITS (#196 D6): loop guard per job id; 0 = off
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
 	now      func() time.Time
@@ -205,12 +206,25 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: the budget of agent "+agent+" for 24 h is used")
 		return
 	}
+	job := cleanJob(r.Header.Get(jobHeader))
+	// loop guard (#196 D6): the job id comes from the agent, so this only stops a run that loops, it is not a
+	// security bound (the per-agent budget above is)
+	if s.jobLimit > 0 && job != "" {
+		if used := s.jobs.used(agent, job); used >= s.jobLimit {
+			s.tel.refuse(agent, "job_budget")
+			if s.jobs.firstRefusal(agent, job) {
+				emitEvent(agent, "job-budget-exhausted", "low", "job "+job+" used "+strconv.FormatInt(used, 10)+" of "+strconv.FormatInt(s.jobLimit, 10)+" units (CLAUDE_JOB_BUDGET_UNITS)")
+			}
+			apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: job "+job+" of agent "+agent+" used its budget (CLAUDE_JOB_BUDGET_UNITS)")
+			return
+		}
+	}
 	cred, ok := s.creds.lookup(agent)
 	if !ok {
 		apiError(w, http.StatusServiceUnavailable, "api_error", "claude-proxy: no Claude credential for agent "+agent)
 		return
 	}
-	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred, s.now()})))
+	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, job, cred, s.now()})))
 }
 
 func clip(s string, n int) string {
@@ -246,8 +260,13 @@ func main() {
 		log.Fatal("CLAUDE_BUDGET_UNITS must be a non-negative integer")
 	}
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
+	jobLimit, err := strconv.ParseInt(envOr("CLAUDE_JOB_BUDGET_UNITS", "0"), 10, 64)
+	if err != nil || jobLimit < 0 {
+		log.Fatal("CLAUDE_JOB_BUDGET_UNITS must be a non-negative integer")
+	}
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
 	s.prices = newPrices(os.Getenv("PRICES_DIR"))
+	s.jobLimit = jobLimit
 	tel, err := newTelemetry(os.Getenv("TELEMETRY_OTLP_URL"), b)
 	if err != nil {
 		log.Fatal(err)

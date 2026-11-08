@@ -124,7 +124,11 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
-        - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
+        - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}
+        - {name: JOB_TIMEOUT, value: "${JOB_TIMEOUT}"}         # #196: seconds per Claude run, 0 = off
+        - {name: MAX_BUDGET_USD, value: "${MAX_BUDGET_USD}"}   # #196: --max-budget-usd per run; empty = off
+        - {name: CLAUDE_CODE_TELEMETRY, value: "${CLAUDE_CODE_TELEMETRY}"}   # #196 D7: Claude Code's own OTel, dashboards only
+        - {name: CLAUDE_CODE_OTLP_URL, value: "${CLAUDE_CODE_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

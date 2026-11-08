@@ -34,6 +34,8 @@ EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agent
 # harness guide (#206): the agents' egress list as 06-agents.sh builds it, for the text only
 AGENT_EGRESS_HOSTS=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
   { if [[ "${CLAUDE_PROXY:-true}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
+[[ "${JOB_TIMEOUT:-3600}" =~ ^[0-9]{1,7}$ ]] || die "JOB_TIMEOUT must be a number of seconds (0 = off)"   # #196
+[[ "${MAX_BUDGET_USD:-}" =~ ^([0-9]{1,6}(\.[0-9]{1,2})?)?$ ]] || die "MAX_BUDGET_USD must be an amount like 2.50 (empty = off)"
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
@@ -47,6 +49,8 @@ COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS
   EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
   USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" \
+  JOB_TIMEOUT="${JOB_TIMEOUT:-3600}" MAX_BUDGET_USD="${MAX_BUDGET_USD:-}" \
+  CLAUDE_CODE_TELEMETRY="${CLAUDE_CODE_TELEMETRY:-false}" CLAUDE_CODE_OTLP_URL="${CLAUDE_CODE_OTLP_URL:-}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 label_ns "${EXEC_NS}"   # created by the operator manifest

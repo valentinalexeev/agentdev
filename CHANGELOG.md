@@ -30,6 +30,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Run guards (#196, ADR 0002 D6/D7): `JOB_TIMEOUT` (default 3600 s, 0 = off) stops a Claude run that takes too long;
+  `MAX_BUDGET_USD` adds `--max-budget-usd` per run; `CLAUDE_JOB_BUDGET_UNITS` makes `claude-proxy` refuse a job id
+  after that many units (loop guard, event `job-budget-exhausted`, `stopped` on `GET /status`). The worker sends the
+  job id as `X-Agentdev-Job`. Optional Claude Code telemetry (`CLAUDE_CODE_TELEMETRY`, off) for dashboards only.
+  Ansible: `job_timeout`, `max_budget_usd`, `claude_job_budget_units`, `claude_code_telemetry`. Re-run: `./run.sh 06`
+  and `12`, or the playbook; new worker, proxy and operator images.
 - OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
   9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
   `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,
