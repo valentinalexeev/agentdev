@@ -9,14 +9,26 @@
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
 #   ansible-playbook kind.yml --tags agents            # was ./run.sh 06 (needs the operator: ./run.sh 12)
+#   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
+#   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06, botboard: 07,
+# mcp: 08.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
   gather_facts: false
   vars:
     kind_cluster_name: agentdev
+    # shared with deploy.yml's roles (group_vars/all.yml is GKE-only); config.env values come in with -e (08-mcp.sh)
+    repo_root: "{{ playbook_dir }}/../.."
+    kube_context: kind-{{ kind_cluster_name }}
+    agents_ns: coding-agents
+    platform_ns: agentdev-platform
+    operator_image: agentdev-operator:dev
+    mcp_projects: []
+    mcp_allowed_hosts: []
+    obs_mcp: {enabled: false}
   tasks:
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
@@ -59,3 +71,24 @@
         kind_agents_context: kind-{{ kind_cluster_name }}
         kind_agents_cluster_name: "{{ kind_cluster_name }}"
       tags: [agents]
+
+    # optional (#26): not in the default run. Agents get BOTBOARD_URL from ./run.sh 06 when the namespace exists.
+    - name: Botboard dashboard (was 07-botboard.sh)
+      ansible.builtin.include_role:
+        name: botboard
+        apply: {tags: [botboard]}
+      vars:
+        botboard_context: kind-{{ kind_cluster_name }}
+      tags: [botboard, never]
+
+    # Postgres always; ContextForge and mcp-sync only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
+    # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager.
+    - name: Postgres, ContextForge MCP gateway, obs-mcp, mcp-sync (was 08-mcp.sh)
+      ansible.builtin.include_role:
+        name: platform
+        apply: {tags: [mcp]}
+      vars:
+        platform_service_cidr: 10.96.0.0/16
+        platform_secret_source: files
+        platform_kind_cluster: "{{ kind_cluster_name }}"
+      tags: [mcp]

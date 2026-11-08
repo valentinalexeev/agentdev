@@ -8,10 +8,21 @@
   changed_when: false
   failed_when: false
 
-- name: Build the local image {{ kind_agents_img.tag }}
+# local tags (agentdev/...) are built from this checkout; a published image (the compatibility e2e, #178, runs the
+# previous release's worker and forge) is pulled as it is. The router and the Claude proxy are always built.
+- name: Build or pull the image {{ kind_agents_img.tag }}
   ansible.builtin.command:
-    argv: ["{{ kind_agents_container_engine }}", build, -q, -t, "{{ kind_agents_img.tag }}",
-           "{{ kind_agents_repo_root }}/images/{{ kind_agents_img.dir }}"]
+    argv: "{{ [kind_agents_container_engine, 'build', '-q', '-t', kind_agents_img.tag,
+               kind_agents_repo_root ~ '/images/' ~ kind_agents_img.dir]
+              if (kind_agents_img.tag is match('agentdev/') or not (kind_agents_img.pull | default(false)))
+              else [kind_agents_container_engine, 'pull', '-q', kind_agents_img.tag] }}"
+  register: kind_agents_img_run
+  changed_when: false
+
+# `pull -q` prints the reference, not the id: compare the image ids before and after
+- name: Image id after the build or pull of {{ kind_agents_img.tag }}
+  ansible.builtin.command:
+    argv: ["{{ kind_agents_container_engine }}", image, inspect, -f, "{{ '{{' }}.Id{{ '}}' }}", "{{ kind_agents_img.tag }}"]
   register: kind_agents_img_build
   changed_when: (kind_agents_img_build.stdout | trim) != (kind_agents_img_before.stdout | trim)
 

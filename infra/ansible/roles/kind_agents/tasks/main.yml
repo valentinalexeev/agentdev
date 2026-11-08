@@ -50,8 +50,8 @@
 - name: Local images (worker, forge sidecar, router, Claude proxy)
   ansible.builtin.include_tasks: image.yml
   loop:
-    - {dir: worker, tag: "{{ kind_agents_worker_image }}"}
-    - {dir: forge, tag: "{{ kind_agents_forge_image }}"}
+    - {dir: worker, tag: "{{ kind_agents_worker_image }}", pull: true}
+    - {dir: forge, tag: "{{ kind_agents_forge_image }}", pull: true}
     - {dir: router, tag: "{{ kind_agents_router_image }}"}
     - {dir: credproxy, tag: "{{ kind_agents_credproxy_image }}"}
   loop_control: {loop_var: kind_agents_img, label: "{{ kind_agents_img.tag }}"}
