@@ -39,6 +39,7 @@
             APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            SECRETS_VALUES_NS: ""
           replace: []
 
     - name: The API container gets the values

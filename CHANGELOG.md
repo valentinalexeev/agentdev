@@ -28,6 +28,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
   request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
   agent container. The harness guide lists the agent's broker secrets.
+- Scoped secrets store, part 3 (#202): write-only API (`GET/POST /api/secrets`, `PUT /api/secrets/<name>/value`,
+  `DELETE /api/secrets/<name>`; repository admins or `agentdev-admins`, audit-logged without the value) and a
+  **Secrets** page in the web UI. The API can create, update and delete value Secrets but never read them. Re-run:
+  `./run.sh 13` (sets `SECRETS_VALUES_NS` on the API).
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
