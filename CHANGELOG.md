@@ -20,6 +20,16 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
    deployment repository. The old copy tries GCP authentication on PRs and fails.
 4. **Public entry point (#120).** `examples/deployment/gcp-gke/terraform/main.tf` now sets `public_hosts`,
    `cloud_armor` and `output "ingress"`. Copy them if your `main.tf` came from an older template.
+5. **OIDC client id and audience (#323).** New instance values `api.oidc_client_id` (default `agentdev`) and
+   `api.ui_oidc_scopes` (default `openid profile email forge`). `api.oidc_audience` now defaults to
+   `api.oidc_client_id`. With the defaults, nothing changes. If you set `api.oidc_client_id`, the API audience follows
+   it, unless you also set `api.oidc_audience`.
+6. **Minimal OIDC providers (#322, #323).** For a provider that gives `groups` only when the scope is requested (for
+   example Pocket ID), set `api.ui_oidc_scopes: "openid profile email groups forge"`. When the access token has no
+   `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo` endpoint. authentik needs no
+   change (infra/ansible/README.md, "Claim contract").
+7. **Upgrade notes (#315).** `scripts/upgrade-notes.sh --repo <agentdev path or URL> <from> <to>` prints these steps
+   for your upgrade. Run it from the deployment repository.
 
 ### Added
 - UI (#323): Ansible `api.ui_oidc_scopes` (default `openid profile email forge`) and `api.oidc_client_id` (default
