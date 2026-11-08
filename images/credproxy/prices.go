@@ -111,6 +111,18 @@ func (p priceTable) multiplier(model string) float64 {
 	return best
 }
 
+// modelLabel is the metric label of a model: the model when a configured prefix matches, else "unknown". The model
+// name comes from the upstream response, so an unbounded set of names must not become an unbounded set of series
+// (review of #276); the usage line and the span keep the full name.
+func (p priceTable) modelLabel(model string) string {
+	for prefix := range p.models {
+		if strings.HasPrefix(model, prefix) {
+			return model
+		}
+	}
+	return "unknown"
+}
+
 // units of one response, rounded up so that any spend counts.
 func (p priceTable) units(model string, t tokenCounts) int64 {
 	var u float64
