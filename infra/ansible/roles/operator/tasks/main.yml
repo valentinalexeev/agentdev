@@ -102,6 +102,10 @@
         EXECUTOR_EGRESS_HOSTS: "{{ operator_executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ operator_usage.five_hour }}"
         USAGE_WEEKLY: "{{ operator_usage.weekly }}"
+        # external forwarder watch (#213, PR #286): off on kind. Extra values are harmless before #286 merges.
+        FORWARDER_NS: ""
+        FORWARDER_SELECTOR: ""
+        FORWARDER_NOT_READY_MINUTES: ""
         SECRETS_STORE: "{{ operator_store }}"
         # the kind store's value Secrets have one key, value
         SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
