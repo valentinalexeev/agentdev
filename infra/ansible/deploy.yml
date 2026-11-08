@@ -63,10 +63,13 @@
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
           - not (item.ssh | default(false) | bool) or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
           - item.snapshot is not defined or ((item.ssh | default(false) | bool) and item.snapshot is sequence and item.snapshot is not string)
+          - item.drift is not defined or (item.drift is mapping and (item.drift.changed_pattern | default('')) | length > 0)
+          - item.probes is not defined or ((item.ssh | default(false) | bool) and item.probes is sequence and item.probes is not string)
+          - (item.probes | default([])) | rejectattr('name', 'match', '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
         fail_msg: >-
           executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
           plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names, ssh needs a pr_plan
-          argv list, snapshot needs ssh)
+          argv list, snapshot and probes need ssh, drift needs changed_pattern, probe names [a-z0-9-])
         quiet: true
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
@@ -386,6 +389,8 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            PROBE_RATE_PER_MIN: "{{ probes.rate_per_min | default(20) }}"   # #205 probe catalogue
+            PROBE_RATE_BURST: "{{ probes.rate_burst | default(5) }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 
@@ -530,6 +535,12 @@
             ssh: "{{ item.ssh | default(false) | bool }}"
             prPlan: "{{ {'command': item.pr_plan} if item.pr_plan is defined else omit }}"
             snapshot: "{{ {'command': item.snapshot, 'intervalHours': item.snapshot_hours | default(24) | int} if item.snapshot is defined else omit }}"
+            # #205: drift check of the branch head and the probe catalogue (server_check)
+            drift: >-
+              {{ ({'changedPattern': item.drift.changed_pattern, 'intervalHours': item.drift.hours | default(24) | int}
+                  | combine({'command': item.drift.command} if item.drift.command is defined else {}))
+                 if item.drift is defined else omit }}
+            probes: "{{ item.probes | default(omit) }}"
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name }}"}
       when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)

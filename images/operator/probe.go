@@ -558,7 +558,8 @@ func probeServerFromEnv(p *ExecutorPoller) (*ProbeServer, string, error) {
 	}
 	tok, err := os.ReadFile(env("PROBE_TOKEN_FILE", "/var/run/agentdev-probe/token"))
 	if err != nil || len(strings.TrimSpace(string(tok))) < 32 {
-		return nil, "", fmt.Errorf("PROBE_TOKEN_FILE: a token of at least 32 characters is required")
+		// fail closed without stopping the operator: no token Secret (yet), no probe server
+		return nil, "", fmt.Errorf("PROBE_TOKEN_FILE: a token of at least 32 characters is required; the probe server is off")
 	}
 	return newProbeServer(p, []byte(strings.TrimSpace(string(tok))), envInt("PROBE_RATE_PER_MIN", 20), envInt("PROBE_RATE_BURST", 5)), listen, nil
 }

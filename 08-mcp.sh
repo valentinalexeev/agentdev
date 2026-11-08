@@ -41,7 +41,13 @@ if [[ "${OBS_MCP:-false}" == true ]]; then
     k -n "${PLATFORM_NS}" create secret generic obs-mcp-token --from-file=token="${S}/obs-token" --dry-run=client -o yaml \
       | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   else k -n "${PLATFORM_NS}" delete secret obs-mcp-token --ignore-not-found >/dev/null; fi
-  PLATFORM_NS="${PLATFORM_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" IMAGE_PULL_POLICY=IfNotPresent \
+  # probe catalogue (#205): the token only obs-mcp and the operator share (random, made once, never in the agents namespace)
+  if ! k -n "${PLATFORM_NS}" get secret agentdev-probe-token >/dev/null 2>&1; then
+    k -n "${PLATFORM_NS}" create secret generic agentdev-probe-token --from-literal=token="$(openssl rand -hex 32)" >/dev/null
+  fi
+  probe_url=""
+  [[ -n "${EXEC_NS:-}" && "${OBS_SERVER_CHECKS:-true}" == true ]] && probe_url="http://agentdev-probe.${PLATFORM_NS}.svc.cluster.local:8090"
+  PLATFORM_NS="${PLATFORM_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" IMAGE_PULL_POLICY=IfNotPresent PROBE_URL="${probe_url}" \
     PROMETHEUS_URL="${PROMETHEUS_URL:-}" LOKI_URL="${LOKI_URL:-}" LOKI_TENANT="${LOKI_TENANT:-}" \
     CLOUD_LOGGING_PROJECT="" OBS_GSA="" OBS_MCP_MAX_OUTPUT="${OBS_MCP_MAX_OUTPUT}" \
     OBS_MCP_RATE_PER_MIN="${OBS_MCP_RATE_PER_MIN}" OBS_MCP_RATE_BURST="${OBS_MCP_RATE_BURST}" \

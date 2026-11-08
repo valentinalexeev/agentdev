@@ -148,7 +148,6 @@ func main() {
 		ex.Forge = ex.defaultForge
 		if ps, listen, err := probeServerFromEnv(ex); err != nil {
 			log.Error(err, "probe server")
-			os.Exit(1)
 		} else if ps != nil {
 			if err := mgr.Add(probeRunnable{s: ps, listen: listen}); err != nil {
 				log.Error(err, "probe server")

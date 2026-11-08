@@ -79,7 +79,7 @@ PROBE='#!/bin/sh
 set -u
 set -f
 cmd=${SSH_ORIGINAL_COMMAND:-}
-refuse() { echo "agentdev-probe: refused: $1" >&2; command -v logger >/dev/null && logger -p auth.warning -t agentdev-probe "refused: $1"; exit 77; }
+refuse() { echo "agentdev-probe: refused: $1" >&2; logger -p auth.warning -t agentdev-probe "refused: $1" 2>/dev/null; exit 77; }
 case "$cmd" in
   ""|probe) echo "agentdev-probe ok host=$(hostname) user=$(id -un) sshd=$(/usr/sbin/sshd -V 2>&1 | head -n1 | tr -d "\n" | cut -c1-60)"; exit 0 ;;
 esac
@@ -112,7 +112,7 @@ while IFS= read -r line; do
   esac
 done < "$f"
 [ $# -ge 1 ] || refuse "check $name has no command"
-command -v logger >/dev/null && logger -p auth.info -t agentdev-probe "check $name by $(id -un)"
+logger -p auth.info -t agentdev-probe "check $name by $(id -un)" 2>/dev/null
 out=$(timeout 20 "$@" 2>&1); rc=$?
 printf "%s\n" "$out" | head -c 65536
 exit $rc'
@@ -146,7 +146,8 @@ for u in ${APPLY_USER} ${CHECK_USER}; do id "\$u" >/dev/null 2>&1 || useradd --c
 passwd -l ${APPLY_USER} >/dev/null; passwd -l ${CHECK_USER} >/dev/null
 install -d -m 0755 /etc/ssh/auth_principals /etc/ssh/sshd_config.d
 printf '%s\n' 'agentdev-${EXECUTOR}-apply' > /etc/ssh/auth_principals/${APPLY_USER}
-printf '%s\n' 'agentdev-${EXECUTOR}-check' 'agentdev-probe' > /etc/ssh/auth_principals/${CHECK_USER}
+# the probe principal runs only agentdev-probe, also if a certificate came without force-command (#205)
+printf '%s\n' 'agentdev-${EXECUTOR}-check' 'command="/usr/local/sbin/agentdev-probe",restrict agentdev-probe' > /etc/ssh/auth_principals/${CHECK_USER}
 chmod 0644 /etc/ssh/auth_principals/${APPLY_USER} /etc/ssh/auth_principals/${CHECK_USER}
 cat > /etc/ssh/agentdev_user_ca.pub <<'CA'
 ${USER_CA}

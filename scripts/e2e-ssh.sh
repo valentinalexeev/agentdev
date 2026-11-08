@@ -3,6 +3,9 @@
 #   scripts/e2e-ssh.sh [enrol]   CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
 #   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (./run.sh 05): PR head without SSH,
 #                                merge plan with the check certificate, apply after the approval, snapshot
+#   scripts/e2e-ssh.sh probes    ansible, then drift and the probe catalogue (#205): server_check through obs-mcp, a
+#                                bad argument refused, the server's allow-list against a valid probe certificate, no
+#                                SSH credential on the agent side
 # Every check prints PASS or FAIL; the exit code is the number of failures. Idempotent: reuses the CA and server.
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
@@ -100,9 +103,13 @@ code=$(k -n "${SRV_NS}" logs e2e-curl 2>/dev/null || true)
 k -n "${SRV_NS}" delete pod e2e-curl --wait=false >/dev/null
 rc=1; [[ "${code}" == 000 ]] && rc=0; check "${rc}" "another pod cannot reach step-ca (curl: ${code:-none}, 000 = no connection)"
 
-if [[ "${1:-enrol}" == ansible ]]; then
+if [[ "${1:-enrol}" == ansible || "${1:-enrol}" == probes ]]; then
   # shellcheck source=/dev/null
   source "${SPIKE_DIR}/scripts/e2e-ssh-ansible.sh"
+fi
+if [[ "${1:-enrol}" == probes ]]; then
+  # shellcheck source=/dev/null
+  source "${SPIKE_DIR}/scripts/e2e-ssh-probes.sh"
 fi
 
 printf '\n%d failure(s)\n' "${fails}"

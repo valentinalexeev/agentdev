@@ -39,16 +39,24 @@ spec:
         - {name: OBS_MCP_MAX_OUTPUT, value: "${OBS_MCP_MAX_OUTPUT}"}
         - {name: OBS_MCP_RATE_PER_MIN, value: "${OBS_MCP_RATE_PER_MIN}"}
         - {name: OBS_MCP_RATE_BURST, value: "${OBS_MCP_RATE_BURST}"}
+        # probe catalogue (#205): server_checks, server_check, server_report through the operator; token shared only
+        # with the operator. The tools are offered when PROBE_URL is set (empty: off).
+        - {name: PROBE_URL, value: "${PROBE_URL}"}
+        - {name: PROBE_TOKEN_FILE, value: /var/run/agentdev-probe/token}
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10}
         resources:
           requests: {cpu: 10m, memory: 32Mi}
           limits:   {memory: 128Mi}
-        volumeMounts: [{name: token, mountPath: /var/run/obs-mcp, readOnly: true}]
+        volumeMounts:
+        - {name: token, mountPath: /var/run/obs-mcp, readOnly: true}
+        - {name: probe-token, mountPath: /var/run/agentdev-probe, readOnly: true}
       volumes:
       # bearer token for Prometheus/Loki (key: token); optional, the stock in-cluster stacks need none
       - name: token
         secret: {secretName: obs-mcp-token, optional: true, defaultMode: 0440}
+      - name: probe-token
+        secret: {secretName: agentdev-probe-token, optional: true, defaultMode: 0440}
 ---
 apiVersion: v1
 kind: Service

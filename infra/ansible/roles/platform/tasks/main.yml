@@ -121,7 +121,7 @@
       - (obs_mcp.prometheus_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
       - (obs_mcp.loki_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
       - (obs_mcp.cloud_logging_project | default('')) is match('^([a-z][a-z0-9-]{4,28}[a-z0-9])?$')
-      - (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != ''
+      - (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != '' or (obs_mcp.server_checks | default(true) | bool)
       - (obs_mcp.max_output | default(16384) | string) is match('^[0-9]+$')
       - (obs_mcp.rate_per_min | default(30) | string) is match('^[0-9]+$')
       - (obs_mcp.rate_burst | default(10) | string) is match('^[0-9]+$')
@@ -150,6 +150,28 @@
   when: platform_obs_mcp_enabled | bool
   no_log: true
 
+# Probe catalogue (#205): one random token shared by obs-mcp and the operator's probe server. Made once in the
+# cluster (never in git or Secret Manager), kept across runs; the operator's probe server is off without it.
+- name: Probe token Secret exists
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Secret
+    namespace: "{{ platform_ns }}"
+    name: agentdev-probe-token
+  register: platform_probe_token
+  no_log: true
+
+- name: Probe token Secret (random, platform namespace only)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: agentdev-probe-token, namespace: "{{ platform_ns }}"}
+      stringData: {token: "{{ lookup('ansible.builtin.password', '/dev/null', length=64, chars=['hexdigits']) }}"}
+  when: (platform_probe_token.resources | default([])) | length == 0
+  no_log: true
+
 - name: Observability MCP server (obs-mcp)
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
@@ -170,6 +192,9 @@
         OBS_MCP_MAX_OUTPUT: "{{ obs_mcp.max_output | default(16384) }}"
         OBS_MCP_RATE_PER_MIN: "{{ obs_mcp.rate_per_min | default(30) }}"
         OBS_MCP_RATE_BURST: "{{ obs_mcp.rate_burst | default(10) }}"
+        PROBE_URL: >-
+          {{ ('http://agentdev-probe.' + platform_ns + '.svc.cluster.local:8090')
+             if (obs_mcp.server_checks | default(true) | bool) else '' }}
       replace: []
 
 - name: Wait for obs-mcp
