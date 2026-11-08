@@ -42,6 +42,10 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// scoped secrets (#202): ProjectSecrets apply to agents (SECRETS_STORE set); BrokerURL is the credential broker
+	// agents call (AGENTDEV_BROKER_URL), empty = no broker
+	Secrets   bool
+	BrokerURL string
 }
 
 type AgentReconciler struct {
@@ -64,7 +68,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	l := log.FromContext(ctx)
 	var a v1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
-		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206)
+		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206) and npm config (#248)
+			if err := r.writeGuideKey(ctx, req.Namespace, npmrcKey(req.Name), ""); err != nil {
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, r.writeGuide(ctx, req.Namespace, req.Name, "")
 		}
 		return ctrl.Result{}, err
@@ -92,13 +99,22 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	guideRetry := false
 	execs, err := r.executorsFor(ctx, &a)
 	if err == nil {
-		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs))
+		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs)+r.secretsGuide(ctx, &a))
 	}
 	if err != nil {
 		l.Error(err, "harness guide not written, will retry", "agent", a.Name)
 		guideRetry = true
 	}
 
+	psecs, err := r.secretsFor(ctx, &a)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// private npm registries (#248): the agent's npm config next to its guide, same optional mount
+	if err := r.writeGuideKey(ctx, a.Namespace, npmrcKey(a.Name), npmrcText(r.D.BrokerURL, &a, psecs)); err != nil {
+		l.Error(err, "npm config not written, will retry", "agent", a.Name)
+		guideRetry = true
+	}
 	if wait, err := r.relayout(ctx, &a); err != nil || wait {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
@@ -109,7 +125,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
 		wasPaused := sts.Annotations["agentdev/paused"] == "true"
-		r.render(&a, sts)
+		r.render(&a, sts, psecs...)
 		if a.Spec.Paused {
 			sts.Annotations["agentdev/paused"] = "true"
 		} else {
@@ -238,6 +254,10 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
 		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))
+	}
+	if r.D.Secrets {
+		// a ProjectSecret in mode env changes the pod of the agents it applies to (#202)
+		b = b.Watches(&v1.ProjectSecret{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfSecret))
 	}
 	return b.Named("agent").Complete(r)
 }

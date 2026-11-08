@@ -28,6 +28,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
   through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
   public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
+- Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
+  `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
+  base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
+  request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
+  agent container. The harness guide lists the agent's broker secrets.
+- Private npm registries per project (#248, needs #202 part 2): `ProjectSecret` mode broker gets
+  `spec.broker.npmScope` (for example `@acme`). The operator writes each agent in the secret's scope an npm config
+  (key `<agent>.npmrc` of `agentdev-guides`, mounted at `/etc/agentdev/guide/npmrc`, `NPM_CONFIG_GLOBALCONFIG`) that
+  maps the scope to the credential broker with `${AGENTDEV_BROKER_KEY}`; no registry token in the agent pod, and an
+  agent of another project gets 403. Re-run: the playbook or `./run.sh 12` (new CRD field). admin.md "Add a private
+  npm registry for a project"; risk R119.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation

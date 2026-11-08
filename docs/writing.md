@@ -172,6 +172,8 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | project secret | a credential that the agents of one project, or one agent, can use (`ProjectSecret` object, #202) |
 | rotate | to replace the value of a credential with a new value |
 | secret store | the place that keeps the values of project secrets: GCP Secret Manager on GKE, a Kubernetes namespace on `kind` |
+| private registry | a package registry that needs a credential to read, for example GitHub Packages for npm (#248) |
+| scoped package | an npm package whose name starts with `@<scope>/`; npm can get each scope from a different registry |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 

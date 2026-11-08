@@ -148,6 +148,8 @@ spec:
     ports: [{port: 8081}]
   - to: [{podSelector: {matchLabels: {app: claude-proxy}}}]   # model calls through the credential proxy (#66), direct
     ports: [{port: 8080}]
+  - to: [{podSelector: {matchLabels: {app: credential-broker}}}]   # project secrets in mode broker (#202), direct
+    ports: [{port: 8080}]
   # in-cluster Gitea (kind). NetworkPolicy cannot tell containers apart: the agent container reaches it too (it holds
   # no token since #64)
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${FORGE_NS}}}}]

@@ -45,6 +45,10 @@ if [[ "${SECRETS_STORE_ENABLED:-true}" == true ]] && k get crd externalsecrets.e
 fi
 SECRETS_REMOTE_PROPERTY=""   # the kind store's value Secrets have one key, value (GCP: the payload itself)
 [[ -n "${SECRETS_STORE}" ]] && SECRETS_REMOTE_PROPERTY=value
+CREDENTIAL_BROKER_URL=""   # #202: set once 13 deployed the broker
+if [[ -n "${SECRETS_STORE}" ]] && k -n "${AGENTS_NS}" get deploy credential-broker >/dev/null 2>&1; then
+  CREDENTIAL_BROKER_URL="http://credential-broker.${AGENTS_NS}.svc.cluster.local:8080"
+fi
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
@@ -56,7 +60,7 @@ COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS
   APPROVALS="${APPROVALS:-false}" APPROVAL_TIMEOUT_MINUTES="${APPROVAL_TIMEOUT_MINUTES:-30}" \
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
   EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
-  SECRETS_STORE="${SECRETS_STORE}" SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY}" USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
+  SECRETS_STORE="${SECRETS_STORE}" SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY}" CREDENTIAL_BROKER_URL="${CREDENTIAL_BROKER_URL}" USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null
 label_ns "${EXEC_NS}"   # created by the operator manifest

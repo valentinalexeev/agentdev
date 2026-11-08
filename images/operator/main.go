@@ -87,6 +87,8 @@ func main() {
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
 		ExecNS:           execNS,
+		Secrets:          os.Getenv("SECRETS_STORE") != "",
+		BrokerURL:        os.Getenv("CREDENTIAL_BROKER_URL"),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
@@ -153,6 +155,10 @@ func main() {
 			Property: os.Getenv("SECRETS_REMOTE_PROPERTY")}
 		if err := psr.SetupWithManager(mgr); err != nil {
 			log.Error(err, "projectsecret controller")
+			os.Exit(1)
+		}
+		if err := mgr.Add(&BrokerSync{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Every: 15 * time.Second}); err != nil {
+			log.Error(err, "credential broker sync")
 			os.Exit(1)
 		}
 		log.Info("scoped secrets store on", "store", store)
