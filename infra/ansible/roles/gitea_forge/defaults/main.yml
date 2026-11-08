@@ -18,3 +18,7 @@ gitea_forge_branch: main
 gitea_forge_agents_ns: coding-agents
 gitea_forge_service_cidr: 10.96.0.0/16
 gitea_forge_timeout: 300
+# a token file that does not log in as its agent (an older cluster, #106): tasks/agent.yml mints a new one
+gitea_forge_token_stale: >-
+  {{ gitea_forge_token_check is defined and gitea_forge_token_check is not skipped
+     and ((gitea_forge_token_check.json | default({})).login | default('')) != gitea_forge_agent }}

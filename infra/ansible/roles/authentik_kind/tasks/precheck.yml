@@ -1,0 +1,7 @@
+---
+- name: The platform Postgres is deployed (kind.yml --tags mcp first)
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", get, statefulset, platform-db]
+  changed_when: false
+  register: authentik_kind_db
+  failed_when: authentik_kind_db.rc != 0
