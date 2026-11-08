@@ -374,7 +374,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
    Separate the paths with spaces.
 3. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres.
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
+   The playbook deploys the namespace `agentdev-platform` with Postgres.
    If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
@@ -2012,7 +2013,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
-| Platform namespace | 08 | role `platform` |
+| Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |

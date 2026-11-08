@@ -264,6 +264,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
+  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
+  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
+  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
