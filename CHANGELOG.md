@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
+  `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
+  audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
+  `agentdev/created-by` (OIDC subject) on agents the API makes. Ansible `api.max_agents` / `api.max_agents_per_user`
+  (validated as whole numbers), `config.env` `MAX_AGENTS` / `MAX_AGENTS_PER_USER`. An invalid env value stops the API
+  at start. To apply: kind `./run.sh 10`; GKE the playbook (role `api`). Docs: admin.md "Limit the number of agents".
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
