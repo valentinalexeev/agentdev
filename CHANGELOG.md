@@ -8,6 +8,19 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [1.0.0] - YYYY-MM-DD
 
+### Upgrade
+Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
+1. **Claude secrets (#212).** Each `claude-shared` and `agent-<name>-claude` secret must have a line
+   `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. Otherwise the playbook stops. Check the format before you
+   merge (docs/admin.md, "Give an agent its own Claude credential").
+2. **Router port 8082 (#218).** The probes and the GKE load balancer health check now use port 8082. Deploy the
+   router image and the manifests of the same release in one run. An old router image with the new manifests fails
+   its probe.
+3. **Deployment template (#207).** Copy the new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the
+   deployment repository. The old copy tries GCP authentication on PRs and fails.
+4. **Public entry point (#120).** `examples/deployment/gcp-gke/terraform/main.tf` now sets `public_hosts`,
+   `cloud_armor` and `output "ingress"`. Copy them if your `main.tf` came from an older template.
+
 ### Added
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to

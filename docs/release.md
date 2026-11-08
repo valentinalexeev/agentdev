@@ -78,6 +78,9 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    Check that every lower line is merged in: `scripts/release-lines.sh check --strict release/X.Y origin/release/X.Y`.
    Then branch `chore/release-X.Y.Z` from `release/X.Y`.
 2. In `CHANGELOG.md`, move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]`.
+   Give the section an `### Upgrade` part with numbered steps for an operator: what to do, whether it breaks, and
+   whether images and manifests must move together (#315). A pre-release tag (`X.Y.Z-rc.N`) gets its own section with
+   the same parts, so that the deployment repository can quote the steps from one place.
 3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
    point in `examples/deployment/gcp-gke/terraform/main.tf` (`public_hosts`, `cloud_armor` and `output "ingress"`),
    so the template matches `private-deployment.md`, which needs `public_hosts` and `terraform output ingress`.
