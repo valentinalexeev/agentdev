@@ -83,7 +83,13 @@ jobs:
       - name: kubeconform (plain manifests and the rendered agent template)
         if: needs.scope.outputs.shell == 'true'
         run: |
-          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz
+          # kubeconform from its container image on ghcr.io (upstream README, "Github Workflow"), pinned by digest.
+          # The image is public, so no login is needed. The release tarball download failed with HTTP 504 several
+          # times. ./kubeconform stays a drop-in for the steps below: files are read from the work tree, "-" is stdin.
+          img=ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+          for _ in 1 2 3; do docker pull -q "$img" && break; sleep 10; done
+          printf '#!/bin/sh\nexec docker run --rm -i -v "$PWD:/w:ro" -w /w %s "$@"\n' "$img" > kubeconform
+          chmod +x kubeconform
           ./kubeconform -strict -summary manifests/gitea.yaml manifests/postgres.yaml
           BOTBOARD_NS=botboard BOTBOARD_IMAGE=img envsubst < manifests/botboard.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform CONTEXTFORGE_IMAGE=img POSTGRES_IMAGE=img CF_ADMIN_EMAIL=a@b.c SERVICE_CIDR=10.96.0.0/12 \
@@ -136,13 +142,16 @@ jobs:
           printf 'gcp_project: p\ngcp_zone: z\nimage_tag: "0"\nreviewer: r\nagents: [{name: a, user: a, repos: o/r}]\napi: {oidc_issuer: "https://i/"}\n' > /tmp/i.yml
           ansible-playbook deploy.yml -e @/tmp/i.yml --syntax-check
           for t in tests/*.yml; do if [ -f "$t" ]; then ansible-playbook "$t"; fi; done
+      - uses: hashicorp/setup-terraform@v3
+        if: needs.scope.outputs.shell == 'true' || needs.scope.outputs.terraform == 'true'
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
       - name: terraform test (infra/terraform, plan-only with mocked providers, no credentials; #202)
         if: needs.scope.outputs.shell == 'true' || needs.scope.outputs.terraform == 'true'
         run: |
           ls infra/terraform/tests/*.tftest.hcl >/dev/null 2>&1 || { echo "no terraform tests yet, skipped"; exit 0; }
-          curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip -o tf.zip
-          unzip -q tf.zip terraform && rm tf.zip
-          cd infra/terraform && ../../terraform init -backend=false -input=false && ../../terraform test
+          cd infra/terraform && terraform init -backend=false -input=false && terraform test
       - name: router tests (no dependencies, a few seconds)
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
