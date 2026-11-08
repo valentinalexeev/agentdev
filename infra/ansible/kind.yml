@@ -8,8 +8,9 @@
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
+#   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -47,3 +48,12 @@
       vars:
         gitea_forge_context: kind-{{ kind_cluster_name }}
       tags: [forge]
+
+    # optional (#26): not in the default run. Agents get BOTBOARD_URL from ./run.sh 06 when the namespace exists.
+    - name: Botboard dashboard (was 07-botboard.sh)
+      ansible.builtin.include_role:
+        name: botboard
+        apply: {tags: [botboard]}
+      vars:
+        botboard_context: kind-{{ kind_cluster_name }}
+      tags: [botboard, never]

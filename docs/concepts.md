@@ -24,6 +24,21 @@ parts, both fenced as untrusted data (#223):
   (GitHub check runs, and commit statuses on both forges, so Gitea Actions results count too, #237). The reply to
   the reviewers covers these items only.
 
+**An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
+started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
+(`/state/jobs/<job>.*`). When the pod starts again, the job:
+
+- keeps its worktree as it is, with Claude's local commits and the changes not yet committed, and starts from the
+  job branch on the forge when it was already pushed;
+- resumes the Claude session (`claude --resume`) with a short "you were interrupted, continue" prompt, so the tokens
+  of the first run are not spent again. When the CLI cannot resume the session, the run starts again with the full
+  prompt;
+- skips what was done already: the "picked this up" comment, a Claude run that finished, a push, the pull request
+  (an open one for the branch is used), and a feedback reply that was posted.
+
+A failed job keeps the same state, so its retry also continues. An approval request of the stopped pod becomes void
+by itself: the API finds that the pod which asked is gone.
+
 **Who may give work** (#130, #237): a label (GitHub) or an assignment (Gitea) alone is not enough. Before each
 start the loop finds the person who added `agent:<name>` last (GitHub issue events) or who assigned the agent last
 (Gitea issue timeline), and checks live that this person has write, maintain or admin permission on the
@@ -221,6 +236,15 @@ namespace) and asks it for a fresh certificate for each run, valid for minutes. 
 writes the fingerprint of its host key, the operator signs that host key, and the person who enrols the server applies
 a snippet that trusts the CA for two local users. Plans of unreviewed pull requests never get a certificate.
 
+## Project secrets
+
+A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can
+use but not read (#202, ADR 0003). A `ProjectSecret` object says who uses it and how (`broker` or `env`); the value
+stays in the secret store (GCP Secret Manager on GKE, a Kubernetes namespace on kind). External Secrets Operator
+copies it into a Secret next to the credential broker, never into an agent pod. Setup: `docs/admin.md`, "Project
+secrets".
+
+## What is planned
 
 | Topic | Issue |
 |---|---|

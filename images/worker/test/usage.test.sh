@@ -83,7 +83,7 @@ check "local pause never shortened" "(( \$(cat \"\${USAGE_PAUSE_FILE}\") >= now 
 
 # run_claude fails closed: output that is not stream-json is never printed
 # shellcheck disable=SC1090
-source <(sed -n '/^run_claude() {/,/^}/p' "${here}/../agent-loop.sh")
+source <(sed -n '/^run_claude() {/,/^}/p; /^run_claude_once() {/,/^}/p' "${here}/../agent-loop.sh")
 mkdir -p "${tmp}/bin"; printf '#!/bin/sh\necho "secret transcript {not json"\n' > "${tmp}/bin/claude"; chmod +x "${tmp}/bin/claude"
 PATH="${tmp}/bin:${PATH}"   # run_claude calls claude through env: a stub on PATH, never the real CLI
 # shellcheck disable=SC2034  # read by run_claude

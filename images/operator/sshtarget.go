@@ -110,13 +110,6 @@ func checkUser(t *v1.SSHTarget) string {
 	return t.Spec.CheckUser
 }
 
-func applyUser(t *v1.SSHTarget) string {
-	if t.Spec.ApplyUser == "" {
-		return "agentdev"
-	}
-	return t.Spec.ApplyUser
-}
-
 // Enrol runs the steps above for one target and writes its status.
 func (e *SSHEnroller) Enrol(ctx context.Context, ca *SSHCA, t *v1.SSHTarget) error {
 	now := e.Now()
