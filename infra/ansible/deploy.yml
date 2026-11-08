@@ -91,8 +91,8 @@
           - (telemetry.instance | default('agentdev')) is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
           - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
           - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
-          - (telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) is mapping
-          - (telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) | length > 0
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) is mapping"
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) | length > 0"
           - >-
             claude_prices.keys()
             | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$')
