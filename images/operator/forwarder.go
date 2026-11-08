@@ -65,7 +65,8 @@ func parseSelector(s string) map[string]string {
 	return m
 }
 
-func podReady(p *corev1.Pod) bool {
+// forwarderPodReady: Running, not deleting, and Ready. Not named podReady: #260 (drain.go) has a podReady too.
+func forwarderPodReady(p *corev1.Pod) bool {
 	if p.DeletionTimestamp != nil || p.Status.Phase != corev1.PodRunning {
 		return false
 	}
@@ -119,7 +120,7 @@ func (w *ForwarderWatch) Check(ctx context.Context) error {
 	now := w.Now()
 	total, ready, first := len(pods.Items), 0, ""
 	for i := range pods.Items {
-		if podReady(&pods.Items[i]) {
+		if forwarderPodReady(&pods.Items[i]) {
 			ready++
 		}
 	}
