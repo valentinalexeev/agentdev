@@ -849,7 +849,7 @@ WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Man
    ```
 
 4. Optional: give the API access to the forge. Refer to "Give the API access to the forge".
-5. Open a pull request in the deployment repository. Merge it after the dry run.
+5. Open a pull request in the deployment repository. Do the dry run (`--check`). Merge after the checks pass.
    The playbook deploys the API in `agentdev-platform`.
 6. Make sure that the API is ready: `kubectl -n agentdev-platform rollout status deploy/agentdev-api`
 
@@ -2054,7 +2054,9 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 1. Read `CHANGELOG.md`.
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
-4. Make sure that the dry run of the pull request has no error. If the dry run shows `no value for ${...}`, the new
+4. Make sure that the checks of the pull request pass. The pull request checks do not use cloud credentials, so
+   also do the dry run manually: `ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff`.
+   If the dry run shows `no value for ${...}`, the new
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
 

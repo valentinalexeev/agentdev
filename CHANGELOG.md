@@ -142,6 +142,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
   with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
   Gitea already routed comments by the PR author; a router test now covers it.
+- Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
+  `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
+  `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
+  header and docs no longer say "PR plan". Copy the new file into your deployment repository. A read-only plan
+  identity for PRs is #291.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
