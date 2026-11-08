@@ -334,3 +334,20 @@ func TestBetaQueryAllowed(t *testing.T) {
 		t.Errorf("status %d query %q", resp.StatusCode, f.got.URL.RawQuery)
 	}
 }
+
+// Review of #275: spend written by the token-counting proxy (no unit marker) is not read as units.
+func TestBudgetStateNeedsUnitMarker(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.json")
+	os.WriteFile(p, []byte(`{"alice":{"hours":[999999,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"stamps":[500000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}`), 0o600)
+	b := newBudget(100, "", p)
+	b.now = func() time.Time { return time.Unix(500000*3600, 0) }
+	if ok, used, _ := b.allow("alice"); !ok || used != 0 {
+		t.Errorf("old token state read as units: %d", used)
+	}
+	b.add("alice", 7)
+	data, _ := os.ReadFile(p)
+	if !strings.Contains(string(data), `"unit":"units"`) {
+		t.Errorf("state without marker: %s", data)
+	}
+}

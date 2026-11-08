@@ -20,7 +20,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   with 0 and set the limit after a day of `GET /status`; (2) convert per-agent values in ConfigMap
   `claude-proxy-budgets` the same way (`kubectl -n coding-agents edit configmap claude-proxy-budgets`); (3) re-run
   `./run.sh 06` on kind, or the playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
-  tokens and resets with the new proxy pod.
+  tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
+  (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
