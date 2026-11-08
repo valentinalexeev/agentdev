@@ -6,6 +6,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.0.0] - YYYY-MM-DD
+
 ### Added
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
@@ -146,6 +148,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- Risk entries R116 (chat session pods not verified on GKE) and R117 (SSO domain restriction not verified on GKE),
+  status accepted: known gaps of 1.0.0 by owner decision on #125.
 - The router has a health-only port 8082 (`HEALTH_PORT`, #218). It serves only `GET /healthz`. The kubelet probes,
   the GKE HealthCheckPolicy and the Google Front End rule of the NetworkPolicy `webhook-router-from-forwarder` use it,
   so the Google ranges no longer reach the internal port 8081 (`/status`, `/register`, `/idle`). Upgrade: deploy the
@@ -629,5 +633,6 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
