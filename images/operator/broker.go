@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -276,4 +277,56 @@ func (r *AgentReconciler) secretsGuide(ctx context.Context, a *v1.Agent) string 
 	}
 	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with $AGENTDEV_BROKER_KEY " +
 		"(Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// npmrcKey: the key of agentdev-guides with the agent's npm config (#248). Agent names have no dots.
+func npmrcKey(agent string) string { return agent + ".npmrc" }
+
+// npmrcPath: where the agent container reads it (the guide volume), set as NPM_CONFIG_GLOBALCONFIG.
+const npmrcPath = "/etc/agentdev/guide/npmrc"
+
+// npmrcText: private npm registries of agent a (#248). Every broker secret in its scope with spec.broker.npmScope maps
+// that scope to the broker; npm sends the agent's key (expanded by npm from $AGENTDEV_BROKER_KEY, so the file holds no
+// credential) and the broker adds the registry token. Sorted by scope; when two secrets name the same scope the first
+// by name wins. "" when there is nothing to write.
+func npmrcText(brokerURL string, a *v1.Agent, secrets []v1.ProjectSecret) string {
+	if brokerURL == "" {
+		return ""
+	}
+	sorted := append([]v1.ProjectSecret(nil), secrets...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	u, err := url.Parse(brokerURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	seen := map[string]bool{}
+	var lines []string
+	for i := range sorted {
+		ps := &sorted[i]
+		if ps.Spec.Mode != "broker" || ps.Spec.Broker == nil || !npmScopeRe.MatchString(ps.Spec.Broker.NpmScope) ||
+			!usableBy(ps, a) || !ps.DeletionTimestamp.IsZero() || seen[ps.Spec.Broker.NpmScope] || !guideWordRe.MatchString(ps.Name) {
+			continue
+		}
+		seen[ps.Spec.Broker.NpmScope] = true
+		base := strings.TrimRight(brokerURL, "/") + "/s/" + ps.Name + "/"
+		lines = append(lines, fmt.Sprintf("%s:registry=%s\n//%s%s/s/%s/:_authToken=${AGENTDEV_BROKER_KEY}\n",
+			ps.Spec.Broker.NpmScope, base, u.Host, strings.TrimRight(u.EscapedPath(), "/"), ps.Name))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	sort.Strings(lines)
+	return "# private npm registries of this agent (#248), written by the operator; no credential in this file\n" +
+		strings.Join(lines, "")
+}
+
+var npmScopeRe = regexp.MustCompile(`^@[a-z0-9][-a-z0-9._]{0,99}$`)
+
+// npmrcEnv points npm at the operator-written config (global level: the agent's own ~/.npmrc still wins). Only with
+// the broker; the file may be absent (no private registry), which npm ignores.
+func (r *AgentReconciler) npmrcEnv() []corev1.EnvVar {
+	if r.D.BrokerURL == "" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "NPM_CONFIG_GLOBALCONFIG", Value: npmrcPath}}
 }

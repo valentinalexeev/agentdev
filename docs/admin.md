@@ -1868,6 +1868,52 @@ Example for npm, in the project's `.npmrc` (the agent can write it):
 
 A new or removed broker secret restarts the broker once. A rotated value does not restart it.
 
+### Add a private npm registry for a project
+
+Use this procedure when the agents of one project must install packages from a private npm registry, for example
+GitHub Packages (#248). The agents of other projects cannot use the registry. No agent pod gets the registry token.
+
+1. Make a read-only token for the registry (for GitHub Packages: a token with `read:packages` only).
+2. Add a project secret in mode broker with `spec.broker.npmScope`, the npm scope of the private packages:
+
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: ProjectSecret
+   metadata: {name: acme-npm, namespace: coding-agents}
+   spec:
+     scope: project
+     project: acme/web            # the agents whose spec.repo is acme/web
+     mode: broker
+     broker: {upstream: "https://npm.pkg.github.com", npmScope: "@acme"}
+     description: GitHub Packages, read-only
+   ```
+
+3. Set the value as in "Add a project secret". Do not put the token in the YAML file.
+4. Make sure that each agent of the project is in the correct project (`spec.repo` of the Agent).
+
+The operator writes an npm configuration for each agent of the project (key `<agent>.npmrc` of the ConfigMap
+`agentdev-guides`). The agent pod mounts only its own key, as `/etc/agentdev/guide/npmrc`, and npm reads it as the
+global configuration (`NPM_CONFIG_GLOBALCONFIG`). For each scope, the file has two lines:
+
+```ini
+@acme:registry=http://credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/
+//credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/:_authToken=${AGENTDEV_BROKER_KEY}
+```
+
+npm replaces `${AGENTDEV_BROKER_KEY}` with the agent key. The file does not contain a credential. Packages that are
+not in a private scope continue to come from the default registry, or from the registry cache when it is on.
+
+Check: in the agent pod, `npm view @acme/<package> version` shows a version. The SecurityEvents show `broker-use`
+for the agent and the secret. An agent of a different project gets 403 (`broker-secret-denied`).
+
+Notes:
+
+- If two secrets for the same agent have the same `npmScope`, the first by name is used.
+- A new or removed scope reaches a running agent in about one minute (the ConfigMap volume is updated). A rotated
+  token does not need a restart.
+- The private packages are not cached. Each install goes through the broker to the registry.
+- On kind, `scripts/e2e-private-registry.sh` tests this procedure.
+
 ### Mode env
 
 In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write

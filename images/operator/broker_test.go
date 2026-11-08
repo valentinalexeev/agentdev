@@ -137,3 +137,72 @@ func TestBrokerEventLineSource(t *testing.T) {
 		t.Errorf("agent %q", spec.Agent)
 	}
 }
+
+// private npm registries (#248): an agent of project A gets A's scope through the broker, never B's; no credential
+func TestNpmrcPrivateRegistries(t *testing.T) {
+	scoped := func(name, scope, owner, npm string) *v1.ProjectSecret {
+		ps := brokerPS(name, scope, owner)
+		ps.Spec.Broker.NpmScope = npm
+		return ps
+	}
+	r, c := setup(t, agent("alice", nil), agent("carol", func(a *v1.Agent) { a.Spec.Repo = "other/repo" }),
+		scoped("acme-npm", "project", "owner/repo", "@acme"), scoped("b-npm", "project", "other/repo", "@beta"),
+		scoped("zz-dup", "project", "owner/repo", "@acme"), brokerPS("plain", "project", "owner/repo"))
+	r.D.Secrets, r.D.BrokerURL = true, "http://credential-broker.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	reconcile(t, r, "carol")
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: guidesCM}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	a := cm.Data["alice.npmrc"]
+	want := "@acme:registry=" + r.D.BrokerURL + "/s/acme-npm/\n//credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/:_authToken=${AGENTDEV_BROKER_KEY}\n"
+	if !strings.Contains(a, want) || strings.Contains(a, "@beta") || strings.Contains(a, "zz-dup") || strings.Contains(a, "plain") {
+		t.Errorf("alice npmrc %q", a)
+	}
+	if b := cm.Data["carol.npmrc"]; !strings.Contains(b, "@beta:registry=") || strings.Contains(b, "@acme") {
+		t.Errorf("carol npmrc %q", b)
+	}
+	s := getSTS(t, c, "alice")
+	if envOf(s, "NPM_CONFIG_GLOBALCONFIG") != npmrcPath {
+		t.Error("NPM_CONFIG_GLOBALCONFIG not set")
+	}
+	found := false
+	for _, v := range s.Spec.Template.Spec.Volumes {
+		if v.Name == "guide" {
+			for _, it := range v.ConfigMap.Items {
+				found = found || (it.Key == "alice.npmrc" && it.Path == "npmrc")
+			}
+		}
+	}
+	if !found {
+		t.Error("npmrc not mounted from the agent's own key")
+	}
+	if fc := container(s, "forge"); hasEnv(fc, "NPM_CONFIG_GLOBALCONFIG") {
+		t.Error("npm config in the forge container")
+	}
+	// the scope is removed when the secret goes away; the key is removed with the agent
+	var ps v1.ProjectSecret
+	c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "b-npm"}, &ps)
+	if err := c.Delete(context.Background(), &ps); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r, "carol")
+	c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: guidesCM}, &cm)
+	if _, ok := cm.Data["carol.npmrc"]; ok {
+		t.Errorf("carol npmrc kept after the secret was deleted: %q", cm.Data["carol.npmrc"])
+	}
+}
+
+func TestNpmrcOffWithoutBroker(t *testing.T) {
+	ps := brokerPS("acme-npm", "project", "owner/repo")
+	ps.Spec.Broker.NpmScope = "@acme"
+	if npmrcText("", agent("alice", nil), []v1.ProjectSecret{*ps}) != "" {
+		t.Error("npmrc without a broker")
+	}
+	r, c := setup(t, agent("alice", nil))
+	reconcile(t, r, "alice")
+	if hasEnv(container(getSTS(t, c, "alice"), "agent"), "NPM_CONFIG_GLOBALCONFIG") {
+		t.Error("NPM_CONFIG_GLOBALCONFIG without a broker")
+	}
+}

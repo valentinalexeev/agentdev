@@ -92,7 +92,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 		// blocks the pod (the loop then runs with the security rules only)
 		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
-			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}}}
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}, {Key: npmrcKey(n), Path: "npmrc"}}}}}}
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -140,7 +140,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(r.claudeProxyEnv(n), r.brokerEnv(n)...), secretEnv(a, psecs)...)...),
+		), append(append(r.claudeProxyEnv(n), r.brokerEnv(n)...), append(r.npmrcEnv(), secretEnv(a, psecs)...)...)...),
 		EnvFrom: append(r.claudeEnvFrom(a), registryProxyEnvFrom),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},

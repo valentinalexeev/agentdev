@@ -29,6 +29,12 @@ type ProjectSecretBroker struct {
 	// +kubebuilder:validation:Enum=bearer;basic;raw
 	// +kubebuilder:default=bearer
 	Scheme string `json:"scheme,omitempty"`
+	// npm scope served by this upstream, for example @acme (private registries, #248). The operator then writes an
+	// npm config for every agent in scope that gets @acme/* packages through the broker with the agent's key; other
+	// packages keep the default registry (or the registry cache, #203). The upstream must be an npm registry.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^@[a-z0-9][-a-z0-9._]{0,99}$`
+	NpmScope string `json:"npmScope,omitempty"`
 }
 
 // ProjectSecretEnv is mode env: the value becomes an environment variable of the agent container, readable by the

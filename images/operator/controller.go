@@ -68,7 +68,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	l := log.FromContext(ctx)
 	var a v1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
-		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206)
+		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206) and npm config (#248)
+			if err := r.writeGuideKey(ctx, req.Namespace, npmrcKey(req.Name), ""); err != nil {
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, r.writeGuide(ctx, req.Namespace, req.Name, "")
 		}
 		return ctrl.Result{}, err
@@ -106,6 +109,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	psecs, err := r.secretsFor(ctx, &a)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	// private npm registries (#248): the agent's npm config next to its guide, same optional mount
+	if err := r.writeGuideKey(ctx, a.Namespace, npmrcKey(a.Name), npmrcText(r.D.BrokerURL, &a, psecs)); err != nil {
+		l.Error(err, "npm config not written, will retry", "agent", a.Name)
+		guideRetry = true
 	}
 	if wait, err := r.relayout(ctx, &a); err != nil || wait {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err

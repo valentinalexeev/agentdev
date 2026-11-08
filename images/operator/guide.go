@@ -175,6 +175,12 @@ func (r *AgentReconciler) executorsFor(ctx context.Context, a *v1.Agent) ([]v1.E
 // writeGuide sets (text != "") or removes (text == "") the agent's key in agentdev-guides. The ConfigMap is created on
 // first use; it is read by name only (the Role grants get/update on this name, create without a name).
 func (r *AgentReconciler) writeGuide(ctx context.Context, ns, agent, text string) error {
+	return r.writeGuideKey(ctx, ns, agent, text)
+}
+
+// writeGuideKey sets or removes one key of agentdev-guides: <agent> (the guide) or <agent>.npmrc (#248). Agent names
+// are DNS labels without dots, so the two kinds of keys never collide.
+func (r *AgentReconciler) writeGuideKey(ctx context.Context, ns, agent, text string) error {
 	var cm corev1.ConfigMap
 	rd := r.Direct
 	if rd == nil {
