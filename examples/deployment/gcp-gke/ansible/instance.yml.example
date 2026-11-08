@@ -63,6 +63,8 @@ github_app:
 #   oidc_audience: agentdev
 #   db_retention_days: 365
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
+#   max_agents: 0                         # agentdev #27: cap on all agents for UI/API creates; 0 = no cap
+#   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
 # Approvals (agentdev #67) are on by default and need api.oidc_issuer. To turn them off:
 # approvals: {enabled: false}
 # Public HTTPS entry point (agentdev #120): from `terraform output ingress` after terraform public_hosts is set.
