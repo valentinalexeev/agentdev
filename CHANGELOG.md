@@ -38,7 +38,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   (key `<agent>.npmrc` of `agentdev-guides`, mounted at `/etc/agentdev/guide/npmrc`, `NPM_CONFIG_GLOBALCONFIG`) that
   maps the scope to the credential broker with `${AGENTDEV_BROKER_KEY}`; no registry token in the agent pod, and an
   agent of another project gets 403. Re-run: the playbook or `./run.sh 12` (new CRD field). admin.md "Add a private
-  npm registry for a project"; risk R108.
+  npm registry for a project"; risk R119.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
