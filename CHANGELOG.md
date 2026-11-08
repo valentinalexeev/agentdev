@@ -300,6 +300,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
   the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
   `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
+- Step 09 (#106): `09-authentik.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags authentik`:
+  the role `authentik` of `deploy.yml` with the secrets in `.secrets/platform` (files, as before), then the new kind-only
+  role `authentik_kind` (akadmin in `agentdev-admins` and the membership check, the company SSO stand-in, its blueprint
+  and `scripts/sso-check.py`). Same result; `SSO_STANDIN` and `SSO_CHECK` still apply. GKE does not change.
 - Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):

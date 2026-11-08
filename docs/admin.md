@@ -555,7 +555,8 @@ Do this task after run.sh step 08.
 
 1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
 2. Run run.sh step 09: `./run.sh 09`
-   The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `authentik` (#106), with the values from `config.env`.
+   The playbook installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
 
 ### Deploy authentik on GKE
 
@@ -2145,6 +2146,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
+| authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
