@@ -112,8 +112,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
+| Prometheus, Loki | the metrics and log services that the observability tools read |
 | poll interval | the time between two reads of the forge by an agent when webhooks do not operate |
 | process pack | the files (`AGENTS.md`, templates, labels) that the bootstrap proposes to a project |
+| observability tools | the read-only MCP tools `prometheus_query`, `loki_query` and `cloud_logging_query` that the pod `obs-mcp` gives |
 | port-forward | a `kubectl port-forward` connection from the local computer to a service in the cluster |
 | project | one forge repository with its agents |
 | pull request (PR) | a request to merge a branch |

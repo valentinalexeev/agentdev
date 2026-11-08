@@ -24,6 +24,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   removed on the next run. New security events `label-not-allowed`, `comment-not-own`. The GitHub App needs no new
   permission. ADR 0005 proposes a typed `/v1/work` endpoint. Re-run: `./run.sh 06` or the agent role of the playbook
   (new images only).
+- Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
+  `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
+  project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is
+  bounded, output redacted, clipped and fenced as untrusted, calls are rate limited (docs/security.md R99). Off by
+  default: `OBS_MCP=true` and `./run.sh 08` on kind, `obs_mcp.enabled` and the playbook (role `platform`) on GKE.
 - Gitea parity for the forge sidecar and the loop (#237, part of 1.3.0). P1: feedback runs on Gitea get the failing
   commit statuses of the PR head (`GET /commits/{sha}/status` and `/statuses` allowed); on GitHub commit statuses
   are read next to check runs. P3: on Gitea, the person who assigned the agent last (issue timeline) must have write
