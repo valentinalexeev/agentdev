@@ -21,6 +21,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Template drift check (#317): `scripts/template-drift.sh <deployment repo dir>` compares a deployment repository
+  with `examples/deployment/gcp-gke` of its pinned `ref=`: `deploy.yml` (diff), `main.tf` blocks and module
+  arguments, `instance.yml` keys. Exit 0 with warnings, 1 with `--strict`. The template `deploy.yml` has a new
+  `template-drift` PR job that writes the warning to the job summary. Re-run: copy the template `deploy.yml` once.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
