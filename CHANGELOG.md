@@ -63,6 +63,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- `scripts/e2e-gke-security.sh`: the check `forge: GitHub works for the sidecar (proxy credential)` gave HTTP 000 on
+  a healthy instance (#211). Squid sends no 407 challenge, and busybox `wget` sends the proxy credential only after one.
+  The check now opens the tunnel with git and `http.proxyAuthMethod=basic`, as the sidecar does (#162). A new check
+  `forge: GitHub is refused with a wrong proxy credential` makes sure the probe still fails without the right credential.
 - Ansible refuses a Secret Manager `claude-shared` or `agent-<name>-claude` without a recognised key (#212). A bare
   token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
   `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
