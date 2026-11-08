@@ -7,6 +7,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Changed
+- `scripts/check-tracked-artifacts.sh` also fails on tracked compiled executables (ELF, Mach-O, PE), for example a
+  Go binary in `images/<name>/`. `.gitignore` ignores `images/credproxy/credproxy` (#272 review).
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
