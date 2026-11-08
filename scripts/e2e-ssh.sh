@@ -36,6 +36,13 @@ k -n "${EXEC_NS}" rollout restart deploy/step-ca >/dev/null 2>&1
 k -n "${EXEC_NS}" rollout status deploy/step-ca --timeout=180s >/dev/null; check $? "step-ca running"
 k -n "${EXEC_NS}" get secret step-ca-provisioner >/dev/null; check $? "provisioner Secret for the operator"
 
+# Executor Jobs check out the repo with the forge image (pull policy Never on kind). A fresh cluster
+# from `run.sh 01 12 05` skips 06-agents.sh, so build and load it here.
+if [[ "${FORGE_IMAGE}" == agentdev/* ]]; then
+  "${CONTAINER_ENGINE}" build -q -t "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge" >/dev/null
+  kind load docker-image "${FORGE_IMAGE}" --name "${CLUSTER_NAME}" >/dev/null
+fi
+
 log "Test SSH server (${SRV_IMAGE}) in ${SRV_NS}"
 if [[ "${SRV_IMAGE}" == agentdev-test-sshd:* ]]; then
   "${CONTAINER_ENGINE}" build -q -t "${SRV_IMAGE}" "${SPIKE_DIR}/tests/e2e/ssh-server" >/dev/null

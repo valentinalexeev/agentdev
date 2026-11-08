@@ -39,7 +39,7 @@ PLATFORM_NS="${PNS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" IMAGE_PULL_POLICY=IfNotP
   envsubst < "${SPIKE_DIR}/manifests/obs-mcp.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PNS}" rollout restart deploy/obs-mcp >/dev/null
 k -n "${PNS}" rollout status deploy/obs-mcp --timeout=180s >/dev/null; check $? "obs-mcp ready"
-k -n "${PNS}" logs deploy/agentdev-operator 2>/dev/null | grep -q 'probe catalogue on'; check $? "operator probe server on"
+grep -q 'probe catalogue on' <<<"$(k -n "${PNS}" logs deploy/agentdev-operator 2>/dev/null)"; check $? "operator probe server on"
 sleep 5   # the old pod of the rollout may still be terminating
 pf_log=$(mktemp); k -n "${PNS}" port-forward deploy/obs-mcp 18080:8080 >"${pf_log}" 2>&1 & pf=$!
 for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:18080/healthz && break; sleep 1; done
