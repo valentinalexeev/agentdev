@@ -34,6 +34,9 @@ EGRESS_PROXY="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"   # agent
 # harness guide (#206): the agents' egress list as 06-agents.sh builds it, for the text only
 AGENT_EGRESS_HOSTS=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
   { if [[ "${CLAUDE_PROXY:-true}" == true ]]; then grep -vx 'api\.anthropic\.com'; else cat; fi; } | xargs)
+if [[ "${REGISTRY_PROXY:-off}" != off ]]; then   # registry cache (#203), as 06-agents.sh
+  AGENT_EGRESS_HOSTS=$(echo "${AGENT_EGRESS_HOSTS}" | xargs -n1 | grep -vxF -f <(echo "${REGISTRY_PROXY_UPSTREAM_HOSTS}" | xargs -n1) | xargs)
+fi
 # scoped secrets store (#202): on only once ./run.sh 13 installed External Secrets Operator (its CRD must be served,
 # or the operator's cache never syncs); 13 re-runs this step
 SECRETS_STORE=""

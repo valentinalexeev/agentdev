@@ -400,8 +400,8 @@ of the agents. It shows one card for each issue.
 
 ### Deploy botboard
 
-1. Run run.sh step 07: `./run.sh 07`
-   The script deploys botboard in the namespace `botboard`.
+1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml --tags botboard`
+   The playbook deploys botboard in the namespace `botboard`. The old command `./run.sh 07` does the same (deprecated, #106).
 2. Run run.sh step 06 again: `./run.sh 06`
    The script finds botboard and sets `BOTBOARD_URL` on each agent.
 
@@ -439,7 +439,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
    Separate the paths with spaces.
 3. Run run.sh step 08: `./run.sh 08`
-   The script deploys the namespace `agentdev-platform` with Postgres.
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
+   The playbook deploys the namespace `agentdev-platform` with Postgres.
    If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
@@ -1321,6 +1322,24 @@ playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider tha
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
+### Post-deploy smoke test
+
+At the end of each run, the playbook sends requests to the public hosts from the operator computer (#213). It does
+this in the two ingress modes. The run fails when one of these checks does not pass in `ingress.smoke_timeout`
+seconds (default 300):
+
+| Check | Expected answer |
+|---|---|
+| Forwarder pods (only with `ingress.forwarder.namespace` and `pod_selector`) | Ready |
+| `POST https://<ingress.webhook_host>/hook` without a signature | 401 from the router |
+| `GET https://<ingress.webhook_host>/status` | 404 (the internal endpoints are not public) |
+| `GET https://<ingress.host>/` (when the UI is routed) | 200, a redirect, 401 or 403 |
+| `GET https://<ingress.auth_host>/` (with authentik) | 200, a redirect, 401 or 403 |
+
+The failure message gives the URL and the answer. A new managed certificate can need more time on the first run.
+Then run the playbook again, or set a larger `ingress.smoke_timeout`. To turn the test off, set `ingress.smoke: false`.
+The test does not operate in check mode (`--check`).
+
 ### Reference: the public entry point
 
 | Control | Where | Value |
@@ -1775,7 +1794,8 @@ is in the secret store, never in the object.
 
 | Field | Values |
 |---|---|
-| `scope` | `project` (all agents of `spec.project`) or `agent` (only `spec.agent`) |
+| `scope` | `project` (all agents of `spec.project` on `spec.forge`) or `agent` (only `spec.agent`, and only while it works on `spec.project` on `spec.forge`) |
+| `forge` | `gitea` (default) or `github`. A repository is the pair of forge and name: `acme/app` on Gitea is not `acme/app` on GitHub |
 | `mode` | `broker` (the broker adds the value to requests for `spec.broker.upstream`) or `env` (the agent can read the value, see below) |
 
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
@@ -2239,11 +2259,12 @@ a run.sh step or a manual `kubectl` command on GKE.
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
+| botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
-| Platform namespace | 08 | role `platform` |
+| Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
