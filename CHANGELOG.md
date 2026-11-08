@@ -23,7 +23,8 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 
 ### Added
 - `scripts/upgrade-notes.sh <from> <to>` (#315) prints only the `### Upgrade` parts of `CHANGELOG.md` for the
-  versions in (from, to], newest first. It reads `CHANGELOG.md` at tag `v<to>` (`CHANGELOG_REF` for another ref).
+  versions in (from, to], newest first. It reads `CHANGELOG.md` at tag `v<to>` (`CHANGELOG_REF` for another ref)
+  of the agentdev repository: the script's own clone, or `--repo <path or URL>`. It works from a deployment repository.
   Test: `scripts/test/upgrade-notes-test.sh`.
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to

@@ -41,4 +41,23 @@ run 1.0 1.1.0 >/dev/null 2>&1; check "bad version exits 2" 2 "$?"
 "$script" 1.0.0 >/dev/null 2>&1; check "one argument exits 2" 2 "$?"
 set -e
 
+# Call from a deployment repository (an empty git repo without agentdev tags), #318 review.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
+g init -q "$tmp/agentdev"; cp "$fixture" "$tmp/agentdev/CHANGELOG.md"
+g -C "$tmp/agentdev" add CHANGELOG.md; g -C "$tmp/agentdev" commit -qm fixture; g -C "$tmp/agentdev" tag v1.0.0
+mkdir -p "$tmp/agentdev/scripts"; cp "$script" "$tmp/agentdev/scripts/upgrade-notes.sh"
+g init -q "$tmp/deploy"
+want="## 1.0.0: Upgrade
+1. Step for 1.0.0."
+check "from empty deployment repo, default repo = script's repo" "$want" \
+  "$(cd "$tmp/deploy" && "$tmp/agentdev/scripts/upgrade-notes.sh" 1.0.0-rc.10 1.0.0)"
+check "from empty deployment repo, --repo PATH" "$want" \
+  "$(cd "$tmp/deploy" && "$script" --repo "$tmp/agentdev" 1.0.0-rc.10 1.0.0)"
+check "from empty deployment repo, --repo URL" "$want" \
+  "$(cd "$tmp/deploy" && "$script" --repo "file://$tmp/agentdev" 1.0.0-rc.10 1.0.0)"
+set +e
+(cd "$tmp/deploy" && "$script" --repo "$tmp/deploy" 1.0.0-rc.10 1.0.0 >/dev/null 2>&1); check "repo without the tag exits 2" 2 "$?"
+set -e
+
 exit "$fail"
