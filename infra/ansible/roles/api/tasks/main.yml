@@ -8,7 +8,11 @@
       - api_oidc_issuer is match('^https://')
       - api_oidc_discovery_url is match('^https?://')
       - api_db_retention_days | string is match('^[1-9][0-9]*$')
-    fail_msg: "api.oidc_issuer must be https://, api.db_retention_days a positive number (example.vars.yml)"
+      - api_max_agents | string is match('^[0-9]{1,6}$')
+      - api_max_agents_per_user | string is match('^[0-9]{1,6}$')
+    fail_msg: >-
+      api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents and
+      api.max_agents_per_user whole numbers 0 or more (0 = no limit) (example.vars.yml)
     quiet: true
 
 - name: Read the API secrets
@@ -41,6 +45,8 @@
         APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+        MAX_AGENTS: "{{ api_max_agents }}"
+        MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
       replace: []
   register: api_applied
 

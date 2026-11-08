@@ -1,5 +1,5 @@
 # Parity check (#122): the playbook's SSO settings use the keys of manifests/authentik-blueprint-sso.yaml and of
-# 09-authentik.sh (kind), and unsafe values are refused before they reach a blueprint expression.
+# the kind role authentik_kind (was 09-authentik.sh, #106), and unsafe values are refused before they reach a blueprint expression.
 # Run: ansible-playbook infra/ansible/tests/authentik_sso.yml
 - name: Company SSO settings (#122)
   hosts: localhost
@@ -14,7 +14,7 @@
       allowed_domains: [example.com, example.org]
       saml_sso_url: https://accounts.google.com/o/saml2/idp?idpid=C0abc
     blueprint: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../manifests/authentik-blueprint-sso.yaml') }}"
-    kind_script: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../09-authentik.sh') }}"
+    kind_script: "{{ lookup('ansible.builtin.file', playbook_dir + '/../roles/authentik_kind/tasks/sso.yml') }}"
   tasks:
     - name: Build the SAML settings
       ansible.builtin.include_tasks: ../roles/authentik_sso/tasks/env.yml
@@ -28,10 +28,10 @@
           - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITHUB == 'githubLogin'
           - authentik_sso_env.AGENTDEV_SSO_FORGE_ATTR_GITEA == 'giteaLogin'
           - "'AGENTDEV_SSO_OIDC' not in authentik_sso_env"
-    - name: The kind script writes the OIDC keys of the blueprint
+    - name: The kind role (authentik_kind, was 09-authentik.sh) writes the OIDC keys of the blueprint
       ansible.builtin.assert:
         that: "item in kind_script"
-      loop: [AGENTDEV_SSO_OIDC=true, AGENTDEV_SSO_ADMIN_GROUP, AGENTDEV_SSO_ALLOWED_DOMAINS, AGENTDEV_SSO_FORGE_ATTR, AGENTDEV_SSO_FORGE_ATTR_GITHUB,
+      loop: ['AGENTDEV_SSO_OIDC: "true"', AGENTDEV_SSO_ADMIN_GROUP, AGENTDEV_SSO_ALLOWED_DOMAINS, AGENTDEV_SSO_FORGE_ATTR, AGENTDEV_SSO_FORGE_ATTR_GITHUB,
              AGENTDEV_SSO_FORGE_ATTR_GITEA, AGENTDEV_SSO_OIDC_CLIENT_ID,
              AGENTDEV_SSO_OIDC_CLIENT_SECRET, AGENTDEV_SSO_OIDC_AUTHORIZE_URL, AGENTDEV_SSO_OIDC_TOKEN_URL,
              AGENTDEV_SSO_OIDC_USERINFO_URL]
