@@ -260,11 +260,21 @@ start_job() {
   echo "$$" > "${JOBS}/${key}.lock"
   (
     JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
+    # #175: <key>.active outlives a killed pod (the lock does not): present at start means an earlier run of this job
+    # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
+    # skipped). Removed when the job succeeds.
+    RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
+    touch "${JOBS}/${key}.active"
     # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
           [[ "${APPROVALS:-false}" == true ]] && curl -fsS -m 30 -X POST "${FORGE_API}/job-done?job=${key}" >/dev/null 2>&1 || true' EXIT
     set -o pipefail
-    if "$@" 2>&1 | sed -u "s/^/[${key}] /"; then
+    local job_rc=0
+    "$@" 2>&1 | sed -u "s/^/[${key}] /" || job_rc=$?
+    if (( job_rc == 0 )); then
+      # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
+      # only opening the PR failed).
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -279,11 +289,13 @@ start_job() {
   return 0
 }
 
-# worktree <branch> <start-point>: the private working tree for one branch, reset to start-point.
+# worktree <branch> <start-point> [keep]: the private working tree for one branch, reset to start-point.
+# keep=1 (#175, an interrupted job): an existing tree or local branch is kept as it is, with its local commits and
+# uncommitted changes; start-point is used only when the branch does not exist yet.
 # Keyed by BRANCH, not by job: git allows a branch in only one worktree, and the issue job and later feedback
 # jobs for the same PR work on the same branch (never at the same time: one job per PR/issue key).
 worktree() {
-  local branch=$1 from=$2 dir existing
+  local branch=$1 from=$2 keep=${3:-0} dir existing
   dir="${STATE}/work/${branch//\//_}"
   (
     flock 9
@@ -299,10 +311,17 @@ worktree() {
     if [[ -d "${dir}" && -z "${existing}" ]] && ! lgit -C "${WORK}" worktree list --porcelain | grep -qxF "worktree ${dir}"; then
       rm -rf "${dir}"
     fi
-    if [[ -d "${dir}" ]]; then
+    # continue (keep=1): pin the .git (Claude may have redirected it); a tree that is still on the branch is kept as it
+    # is. A tree on another ref (detached by Claude) falls through to the reset below.
+    if [[ -d "${dir}" && "${keep}" == 1 ]] && pin_worktree "${dir}" &&
+       [[ "$(lgit -C "${dir}" symbolic-ref -q --short HEAD)" == "${branch}" ]]; then
+      :
+    elif [[ -d "${dir}" ]]; then
       # a reused tree may have a .git Claude redirected: pin it before the loop runs checkout/reset/clean there
       pin_worktree "${dir}" &&
       lgit -C "${dir}" checkout -q -B "${branch}" "${from}" && lgit -C "${dir}" reset -q --hard "${from}" && lgit -C "${dir}" clean -qfd
+    elif [[ "${keep}" == 1 ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/heads/${branch}" >/dev/null; then
+      mkdir -p "${STATE}/work" && lgit -C "${WORK}" worktree add -q "${dir}" "${branch}"
     else
       mkdir -p "${STATE}/work" && lgit -C "${WORK}" worktree add -q -B "${branch}" "${dir}" "${from}"
     fi >/dev/null && echo "${dir}"
@@ -354,8 +373,36 @@ system_prompt() {  # the security rules, then the harness guide
   return 0
 }
 
+# Session per job (#175): inside a job, every run gets a fixed session id, kept in <jobs>/<JOB>.session on the state
+# volume (Claude Code keeps the transcript under ~/.claude, also on the state volume). A job that was interrupted
+# (RESUMING=1) resumes that session with a short prompt instead of starting over; when the CLI cannot resume it (the
+# transcript is gone), the run starts fresh with the full prompt.
+RESUME_PROMPT="Your previous run of this task was interrupted (the pod was restarted). Your earlier changes and local
+commits are still in the working tree. Continue the task from where you stopped; do not start over. The rules of the
+task still apply, including the STATUS line at the end."
+new_session_id() {
+  local u; u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null) || return 1
+  u=${u,,}; [[ "${u}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && echo "${u}"
+}
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
-  local dir=$1 out rc err mcp=()
+  local dir=$1 prompt=$2 sess=() sf="" sid=""
+  if [[ -n "${JOB:-}" ]]; then
+    sf="${STATE}/jobs/${JOB}.session"
+    [[ -r "${sf}" ]] && read -r sid < "${sf}"
+    [[ "${sid}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || sid=""
+    if [[ "${RESUMING:-0}" == 1 && -n "${sid}" ]]; then
+      local out rc=0
+      out=$(run_claude_once "${dir}" "${RESUME_PROMPT}" --resume "${sid}") || rc=$?
+      # 75 (rate limited) is final for this attempt; anything else that is not a result: start over below
+      if (( rc == 0 || rc == 75 )); then printf '%s' "${out}"; return ${rc}; fi
+      log "could not resume Claude session of ${JOB} (exit ${rc}): starting a new run"
+    fi
+    sid=$(new_session_id) && echo "${sid}" > "${sf}" && sess=(--session-id "${sid}")
+  fi
+  run_claude_once "${dir}" "${prompt}" "${sess[@]}"
+}
+run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
+  local dir=$1 out rc err mcp=() prompt=$2; shift 2
   err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
   local mode=(--permission-mode dontAsk) cfg="${MCP_CONFIG}"
@@ -370,7 +417,7 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-          claude -p "$2" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
+          claude -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
@@ -475,6 +522,41 @@ commit_and_push() {  # commit_and_push <dir> <branch> <message> <base>  -> 0 if 
 }
 
 # ---------- 1. new issues -> PRs ----------
+# ---------- resume state of a job (#175) ----------
+# A job keeps what it already did in <jobs>/<JOB>.* on the state volume, so a job that a killed pod interrupted
+# (RESUMING=1, set by start_job) continues instead of repeating it. start_job removes the files when the job ends.
+#   .result   Claude's answer of this job (the run is not repeated)
+#   .pushed   the commit the sidecar pushed (a push before the kill counts)
+#   .replying the job's reply was posted (feedback: not posted twice)
+jobf() { printf '%s/jobs/%s.%s' "${STATE}" "${JOB:-none}" "$1"; }
+# claude_step <dir> <prompt>: run Claude once per job; an interrupted job resumes the session, a finished run is reused
+claude_step() {
+  local f; f=$(jobf result)
+  if [[ "${RESUMING:-0}" == 1 && -e "${f}" ]]; then log "${JOB}: Claude already finished before the restart"; cat "${f}"; return 0; fi
+  local out rc=0; out=$(run_claude "$1" "$2") || rc=$?
+  (( rc == 0 )) && [[ -n "${JOB:-}" ]] && printf '%s' "${out}" > "${f}"
+  printf '%s' "${out}"; return ${rc}
+}
+# push_step <dir> <branch> <message> <base>: commit_and_push, and remember the push; 0 also when an interrupted run of
+# this job already pushed and nothing new is left (the push is not lost because the pod died before the next step)
+push_step() {
+  local f; f=$(jobf pushed)
+  if commit_and_push "$@"; then
+    [[ -n "${JOB:-}" ]] && lgit -C "$1" rev-parse HEAD > "${f}" 2>/dev/null
+    return 0
+  fi
+  [[ "${RESUMING:-0}" == 1 && -s "${f}" ]] && { log "${JOB}: the push was done before the restart"; return 0; }
+  # issue job: the job branch is on the forge with commits the base does not have (pushed by an earlier run whose state
+  # is gone, so no PR yet). Not for feedback jobs: there an unchanged branch means "no update".
+  [[ "${JOB:-}" == issue-* && -n "${4:-}" ]] && lgit -C "$1" rev-parse -q --verify "origin/$2" >/dev/null 2>&1 &&
+    [[ -n "$(lgit -C "$1" log --oneline -1 "origin/$4..origin/$2" 2>/dev/null)" ]] && { log "${JOB:-}: $2 was pushed earlier"; return 0; }
+  return 1
+}
+# open_pr_for <branch> -> number of the open PR with this head branch, if any (a restart after the PR was created)
+open_pr_for() {
+  api GET "/repos/${REPO}/pulls?state=open&$(per_page 50)" | jq -r --arg b "$1" '[.[] | select(.head.ref == $b)][0].number // empty'
+}
+
 # awaiting_answer <n>: 0 while the agent asked on issue n (needs-decision) and nobody else commented since.
 # One API call per asked issue per pass, only while it waits.
 awaiting_answer() {
@@ -556,12 +638,16 @@ issue_job() {
   issue=$(api GET "/repos/${REPO}/issues/${n}") || return
   title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
   branch="agent/${FORGE_USER}/issue-${n}"
-  comment "${n}" "🤖 \`${FORGE_USER}\` picked this up and is working on it."
+  # #175: an interrupted job already said so
+  [[ "${RESUMING:-0}" == 1 ]] || comment "${n}" "🤖 \`${FORGE_USER}\` picked this up and is working on it."
   board_card "issue-${n}" "#${n} ${title}" plan "picked up" "$(web_url "issues/${n}")"
   sync_repo || { log "clone failed"; board_card "issue-${n}" "#${n} ${title}" blocked "clone failed, will retry" "$(web_url "issues/${n}")"; return 1; }
-  dir=$(worktree "${branch}" "origin/${base}") || { log "worktree failed"; return 1; }
+  # #175: continue from the job branch when it exists (pushed before a kill), else from the base
+  local from="origin/${base}"
+  lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${branch}" >/dev/null 2>&1 && from="origin/${branch}"
+  dir=$(worktree "${branch}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
-  result=$(run_claude "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
+  result=$(claude_step "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
   # rate limit (#93): keep the work, retry after the pause; no "could not produce a change" comment
   if [[ ${claude_rc:-0} == 75 ]]; then
     board_card "issue-${n}" "#${n} ${title}" blocked "Claude usage limit reached, will resume" "$(web_url "issues/${n}")"; return 1
@@ -587,9 +673,11 @@ ${summary}"
     return 0
   fi
   rm -f "${STATE}/seen/issue-${n}.asked"
-  if commit_and_push "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
+  if push_step "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
     local pr
-    pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
+    # #175: a restart after the PR was created must not open a second one (the forge refuses it anyway)
+    pr=$(open_pr_for "${branch}")
+    [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
           --arg d "Closes #${n}
 
 ${summary}
@@ -901,6 +989,12 @@ board_finish() {
 feedback_job() {
   local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # #175: an interrupted job keeps its first cursor time, and does not reply twice
+  if [[ "${RESUMING:-0}" == 1 && -r "$(jobf now)" ]]; then read -r now < "$(jobf now)"; [[ "${now}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || now=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+  [[ -n "${JOB:-}" ]] && echo "${now}" > "$(jobf now)"
+  if [[ "${RESUMING:-0}" == 1 && -e "$(jobf replying)" ]]; then
+    log "PR #${pr}: replied before the restart; cursor moved"; echo "${now}" > "${STATE}/seen/pr-${pr}"; return 0
+  fi
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
   [[ -z "${fb}" ]] && return
   threads=$(security_threads "${pr}" "${since}")
@@ -915,12 +1009,12 @@ THREAD <id> <fixed|accepted-risk|false-positive>: <one-sentence reason>
 before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   fi
   sync_repo || return 1
-  dir=$(worktree "${branch}" "origin/${branch}") || { log "worktree failed"; return 1; }
+  dir=$(worktree "${branch}" "origin/${branch}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
-  result=$(run_claude "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
+  result=$(claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
   local status; status=$(run_status "${result}"); result=$(run_summary "${result}")
   if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
@@ -929,22 +1023,28 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
     comment "${pr}" "🤖 $([[ "${status}" == blocked ]] && echo 'I am blocked on this feedback.' || echo 'I need a decision before I change the code.')
 
 ${result}"
+    [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"   # #175: posted; a restart from here only moves the cursor
     echo "${now}" > "${STATE}/seen/pr-${pr}"
     log "PR #${pr}: ${status}, replied without a push"
     return 0
   fi
   before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
-  if commit_and_push "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
+  # an interrupted job that pushed already: the diff for the thread replies starts before that push
+  [[ "${RESUMING:-0}" == 1 && -r "$(jobf before)" ]] && read -r before < "$(jobf before)"
+  [[ -n "${JOB:-}" && "${before}" =~ ^[0-9a-f]{40}$ ]] && echo "${before}" > "$(jobf before)"
+  if push_step "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
     after=$(lgit -C "${dir}" rev-parse HEAD 2>/dev/null)
     [[ "${before}" =~ ^[0-9a-f]{40}$ && "${after}" =~ ^[0-9a-f]{40}$ ]] && changed=$(lgit -C "${dir}" diff --name-only "${before}" "${after}")
     reply_threads "${pr}" "${threads}" "${result}" "${after}" "${changed}"
     comment "${pr}" "🤖 Pushed an update.
 
 ${result}"
+    [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"   # #175: posted; a restart from here only moves the cursor
     request_review "${pr}"   # ask the approver to look again
   else
     reply_threads "${pr}" "${threads}" "${result}" "" ""
     comment "${pr}" "🤖 ${result}"
+    [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"
   fi
   echo "${now}" > "${STATE}/seen/pr-${pr}"
   log "PR #${pr}: replied"

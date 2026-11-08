@@ -36,6 +36,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - Statuses: not started = open without `in-progress`; in progress = `in-progress`; done = closed as completed
   **only** when the acceptance criterion is met, with a comment (what was done, checks, PR); partial = stays open
   with a list of what remains; rejected = closed as not planned with a reason.
+- **Tickets use ASD-STE100 Simplified Technical English.** Issue bodies, issue and PR comments, PR descriptions and
+  review comments on GitHub follow the rules and word list in [`docs/writing.md`](docs/writing.md): one topic per
+  sentence, max. 25 words per description sentence, numbered one-instruction steps for things the owner must do,
+  approved words plus the project's technical names. Code, commands, file names and quoted output stay as they are.
 - Commits and PRs reference the issue (`#NN`). `Closes #NN` only when the acceptance criterion is met, otherwise `Refs #NN`.
 - **Every question to the owner goes on an issue** (open one if none fits), in the form of §3 *Questions*, even when
   it is also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the

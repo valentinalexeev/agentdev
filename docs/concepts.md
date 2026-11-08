@@ -24,6 +24,21 @@ parts, both fenced as untrusted data (#223):
   (GitHub check runs, and commit statuses on both forges, so Gitea Actions results count too, #237). The reply to
   the reviewers covers these items only.
 
+**An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
+started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
+(`/state/jobs/<job>.*`). When the pod starts again, the job:
+
+- keeps its worktree as it is, with Claude's local commits and the changes not yet committed, and starts from the
+  job branch on the forge when it was already pushed;
+- resumes the Claude session (`claude --resume`) with a short "you were interrupted, continue" prompt, so the tokens
+  of the first run are not spent again. When the CLI cannot resume the session, the run starts again with the full
+  prompt;
+- skips what was done already: the "picked this up" comment, a Claude run that finished, a push, the pull request
+  (an open one for the branch is used), and a feedback reply that was posted.
+
+A failed job keeps the same state, so its retry also continues. An approval request of the stopped pod becomes void
+by itself: the API finds that the pod which asked is gone.
+
 **Who may give work** (#130, #237): a label (GitHub) or an assignment (Gitea) alone is not enough. Before each
 start the loop finds the person who added `agent:<name>` last (GitHub issue events) or who assigned the agent last
 (Gitea issue timeline), and checks live that this person has write, maintain or admin permission on the
@@ -147,6 +162,23 @@ through [ContextForge](https://github.com/IBM/mcp-context-forge), an MCP gateway
 its project's server, so one project's agents cannot reach another project's tools. The readiness report shows how
 many tools an agent sees.
 
+### Observability tools (#205)
+
+Agents get no SSH and no backend credentials. To read the state of what they deploy, a project can add the
+**observability tools**: the pod `obs-mcp` in `agentdev-platform` (the operator image, subcommand `obs-mcp`) is an
+MCP server with `prometheus_query`, `loki_query` and, on GKE as an add-on, `cloud_logging_query`. It is registered in
+ContextForge like any other project server, so an agent reaches it only with its project-scoped token, and a
+NetworkPolicy lets only ContextForge call the pod. The backend token (and on GKE the Workload Identity for Cloud
+Logging) stays in that pod.
+
+The tools only call the backends' query APIs. Input is bounded (query length, time range, lines, points); output
+is redacted for common credential shapes, clipped, and returned as `UNTRUSTED DATA` in a fence the text cannot
+close. That output goes to the model only; no limit, pause or credential decision reads it (reviewer checklist item
+4). Prometheus and Loki are the backend on both kind and GKE (owner decision on #205); agentdev does not install them.
+
+Planned in #205, after the SSH certificate authority (#204): scheduled snapshots of fixed server facts, a nightly
+drift check, and a catalogue of admin-defined server checks (`server_check`).
+
 ## Interactive session
 
 An **interactive session** is a chat with Claude Code inside a project, for exploring an idea before it becomes a
@@ -204,6 +236,14 @@ sets the rule that makes this safe: the calls between components, the pod templa
 and the database schema accept the previous MINOR release, change only by adding, and drop an old form one release
 after the new form shipped. A unit test (`images/operator/testdata/pod-contract.txt`) fails when the operator stops
 rendering a name an older agent pod may use.
+
+## Project secrets
+
+A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can
+use but not read (#202, ADR 0003). A `ProjectSecret` object says who uses it and how (`broker` or `env`); the value
+stays in the secret store (GCP Secret Manager on GKE, a Kubernetes namespace on kind). External Secrets Operator
+copies it into a Secret next to the credential broker, never into an agent pod. Setup: `docs/admin.md`, "Project
+secrets".
 
 ## What is planned
 

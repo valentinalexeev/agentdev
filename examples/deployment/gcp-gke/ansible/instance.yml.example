@@ -15,6 +15,14 @@ agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels
 mcp_projects: []
 # trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R51)
 mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.local:8080]
+# read-only observability MCP tools (agentdev docs/admin.md "Give agents the observability tools"); off by default
+# obs_mcp:
+#   enabled: true
+#   prometheus_url: http://prometheus-server.monitoring.svc.cluster.local
+#   loki_url: http://loki-gateway.monitoring.svc.cluster.local
+#   token_secret: ""              # Secret Manager name of a read-only bearer token; empty: none
+#   cloud_logging_project: ""     # add-on: GCP project for cloud_logging_query
+#   cloud_logging_gsa: ""         # Google service account with roles/logging.viewer only
 # GitHub App the agents act as (#2); register with agentdev scripts/github-app.sh form instance.yml
 github_app:
   name: my-agentdev                              # unique on GitHub

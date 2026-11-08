@@ -34,6 +34,7 @@ jobs:
       credproxy: ${{ steps.f.outputs.credproxy }}
       ui: ${{ steps.f.outputs.ui }}
       tools: ${{ steps.f.outputs.tools }}
+      terraform: ${{ steps.f.outputs.terraform }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +60,7 @@ jobs:
           echo "credproxy=$(has '(^images/credproxy/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "ui=$(has '(^images/ui/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "tools=$(has '(^tools/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "terraform=$(has '(^infra/terraform/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
 
   lint:
     needs: scope
@@ -97,10 +99,18 @@ jobs:
           ./kubeconform -strict -summary -ignore-missing-schemas images/operator/config/crd/
           PLATFORM_NS=agentdev-platform AGENTS_NS=coding-agents OPERATOR_IMAGE=img WORKER_IMAGE=img FORGE_IMAGE=img IMAGE_PULL_POLICY=Never \
             FORGE_URL=http://f FORGE_PUBLIC_URL=http://f FORGE_ADMIN_USER=owner BOTBOARD_URL= POLL_SECONDS=20 IDLE_SECONDS=900 \
+            PROBE_RATE_PER_MIN=20 PROBE_RATE_BURST=5 TELEMETRY_OTLP_URL='' TELEMETRY_SCRAPER_NS=monitoring \
+            TELEMETRY_SCRAPER_SELECTOR='{"app.kubernetes.io/name": "prometheus"}' \
             envsubst < manifests/operator.yaml.tmpl | ./kubeconform -strict -summary -
           AGENTS_NS=coding-agents PLATFORM_NS=agentdev-platform CLAUDE_PROXY_IMAGE=img IMAGE_PULL_POLICY=Never CLAUDE_BUDGET_TOKENS=0 \
+            CLAUDE_BUDGET_UNITS=0 CLAUDE_PRICES_DATA='{}' TELEMETRY_OTLP_URL='' TELEMETRY_SCRAPER_NS=monitoring \
+            TELEMETRY_SCRAPER_SELECTOR='{"app.kubernetes.io/name": "prometheus"}' \
             CLAUDE_SECRET_SOURCES="$(scripts/claude-proxy-sources.sh alice)" envsubst < manifests/claude-proxy.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform UI_IMAGE=img OIDC_ISSUER=https://i/ envsubst < manifests/ui.yaml.tmpl | ./kubeconform -strict -summary -
+          # observability MCP tools (#205)
+          PLATFORM_NS=agentdev-platform OPERATOR_IMAGE=img IMAGE_PULL_POLICY=Never PROMETHEUS_URL=http://p LOKI_URL='' LOKI_TENANT='' \
+            CLOUD_LOGGING_PROJECT='' OBS_GSA='' OBS_MCP_MAX_OUTPUT=16384 OBS_MCP_RATE_PER_MIN=30 OBS_MCP_RATE_BURST=10 PROBE_URL=http://p \
+            envsubst < manifests/obs-mcp.yaml.tmpl | ./kubeconform -strict -summary -
       # The checks below cover files that #98 (egress, #65) and #115 (Ansible API role, #104) add; each one is skipped
       # until its file is on the branch, so this workflow can merge first.
       - name: egress proxy (#65) manifests validate and squid.conf parses with the pinned image
@@ -126,6 +136,13 @@ jobs:
           printf 'gcp_project: p\ngcp_zone: z\nimage_tag: "0"\nreviewer: r\nagents: [{name: a, user: a, repos: o/r}]\napi: {oidc_issuer: "https://i/"}\n' > /tmp/i.yml
           ansible-playbook deploy.yml -e @/tmp/i.yml --syntax-check
           for t in tests/*.yml; do if [ -f "$t" ]; then ansible-playbook "$t"; fi; done
+      - name: terraform test (infra/terraform, plan-only with mocked providers, no credentials; #202)
+        if: needs.scope.outputs.shell == 'true' || needs.scope.outputs.terraform == 'true'
+        run: |
+          ls infra/terraform/tests/*.tftest.hcl >/dev/null 2>&1 || { echo "no terraform tests yet, skipped"; exit 0; }
+          curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip -o tf.zip
+          unzip -q tf.zip terraform && rm tf.zip
+          cd infra/terraform && ../../terraform init -backend=false -input=false && ../../terraform test
       - name: router tests (no dependencies, a few seconds)
         if: needs.scope.outputs.router == 'true'
         run: node --test images/router/test/*.test.js
@@ -195,6 +212,12 @@ jobs:
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/feedback.test.sh
           # run contract: STATUS line, no push on needs-decision/blocked, resume after an answer (#234)
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/contract.test.sh
+          # tests of open PRs; each runs once its file is on the branch (#175 resume, #174 drain, #196 run guards)
+          for t in resume drain guards; do
+            if [ -f "images/worker/test/$t.test.sh" ]; then
+              docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci "test/$t.test.sh"
+            fi
+          done
           if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
           grep -q FORGE_URL err.txt
       - name: skipped (images/worker unchanged)
