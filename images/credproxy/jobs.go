@@ -104,7 +104,7 @@ func (j *jobs) pruneLocked(agent string, now time.Time) {
 func (j *jobs) snapshot(p priceTable) []jobTotal {
 	now := j.now()
 	j.mu.Lock()
-	var out []jobTotal
+	out := []jobTotal{} // [] not null on GET /status
 	for _, a := range j.m {
 		for _, e := range a {
 			if now.Sub(e.Last) > jobRetention {
