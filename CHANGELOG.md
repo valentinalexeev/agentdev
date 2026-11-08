@@ -194,6 +194,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
+- obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses or an unterminated string before the API
+  call (#250); such a filter could also close the tool's `(<filter>) AND timestamp>=...` wrapper and drop the time
+  bound.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
