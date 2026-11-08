@@ -56,7 +56,7 @@
   when: gitea_forge_token_have is not skipped
   no_log: true
 
-- name: Stale token file of {{ gitea_forge_agent }} (older cluster)
+- name: Stale token file (older cluster) of {{ gitea_forge_agent }}
   ansible.builtin.debug:
     msg: >-
       {{ gitea_forge_agent }}.token does not log in (HTTP {{ gitea_forge_token_check.status }}): a new token replaces it.
