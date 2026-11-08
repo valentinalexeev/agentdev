@@ -23,6 +23,17 @@ While the version is `0.x`, breaking changes bump MINOR.
   Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
   through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
   public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
+- Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
+  `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
+  base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
+  request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
+  agent container. The harness guide lists the agent's broker secrets.
+- Private npm registries per project (#248, needs #202 part 2): `ProjectSecret` mode broker gets
+  `spec.broker.npmScope` (for example `@acme`). The operator writes each agent in the secret's scope an npm config
+  (key `<agent>.npmrc` of `agentdev-guides`, mounted at `/etc/agentdev/guide/npmrc`, `NPM_CONFIG_GLOBALCONFIG`) that
+  maps the scope to the credential broker with `${AGENTDEV_BROKER_KEY}`; no registry token in the agent pod, and an
+  agent of another project gets 403. Re-run: the playbook or `./run.sh 12` (new CRD field). admin.md "Add a private
+  npm registry for a project"; risk R108.
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
@@ -40,25 +51,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   admission policies that pin `ExternalSecret ps-<n>` to the store key `agentdev-ps-<n>` and reserve `ps-*` Secrets
   for External Secrets Operator. The operator writes one ExternalSecret per ProjectSecret (off without
   `SECRETS_STORE`). Re-run: `./run.sh 13` (new) on kind; the playbook installs the new CRD (store on GKE follows in
-  part 4).
-- Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
-  `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
-  base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
-  request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
-  agent container. The harness guide lists the agent's broker secrets.
-- Registry cache for npm, PyPI and Go (#203), one setting `registry_proxy` (`off` by default, `cluster`,
-  `artifact_registry`). GKE: Terraform `registry_proxy = true` makes Artifact Registry remote repositories
-  `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (labels, reader IAM per repository for a gateway service account
-  through Workload Identity, 30-day cleanup) and output `registry_proxy`. kind and GKE without Artifact Registry: new
-  Ansible role `registry_cache` with Verdaccio, devpi and Athens. Agents reach a read-only gateway `registry-cache`
-  through the ConfigMap `registry-proxy` (operator: optional envFrom on the agent container); with the cache on, the
-  public registry hosts leave the agents' egress allow-list. Private registries per project: #248.
-- Private npm registries per project (#248, needs #202 part 2): `ProjectSecret` mode broker gets
-  `spec.broker.npmScope` (for example `@acme`). The operator writes each agent in the secret's scope an npm config
-  (key `<agent>.npmrc` of `agentdev-guides`, mounted at `/etc/agentdev/guide/npmrc`, `NPM_CONFIG_GLOBALCONFIG`) that
-  maps the scope to the credential broker with `${AGENTDEV_BROKER_KEY}`; no registry token in the agent pod, and an
-  agent of another project gets 403. Re-run: the playbook or `./run.sh 12` (new CRD field). admin.md "Add a private
-  npm registry for a project"; risk R108.
   part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
   repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
   variable (`ESO_SA`) for the chart and the policy.
