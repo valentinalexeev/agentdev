@@ -292,6 +292,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
   Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
   a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
+- Step 10 (#106): `10-api.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags api`: the role
+  `api` of `deploy.yml`, with the new secret source `files` (`.secrets/platform/pg-agentdev-api`, `siem-webhook`,
+  `.secrets/github-app`), the image built and loaded into kind, and the Gitea account `agentdev-api` (#100). Same
+  result (database roles and grants, Secrets `agentdev-api-db`, `-forge`, `-github`, `-siem`, Deployment). Changed:
+  the API restarts only when a Secret or the loaded image changes, so a second run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

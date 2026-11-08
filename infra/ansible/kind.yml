@@ -10,8 +10,9 @@
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
 #   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
+#   ansible-playbook kind.yml --tags api               # was ./run.sh 10
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08, api: 10.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -27,6 +28,7 @@
     mcp_projects: []
     mcp_allowed_hosts: []
     obs_mcp: {enabled: false}
+    approvals: {enabled: false}   # APPROVALS in config.env; the API and the operator read the same switch (#67)
   tasks:
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
@@ -79,3 +81,19 @@
         platform_secret_source: files
         platform_kind_cluster: "{{ kind_cluster_name }}"
       tags: [mcp]
+
+    # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager and the Gitea
+    # account agentdev-api (#100). The web UI is step 11 (tag ui). Needs authentik (09) and Postgres (08).
+    - name: Management API (was 10-api.sh)
+      ansible.builtin.include_role:
+        name: api
+        apply: {tags: [api]}
+      vars:
+        api_secret_source: files
+        api_kind_cluster: "{{ kind_cluster_name }}"
+        api_image: agentdev-api:dev
+        api_ui: false
+        api_oidc_issuer: https://localhost:9443/application/o/agentdev/
+        api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
+        api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
+      tags: [api]
