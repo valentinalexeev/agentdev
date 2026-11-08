@@ -1148,6 +1148,15 @@ max_concurrent=${MAX_CONCURRENT}"
 # stop it. The router refuses if it forwarded a wake since idle_since, so new work never races a shutdown.
 IDLE_SECONDS="${IDLE_SECONDS:-900}"
 idle_since=$(date +%s)
+# idle_wait: wait for the pod to be removed. No exec: an exec'd sleep as PID 1 has no TERM handler and ignores
+# SIGTERM, so every idle stop would wait AGENT_GRACE_SECONDS. No job runs here, so SIGTERM simply exits 0.
+idle_wait() {
+  local s
+  sleep infinity & s=$!
+  trap 'kill "${s}" 2>/dev/null; exit 0' TERM
+  wait "${s}"
+  exit 0
+}
 maybe_stop() {
   [[ "${SCALE_TO_ZERO:-false}" == true && -n "${ROUTER_URL:-}" ]] || return
   if (( $(running_jobs) > 0 )); then idle_since=$(date +%s); return; fi
@@ -1158,7 +1167,7 @@ maybe_stop() {
     || { log "idle: router unreachable or refused"; idle_since=$(date +%s); return; }
   if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then
     # the pod is being removed: take no new work (a job started now would be killed); the router restarts us on the next event
-    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; exec sleep infinity
+    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; idle_wait
   else log "idle: router keeps this agent ($(jq -r .reason <<<"${r}"))"; idle_since=$(date +%s); fi
 }
 # ---------- drain and graceful stop (#174) ----------
