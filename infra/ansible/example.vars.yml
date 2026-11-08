@@ -12,6 +12,8 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #   oidc_audience: agentdev
 #   db_retention_days: 365
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
+#   max_agents: 0                         # #27: cap on all agents for UI/API creates; 0 = no cap
+#   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate

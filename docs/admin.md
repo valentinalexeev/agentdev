@@ -555,7 +555,8 @@ Do this task after run.sh step 08.
 
 1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
 2. Run run.sh step 09: `./run.sh 09`
-   The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `authentik` (#106), with the values from `config.env`.
+   The playbook installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
 
 ### Deploy authentik on GKE
 
@@ -967,6 +968,31 @@ in `user-guide.md`.
    `curl -X PATCH -H "Authorization: Bearer $TOKEN" -d '{"paused":true}' http://localhost:8088/api/agents/carol`
    The API gives 200 and the agent with `"paused": true`.
 2. To resume the agent, send the same request with `"paused":false`.
+
+### Limit the number of agents
+
+An administrator can set two limits for agents that people add in the web UI or through the API (#27). The value
+`0` means no limit (the default).
+
+| Limit | Counts | Who it stops | Setting |
+|---|---|---|---|
+| Instance limit | all Agent objects in the agents namespace, also agents from Ansible or `kubectl` | all users, also `agentdev-admins` | Ansible `api.max_agents`; `kind`: `MAX_AGENTS` |
+| Limit for each person | the agents that one person added in the web UI or through the API | all users except `agentdev-admins` | Ansible `api.max_agents_per_user`; `kind`: `MAX_AGENTS_PER_USER` |
+
+1. Set the limits. For GKE, in `ansible/instance.yml`:
+   `api: {max_agents: 2, max_agents_per_user: 1}`
+   For `kind`, in `.env`: `MAX_AGENTS=2` and `MAX_AGENTS_PER_USER=1`.
+2. Deploy again. For GKE, run the playbook. For `kind`, run `./run.sh 10`.
+3. Make sure that the API log shows `agent limits: max 2 in total, 1 per user`.
+
+When a limit is reached, the API refuses a new agent with 403 and a message that gives the limit. The audit line has
+the result `denied`. To add the agent, remove an agent or set a larger limit. The API writes the OIDC subject of the
+person into the annotation `agentdev/created-by` of each agent that it adds.
+
+NOTE: The limits apply only to new agents through the API. They do not stop agents that already exist, and they do not
+stop Ansible or `kubectl`. The ResourceQuota from `limits:` in the project spec is the Kubernetes limit for all
+callers. To stop one agent and prevent a new start, use the annotation `agentdev/blocked` (refer to "Agents as
+resources (operator)").
 
 ### Reference: who can change an agent
 
@@ -2140,6 +2166,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
+| authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |

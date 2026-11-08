@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +90,11 @@ func main() {
 		perms.github = gh
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
-	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents}
+	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
+		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}} // #27, 0 = no cap
+	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
+		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
+	}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		dc := newDecider(agents, agents, gp, perms)
 		dc.github = gh
@@ -121,6 +126,22 @@ func envPct(k string, def int) int {
 	}
 	return def
 }
+
+// envCount reads a cap (#27): digits only, 0 or empty = no cap. Any other value stops the API at start (fail closed:
+// a typo must not silently turn a limit off).
+func envCount(k string) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || !digitsRe.MatchString(v) {
+		log.Fatalf("%s must be a whole number 0 or more (0 = no limit), got %q", k, v)
+	}
+	return n
+}
+
+var digitsRe = regexp.MustCompile(`^[0-9]{1,6}$`)
 
 func envInt(k string, def int) int {
 	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
