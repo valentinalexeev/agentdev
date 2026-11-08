@@ -1,0 +1,89 @@
+# Render checks of the role kind_agents (#106, was 06-agents.sh), without a cluster: the values match what the shell
+# step computed (claude-proxy sources, forge proxy auth hash, the agents' egress list), and every ${VAR} of the router,
+# egress and Claude proxy manifests gets a value. The kind e2e (kind.yml --tags agents) covers the cluster side.
+# Run: ansible-playbook infra/ansible/tests/kind_agents.yml
+- name: Role kind_agents values (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kind_agents_agents: [alice, bob]
+    kind_agents_secret:
+      router-register.token: reg
+      egress-forge-proxy.key: 0123abcd
+    kind_agents_forge_secrets: gitea=x
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/kind_agents/defaults/main.yml
+
+    - name: The repo root seen from tests/ (the default is relative to kind.yml)
+      ansible.builtin.set_fact:
+        kind_agents_repo_root: "{{ playbook_dir }}/../../.."
+
+    - name: The Claude proxy sources match scripts/claude-proxy-sources.sh
+      ansible.builtin.command:
+        argv: ["{{ kind_agents_repo_root }}/scripts/claude-proxy-sources.sh", alice, bob]
+      register: kind_agents_t_sources
+      changed_when: false
+
+    - name: Compare the sources
+      ansible.builtin.assert:
+        that:
+          - (lookup('ansible.builtin.template', '../templates/claude-proxy-sources.j2') | trim | from_json)
+            == (kind_agents_t_sources.stdout | from_json)
+        quiet: true
+      vars:
+        agents: "{{ kind_agents_agents | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_json') | list }}"
+
+    - name: The forge proxy auth hash as 06-agents.sh computed it
+      ansible.builtin.shell: |
+        set -euo pipefail
+        auth="^Basic $(printf 'forge:%s' 0123abcd | base64 | tr -d '\n')\$"
+        printf '%s' "$auth" | openssl dgst -sha256 -r | cut -c1-16
+      args: {executable: /bin/bash}
+      register: kind_agents_t_sha
+      changed_when: false
+
+    - name: Compare the hash and the egress list
+      ansible.builtin.assert:
+        that:
+          - (('^Basic ' ~ (('forge:' ~ kind_agents_secret['egress-forge-proxy.key']) | b64encode) ~ '$') | hash('sha256'))[:16]
+            == kind_agents_t_sha.stdout | trim
+          - "'api.anthropic.com' not in kind_agents_agent_egress_hosts"
+          - "'pypi.org' in kind_agents_agent_egress_hosts"
+        quiet: true
+
+    # include_vars has a higher precedence than task vars: set_fact overrides it
+    - name: Turn the credential proxy off
+      ansible.builtin.set_fact:
+        kind_agents_claude_proxy: false
+
+    - name: Without the credential proxy the agents keep api.anthropic.com
+      ansible.builtin.assert:
+        that: "'api.anthropic.com' in kind_agents_agent_egress_hosts"
+        quiet: true
+
+    - name: Render the router, egress and Claude proxy manifests with the role's value names
+      ansible.builtin.set_fact:
+        kind_agents_t_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=item) | from_yaml_all | list }}"
+      loop:
+        - src: "{{ kind_agents_repo_root }}/manifests/router.yaml.tmpl"
+          values: {AGENTS_NS: a, FORGE_SECRETS: g=x, REGISTER_TOKEN: r, ROUTER_IMAGE: i, IMAGE_PULL_POLICY: Never,
+                   WAKE_POLL_SECONDS: "300", GITEA_URL: http://g, GITHUB_API_URL: https://api.github.com}
+          replace: []
+        - src: "{{ kind_agents_repo_root }}/manifests/egress.yaml.tmpl"
+          values: {AGENTS_NS: a, PLATFORM_NS: p, FORGE_NS: f, BOTBOARD_NS: b, EGRESS_HOSTS: pypi.org,
+                   FORGE_EGRESS_HOSTS: github.com, EGRESS_PROXY_IMAGE: i, FORGE_PROXY_AUTH_SHA: "0123456789abcdef"}
+          replace: []
+        - src: "{{ kind_agents_repo_root }}/manifests/claude-proxy.yaml.tmpl"
+          values: {AGENTS_NS: a, PLATFORM_NS: p, CLAUDE_PROXY_IMAGE: i, IMAGE_PULL_POLICY: Never, CLAUDE_BUDGET_TOKENS: "0",
+                   CLAUDE_SECRET_SOURCES: "[]"}
+          replace: []
+      loop_control: {label: "{{ item.src | basename }}"}
+
+    - name: The role sets the same value names (main.yml has each one)
+      ansible.builtin.assert:
+        that: lookup('ansible.builtin.file', '../roles/kind_agents/tasks/main.yml') is search('\n\s+' ~ item ~ ':')
+        quiet: true
+      loop: [AGENTS_NS, FORGE_SECRETS, REGISTER_TOKEN, ROUTER_IMAGE, IMAGE_PULL_POLICY, WAKE_POLL_SECONDS, GITEA_URL,
+             GITHUB_API_URL, PLATFORM_NS, FORGE_NS, BOTBOARD_NS, EGRESS_HOSTS, FORGE_EGRESS_HOSTS, EGRESS_PROXY_IMAGE,
+             FORGE_PROXY_AUTH_SHA, CLAUDE_PROXY_IMAGE, CLAUDE_BUDGET_TOKENS, CLAUDE_SECRET_SOURCES]

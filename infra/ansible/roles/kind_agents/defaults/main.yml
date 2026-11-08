@@ -1,0 +1,50 @@
+---
+# Agents on kind (#106, was 06-agents.sh): local images, the webhook router, the Claude credential proxy, the egress
+# allow-list, and one Agent object per agent (the operator renders the StatefulSets). The manifests are the same as
+# deploy.yml on GKE (manifests/*.tmpl, templates/render.j2). Secrets are files in kind_agents_secrets_dir (generated
+# once, mode 600), not Secret Manager. 06-agents.sh passes the config.env values with -e.
+kind_agents_context: kind-agentdev
+kind_agents_cluster_name: agentdev
+kind_agents_container_engine: docker
+kind_agents_repo_root: "{{ playbook_dir }}/../.."
+kind_agents_secrets_dir: "{{ kind_agents_repo_root }}/.secrets"
+kind_agents_ns: coding-agents
+kind_agents_platform_ns: agentdev-platform
+kind_agents_forge_ns: forge
+kind_agents_botboard_ns: botboard
+kind_agents_worker_image: agentdev/worker:mvp
+kind_agents_forge_image: agentdev/forge:mvp
+kind_agents_router_image: agentdev/router:mvp
+kind_agents_credproxy_image: agentdev/credproxy:mvp
+kind_agents_egress_proxy_image: >-
+  ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+# build the four local images and load them into the kind nodes; false: use what is in the nodes
+kind_agents_build: true
+kind_agents_forge_kind: gitea                 # gitea or github (#2)
+kind_agents_repo: owner/playground
+kind_agents_agents: [alice, bob]
+kind_agents_github_installation_id: ""
+kind_agents_forge_url: http://localhost:3000  # Gitea from the operator machine (FORGE_HOST_URL)
+kind_agents_forge_admin_user: owner
+# from the environment (never from -e, so it is not in the process list)
+kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
+kind_agents_max_concurrent: 2
+kind_agents_scale_to_zero: true
+kind_agents_wake_poll_seconds: 300
+kind_agents_claude_proxy: true
+kind_agents_claude_budget_tokens: 0
+kind_agents_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
+                           files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
+kind_agents_egress_extra_hosts: []
+kind_agents_forge_egress_hosts: [api.github.com, github.com]
+kind_agents_timeout: 300
+# shared Claude credential (claude-shared), from the environment as 06-agents.sh read it (.env)
+kind_agents_shared_claude: >-
+  {{ {'ANTHROPIC_API_KEY': lookup('ansible.builtin.env', 'ANTHROPIC_API_KEY'),
+      'CLAUDE_CODE_OAUTH_TOKEN': lookup('ansible.builtin.env', 'CLAUDE_CODE_OAUTH_TOKEN')}
+     | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
+# the agents' egress list: with the credential proxy only claude-proxy reaches the Claude API (docs/security.md R64)
+kind_agents_agent_egress_hosts: >-
+  {{ (kind_agents_egress_hosts + kind_agents_egress_extra_hosts)
+     | reject('in', ['api.anthropic.com'] if kind_agents_claude_proxy | bool else []) | list }}
+kind_agents_name_re: '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'

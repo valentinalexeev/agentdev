@@ -1,0 +1,28 @@
+---
+# One local image (was the build and kind load lines of 06-agents.sh). kind_agents_image_changed[<dir>] is true when the
+# build gave a new image id; the router, the proxy and the agents restart only then (a second run changes nothing).
+- name: Image id before the build of {{ kind_agents_img.tag }}
+  ansible.builtin.command:
+    argv: ["{{ kind_agents_container_engine }}", image, inspect, -f, "{{ '{{' }}.Id{{ '}}' }}", "{{ kind_agents_img.tag }}"]
+  register: kind_agents_img_before
+  changed_when: false
+  failed_when: false
+
+- name: Build the local image {{ kind_agents_img.tag }}
+  ansible.builtin.command:
+    argv: ["{{ kind_agents_container_engine }}", build, -q, -t, "{{ kind_agents_img.tag }}",
+           "{{ kind_agents_repo_root }}/images/{{ kind_agents_img.dir }}"]
+  register: kind_agents_img_build
+  changed_when: (kind_agents_img_build.stdout | trim) != (kind_agents_img_before.stdout | trim)
+
+- name: Load into kind {{ kind_agents_img.tag }}
+  ansible.builtin.command:
+    argv: [kind, load, docker-image, "{{ kind_agents_img.tag }}", --name, "{{ kind_agents_cluster_name }}"]
+  register: kind_agents_img_load
+  # kind writes "already present on all nodes" to stderr on a skip
+  changed_when: "'already present on all nodes' not in (kind_agents_img_load.stdout ~ kind_agents_img_load.stderr)"
+
+- name: Remember a changed image of {{ kind_agents_img.dir }}
+  ansible.builtin.set_fact:
+    kind_agents_image_changed: >-
+      {{ kind_agents_image_changed | default({}) | combine({kind_agents_img.dir: kind_agents_img_build is changed}) }}

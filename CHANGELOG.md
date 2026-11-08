@@ -264,6 +264,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 06 (#106): `06-agents.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags agents` (new role
+  `kind_agents`, the same manifests as `deploy.yml`). Same result (local worker, forge, router and credproxy images;
+  router, Claude proxy, egress proxy; Secrets and one Agent object per agent; the Gitea webhook). The secret files in
+  `.secrets` are kept. Changed: the router, the proxy and the agents restart only after a new image or Secret, so a
+  second run changes nothing; the webhook is created again only when it is missing. The operator must run first (the
+  wrapper still installs it when it is missing). GKE does not change: `deploy.yml` is not edited.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

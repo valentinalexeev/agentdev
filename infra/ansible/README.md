@@ -156,6 +156,19 @@ password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every 
 `no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
 changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
 
+```bash
+FORGE_ADMIN_PASSWORD=... ANTHROPIC_API_KEY=... ansible-playbook infra/ansible/kind.yml --tags agents   # needs the operator
+```
+The role `kind_agents` does the old step 06 with the same manifests as `deploy.yml` (`manifests/router.yaml.tmpl`,
+`egress.yaml.tmpl`, `egress-proxy-web.yaml.tmpl`, `claude-proxy.yaml.tmpl`, `templates/render.j2`): it builds the
+worker, forge, router and credproxy images and loads them into kind, then applies the router, the Claude proxy, the
+egress proxy, the Secrets of each agent and one Agent object per entry of `kind_agents_agents`, and the Gitea webhook.
+Generated values (router secrets, wake tokens, proxy signing key, forge proxy key) are files in
+`kind_agents_secrets_dir` (mode 600), created once. Credentials come from the environment (`FORGE_ADMIN_PASSWORD`,
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`) or from `.secrets/<agent>.claude`, never from `-e`; every task that
+uses one has `no_log`. Restarts happen only after a new image id or a changed Secret, so a second run changes nothing.
+GKE keeps its own tasks in `deploy.yml` (Secret Manager); `tests/kind_agents.yml` checks that both render the same.
+
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
 Day-2 changes (adding agents, rotating credentials) move to the management UI (#12).
