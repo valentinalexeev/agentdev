@@ -63,6 +63,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
+  `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
+  `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
+  header and docs no longer say "PR plan". Copy the new file into your deployment repository. A read-only plan
+  identity for PRs is #291.
 - Ansible refuses a Secret Manager `claude-shared` or `agent-<name>-claude` without a recognised key (#212). A bare
   token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
   `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
