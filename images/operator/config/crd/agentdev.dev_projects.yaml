@@ -66,11 +66,12 @@ spec:
                 maxLength: 8192
                 type: string
               repos:
-                description: Repositories of the project, owner/name, all of the same
-                  owner.
+                description: |-
+                  Repositories of the project, owner/name, all of the same owner.
+                  Each part starts with a letter, digit or _, has no "..", and does not end with a dot (as the API's validRepo).
                 items:
                   maxLength: 201
-                  pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+                  pattern: ^[A-Za-z0-9_]([A-Za-z0-9_-]|\.[A-Za-z0-9_-])*/[A-Za-z0-9_]([A-Za-z0-9_-]|\.[A-Za-z0-9_-])*$
                   type: string
                 maxItems: 20
                 minItems: 1

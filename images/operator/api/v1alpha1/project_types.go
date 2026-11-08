@@ -17,7 +17,8 @@ type ProjectSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
 	// +listType=set
-	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`
+	// Each part starts with a letter, digit or _, has no "..", and does not end with a dot (as the API's validRepo).
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_]([A-Za-z0-9_-]|\.[A-Za-z0-9_-])*/[A-Za-z0-9_]([A-Za-z0-9_-]|\.[A-Za-z0-9_-])*$`
 	// +kubebuilder:validation:items:MaxLength=201
 	Repos []string `json:"repos"`
 	// Text that project members add to the harness guide of every agent of the project. Appended under its own
