@@ -5,6 +5,9 @@ troubleshooting (`troubleshooting.md`) and the private-deployment guide (`privat
 **ASD-STE100 Simplified Technical English** (STE). The design pages (`concepts.md`, `security.md`,
 `security-model.md`, `release.md`, `adr/`) are for engineers and use normal technical English.
 
+Text on GitHub tickets also uses STE: issue bodies, issue and PR comments, PR descriptions and review comments
+(`CLAUDE.md` §2). Code, commands, file names and quoted output stay as they are.
+
 STE makes the manuals easy to read for people whose first language is not English, and easy to translate. Each
 word has one meaning, and each procedure gives one action per step.
 
