@@ -20,10 +20,11 @@ if [[ "${OPERATOR_IMAGE}" == agentdev-operator:* ]]; then
   ok "built and loaded"
 else ok "using published image"; fi
 
-log "CRDs agents, securityevents, approvals, executors, executorruns, sshtargets (agentdev.dev)"
+log "CRDs agents, securityevents, approvals, executors, executorruns, sshtargets, projectsecrets (agentdev.dev)"
 k apply --server-side --force-conflicts --field-manager=agentdev -f "${SPIKE_DIR}/images/operator/config/crd/" >/dev/null
 k wait --for=condition=Established crd/agents.agentdev.dev crd/securityevents.agentdev.dev crd/approvals.agentdev.dev \
-  crd/executors.agentdev.dev crd/executorruns.agentdev.dev crd/sshtargets.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
+  crd/executors.agentdev.dev crd/executorruns.agentdev.dev crd/sshtargets.agentdev.dev \
+  crd/projectsecrets.agentdev.dev --timeout=60s >/dev/null && ok "CRD established"
 
 log "Operator (${PLATFORM_NS}, watching ${AGENTS_NS})"
 BOTBOARD_URL="${BOTBOARD_URL:-}"
@@ -38,6 +39,14 @@ AGENT_EGRESS_HOSTS=$(echo "${EGRESS_HOSTS} ${EGRESS_EXTRA_HOSTS}" | xargs -n1 |
 if ! k -n "${PLATFORM_NS}" get secret agentdev-probe-token >/dev/null 2>&1; then
   k -n "${PLATFORM_NS}" create secret generic agentdev-probe-token --from-literal=token="$(openssl rand -hex 32)" >/dev/null
 fi
+# scoped secrets store (#202): on only once ./run.sh 13 installed External Secrets Operator (its CRD must be served,
+# or the operator's cache never syncs); 13 re-runs this step
+SECRETS_STORE=""
+if [[ "${SECRETS_STORE_ENABLED:-true}" == true ]] && k get crd externalsecrets.external-secrets.io >/dev/null 2>&1; then
+  SECRETS_STORE=agentdev-secrets
+fi
+SECRETS_REMOTE_PROPERTY=""   # the kind store's value Secrets have one key, value (GCP: the payload itself)
+[[ -n "${SECRETS_STORE}" ]] && SECRETS_REMOTE_PROPERTY=value
 pull=Never   # kind: 06 loads the worker image into the nodes (as 06 renders agents); GKE sets IfNotPresent (#51)
 COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS}" OPERATOR_IMAGE="${OPERATOR_IMAGE}" WORKER_IMAGE="${WORKER_IMAGE}" FORGE_IMAGE="${FORGE_IMAGE}" \
   IMAGE_PULL_POLICY="${pull}" FORGE_URL="http://gitea.${FORGE_NS}.svc.cluster.local:3000" FORGE_PUBLIC_URL="${FORGE_HOST_URL}" \
@@ -49,7 +58,7 @@ COST_LABELS="${COST_LABELS}" PLATFORM_NS="${PLATFORM_NS}" AGENTS_NS="${AGENTS_NS
   APPROVALS="${APPROVALS:-false}" APPROVAL_TIMEOUT_MINUTES="${APPROVAL_TIMEOUT_MINUTES:-30}" \
   EXEC_NS="${EXEC_NS}" EXECUTOR_POLL_SECONDS="${EXECUTOR_POLL_SECONDS}" EXECUTOR_RETENTION_DAYS="${EXECUTOR_RETENTION_DAYS}" \
   EXECUTOR_APPLY_START_MINUTES="${EXECUTOR_APPLY_START_MINUTES}" EXECUTOR_EGRESS_HOSTS="${EXECUTOR_EGRESS_HOSTS}" \
-  USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
+  SECRETS_STORE="${SECRETS_STORE}" SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY}" USAGE_FIVE_HOUR="${USAGE_FIVE_HOUR:-80}" USAGE_WEEKLY="${USAGE_WEEKLY:-90}" \
   PROBE_RATE_PER_MIN="${PROBE_RATE_PER_MIN:-20}" PROBE_RATE_BURST="${PROBE_RATE_BURST:-5}" \
   CLAUDE_PROXY_URL="$([[ "${CLAUDE_PROXY:-true}" == true ]] && echo "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080")" \
   envsubst < "${SPIKE_DIR}/manifests/operator.yaml.tmpl" | k apply -f - >/dev/null

@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -296,10 +297,33 @@ func (p *ExecutorPoller) Poll(ctx context.Context, e *v1.Executor) error {
 	if err := p.Direct.List(ctx, &runs, client.InNamespace(p.C.NS), client.MatchingLabels{"agentdev/executor": e.Name}); err != nil {
 		return err
 	}
-	for i := range runs.Items {
-		if err := p.syncRun(ctx, e, f, &runs.Items[i]); err != nil {
-			return fmt.Errorf("run %s: %w", runs.Items[i].Name, err)
+	// #271: runs that touch the environment (merge plan, apply, snapshot) run one at a time per Executor, in order
+	sortRuns(runs.Items)
+	waiting := func(r *v1.ExecutorRun) bool {
+		return serialStage(r) && (r.Status.Phase == "" || r.Status.Phase == "Pending")
+	}
+	busy := false
+	for i := range runs.Items { // first the started runs: a run that ends now frees the slot for this poll
+		r := &runs.Items[i]
+		if waiting(r) {
+			continue
 		}
+		if err := p.syncRun(ctx, e, f, r); err != nil {
+			return fmt.Errorf("run %s: %w", r.Name, err)
+		}
+		if serialStage(r) && r.Status.Phase == "Running" {
+			busy = true
+		}
+	}
+	for i := range runs.Items { // then at most one waiting run, in order; the others start at a later poll
+		r := &runs.Items[i]
+		if !waiting(r) || busy {
+			continue
+		}
+		if err := p.syncRun(ctx, e, f, r); err != nil {
+			return fmt.Errorf("run %s: %w", r.Name, err)
+		}
+		busy = r.Status.Phase == "Running"
 	}
 	if e.Spec.Paused {
 		p.setPhase(ctx, e, "paused", "Paused", "spec.paused: no new runs")
@@ -332,7 +356,7 @@ func (p *ExecutorPoller) discover(ctx context.Context, e *v1.Executor, f forgeAP
 		if !e.Spec.AllowForkPRs && !strings.EqualFold(pr.HeadRepo, e.Spec.Repo) {
 			continue // a fork (or a deleted head repository): its code is not planned unless the admin opted in
 		}
-		if err := p.ensurePlan(ctx, e, f, "pr", pr.Number, pr.Head); err != nil {
+		if err := p.ensurePlan(ctx, e, f, "pr", pr.Number, pr.Head, time.Time{}); err != nil {
 			return err
 		}
 	}
@@ -344,22 +368,62 @@ func (p *ExecutorPoller) discover(ctx context.Context, e *v1.Executor, f forgeAP
 	if c := e.CreationTimestamp.Time; c.After(cut) {
 		cut = c // an executor never applies history from before it existed
 	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].MergedAt.Before(merged[j].MergedAt) }) // #271: merge order
 	for _, pr := range merged {
 		if pr.Base != branch || pr.Number < 1 || !shaRE.MatchString(pr.Merge) || pr.MergedAt.Before(cut) {
 			continue
 		}
-		if err := p.ensurePlan(ctx, e, f, "merge", pr.Number, pr.Merge); err != nil {
+		if err := p.ensurePlan(ctx, e, f, "merge", pr.Number, pr.Merge, pr.MergedAt); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// serialStage reports whether a run touches the environment. Only one such run of an Executor is Running at a time.
+// PR head plans run in parallel: they have no environment credentials.
+func serialStage(r *v1.ExecutorRun) bool {
+	return r.Spec.Stage == "merge" || r.Spec.Stage == "apply" || r.Spec.Stage == "snapshot" || r.Spec.Stage == "drift"
+}
+
+// sortRuns gives the start order of waiting runs: an apply first (its start window runs), then merge plans in merge
+// order (annotation agentdev.dev/merged-at, else creation time), then snapshots. Ties: by name.
+func sortRuns(rs []v1.ExecutorRun) {
+	rank := func(r *v1.ExecutorRun) int {
+		switch r.Spec.Stage {
+		case "apply":
+			return 0
+		case "merge":
+			return 1
+		case "snapshot", "drift": // #205: a drift plan during an apply reports false drift
+			return 2
+		}
+		return 3
+	}
+	sort.SliceStable(rs, func(i, j int) bool {
+		a, b := &rs[i], &rs[j]
+		if ra, rb := rank(a), rank(b); ra != rb {
+			return ra < rb
+		}
+		if ma, mb := a.Annotations[mergedAtAnnotation], b.Annotations[mergedAtAnnotation]; ma != "" && mb != "" && ma != mb {
+			ta, ea := time.Parse(time.RFC3339Nano, ma)
+			tb, eb := time.Parse(time.RFC3339Nano, mb)
+			if ea == nil && eb == nil && !ta.Equal(tb) {
+				return ta.Before(tb)
+			}
+		}
+		if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+			return a.CreationTimestamp.Before(&b.CreationTimestamp)
+		}
+		return a.Name < b.Name
+	})
+}
+
 func runName(e *v1.Executor, stage, commit string) string {
 	return e.Name + "-" + stage + "-" + commit[:12]
 }
 
-func (p *ExecutorPoller) ensurePlan(ctx context.Context, e *v1.Executor, f forgeAPI, stage string, pr int64, commit string) error {
+func (p *ExecutorPoller) ensurePlan(ctx context.Context, e *v1.Executor, f forgeAPI, stage string, pr int64, commit string, mergedAt time.Time) error {
 	name := runName(e, stage, commit)
 	var existing v1.ExecutorRun
 	if err := p.Direct.Get(ctx, types.NamespacedName{Namespace: p.C.NS, Name: name}, &existing); err == nil {
@@ -374,8 +438,17 @@ func (p *ExecutorPoller) ensurePlan(ctx context.Context, e *v1.Executor, f forge
 	if !touches(files, e.Spec.Path) {
 		return nil
 	}
-	return p.createRun(ctx, e, v1.ExecutorRunSpec{Executor: e.Name, Action: "plan", Stage: stage, Commit: commit, PR: pr})
+	r := &v1.ExecutorRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: p.C.NS,
+		Labels: map[string]string{"agentdev/executor": e.Name, "agentdev/stage": stage}},
+		Spec: v1.ExecutorRunSpec{Executor: e.Name, Action: "plan", Stage: stage, Commit: commit, PR: pr}}
+	if !mergedAt.IsZero() {
+		r.Annotations = map[string]string{mergedAtAnnotation: mergedAt.UTC().Format(time.RFC3339Nano)}
+	}
+	return p.createOwnedRun(ctx, e, r)
 }
+
+// mergedAtAnnotation holds the merge time of a merge plan run: the start order of waiting merge plans (#271).
+const mergedAtAnnotation = "agentdev.dev/merged-at"
 
 func (p *ExecutorPoller) createRun(ctx context.Context, e *v1.Executor, spec v1.ExecutorRunSpec) error {
 	r := &v1.ExecutorRun{ObjectMeta: metav1.ObjectMeta{Name: runName(e, spec.Stage, spec.Commit), Namespace: p.C.NS,

@@ -32,6 +32,11 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-snapshots], verbs: [get, update]}
 # drift reports (#205): one key per executor, written by the operator only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-drift], verbs: [get, update]}
+# scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
+# its fields); the operator never reads the synced Secrets
+- {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
+- {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -137,6 +142,8 @@ spec:
         - {name: PROBE_TOKEN_FILE, value: /var/run/agentdev-probe/token}
         - {name: PROBE_RATE_PER_MIN, value: "${PROBE_RATE_PER_MIN}"}
         - {name: PROBE_RATE_BURST, value: "${PROBE_RATE_BURST}"}
+        - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
+        - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}, {name: probe, containerPort: 8090}]
         volumeMounts: [{name: probe-token, mountPath: /var/run/agentdev-probe, readOnly: true}]
