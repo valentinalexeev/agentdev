@@ -61,9 +61,12 @@
           - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
           - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+          - not (item.ssh | default(false) | bool) or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
+          - item.snapshot is not defined or ((item.ssh | default(false) | bool) and item.snapshot is sequence and item.snapshot is not string)
         fail_msg: >-
           executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
-          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
+          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names, ssh needs a pr_plan
+          argv list, snapshot needs ssh)
         quiet: true
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
@@ -523,6 +526,10 @@
             approvalHours: "{{ item.approval_hours | default(24) | int }}"
             allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
             egressHosts: "{{ item.egress_hosts | default([]) }}"
+            # #204: server access with SSH certificates (SSHTargets are written by admins, not by this playbook)
+            ssh: "{{ item.ssh | default(false) | bool }}"
+            prPlan: "{{ {'command': item.pr_plan} if item.pr_plan is defined else omit }}"
+            snapshot: "{{ {'command': item.snapshot, 'intervalHours': item.snapshot_hours | default(24) | int} if item.snapshot is defined else omit }}"
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name }}"}
       when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)

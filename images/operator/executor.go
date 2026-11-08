@@ -117,6 +117,8 @@ type ExecutorPoller struct {
 	Now    func() time.Time
 	// Forge builds the forge client of an executor from its token; replaced in tests.
 	Forge func(e *v1.Executor, token string) (forgeAPI, error)
+	// SSHCA is the SSH certificate authority client for executors with spec.ssh (#204); nil: SSH runs fail closed.
+	SSHCA func(ctx context.Context) (*SSHCA, error)
 	// EgressLogs reads the executor egress proxy's log (#135); nil: refusals are not collected.
 	EgressLogs  sinceLogs
 	egressSince map[types.UID]time.Time // proxy pod -> time of the last log line read
@@ -230,8 +232,9 @@ func specHash(e *v1.Executor) string {
 		Plan, Apply                           []string
 		PlanCreds, ApplyCreds                 v1.ExecutorCredentials
 		ForgeSecret                           string
+		SSH                                   bool `json:",omitempty"` // #204: omitted when false, so older hashes stay valid
 	}{e.Spec.Environment, e.Spec.Repo, forgeOf(e), branchOf(e), e.Spec.Path, e.Spec.Image, e.Spec.Plan.Command,
-		e.Spec.Apply.Command, e.Spec.PlanCredentials, e.Spec.ApplyCredentials, e.Spec.ForgeSecret})
+		e.Spec.Apply.Command, e.Spec.PlanCredentials, e.Spec.ApplyCredentials, e.Spec.ForgeSecret, e.Spec.SSH})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
@@ -260,6 +263,8 @@ func validExecutor(e *v1.Executor) string {
 		return "invalid spec.branch"
 	case strings.Contains(e.Spec.Path, ".."):
 		return "invalid spec.path"
+	case e.Spec.SSH && (e.Spec.PRPlan == nil || len(e.Spec.PRPlan.Command) == 0):
+		return "spec.ssh needs spec.prPlan: pull request heads never get server credentials"
 	}
 	return ""
 }
@@ -297,6 +302,9 @@ func (p *ExecutorPoller) Poll(ctx context.Context, e *v1.Executor) error {
 		return nil
 	}
 	if err := p.discover(ctx, e, f); err != nil {
+		return err
+	}
+	if err := p.ensureSnapshot(ctx, e); err != nil { // #205: scheduled server snapshot
 		return err
 	}
 	p.setPhase(ctx, e, "ready", "Polled", "forge polled")
@@ -365,6 +373,12 @@ func (p *ExecutorPoller) ensurePlan(ctx context.Context, e *v1.Executor, f forge
 func (p *ExecutorPoller) createRun(ctx context.Context, e *v1.Executor, spec v1.ExecutorRunSpec) error {
 	r := &v1.ExecutorRun{ObjectMeta: metav1.ObjectMeta{Name: runName(e, spec.Stage, spec.Commit), Namespace: p.C.NS,
 		Labels: map[string]string{"agentdev/executor": e.Name, "agentdev/stage": spec.Stage}}, Spec: spec}
+	return p.createOwnedRun(ctx, e, r)
+}
+
+// createOwnedRun creates r owned by e (deleted with the Executor); an existing run of that name is kept.
+func (p *ExecutorPoller) createOwnedRun(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun) error {
+	spec := r.Spec
 	if err := controllerutil.SetControllerReference(e, r, p.Scheme()); err != nil {
 		return err
 	}
@@ -381,7 +395,9 @@ func (p *ExecutorPoller) createRun(ctx context.Context, e *v1.Executor, spec v1.
 // syncRun moves one run forward: start its Job, collect its result, then (merge) request and follow the approval.
 func (p *ExecutorPoller) syncRun(ctx context.Context, e *v1.Executor, f forgeAPI, r *v1.ExecutorRun) error {
 	// the spec is checked again: an ExecutorRun is only ever written by this operator, but never trust it blindly
-	if !shaRE.MatchString(r.Spec.Commit) || r.Spec.PR < 1 || r.Spec.Executor != e.Name {
+	if r.Spec.Executor != e.Name || (r.Spec.Stage == "snapshot") != (r.Spec.Action == "snapshot") ||
+		(r.Spec.Stage == "snapshot" && (r.Spec.Commit != "" || r.Spec.PR != 0)) ||
+		(r.Spec.Stage != "snapshot" && (!shaRE.MatchString(r.Spec.Commit) || r.Spec.PR < 1)) {
 		return p.finish(ctx, e, r, "Failed", "invalid run spec", false)
 	}
 	switch r.Status.Phase {
@@ -418,7 +434,25 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 		}
 		r.Status.SpecHash = specHash(e) // the spec this plan runs with; the approval and the apply are bound to it
 	}
+	// #204: merge and apply of an SSH executor get a fresh certificate; the PR head never does
+	withSSH, err := p.ensureRunSSH(ctx, e, r)
+	if err != nil {
+		return p.finish(ctx, e, r, "Failed", "ssh: "+err.Error(), false)
+	}
 	job := p.renderJob(e, r)
+	if withSSH {
+		p.addRunSSH(job, r)
+		for i := range job.Spec.Template.Spec.InitContainers {
+			if job.Spec.Template.Spec.InitContainers[i].Name == "tool" {
+				p.egressEnvSSH(&job.Spec.Template.Spec.InitContainers[i], e)
+			}
+		}
+		for i := range job.Spec.Template.Spec.Containers {
+			if job.Spec.Template.Spec.Containers[i].Name == "tool" {
+				p.egressEnvSSH(&job.Spec.Template.Spec.Containers[i], e)
+			}
+		}
+	}
 	if err := controllerutil.SetControllerReference(r, job, p.Scheme()); err != nil {
 		return err
 	}
@@ -431,6 +465,12 @@ func (p *ExecutorPoller) start(ctx context.Context, e *v1.Executor, f forgeAPI, 
 		return err
 	}
 	rule := "executor.plan"
+	if r.Spec.Stage == "snapshot" {
+		if err := p.event(ctx, e, r, "executor.snapshot", "low", "start snapshot"); err != nil {
+			log.FromContext(ctx).Error(err, "snapshot event")
+		}
+		return nil
+	}
 	if r.Spec.Action == "apply" {
 		rule = "executor.apply"
 		if err := f.Comment(ctx, r.Spec.PR, fmt.Sprintf("🤖 agentdev executor `%s` (%s): **apply started** on `%s`, plan sha256 `%s` (approval `%s`).",
@@ -485,6 +525,9 @@ func (p *ExecutorPoller) collect(ctx context.Context, e *v1.Executor, f forgeAPI
 	out := ""
 	if pod != "" {
 		out, _ = p.Logs(ctx, p.C.NS, pod, "tool", maxOutput)
+	}
+	if r.Spec.Stage == "snapshot" {
+		return p.finishSnapshot(ctx, e, r, !failed, out)
 	}
 	if failed {
 		return p.report(ctx, e, f, r, "Failed", "the job failed", out)
@@ -751,7 +794,11 @@ func (p *ExecutorPoller) requestApproval(ctx context.Context, e *v1.Executor, f 
 
 // event records a SecurityEvent for an executor run in the agents namespace, where the API copies it to Postgres.
 func (p *ExecutorPoller) event(ctx context.Context, e *v1.Executor, r *v1.ExecutorRun, rule, severity, action string) error {
-	return p.record(ctx, e, fmt.Sprintf("pr-%d", r.Spec.PR), r.Name, rule, severity, action)
+	job := fmt.Sprintf("pr-%d", r.Spec.PR)
+	if r.Spec.Stage == "snapshot" {
+		job = "" // no issue or PR (SecurityEvent job is issue-N, pr-N or empty)
+	}
+	return p.record(ctx, e, job, r.Name, rule, severity, action)
 }
 
 // record writes one SecurityEvent; job may be empty (an event about the Executor itself).
@@ -845,6 +892,13 @@ func (p *ExecutorPoller) prune(ctx context.Context) error {
 func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.Job {
 	apply := r.Spec.Action == "apply"
 	creds, cmd := e.Spec.PlanCredentials, e.Spec.Plan.Command
+	if r.Spec.Stage == "pr" && e.Spec.PRPlan != nil && len(e.Spec.PRPlan.Command) > 0 {
+		cmd = e.Spec.PRPlan.Command // #204: unreviewed heads run checks without servers
+	}
+	snapshot := r.Spec.Stage == "snapshot"
+	if snapshot && e.Spec.Snapshot != nil {
+		cmd = e.Spec.Snapshot.Command // #205: fixed fact gathering, read-only credentials, no checkout
+	}
 	if apply {
 		creds, cmd = e.Spec.ApplyCredentials, e.Spec.Apply.Command
 	}
@@ -864,6 +918,9 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 	toolDir := src
 	if e.Spec.Path != "" {
 		toolDir = src + "/" + e.Spec.Path
+	}
+	if snapshot {
+		toolDir = workDir
 	}
 	restricted := func(uid int64, roRoot bool) *corev1.SecurityContext {
 		return &corev1.SecurityContext{RunAsUser: ptr.To(uid), RunAsGroup: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true),
@@ -896,7 +953,9 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 			Resources: res("10m", "32Mi", "500m", "128Mi")}
 	}
 	var inits, main []corev1.Container
-	if apply {
+	if snapshot {
+		main = []corev1.Container{tool} // no checkout (no repository code runs), no plan file
+	} else if apply {
 		// the plan is checked before the tool starts; a different file never reaches the tool
 		inits = []corev1.Container{checkout, helper("verify", "verify-plan", planFile, r.Spec.PlanHash)}
 		main = []corev1.Container{tool}
@@ -906,7 +965,7 @@ func (p *ExecutorPoller) renderJob(e *v1.Executor, r *v1.ExecutorRun) *batchv1.J
 		main = []corev1.Container{helper("hash", "hash-plan", planFile)}
 	}
 	planVol := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
-	if r.Spec.Stage != "pr" {
+	if r.Spec.Stage != "pr" && r.Spec.Stage != "snapshot" {
 		planVol = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: planVolumeName(e, r.Spec.Commit), ReadOnly: apply}}
 	}
 	labels := withCostLabels(map[string]string{"app": "agentdev-executor", "agentdev/executor": e.Name, "agentdev/stage": r.Spec.Stage}, p.C.CostLabels)

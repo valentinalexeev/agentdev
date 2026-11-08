@@ -16,6 +16,19 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ansible executor stages over SSH certificates, and server snapshots (#204 part 2, #205 decision 4; ADR 0007).
+  `Executor.spec.ssh` gives the merge plan a new 15-minute certificate of principal `agentdev-<executor>-check` (user
+  `agentdev-check`, no sudo) and the apply after the approval one of `agentdev-<executor>-apply` (user `agentdev`),
+  key ID `executor/<run>/<commit>`; the pull request head runs the new `spec.prPlan` and gets no SSH credential
+  (`spec.ssh` requires `prPlan`). Key, certificate, `known_hosts` (`@cert-authority`, `HostKeyAlias`), ssh config and
+  inventory are in Secret `<run>-ssh`, owned by the run and mounted only in the tool container; the Job gets
+  `AGENTDEV_SSH_CONFIG`, `AGENTDEV_SSH_INVENTORY`, `ANSIBLE_SSH_ARGS` and `ANSIBLE_SSH_USETTY=False`. Connections go
+  through the executor egress proxy (`agentdev-operator connect-proxy` as `ProxyCommand`): a second proxy credential
+  `<executor>-ssh`, given only to merge, apply and snapshot Jobs, opens `CONNECT` to the executor's `Ready`
+  SSHTargets (`acl-ssh.conf`, NetworkPolicy `executor-egress-proxy-ssh`). `spec.snapshot` runs a fixed command every
+  `intervalHours` as the check user without a checkout and publishes the redacted output in ConfigMap
+  `agentdev-snapshots` (agents namespace). Ansible vars `ssh`, `pr_plan`, `snapshot`, `snapshot_hours`. Manuals:
+  admin.md "Set up an Ansible executor", "Publish server snapshots"; risk R104. kind e2e: `scripts/e2e-ssh.sh ansible`.
 - SSH certificate authority and server enrolment for executors (#204, part 1 of 2; ADR 0007). step-ca runs in
   `EXEC_NS` (`manifests/step-ca.yaml.tmpl`, Ansible `step_ca_image`), only the operator may connect, and its only
   provisioner is the operator's JWK key: user certificates at most 15 minutes, no extensions, key ID

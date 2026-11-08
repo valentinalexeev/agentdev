@@ -19,6 +19,18 @@ type ExecutorCommand struct {
 	Command []string `json:"command"`
 }
 
+// ExecutorSnapshot is the fixed fact gathering of an executor (#205).
+type ExecutorSnapshot struct {
+	// Command, for example [ansible, all, -i, $(AGENTDEV_SSH_INVENTORY), -m, setup, -a, "gather_subset=!all,hardware"].
+	ExecutorCommand `json:",inline"`
+	// Hours between two snapshots.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=168
+	// +kubebuilder:default=24
+	// +optional
+	IntervalHours int32 `json:"intervalHours,omitempty"`
+}
+
 // ExecutorCredentials are what one phase (plan or apply) of the tool runs with. The Secret's keys become the tool
 // container's environment; the service account carries the cloud identity (GKE Workload Identity annotation). The
 // Kubernetes API token is never mounted.
@@ -66,6 +78,21 @@ type ExecutorSpec struct {
 	Plan ExecutorCommand `json:"plan"`
 	// Apply command: must apply exactly $(PLAN_FILE).
 	Apply ExecutorCommand `json:"apply"`
+	// PRPlan: the command for pull request heads (unreviewed code), instead of plan. Required with ssh: a PR head never
+	// gets a server credential (#204), so it runs checks without servers (for Ansible: --syntax-check, ansible-lint).
+	// +optional
+	PRPlan *ExecutorCommand `json:"prPlan,omitempty"`
+	// SSH: the merge plan and the apply connect to the Ready SSHTargets of this executor (#204, docs/adr/0007) with
+	// short-lived certificates: the merge plan as the check user, the apply as the apply user. The tool container gets
+	// $(AGENTDEV_SSH_CONFIG) (an ssh_config with the targets) and ANSIBLE_SSH_ARGS="-F $(AGENTDEV_SSH_CONFIG)".
+	// +optional
+	SSH bool `json:"ssh,omitempty"`
+	// Snapshot: scheduled fact gathering on the servers (#205 decision 4, #204). Needs ssh. Runs the fixed command with
+	// the check certificate (no checkout, no PR) and publishes its output, clipped and redacted, in ConfigMap
+	// agentdev-snapshots (key <executor>) of the agents namespace. Output is untrusted data for the agents, never a
+	// control decision.
+	// +optional
+	Snapshot *ExecutorSnapshot `json:"snapshot,omitempty"`
 	// Read-only credentials, used for every plan (also of unreviewed pull requests).
 	// +optional
 	PlanCredentials ExecutorCredentials `json:"planCredentials,omitempty"`
@@ -126,6 +153,8 @@ type ExecutorStatus struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.planCredentials) || !has(self.spec.planCredentials.secretName) || self.spec.planCredentials.secretName == 'exec-' + self.metadata.name + '-plan'",message="spec.planCredentials.secretName must be exec-<name>-plan"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.applyCredentials) || !has(self.spec.applyCredentials.secretName) || self.spec.applyCredentials.secretName == 'exec-' + self.metadata.name + '-apply'",message="spec.applyCredentials.secretName must be exec-<name>-apply"
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.planCredentials) || !has(self.spec.planCredentials.serviceAccountName) || !has(self.spec.applyCredentials) || !has(self.spec.applyCredentials.serviceAccountName) || self.spec.planCredentials.serviceAccountName != self.spec.applyCredentials.serviceAccountName",message="plan and apply must use different service accounts"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.snapshot) || (has(self.spec.ssh) && self.spec.ssh)",message="spec.snapshot needs spec.ssh"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.ssh) || !self.spec.ssh || has(self.spec.prPlan)",message="spec.ssh needs spec.prPlan: pull request heads never get server credentials"
 type Executor struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -145,19 +174,22 @@ type ExecutorRunSpec struct {
 	// Executor name.
 	// +kubebuilder:validation:MaxLength=40
 	Executor string `json:"executor"`
-	// plan | apply
-	// +kubebuilder:validation:Enum=plan;apply
+	// plan | apply | snapshot
+	// +kubebuilder:validation:Enum=plan;apply;snapshot
 	Action string `json:"action"`
 	// pr: plan of a pull request head (unreviewed code, result informative only). merge: plan of a merge commit of
-	// the protected branch (the only plan that can be applied). apply: apply of an approved merge plan.
-	// +kubebuilder:validation:Enum=pr;merge;apply
+	// the protected branch (the only plan that can be applied). apply: apply of an approved merge plan. snapshot:
+	// scheduled fact gathering (no commit, no PR, #205).
+	// +kubebuilder:validation:Enum=pr;merge;apply;snapshot
 	Stage string `json:"stage"`
-	// Commit, 40 hex characters (from the forge API, checked by the operator).
-	// +kubebuilder:validation:Pattern=`^[0-9a-f]{40}$`
-	Commit string `json:"commit"`
-	// Pull request number the results are posted to.
-	// +kubebuilder:validation:Minimum=1
-	PR int64 `json:"pr"`
+	// Commit, 40 hex characters (from the forge API, checked by the operator). Empty for snapshot runs.
+	// +kubebuilder:validation:Pattern=`^([0-9a-f]{40})?$`
+	// +optional
+	Commit string `json:"commit,omitempty"`
+	// Pull request number the results are posted to. 0 for snapshot runs.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	PR int64 `json:"pr,omitempty"`
 	// apply: the Approval that allowed it.
 	// +optional
 	// +kubebuilder:validation:MaxLength=63
@@ -211,6 +243,7 @@ type ExecutorRunStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.spec == oldSelf.spec",message="ExecutorRun spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self.spec.stage == 'snapshot' ? (self.spec.action == 'snapshot' && !has(self.spec.commit) && !has(self.spec.pr)) : (self.spec.action != 'snapshot' && has(self.spec.commit) && size(self.spec.commit) == 40 && has(self.spec.pr) && self.spec.pr >= 1)",message="snapshot runs have no commit and no PR; other runs need both"
 type ExecutorRun struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

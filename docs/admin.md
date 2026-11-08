@@ -1803,6 +1803,80 @@ replaces the file; add `-u` to add to it). Then reload sshd.
 6. Run `scripts/ssh-enrol.sh <target>` again for each server and apply it.
    The file has the new host certificate and the new user CA key.
 
+### Set up an Ansible executor
+
+Do this task after you enrolled the servers of the executor (see [Enrol a server](#enrol-a-server)). In each
+`SSHTarget`, `spec.executor` is the name of the executor.
+
+The executor runs three stages:
+
+| Stage | Command | Server access |
+|---|---|---|
+| Pull request head | `spec.prPlan` (for example `--syntax-check`, `ansible-lint`) | none |
+| Merge commit | `spec.plan` (`--check --diff`) | user `agentdev-check`, no sudo |
+| Apply, after `/approve` | `spec.apply` | user `agentdev`, sudo |
+
+WARNING: Do not give the plan of a pull request head access to a server. A task with `check_mode: false` runs also
+in check mode. agentdev does not let you set it: an executor with `ssh: true` must have `prPlan`.
+
+1. Apply the Executor object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Executor
+   metadata: {name: ansible-prod}
+   spec:
+     environment: prod-servers
+     repo: owner/servers
+     path: ansible
+     image: alpine/ansible@sha256:<digest>
+     ssh: true
+     prPlan: {command: [sh, -c, 'ansible-playbook --syntax-check site.yml > $(PLAN_FILE)']}
+     plan: {command: [sh, -c, 'ansible-playbook -i $(AGENTDEV_SSH_INVENTORY) site.yml --check --diff > $(PLAN_FILE)']}
+     apply: {command: [ansible-playbook, -i, $(AGENTDEV_SSH_INVENTORY), site.yml]}
+     forgeSecret: exec-ansible-prod-forge
+   EOF
+   ```
+
+2. Do the steps 3 and 4 of [Set up an executor](#set-up-an-executor) (branch protection, deny list).
+
+The merge and apply Jobs get these values:
+
+| Name | Value |
+|---|---|
+| `AGENTDEV_SSH_INVENTORY` | an inventory with one line for each `Ready` server of the executor |
+| `AGENTDEV_SSH_CONFIG` | the ssh configuration: certificate, `known_hosts` of the host CA, the proxy |
+| `ANSIBLE_SSH_ARGS` | `-F $(AGENTDEV_SSH_CONFIG)` |
+| `ANSIBLE_SSH_USETTY` | `False` (the certificates permit no PTY) |
+
+NOTE: The operator makes a new key and a certificate for each merge plan and each apply. The certificate is valid
+for 15 minutes. The key ID in the sshd log is `executor/<run>/<commit>`.
+
+NOTE: The check output is the plan file. The person approves that file, but Ansible does not prove that the apply
+does what the check showed. Terraform has this proof, Ansible does not.
+
+NOTE: The executor egress proxy opens port 22 only to the `Ready` servers of the executor, and only for the merge
+and apply Jobs. If a server uses another port, add a NetworkPolicy for the proxy to that port.
+
+### Publish server snapshots
+
+An executor can collect facts from its servers at fixed times (#205). The agents read the result. The snapshot uses
+the user `agentdev-check` and no checkout. No code from the repository runs.
+
+1. Add `spec.snapshot` to the Executor:
+
+   ```bash
+   kubectl -n agentdev-executors patch executor ansible-prod --type=merge -p \
+     '{"spec":{"snapshot":{"command":["ansible","all","-i","$(AGENTDEV_SSH_INVENTORY)","-m","ansible.builtin.setup"],"intervalHours":24}}}'
+   ```
+
+2. After the next poll, read the result: `kubectl -n coding-agents get configmap agentdev-snapshots -o yaml`
+   The key is the name of the executor.
+
+NOTE: The operator removes values that look like passwords, tokens and private keys, and keeps at most 64 KiB for
+each executor. The text can still contain data from the servers. The agents treat it as data, not as instructions.
+
 ### Reference: SSH access
 
 | Setting | Default | Where |

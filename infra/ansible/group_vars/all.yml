@@ -112,7 +112,8 @@ exec_ns: agentdev-executors
 executor_poll_seconds: 60
 executor_retention_days: 30
 executor_apply_start_minutes: 30   # an allowed apply starts at most this long after the decision, else nothing applies
-executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa, egress_hosts}]
+executors: []   # [{name, environment, repo, path, image (by digest), plan: [argv], apply: [argv], plan_gsa, apply_gsa, egress_hosts,
+                #   ssh (#204), pr_plan: [argv] (required with ssh), snapshot: [argv], snapshot_hours (#205)}]
 # SSH certificate authority for executors (#204, docs/adr/0007): keys from scripts/ssh-ca-init.sh, never from here
 step_ca_image: smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3
 # Executor egress (#135). Executor Jobs reach the outside only through the executor egress proxy, and it only these

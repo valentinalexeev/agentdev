@@ -174,11 +174,56 @@ spec:
                     pattern: ^exec-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 type: object
+              prPlan:
+                description: |-
+                  PRPlan: the command for pull request heads (unreviewed code), instead of plan. Required with ssh: a PR head never
+                  gets a server credential (#204), so it runs checks without servers (for Ansible: --syntax-check, ansible-lint).
+                properties:
+                  command:
+                    items:
+                      maxLength: 1024
+                      type: string
+                    maxItems: 32
+                    minItems: 1
+                    type: array
+                required:
+                - command
+                type: object
               repo:
                 description: Repository, owner/name.
                 maxLength: 201
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
+              snapshot:
+                description: |-
+                  Snapshot: scheduled fact gathering on the servers (#205 decision 4, #204). Needs ssh. Runs the fixed command with
+                  the check certificate (no checkout, no PR) and publishes its output, clipped and redacted, in ConfigMap
+                  agentdev-snapshots (key <executor>) of the agents namespace. Output is untrusted data for the agents, never a
+                  control decision.
+                properties:
+                  command:
+                    items:
+                      maxLength: 1024
+                      type: string
+                    maxItems: 32
+                    minItems: 1
+                    type: array
+                  intervalHours:
+                    default: 24
+                    description: Hours between two snapshots.
+                    format: int32
+                    maximum: 168
+                    minimum: 1
+                    type: integer
+                required:
+                - command
+                type: object
+              ssh:
+                description: |-
+                  SSH: the merge plan and the apply connect to the Ready SSHTargets of this executor (#204, docs/adr/0007) with
+                  short-lived certificates: the merge plan as the check user, the apply as the apply user. The tool container gets
+                  $(AGENTDEV_SSH_CONFIG) (an ssh_config with the targets) and ANSIBLE_SSH_ARGS="-F $(AGENTDEV_SSH_CONFIG)".
+                type: boolean
             required:
             - apply
             - environment
@@ -276,6 +321,11 @@ spec:
           rule: '!has(self.spec.planCredentials) || !has(self.spec.planCredentials.serviceAccountName)
             || !has(self.spec.applyCredentials) || !has(self.spec.applyCredentials.serviceAccountName)
             || self.spec.planCredentials.serviceAccountName != self.spec.applyCredentials.serviceAccountName'
+        - message: spec.snapshot needs spec.ssh
+          rule: '!has(self.spec.snapshot) || (has(self.spec.ssh) && self.spec.ssh)'
+        - message: 'spec.ssh needs spec.prPlan: pull request heads never get server
+            credentials'
+          rule: '!has(self.spec.ssh) || !self.spec.ssh || has(self.spec.prPlan)'
     served: true
     storage: true
     subresources:
