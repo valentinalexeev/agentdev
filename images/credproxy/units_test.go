@@ -20,8 +20,15 @@ func TestUnitsWeighted(t *testing.T) {
 		t.Errorf("units %d", got)
 	}
 	raw := int64(100 + 10000 + 200)
-	if got*100/raw >= 25 { // far below the raw count (acceptance: cache-heavy run well under its raw tokens)
+	if got*100/raw >= 25 { // 2% output at weight 5: about 20%
 		t.Errorf("units %d not well below raw %d", got, raw)
+	}
+	// acceptance of #196: a cache-read-heavy run uses less than 20% of its raw token count. Shape of a Claude Code
+	// turn: ~97% cache read, ~1% each of fresh input, cache write and output
+	run := tokenCounts{tokIn: 300, tokCacheWrite5m: 300, tokCacheRead: 29000, tokOut: 400}
+	runRaw := int64(300 + 300 + 29000 + 400)
+	if u := p.units("claude-sonnet-4-5-20250929", run); u*100/runRaw >= 20 {
+		t.Errorf("cache-heavy run: %d units of %d raw tokens, want < 20%%", u, runRaw)
 	}
 	for model, m := range map[string]float64{"claude-opus-4-1-20250805": 5, "claude-opus-4-20250514": 5, "claude-opus-4-5-20251101": 1.666667,
 		"claude-opus-5": 1.666667, "claude-opus-5-5": 1.333333, "claude-sonnet-5-5": 0.666667, "claude-haiku-4-5": 0.333333,
@@ -134,11 +141,11 @@ func TestJobsBoundedAndExpire(t *testing.T) {
 		now = now.Add(time.Second)
 		j.add("a", "job-"+string(rune('a'+i%26))+jsonInt(int64(i)), 1, tokenCounts{})
 	}
-	if n := len(j.m["a"]); n != jobsPerAgent {
+	if n := len(j.m["a"]); n > jobsPerAgent {
 		t.Errorf("%d jobs kept", n)
 	}
-	if j.used("a", "job-a0") != 0 {
-		t.Error("oldest job not dropped")
+	if j.used("a", "job-a0") != 0 || j.used("a", otherJob) != 51 {
+		t.Errorf("evicted jobs not folded into %s: %d", otherJob, j.used("a", otherJob))
 	}
 	now = now.Add(jobRetention + time.Hour)
 	if len(j.snapshot(defaultPrices())) != 0 {
@@ -157,4 +164,29 @@ func captureOut(t *testing.T) *strings.Builder {
 	out = b
 	t.Cleanup(func() { out = os.Stdout })
 	return b
+}
+
+// Review of #275: an agent sending many fresh job ids cannot evict its expensive jobs from the report.
+func TestJobsChurnKeepsExpensiveJobs(t *testing.T) {
+	j := newJobs()
+	now := time.Unix(1_800_000_000, 0)
+	j.now = func() time.Time { return now }
+	j.add("a", "issue-1", 50_000, tokenCounts{})
+	for i := 0; i < 5*jobsPerAgent; i++ {
+		now = now.Add(time.Second)
+		j.add("a", "noise-"+jsonInt(int64(i)), 1, tokenCounts{})
+	}
+	if j.used("a", "issue-1") != 50_000 {
+		t.Error("the expensive job was evicted by churn")
+	}
+	var sum int64
+	for _, e := range j.m["a"] {
+		sum += e.Units
+	}
+	if sum != 50_000+5*jobsPerAgent || len(j.m["a"]) > jobsPerAgent {
+		t.Errorf("units lost or too many jobs: %d in %d", sum, len(j.m["a"]))
+	}
+	if cleanJob(otherJob) != "" {
+		t.Error("an agent may send the reserved job id")
+	}
 }

@@ -22,6 +22,14 @@ type agentSpend struct {
 	Stamps [bucketCount]int64 `json:"stamps"` // unix hour of each bucket
 }
 
+// stateFile is the persisted spend; Unit marks the counting unit.
+type stateFile struct {
+	Unit  string                 `json:"unit"`
+	Spend map[string]*agentSpend `json:"spend"`
+}
+
+const stateUnit = "units"
+
 type budget struct {
 	mu       sync.Mutex
 	spend    map[string]*agentSpend
@@ -36,7 +44,15 @@ func newBudget(def int64, dir, state string) *budget {
 	b := &budget{spend: map[string]*agentSpend{}, def: def, dir: dir, state: state, now: time.Now, exceeded: map[string]bool{}}
 	if state != "" {
 		if data, err := os.ReadFile(state); err == nil {
-			_ = json.Unmarshal(data, &b.spend)
+			// only state written in units (#196): a file from the token-counting proxy, or without the marker, is
+			// dropped, so an in-place image change never reads token hours as units (review of #275)
+			var f stateFile
+			if json.Unmarshal(data, &f) == nil && f.Unit == stateUnit {
+				b.spend = f.Spend
+			}
+			if b.spend == nil {
+				b.spend = map[string]*agentSpend{}
+			}
 			for k, v := range b.spend {
 				if !agentRe.MatchString(k) || v == nil {
 					delete(b.spend, k)
@@ -114,7 +130,7 @@ func (b *budget) add(agent string, units int64) {
 	s.Hours[i] += units
 	var data []byte
 	if b.state != "" {
-		data, _ = json.Marshal(b.spend)
+		data, _ = json.Marshal(stateFile{Unit: stateUnit, Spend: b.spend})
 	}
 	b.mu.Unlock()
 	if data != nil {
