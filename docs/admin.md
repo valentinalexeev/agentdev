@@ -2101,6 +2101,14 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 4. Make sure that the dry run of the pull request has no error. If the dry run shows `no value for ${...}`, the new
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
+5. Look for the `template-drift` warning in the job summary of the pull request (#317). If there is a warning,
+   copy the changed parts of `examples/deployment/gcp-gke` at the new release into your repository.
+   An upgrade does not change your copy of `.github/workflows/deploy.yml`. You must copy it.
+
+You can also run the check on your computer:
+`<agentdev checkout>/scripts/template-drift.sh <deployment repo dir>`. The script reads `ref=` from
+`terraform/main.tf`. It shows the diff of `deploy.yml`, the blocks and module arguments of `main.tf`, and the keys
+of `ansible/instance.yml`. Instance values are not compared. With `--strict`, the script exits 1 on drift.
 
 ### Upgrade the local installation
 

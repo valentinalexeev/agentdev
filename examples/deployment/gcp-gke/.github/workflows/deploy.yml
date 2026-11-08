@@ -11,6 +11,22 @@ on:
 concurrency: {group: deploy, cancel-in-progress: false}   # never two applies at once
 permissions: {contents: read, id-token: write, pull-requests: write}
 jobs:
+  template-drift:   # agentdev #317: warn when this copy of the template is behind the pinned release; no credentials
+    if: github.event_name == 'pull_request'
+    permissions: {contents: read}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare with examples/deployment/gcp-gke of the pinned release (warning in the job summary)
+        run: |
+          ref=$(grep -oE 'agentdev//infra/terraform\?ref=[^"]+' terraform/main.tf | sed 's/.*ref=//')
+          git clone --quiet --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev-drift
+          git -C ../agentdev-drift fetch --quiet --depth 1 origin "refs/tags/$ref:refs/tags/$ref"
+          if [ -x ../agentdev-drift/scripts/template-drift.sh ]; then
+            AGENTDEV_REPO=../agentdev-drift ../agentdev-drift/scripts/template-drift.sh .
+          else
+            echo "::warning title=template drift::agentdev $ref has no scripts/template-drift.sh (added in 1.1.0)"
+          fi
   infra:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: terraform}}
