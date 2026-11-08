@@ -191,6 +191,12 @@ See the CHANGELOG for the conversion.
 
 ### Set the budget of one agent
 
+In the web UI (agentdev administrators): open **Cost**, choose **Change budget** next to the agent, enter the units
+(0 = no limit, empty = the default) and save. The change is in the audit log and is a `budget-changed` security
+event.
+
+Or with kubectl:
+
 1. Run this command (use 0 for no limit):
    `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
 2. Wait one minute. Kubernetes updates the file in the proxy pod, and the proxy reads it at the next request.
@@ -213,7 +219,9 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
 
 ### Look at the spend
 
-1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.
+1. Open the web UI. The column **Claude units (24 h)** on **Agents** shows the units of each agent and the budget
+   (and the estimated USD when prices are set). The page **Cost** shows the cost of each job (issue or pull request)
+   of the last 7 days, with the share of cache reads.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
 

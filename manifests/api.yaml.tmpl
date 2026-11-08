@@ -19,6 +19,9 @@ rules:
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
+# Claude budgets (#196, ADR 0002 U5): admins edit per-agent limits in the UI; claude-proxy enforces them. This one
+# ConfigMap only (the proxy's prices stay deploy-time configuration).
+- {apiGroups: [""], resources: [configmaps], resourceNames: [claude-proxy-budgets], verbs: [get, patch]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

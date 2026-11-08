@@ -89,7 +89,7 @@ func main() {
 		perms.github = gh
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
-	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents}
+	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents, events: s.add}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		dc := newDecider(agents, agents, gp, perms)
 		dc.github = gh
@@ -190,9 +190,11 @@ type agent struct {
 	Paused        bool     `json:"paused"`
 	// SecurityEvents in the last 7 days (#70)
 	SecurityEvents int `json:"securityEvents"`
-	// Claude tokens in the last 24 h and the agent's limit (0 = none), from the credential proxy (#66, budget.go)
-	BudgetUsed  *int64 `json:"budgetUsed,omitempty"`
-	BudgetLimit *int64 `json:"budgetLimit,omitempty"`
+	// Claude cost units in the last 24 h and the agent's limit (0 = none), from the credential proxy (#66, #196,
+	// budget.go); BudgetUSD only when the proxy has USD prices (owner decision 2 of #196)
+	BudgetUsed  *int64   `json:"budgetUsed,omitempty"`
+	BudgetLimit *int64   `json:"budgetLimit,omitempty"`
+	BudgetUSD   *float64 `json:"budgetUsd,omitempty"`
 }
 
 func routes(verify verifier, agents agentLister, events eventStore, wr *writer) http.Handler {
@@ -235,6 +237,11 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
 			mux.Handle("POST /api/approvals/{name}/decision", auditAuth("approval-decision", auth(verify, http.HandlerFunc(ar.decide))))
 		}
+	}
+	// Claude cost (#196, costs.go): per-job cost for every signed-in user, budget edits for admins (audited)
+	mux.Handle("GET /api/costs", auth(verify, http.HandlerFunc(getCosts)))
+	if wr != nil {
+		mux.Handle("PUT /api/costs/budgets/{name}", auditAuth("set-budget", auth(verify, http.HandlerFunc(wr.putAgentBudget))))
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
 		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
