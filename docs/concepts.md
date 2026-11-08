@@ -213,6 +213,14 @@ runner can start any program. So the security boundary is the pod, not the list 
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
 
+## Project secrets
+
+A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can
+use but not read (#202, ADR 0003). A `ProjectSecret` object says who uses it and how (`broker` or `env`); the value
+stays in the secret store (GCP Secret Manager on GKE, a Kubernetes namespace on kind). External Secrets Operator
+copies it into a Secret next to the credential broker, never into an agent pod. Setup: `docs/admin.md`, "Project
+secrets".
+
 ## What is planned
 
 | Topic | Issue |
