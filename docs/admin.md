@@ -1710,7 +1710,8 @@ is in the secret store, never in the object.
 
 | Field | Values |
 |---|---|
-| `scope` | `project` (all agents of `spec.project`) or `agent` (only `spec.agent`) |
+| `scope` | `project` (all agents of `spec.project` on `spec.forge`) or `agent` (only `spec.agent`, and only while it works on `spec.project` on `spec.forge`) |
+| `forge` | `gitea` (default) or `github`. A repository is the pair of forge and name: `acme/app` on Gitea is not `acme/app` on GitHub |
 | `mode` | `broker` (the broker adds the value to requests for `spec.broker.upstream`) or `env` (the agent can read the value, see below) |
 
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it

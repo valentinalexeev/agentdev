@@ -46,11 +46,13 @@ out=$(k -n "$ns" apply -f - 2>&1 <<EOF
 apiVersion: agentdev.dev/v1alpha1
 kind: ProjectSecret
 metadata: {name: e2e-env}
-spec: {scope: agent, agent: a, mode: env, env: {name: ANTHROPIC_API_KEY, riskAccepted: true}}
+spec: {scope: agent, agent: a, project: owner/repo, mode: env, env: {name: ANTHROPIC_API_KEY, riskAccepted: true}}
 EOF
 ) && no "reserved env name accepted" || { [[ "$out" == *"reserved variable name"* ]] && ok "CEL refuses a reserved env name" || no "unexpected: $out"; }
 out=$(k -n "$ns" patch projectsecret "$name" --type=merge -p '{"spec":{"project":"other/repo"}}' 2>&1) \
   && no "project changed" || { [[ "$out" == *immutable* ]] && ok "CEL keeps the project immutable" || no "unexpected: $out"; }
+out=$(k -n "$ns" patch projectsecret "$name" --type=merge -p '{"spec":{"forge":"github"}}' 2>&1) \
+  && no "forge changed" || { [[ "$out" == *immutable* ]] && ok "CEL keeps the forge immutable" || no "unexpected: $out"; }
 
 # admission policies (as cluster admin: the rules hold for everyone except ESO)
 out=$(k -n "$ns" apply -f - 2>&1 <<EOF
@@ -73,6 +75,16 @@ spec:
   data: [{secretKey: value, remoteRef: {key: anything}}]
 EOF
 ) && { no "ExternalSecret with a free name accepted"; k -n "$ns" delete externalsecret forge-copy >/dev/null; } || ok "policy refuses an ExternalSecret not named ps-<n>"
+out=$(k -n "$ns" apply -f - 2>&1 <<EOF
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: {name: ps-$name}
+spec:
+  secretStoreRef: {name: agentdev-secrets, kind: SecretStore}
+  target: {name: ps-$name, creationPolicy: Owner}
+  dataFrom: [{extract: {key: agentdev-ps-other}}]
+EOF
+) && no "ExternalSecret with dataFrom accepted" || ok "policy refuses dataFrom"
 out=$(k -n "$ns" create secret generic ps-fake --from-literal=value=x 2>&1) \
   && { no "ps-* Secret written by a person"; k -n "$ns" delete secret ps-fake >/dev/null; } || ok "policy reserves ps-* Secrets for ESO"
 out=$(k -n "$ns" --as=system:serviceaccount:${PLATFORM_NS}:agentdev-operator apply -f - 2>&1 <<EOF
