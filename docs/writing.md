@@ -5,6 +5,9 @@ troubleshooting (`troubleshooting.md`) and the private-deployment guide (`privat
 **ASD-STE100 Simplified Technical English** (STE). The design pages (`concepts.md`, `security.md`,
 `security-model.md`, `release.md`, `adr/`) are for engineers and use normal technical English.
 
+Text on GitHub tickets also uses STE: issue bodies, issue and PR comments, PR descriptions and review comments
+(`CLAUDE.md` §2). Code, commands, file names and quoted output stay as they are.
+
 STE makes the manuals easy to read for people whose first language is not English, and easy to translate. Each
 word has one meaning, and each procedure gives one action per step.
 
@@ -164,6 +167,11 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | registry cache | the agentdev service `registry-cache` that keeps copies of npm, PyPI and Go packages for the agents (#203) |
 | remote repository | an Artifact Registry repository that keeps copies of the packages of a public registry |
 | upstream | the public registry from which a registry cache gets the packages, for example `registry.npmjs.org` |
+| credential broker | the service that adds the value of a project secret to the requests of an agent; the agent does not get the value (#202) |
+| External Secrets Operator | the program that copies a value from the secret store into a Kubernetes Secret |
+| project secret | a credential that the agents of one project, or one agent, can use (`ProjectSecret` object, #202) |
+| rotate | to replace the value of a credential with a new value |
+| secret store | the place that keeps the values of project secrets: GCP Secret Manager on GKE, a Kubernetes namespace on `kind` |
 
 Always write the name of the cluster tool as code: `kind`. In STE, "kind" alone is not approved (use TYPE).
 
