@@ -16,6 +16,9 @@ api_forge_url: "{{ api.forge_url | default(forge_url) }}"
 # forge logins that never decide an approval (service accounts, executor accounts: docs/security.md R83);
 # APPROVAL_DENY_ACCOUNTS on kind. The API's own token user is excluded automatically.
 api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
+# agent caps (#27) for POST /api/agents (MAX_AGENTS, MAX_AGENTS_PER_USER on kind); 0 = no cap. Checked in tasks/main.yml.
+api_max_agents: "{{ api.max_agents | default(0) }}"
+api_max_agents_per_user: "{{ api.max_agents_per_user | default(0) }}"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
 # Where secrets come from: gcp (Secret Manager, deploy.yml) or files (kind.yml, #106: api_secrets_dir).
 api_secret_source: gcp

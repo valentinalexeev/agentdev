@@ -26,7 +26,8 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "api_db_retention_days=${retention}" -e "forge_kind=${FORGE_KIND}" -e "github_url=${GITHUB_URL:-https://github.com}" \
   -e "api_forge_ns=${FORGE_NS}" -e "api_forge_host_url=${FORGE_HOST_URL}" -e "api_forge_admin_user=${FORGE_ADMIN_USER}" \
   -e "api_forge_repo=${REPO}" -e "api_secrets_dir=${SPIKE_DIR}/.secrets/platform" \
-  -e "api_github_app_dir=${SPIKE_DIR}/.secrets/github-app" -e "${vars}"
+  -e "api_github_app_dir=${SPIKE_DIR}/.secrets/github-app" -e "${vars}" \
+  -e "api_max_agents=${MAX_AGENTS:-0}" -e "api_max_agents_per_user=${MAX_AGENTS_PER_USER:-0}"   # agent caps (#27)
 s=$(( ($(ms_now)-t0)/1000 ))
 record "agentdev API up in ${PLATFORM_NS} (issuer ${API_OIDC_ISSUER}, Ansible, ${s}s)"
 echo "  API: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/agentdev-api 8088:8080  ->  http://localhost:8088/api/agents"
