@@ -22,3 +22,7 @@ authentik_trusted_proxy_allow_wide: false
 authentik_db_pod: platform-db-0
 # break-glass (docs/admin.md): akadmin is added to agentdev-admins once; add only, never removed by the playbook
 authentik_breakglass_admin_group: true
+# kind (#106, kind.yml): secrets as files in .secrets/platform instead of Secret Manager
+authentik_secret_source: secret_manager    # files: authentik_secrets_dir (kind)
+authentik_secrets_dir: "{{ repo_root }}/.secrets/platform"
+authentik_file_keys: [pg-authentik, authentik-secret-key, authentik-secret-key2, authentik-admin]

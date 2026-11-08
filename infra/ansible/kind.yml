@@ -11,9 +11,10 @@
 #   ansible-playbook kind.yml --tags agents            # was ./run.sh 06 (needs the operator: ./run.sh 12)
 #   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
+#   ansible-playbook kind.yml --tags authentik         # was ./run.sh 09 (after mcp)
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06, botboard: 07,
-# mcp: 08.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06, botboard:
+# 07, mcp: 08, authentik: 09.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -29,6 +30,7 @@
     mcp_projects: []
     mcp_allowed_hosts: []
     obs_mcp: {enabled: false}
+    authentik: {version: 2026.8.5, admin_email: admin@agentdev.dev}   # config.env AUTHENTIK_VERSION, AUTHENTIK_ADMIN_EMAIL
   tasks:
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
@@ -92,3 +94,26 @@
         platform_secret_source: files
         platform_kind_cluster: "{{ kind_cluster_name }}"
       tags: [mcp]
+
+    # authentik on the platform Postgres: the GKE role (secrets in .secrets/platform), then the kind-only checks and the
+    # company SSO stand-in (#122). Not in the default run, as ./run.sh without arguments does not run step 09.
+    - name: The platform Postgres is deployed (run --tags mcp first)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        tasks_from: precheck
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
+
+    - name: Identity provider authentik (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik
+        apply: {tags: [authentik]}
+      vars:
+        authentik_secret_source: files
+      tags: [authentik, never]
+
+    - name: Membership check of agentdev-admins, company SSO stand-in (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
