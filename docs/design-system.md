@@ -232,6 +232,7 @@ with no work, not an error.
 | Board | `ad-board`, `ad-col-plan / build / review / done` | Work cards by phase; the review column is the person's turn. One column per screen on phones. |
 | Empty state | `ad-empty` | Says what will appear and how to make it appear. |
 | Toast | `ad-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
+| Health lamp | `ad-health`, `-ok / -degraded / -down / -zero` | Platform parts only (API, router, operator). Green means healthy. Agents never use it: their lamp is amber because amber is the agent, and a running agent is activity, not health. |
 | Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, projects, agents and commands. No one-key approve anywhere. |
 | Project scope | `ad-scope` | Left of the top bar: the projects every page shows and their count. Opens a palette of projects, sorted by what waits. |
 | Group header | `ad-group-head` (lists), `ad-group-row` and `ad-group-btn` (tables) | A list groups itself above about 10 items. The header has the name, the urgency and the count. A table group folds; `aria-expanded` on the button. |

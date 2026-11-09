@@ -264,3 +264,15 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
   .ad-bottombar .ad-nav svg { width: 20px; height: 20px; }
   .ad-bottombar .ad-count { position: absolute; top: 6px; left: calc(50% + 6px); margin: 0; }
 }
+
+/* Health lamp: platform parts (API, router, operator...). Not for agents: an agent's lamp is amber because amber is
+   the agent, and running is not "good" (idle at zero pods is normal). A platform part uses traffic-light health. */
+.ad-health { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); }
+.ad-health-dot { width: 10px; height: 10px; box-sizing: border-box; border-radius: var(--radius-lamp); border: 1.5px solid var(--line-strong); flex: none; }
+.ad-health-ok { color: var(--ok); }
+.ad-health-ok .ad-health-dot { background: var(--ok); border-color: var(--ok); }
+.ad-health-degraded { color: var(--lamp-ink); }
+.ad-health-degraded .ad-health-dot { background: var(--lamp); border-color: var(--lamp-ink); border-radius: var(--radius-sm); }
+.ad-health-down { color: var(--danger); }
+.ad-health-down .ad-health-dot { background: var(--danger); border-color: var(--danger); border-radius: var(--radius-sm); }
+.ad-health-zero .ad-health-dot { background: transparent; }
