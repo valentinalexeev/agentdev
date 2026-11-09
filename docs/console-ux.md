@@ -6,7 +6,8 @@ architecture, screens and phases. The visual language is the [design system](des
 components are in `design-system/console.css`, and `design-system/console-prototype.html` is a clickable prototype
 with example data.
 
-Status: proposal. Nothing here is built yet. The open decisions are at the end.
+Status: proposal. Nothing here is built yet. The phases are tracked in #340 (sub-issues #341 to #347); the open
+decisions are at the end and on #340.
 
 ## 1. The console's job
 
@@ -316,13 +317,13 @@ Every new endpoint keeps the rules of the API: bearer token, permission check on
 
 | Phase | Scope | API change | Issues |
 |---|---|---|---|
-| 1 | Adopt the design system in `images/ui`: shell, rail, lamps, tags, tables, drawer, dark theme, favicon | none | new |
-| 2 | Today inbox (client-side), two-axis agent state, connection states, project scope, grouping above 10 items, Projects page | none (filters later) | new, #339 |
-| 3 | Responsive layout and PWA manifest | none | #338 (part) |
-| 4 | Agent drawer, Audit page, Platform page | agent detail, platform | new |
-| 5 | Work board, live stream | jobs, stream | new |
-| 6 | Chat page: sessions, thread, permission cards, issue drafts, terminal view | session API, session server | #38, #338 |
-| 7 | PWA install and Web Push for approvals and stopped agents | push | #338 |
+| 1 | Adopt the design system in `images/ui`: shell, rail, lamps, tags, tables, drawer, dark theme, favicon | none | #341 |
+| 2 | Today inbox (client-side), two-axis agent state, connection states, project scope, grouping above 10 items, Projects page | none (filters later) | #342, #339 |
+| 3 | Responsive layout and PWA manifest | none | #343, #338 |
+| 4 | Agent drawer, Audit page, Platform page | agent detail, platform | #344 |
+| 5 | Work board, live stream | jobs, stream | #345 |
+| 6 | Chat page: sessions, thread, permission cards, issue drafts, terminal view | session API, session server | #346, #38, #338 |
+| 7 | PWA install and Web Push for approvals and stopped agents | push | #347, #338 |
 
 ## 13. Open decisions
 
