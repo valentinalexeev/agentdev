@@ -766,11 +766,13 @@ const TITLES = Object.fromEntries([...NAV, ...ADMIN, ['more', 'More']].map(([id,
 function go(v) { location.hash = v; }
 function render() {
   const view = (location.hash.slice(1) || 'today').split('?')[0];
-  const v = V[view] ? view : 'today';
+  // only the page names in VIEWS: a name from the URL never reaches a property lookup on an object
+  const VIEWS = new Map(Object.entries(V));
+  const v = VIEWS.has(view) ? view : 'today';
   renderNav(v); renderConn();
   document.getElementById('shell').classList.toggle('ad-shell-fill', v === 'chat');
   document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
-  document.getElementById('main').innerHTML = V[v](); fill(document.body);
+  document.getElementById('main').innerHTML = VIEWS.get(v)(); fill(document.body);
 }
 function theme() {
   const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
