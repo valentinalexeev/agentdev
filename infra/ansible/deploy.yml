@@ -691,6 +691,7 @@
             forge: "{{ forge_kind }}"
             claudeSecret: "{{ ('claude-' + item.name) if (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list) else 'claude-shared' }}"
             maxConcurrent: "{{ (item.max_concurrent | default(max_concurrent)) | int }}"
+            maxTurns: "{{ (item.max_turns | default(max_turns)) | int }}"
             scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}

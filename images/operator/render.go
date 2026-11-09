@@ -36,6 +36,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if maxc == 0 {
 		maxc = 2
 	}
+	maxTurns := a.Spec.MaxTurns // #336
+	if maxTurns <= 0 {
+		maxTurns = 40
+	}
 	labels := withCostLabels(map[string]string{"app": "coding-agent", "agent": n}, r.D.CostLabels)
 
 	if s.Labels == nil {
@@ -129,7 +133,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
+			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
