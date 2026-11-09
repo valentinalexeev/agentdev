@@ -28,8 +28,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   work card, loop strip) and `console.css` (app shell, navigation, connection state, banner, KPI tile, inbox, data
   table, filters, drawer, untrusted text, timeline, board, empty state, toast, command palette, phone bottom bar).
   `docs/console-ux.md`: who uses the console, daily use, research of comparable products, information architecture,
-  screens, platform states (#339), mobile (#338), needed API and phases. `console-prototype.html` shows every
-  screen with example data.
+  screens, platform states (#339), mobile (#338), rules for 15 to 30 projects (project scope, grouped inbox and agents,
+  wall, phase matrix, Projects page), needed API and phases. `console-prototype.html` shows every screen with a small
+  and a large example.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation

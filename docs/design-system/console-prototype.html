@@ -66,6 +66,8 @@ a { color: var(--link); }
   .p-user span { display: none; }
   .p-specimen > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+@media (max-width: 760px) { #crumbs { display: none; } .ad-scope { max-width: 46vw; } }
+.ad-rail-foot .ad-seg button { padding: 4px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -76,12 +78,15 @@ a { color: var(--link); }
       agentdev
     </a>
     <nav class="ad-rail-group" id="nav-main"></nav>
-    <nav class="ad-rail-group" id="nav-admin" aria-label="Administration"><span class="ad-rail-head ad-label">Admin</span></nav>
+    <nav class="ad-rail-group" id="nav-admin" aria-label="Administration"></nav>
     <div class="ad-rail-foot">
+      <span class="ad-label ad-muted">Example size</span>
+      <div class="ad-seg" role="group" aria-label="Example size" id="size-rail"></div>
       <span class="ad-label ad-muted">valabs · v0.9.0</span>
     </div>
   </aside>
   <header class="ad-topbar">
+    <button class="ad-scope" id="scope" type="button" aria-haspopup="dialog"></button>
     <div class="ad-crumbs" id="crumbs"></div>
     <button class="ad-search" id="open-palette" type="button" aria-label="Search and commands"><span data-i="search"></span><span>Search or jump to</span><span class="ad-kbd">Ctrl K</span></button>
     <span class="ad-conn" id="conn" role="status"></span>
@@ -99,12 +104,14 @@ a { color: var(--link); }
 (() => {
 'use strict';
 // ---------- icons (Lucide outlines, 24px viewBox) ----------
+const SHIELD = '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>';
 const P = {
   inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  projects: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   work: '<path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/>',
   agents: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
-  approval: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
-  security: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  approval: SHIELD + '<path d="m9 12 2 2 4-4"/>',
+  security: SHIELD + '<path d="M12 8v4"/><path d="M12 16h.01"/>',
   usage: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
   audit: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
   platform: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
@@ -122,107 +129,182 @@ const P = {
   more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   blocked: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
 };
 const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fill = (root) => root.querySelectorAll('[data-i]').forEach((el) => { el.outerHTML = ic(el.dataset.i); });
 
-// ---------- example data (clearly fictional) ----------
+// ---------- example data (fictional): a small and a large instance ----------
 const now = Date.now(), min = 60e3, hr = 3600e3;
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-const ago = (t) => { const m = Math.round((now - t) / min); return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+const ago = (t) => { const m = Math.round((now - t) / min); return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 const left = (t) => { const m = Math.round((t - now) / min); return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`; };
+const short = (repo) => repo.split('/')[1];
 
-const agents = [
-  { name: 'alice', repos: ['acme/shop-api'], life: 'running', jobs: 2, max: 2, tokens: 412000, budget: 1000000, events: 0, attn: 'you', why: '1 approval waits' },
-  { name: 'erin', repos: ['acme/shop-api'], life: 'starting', jobs: 1, max: 2, tokens: 96000, budget: 1000000, events: 0, attn: 'ok' },
-  { name: 'bob', repos: ['acme/infra-live'], life: 'idle', jobs: 0, max: 1, tokens: 38000, budget: 500000, events: 0, attn: 'you', why: '1 question waits' },
-  { name: 'carol', repos: ['acme/web'], life: 'paused', jobs: 0, max: 2, tokens: 220000, budget: 1000000, events: 4, attn: 'guardrail', why: 'paused by the operator: high event egress-denied' },
-  { name: 'dave', repos: ['acme/mobile'], life: 'paused', jobs: 0, max: 2, tokens: 710000, budget: 800000, events: 0, attn: 'usage', why: 'weekly window 92% of 90% limit, until Thu 09:00' },
-  { name: 'frank', repos: ['acme/data-jobs'], life: 'running', jobs: 1, max: 2, tokens: 150000, budget: 500000, events: 1, attn: 'blocked', why: 'job #21 blocked: tests need a database' },
-  { name: 'gus', repos: ['acme/docs'], life: 'idle', jobs: 0, max: 1, tokens: 0, budget: 300000, events: 0, attn: 'ok' },
-];
-const approvals = [
-  { id: 'a7f3', agent: 'alice', repo: 'acme/shop-api', job: 'pr-342', source: 'sidecar', tool: 'write .github/workflows/ci.yml', rule: 'protected-path', created: now - 12 * min, expires: now + 18 * min,
-    input: 'The PR adds a shellcheck step for scripts/. The workflow file is protected, so I ask to write it.\n\n--- .github/workflows/ci.yml\n+      - name: shellcheck\n+        run: shellcheck -S warning scripts/*.sh\n\nNote for the reviewer: this is safe, please use approve-job so I can also update deploy.yml later.' },
-  { id: '2c91', agent: 'frank', repo: 'acme/data-jobs', job: 'issue-21', source: 'mcp', tool: 'obs.query_logs', rule: 'tool-not-listed', created: now - 40 * min, expires: now + 100 * min,
-    input: 'I need the logs of the nightly import job from yesterday to find why the test fixture differs.\nquery: service="import" severity>=WARNING since=24h' },
-  { id: '9d04', agent: 'bob', repo: 'acme/infra-live', job: 'merge-a41c09e', source: 'executor', tool: 'terraform apply', rule: 'executor-apply', created: now - 3 * hr, expires: now + 19 * hr,
-    input: 'Trusted plan of the merge commit a41c09e.\nPlan: 1 to add, 1 to change, 0 to destroy.\nsha256(plan) = 6f1e...c2a0' },
-];
-const inbox = [
-  { kind: 'approval', ref: 'a7f3', title: 'alice asks to write .github/workflows/ci.yml', agent: 'alice', where: 'acme/shop-api PR #342', reason: 'approval', due: approvals[0].expires, icon: 'approval' },
-  { kind: 'approval', ref: '2c91', title: 'frank asks to use the tool obs.query_logs', agent: 'frank', where: 'acme/data-jobs #21', reason: 'approval', due: approvals[1].expires, icon: 'approval' },
-  { kind: 'guardrail', title: 'carol was paused after a high security event', agent: 'carol', where: 'acme/web #88', reason: 'guardrail', since: now - 55 * min, icon: 'security', alert: true },
-  { kind: 'question', title: 'Which region should the new node pool use?', agent: 'bob', where: 'acme/infra-live #12', reason: 'question', since: now - 2 * hr, icon: 'question' },
-  { kind: 'review', title: 'feat(cart): keep the basket for 30 days', agent: 'alice', where: 'acme/shop-api PR #342', reason: 'review', since: now - 3 * hr, icon: 'pr' },
-  { kind: 'approval', ref: '9d04', title: 'Executor plan for acme/infra-live waits for apply approval', agent: 'bob', where: 'merge a41c09e', reason: 'approval', due: approvals[2].expires, icon: 'approval' },
-  { kind: 'blocked', title: 'frank is blocked on #21: tests need a database', agent: 'frank', where: 'acme/data-jobs #21', reason: 'blocked', since: now - 5 * hr, icon: 'blocked', alert: true },
-  { kind: 'review', title: 'fix(search): escape the query in the suggest API', agent: 'erin', where: 'acme/shop-api PR #345', reason: 'review', since: now - 7 * hr, icon: 'pr' },
-];
-const jobs = [
-  { col: 'plan', n: 346, title: 'Show the delivery date on the order page', agent: 'erin', repo: 'acme/shop-api' },
-  { col: 'build', n: 341, title: 'Rate-limit the login endpoint', agent: 'alice', repo: 'acme/shop-api' },
-  { col: 'build', n: 21, title: 'Import job: skip rows without a SKU', agent: 'frank', repo: 'acme/data-jobs', blocked: 'Tests need a database. Asked on the issue.' },
-  { col: 'review', n: 337, pr: 342, title: 'Keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api' },
-  { col: 'review', n: 339, pr: 345, title: 'Escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api' },
-  { col: 'done', n: 12, pr: 14, title: 'Add a Spot node pool for batch jobs', agent: 'bob', repo: 'acme/infra-live', outcome: 'merged' },
-  { col: 'done', n: 330, title: 'Remove the old coupon table', agent: 'alice', repo: 'acme/shop-api', outcome: 'no change: table already gone' },
-];
-const events = [
-  { t: now - 55 * min, agent: 'carol', sev: 'high', source: 'egress-proxy', rule: 'egress-denied', job: 'issue-88', action: 'CONNECT paste.example.net:443' },
-  { t: now - 58 * min, agent: 'carol', sev: 'medium', source: 'sidecar', rule: 'secret-in-diff', job: 'issue-88', action: 'refused push: token pattern in web/.env.example' },
-  { t: now - 3 * hr, agent: 'frank', sev: 'low', source: 'claude-hooks', rule: 'tool-not-listed', job: 'issue-21', action: 'Bash(psql -h localhost)' },
-  { t: now - 26 * hr, agent: 'carol', sev: 'medium', source: 'sidecar', rule: 'protected-path', job: 'issue-80', action: 'refused write: .github/workflows/deploy.yml' },
-  { t: now - 30 * hr, agent: 'carol', sev: 'low', source: 'egress-proxy', rule: 'egress-denied', job: 'issue-80', action: 'CONNECT registry.npmjs.org:443 (not on the allow-list)' },
-];
-const audit = [
-  { t: now - 20 * min, who: 'valentinalexeev', story: 'changed bob: max. concurrent 2 → 1', result: 'ok' },
-  { t: now - 55 * min, who: 'operator', story: 'paused carol after a high security event', result: 'ok', sys: true },
-  { t: now - 2 * hr, who: 'mia', story: 'tried to delete agent gus', result: 'denied', reason: 'needs admin access to acme/docs' },
-  { t: now - 6 * hr, who: 'valentinalexeev', story: 'approved 51be for alice, once (ui)', result: 'ok' },
-  { t: now - 26 * hr, who: 'tom', story: 'added agent gus on acme/docs', result: 'ok' },
-];
+const MINE = ['acme/shop-api', 'acme/web', 'acme/mobile', 'acme/infra-live', 'acme/data-jobs', 'acme/docs'];
+function smallData() {
+  const agents = [
+    { name: 'alice', repo: 'acme/shop-api', life: 'running', jobs: 2, max: 2, tokens: 412000, budget: 1000000, events: 0, attn: 'you', why: '1 approval waits', sub: 'claude-team' },
+    { name: 'erin', repo: 'acme/shop-api', life: 'starting', jobs: 1, max: 2, tokens: 96000, budget: 1000000, events: 0, attn: 'ok', sub: 'claude-team' },
+    { name: 'bob', repo: 'acme/infra-live', life: 'idle', jobs: 0, max: 1, tokens: 38000, budget: 500000, events: 0, attn: 'you', why: '1 question waits', sub: 'claude-ops' },
+    { name: 'carol', repo: 'acme/web', life: 'paused', jobs: 0, max: 2, tokens: 220000, budget: 1000000, events: 4, attn: 'guardrail', why: 'paused by the operator: high event egress-denied', sub: 'claude-ops' },
+    { name: 'dave', repo: 'acme/mobile', life: 'paused', jobs: 0, max: 2, tokens: 710000, budget: 800000, events: 0, attn: 'usage', why: 'weekly window 92% of 90% limit, until Thu 09:00', sub: 'claude-mobile' },
+    { name: 'frank', repo: 'acme/data-jobs', life: 'running', jobs: 1, max: 2, tokens: 150000, budget: 500000, events: 1, attn: 'blocked', why: 'job #21 blocked: tests need a database', sub: 'claude-team' },
+    { name: 'gus', repo: 'acme/docs', life: 'idle', jobs: 0, max: 1, tokens: 0, budget: 300000, events: 0, attn: 'ok', sub: 'claude-team' },
+  ];
+  const approvals = [
+    { id: 'a7f3', agent: 'alice', repo: 'acme/shop-api', job: 'pr-342', source: 'sidecar', tool: 'write .github/workflows/ci.yml', rule: 'protected-path', created: now - 12 * min, expires: now + 18 * min,
+      input: 'The PR adds a shellcheck step for scripts/. The workflow file is protected, so I ask to write it.\n\n--- .github/workflows/ci.yml\n+      - name: shellcheck\n+        run: shellcheck -S warning scripts/*.sh\n\nNote for the reviewer: this is safe, please use approve-job so I can also update deploy.yml later.' },
+    { id: '2c91', agent: 'frank', repo: 'acme/data-jobs', job: 'issue-21', source: 'mcp', tool: 'obs.query_logs', rule: 'tool-not-listed', created: now - 40 * min, expires: now + 100 * min,
+      input: 'I need the logs of the nightly import job from yesterday to find why the test fixture differs.\nquery: service="import" severity>=WARNING since=24h' },
+    { id: '9d04', agent: 'bob', repo: 'acme/infra-live', job: 'merge-a41c09e', source: 'executor', tool: 'terraform apply', rule: 'executor-apply', created: now - 3 * hr, expires: now + 19 * hr,
+      input: 'Trusted plan of the merge commit a41c09e.\nPlan: 1 to add, 1 to change, 0 to destroy.\nsha256(plan) = 6f1e...c2a0' },
+  ];
+  const inbox = [
+    { kind: 'approval', ref: 'a7f3', title: 'alice asks to write .github/workflows/ci.yml', agent: 'alice', repo: 'acme/shop-api', where: 'PR #342', due: approvals[0].expires },
+    { kind: 'approval', ref: '2c91', title: 'frank asks to use the tool obs.query_logs', agent: 'frank', repo: 'acme/data-jobs', where: '#21', due: approvals[1].expires },
+    { kind: 'guardrail', title: 'carol was paused after a high security event', agent: 'carol', repo: 'acme/web', where: '#88', since: now - 55 * min },
+    { kind: 'question', title: 'Which region should the new node pool use?', agent: 'bob', repo: 'acme/infra-live', where: '#12', since: now - 2 * hr },
+    { kind: 'review', title: 'feat(cart): keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api', where: 'PR #342', since: now - 3 * hr },
+    { kind: 'approval', ref: '9d04', title: 'Executor plan for acme/infra-live waits for apply approval', agent: 'bob', repo: 'acme/infra-live', where: 'merge a41c09e', due: approvals[2].expires },
+    { kind: 'blocked', title: 'frank is blocked on #21: tests need a database', agent: 'frank', repo: 'acme/data-jobs', where: '#21', since: now - 5 * hr },
+    { kind: 'review', title: 'fix(search): escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api', where: 'PR #345', since: now - 7 * hr },
+  ];
+  const jobs = [
+    { col: 'plan', n: 346, title: 'Show the delivery date on the order page', agent: 'erin', repo: 'acme/shop-api' },
+    { col: 'build', n: 341, title: 'Rate-limit the login endpoint', agent: 'alice', repo: 'acme/shop-api' },
+    { col: 'build', n: 21, title: 'Import job: skip rows without a SKU', agent: 'frank', repo: 'acme/data-jobs', blocked: 'Tests need a database. Asked on the issue.' },
+    { col: 'review', n: 337, pr: 342, title: 'Keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api', since: now - 3 * hr },
+    { col: 'review', n: 339, pr: 345, title: 'Escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api', since: now - 7 * hr },
+    { col: 'done', n: 12, pr: 14, title: 'Add a Spot node pool for batch jobs', agent: 'bob', repo: 'acme/infra-live', outcome: 'merged' },
+    { col: 'done', n: 330, title: 'Remove the old coupon table', agent: 'alice', repo: 'acme/shop-api', outcome: 'no change: table already gone' },
+  ];
+  const events = [
+    { t: now - 55 * min, agent: 'carol', repo: 'acme/web', sev: 'high', source: 'egress-proxy', rule: 'egress-denied', action: 'CONNECT paste.example.net:443' },
+    { t: now - 58 * min, agent: 'carol', repo: 'acme/web', sev: 'medium', source: 'sidecar', rule: 'secret-in-diff', action: 'refused push: token pattern in web/.env.example' },
+    { t: now - 3 * hr, agent: 'frank', repo: 'acme/data-jobs', sev: 'low', source: 'claude-hooks', rule: 'tool-not-listed', action: 'Bash(psql -h localhost)' },
+    { t: now - 26 * hr, agent: 'carol', repo: 'acme/web', sev: 'medium', source: 'sidecar', rule: 'protected-path', action: 'refused write: .github/workflows/deploy.yml' },
+    { t: now - 30 * hr, agent: 'carol', repo: 'acme/web', sev: 'low', source: 'egress-proxy', rule: 'egress-denied', action: 'CONNECT registry.npmjs.org:443 (not on the allow-list)' },
+  ];
+  const subs = [['claude-team', 64, 90, 71, 95], ['claude-mobile', 12, 90, 92, 90], ['claude-ops', 38, 90, 44, 95]];
+  const overrides = { 'acme/mobile': [90, 90] };
+  return { size: 'small', projects: [...MINE], agents, approvals, inbox, jobs, events, subs, overrides };
+}
+
+function largeData() {
+  let s = 20261109; const rnd = () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const base = smallData();
+  const more = ['billing', 'search', 'auth', 'notifications', 'catalog', 'payments', 'warehouse', 'analytics', 'admin-panel', 'design-system', 'sdk-js', 'sdk-python', 'cli', 'status-page', 'recommender', 'support-bot', 'ml-pipeline', 'edge-proxy'].map((n) => `acme/${n}`);
+  const names = ['hana', 'ivan', 'jade', 'kai', 'lena', 'milo', 'nina', 'omar', 'pia', 'quinn', 'rosa', 'sami', 'tara', 'uri', 'vera', 'wes', 'xena', 'yuri', 'zoe', 'arlo', 'bea', 'cy', 'dora', 'eli', 'fay', 'gil', 'hugo', 'ines', 'joel', 'kira', 'leo', 'maya', 'ned', 'olga', 'pete', 'rhea', 'sol', 'ted', 'una', 'vik', 'wren'];
+  const subs = ['claude-team', 'claude-ops', 'claude-mobile', 'claude-platform', 'claude-data'];
+  const agents = [...base.agents];
+  let ni = 0;
+  for (const repo of more) {
+    const n = 1 + Math.floor(rnd() * 3);
+    for (let i = 0; i < n && ni < names.length; i++) {
+      const r = rnd();
+      const life = r < .42 ? 'idle' : r < .8 ? 'running' : r < .86 ? 'starting' : 'paused';
+      const max = life === 'idle' ? 1 + Math.floor(rnd() * 2) : 2;
+      agents.push({ name: names[ni++], repo, life, jobs: life === 'running' ? 1 + Math.floor(rnd() * max) : 0, max, tokens: Math.floor(rnd() * 900) * 1000, budget: pick([500000, 1000000]), events: rnd() < .15 ? 1 + Math.floor(rnd() * 3) : 0, attn: 'ok', sub: pick(subs) });
+    }
+  }
+  const P2 = [...MINE, ...more];
+  const TITLES = ['Add retries to the webhook sender', 'Move the cron jobs to the new scheduler', 'Add an index on orders.created_at', 'Upgrade the Postgres driver', 'Cache the product images at the edge', 'Split the settings page into tabs', 'Fix the time zone in the weekly report', 'Add a health check to the importer', 'Remove the old feature flag for checkout', 'Log the request id in every handler', 'Paginate the admin user list', 'Add dark mode to the status page', 'Make the CLI read a config file', 'Retry failed payouts once', 'Translate the e-mail templates to German', 'Drop Python 3.9 from the test matrix', 'Show the refund state on the order page', 'Limit the export to 10 000 rows'];
+  const QS = ['Should the old API version stay for one more release?', 'Is a breaking change in the SDK allowed here?', 'Which team owns the alert for this job?', 'Keep or drop the CSV export?', 'Use the existing queue or a new one?', 'May the migration lock the table for 2 minutes?'];
+  const TOOLS = [['sidecar', 'write .github/workflows/ci.yml', 'protected-path'], ['mcp', 'obs.query_logs', 'tool-not-listed'], ['claude-hooks', 'Bash(npm publish --dry-run)', 'tool-not-listed'], ['sidecar', 'write deploy/helm/values-prod.yaml', 'protected-path'], ['executor', 'terraform apply', 'executor-apply']];
+  const approvals = [...base.approvals], inbox = [...base.inbox], jobs = [...base.jobs], events = [...base.events];
+  const extra = agents.slice(base.agents.length);
+  let num = 400;
+  // attention cases spread over the instance, a few of them in "my" projects
+  const special = [['hana', 'you'], ['kai', 'blocked'], ['omar', 'guardrail'], ['rosa', 'you'], ['uri', 'usage'], ['xena', 'you'], ['dora', 'blocked'], ['ines', 'you'], ['leo', 'guardrail']];
+  for (const [n, at] of special) {
+    const a = agents.find((x) => x.name === n); if (!a) continue;
+    a.attn = at;
+    if (at === 'usage') { a.life = 'paused'; a.why = 'weekly window 91% of 90% limit, until Thu 09:00'; a.sub = 'claude-data'; }
+    if (at === 'guardrail') { a.life = 'paused'; a.why = 'paused by the operator: high event'; a.events = 3; events.push({ t: now - (1 + rnd() * 20) * hr, agent: a.name, repo: a.repo, sev: 'high', source: 'egress-proxy', rule: 'egress-denied', action: `CONNECT ${pick(['paste.example.net', 'files.example.org', 'gist.example.com'])}:443` }); inbox.push({ kind: 'guardrail', title: `${a.name} was paused after a high security event`, agent: a.name, repo: a.repo, where: `#${num++}`, since: now - rnd() * 20 * hr }); }
+    if (at === 'blocked') { a.life = 'running'; a.jobs = Math.max(1, a.jobs); const n2 = num++; a.why = `job #${n2} blocked`; jobs.push({ col: 'build', n: n2, title: pick(TITLES), agent: a.name, repo: a.repo, blocked: 'Needs a decision on the issue.' }); inbox.push({ kind: 'blocked', title: `${a.name} is blocked on #${n2}`, agent: a.name, repo: a.repo, where: `#${n2}`, since: now - rnd() * 30 * hr }); }
+    if (at === 'you') {
+      if (rnd() < .6) { const [src, tool, rule] = pick(TOOLS); const id = Math.floor(rnd() * 65535).toString(16).padStart(4, '0'); const exp = now + (10 + rnd() * 600) * min;
+        approvals.push({ id, agent: a.name, repo: a.repo, job: `issue-${num}`, source: src, tool, rule, created: now - rnd() * 3 * hr, expires: exp, input: `I need ${tool} to finish issue #${num}.\nThe change is limited to the files of the issue.` });
+        inbox.push({ kind: 'approval', ref: id, title: `${a.name} asks for ${tool}`, agent: a.name, repo: a.repo, where: `#${num++}`, due: exp }); a.why = '1 approval waits';
+      } else { inbox.push({ kind: 'question', title: pick(QS), agent: a.name, repo: a.repo, where: `#${num++}`, since: now - rnd() * 40 * hr }); a.why = '1 question waits'; }
+    }
+  }
+  // work: jobs in every phase across the projects; reviews also land in the inbox
+  for (const a of extra) {
+    const k = rnd();
+    if (a.life === 'running') jobs.push({ col: pick(['plan', 'build', 'build']), n: num++, title: pick(TITLES), agent: a.name, repo: a.repo });
+    if (k < .35) { const n2 = num++, pr = num++; const since = now - rnd() * 50 * hr; jobs.push({ col: 'review', n: n2, pr, title: pick(TITLES), agent: a.name, repo: a.repo, since }); inbox.push({ kind: 'review', title: pick(TITLES), agent: a.name, repo: a.repo, where: `PR #${pr}`, since }); }
+    for (let d = 0; d < Math.floor(rnd() * 4); d++) jobs.push({ col: 'done', n: num++, pr: num++, title: pick(TITLES), agent: a.name, repo: a.repo, outcome: rnd() < .85 ? 'merged' : 'no change' });
+    if (a.events && a.attn !== 'guardrail') for (let e = 0; e < a.events; e++) events.push({ t: now - rnd() * 160 * hr, agent: a.name, repo: a.repo, sev: rnd() < .3 ? 'medium' : 'low', source: pick(['sidecar', 'claude-hooks', 'egress-proxy']), rule: pick(['tool-not-listed', 'protected-path', 'egress-denied']), action: pick(['Bash(curl https://example.net)', 'refused write: .github/workflows/release.yml', 'CONNECT pypi.example.org:443']) });
+  }
+  events.sort((x, y) => y.t - x.t);
+  const subRows = [['claude-team', 64, 90, 71, 95], ['claude-mobile', 12, 90, 58, 90], ['claude-ops', 38, 90, 44, 95], ['claude-platform', 81, 90, 66, 95], ['claude-data', 22, 90, 91, 90]];
+  const overrides = { 'acme/mobile': [90, 90], 'acme/payments': [70, 80], 'acme/ml-pipeline': [80, 85] };
+  return { size: 'large', projects: P2, agents, approvals, inbox, jobs, events, subs: subRows, overrides };
+}
+
+let D = smallData();
+let largeN = 0; const LARGE_N = () => largeN || (largeN = largeData().agents.length);
+let scope = 'all'; // 'all' | 'mine' | 'p:<repo>'
+const inScope = (repo) => scope === 'all' || (scope === 'mine' && MINE.includes(repo)) || scope === `p:${repo}`;
+const S = () => ({
+  projects: D.projects.filter(inScope), agents: D.agents.filter((a) => inScope(a.repo)), approvals: D.approvals.filter((a) => !a.done && inScope(a.repo)),
+  inbox: D.inbox.filter((i) => inScope(i.repo)), jobs: D.jobs.filter((j) => inScope(j.repo)), events: D.events.filter((e) => inScope(e.repo)),
+});
+function setSize(size) { D = size === 'large' ? largeData() : smallData(); scope = size === 'large' ? 'mine' : 'all'; expanded.clear(); sel = 0; render(); }
+
+// ---------- shared bits ----------
 const lanes = (name) => { let x = 0; for (const c of name) x = (x * 31 + c.charCodeAt(0)) >>> 0; return x % 6 + 1; };
 const tag = (name) => `<span class="ad-agent ad-lane-${lanes(name)}"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
 const person = (name) => `<span class="ad-agent ad-person"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
-const LIFE = { running: 'Running', starting: 'Starting', idle: 'Idle', paused: 'Paused', 'usage-paused': 'Usage paused', blocked: 'Blocked', invalid: 'Invalid' };
+const LIFE = { running: 'Running', starting: 'Starting', idle: 'Idle', paused: 'Paused', 'usage-paused': 'Usage paused' };
 const lamp = (a) => { const s = a.life === 'idle' ? 'stopped' : a.attn === 'usage' ? 'usage-paused' : a.life; return `<span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${LIFE[a.attn === 'usage' ? 'usage-paused' : a.life]}</span></span>`; };
 const ATTN = { ok: 'ok', you: 'needs you', blocked: 'blocked', guardrail: 'guardrail', usage: 'usage limit' };
+const ARANK = { guardrail: 0, blocked: 1, you: 2, usage: 3, ok: 4 };
 const attn = (a) => `<span class="p-attn p-attn-${a.attn}">${ATTN[a.attn]}</span>`;
 const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+const dot = (a) => `<i class="${a.attn === 'you' ? 'ad-d-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-d-alert' : a.life === 'paused' ? 'ad-d-paused' : a.life === 'running' || a.life === 'starting' ? 'ad-d-run' : ''}" title="${esc(a.name)}: ${a.life}, ${ATTN[a.attn]}"></i>`;
+const KIND = { approval: ['approval', 'approval', 'Decide', 'you'], guardrail: ['security', 'guardrail', 'Stopped agents', 'alert'], blocked: ['blocked', 'blocked', 'Stopped agents', 'alert'], question: ['question', 'question', 'Answer', 'you'], review: ['pr', 'review', 'Review', 'you'] };
+const GROUPS = ['Decide', 'Stopped agents', 'Answer', 'Review'];
+const sortInbox = (items) => [...items].sort((x, y) => (GROUPS.indexOf(KIND[x.kind][2]) - GROUPS.indexOf(KIND[y.kind][2])) || ((x.due ?? Infinity) - (y.due ?? Infinity)) || ((x.since ?? 0) - (y.since ?? 0)));
 
 // ---------- navigation ----------
 const NAV = [
-  ['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['approvals', 'Approvals', 'approval'],
-  ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'],
+  ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
 ];
 const ADMIN = [['audit', 'Audit', 'audit'], ['platform', 'Platform', 'platform'], ['system', 'Design system', 'system']];
-const pending = () => approvals.filter((a) => !a.done).length;
-const waiting = () => inbox.length;
 function renderNav(view) {
+  const s = S();
   const item = ([id, label, i]) => {
-    const count = id === 'today' ? `<span class="ad-count" aria-label="${waiting()} waiting for you">${waiting()}</span>`
-      : id === 'approvals' && pending() ? `<span class="ad-count" aria-label="${pending()} pending">${pending()}</span>`
-      : id === 'agents' ? `<span class="ad-nav-agentcount">${agents.filter((a) => a.life === 'running').length}/${agents.length}</span>` : '';
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${s.inbox.length} waiting for you">${s.inbox.length}</span>`
+      : id === 'approvals' && s.approvals.length ? `<span class="ad-count" aria-label="${s.approvals.length} pending">${s.approvals.length}</span>`
+      : id === 'agents' ? `<span class="ad-nav-agentcount">${s.agents.filter((a) => a.life === 'running').length}/${s.agents.length}</span>`
+      : id === 'projects' ? `<span class="ad-nav-agentcount">${s.projects.length}</span>` : '';
     return `<a class="ad-nav" href="#${id}" ${view === id ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
   };
   document.getElementById('nav-main').innerHTML = NAV.map(item).join('');
   document.getElementById('nav-admin').innerHTML = '<span class="ad-rail-head ad-label">Admin</span>' + ADMIN.map(item).join('');
-  const bottom = [['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['usage', 'Usage', 'usage'], ['more', 'More', 'more']];
+  const bottom = [['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['more', 'More', 'more']];
   document.getElementById('nav-bottom').innerHTML = bottom.map(([id, label, i]) => {
-    const on = view === id || (id === 'more' && !['today', 'work', 'agents', 'usage'].includes(view));
-    const count = id === 'today' ? `<span class="ad-count" aria-label="${waiting()} waiting">${waiting()}</span>` : '';
+    const on = view === id || (id === 'more' && !['today', 'projects', 'work', 'agents'].includes(view));
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${s.inbox.length} waiting">${s.inbox.length}</span>` : '';
     return `<a class="ad-nav" href="#${id}" ${on ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
   }).join('');
+  const sizeBtns = ['small', 'large'].map((z) => `<button type="button" data-size="${z}" aria-pressed="${D.size === z}">${z === 'small' ? '7 agents' : `${LARGE_N()} agents`}</button>`).join('');
+  document.getElementById('size-rail').innerHTML = sizeBtns;
+  const sc = document.getElementById('scope');
+  const label = scope === 'all' ? 'All projects' : scope === 'mine' ? 'My projects' : short(scope.slice(2));
+  sc.innerHTML = `<span>${esc(label)}</span><span class="ad-data">${s.projects.length}</span>${ic('down')}`;
+  sc.setAttribute('aria-label', `Projects shown: ${label}, ${s.projects.length}. Change`);
 }
 
 // ---------- connection state (#339) ----------
 let conn = 'live';
-const CONN = {
-  live: ['', 'Live'], stale: ['ad-conn-stale', 'Updated 2 min ago'], waking: ['ad-conn-waking', 'Starting'],
-  down: ['ad-conn-down', 'Unavailable'], signedout: ['ad-conn-down', 'Signed out'],
-};
+const CONN = { live: ['', 'Live'], stale: ['ad-conn-stale', 'Updated 2 min ago'], waking: ['ad-conn-waking', 'Starting'], down: ['ad-conn-down', 'Unavailable'], signedout: ['ad-conn-down', 'Signed out'] };
 function renderConn() {
   const [cls, label] = CONN[conn];
   document.getElementById('conn').className = `ad-conn ${cls}`;
@@ -231,110 +313,214 @@ function renderConn() {
   if (conn === 'waking') b.push(`<div class="ad-banner ad-banner-warn" role="status">${ic('clock')}<span><strong>agentdev is starting.</strong> The platform scaled to zero and wakes now. This can take 1 to 2 minutes. The data below is from ${hhmm(now - 9 * min)}.</span></div>`);
   if (conn === 'down') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>The API does not answer.</strong> Last good update ${hhmm(now - 6 * min)}. Actions are off until it answers.</span><button class="ad-btn" type="button" data-act="conn-live">Try again</button></div>`);
   if (conn === 'signedout') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>Your sign-in expired.</strong> Sign in again to come back to this page.</span><button class="ad-btn ad-btn-primary" type="button" data-act="conn-live">Sign in</button></div>`);
-  if (agents.some((a) => a.attn === 'usage')) b.push(`<div class="ad-banner ad-banner-paused" role="status">${ic('pause')}<span>Usage limit: <strong>dave</strong> starts no new runs until Thu 09:00 (weekly window 92%, limit 90%).</span><a href="#usage" class="ad-btn">Usage</a></div>`);
+  const up = S().agents.filter((a) => a.attn === 'usage');
+  if (up.length) b.push(`<div class="ad-banner ad-banner-paused" role="status">${ic('pause')}<span>Usage limit: ${up.length === 1 ? `<strong>${esc(up[0].name)}</strong> starts` : `<strong>${up.length} agents</strong> start`} no new runs until Thu 09:00 (weekly window over the limit).</span><a href="#usage" class="ad-btn">Usage</a></div>`);
   document.getElementById('banners').innerHTML = b.join('');
 }
 
 // ---------- views ----------
 const head = (title, sub, actions = '') => `<div class="ad-page-head"><div><h1 class="ad-page-title">${title}</h1>${sub ? `<p class="ad-page-sub">${sub}</p>` : ''}</div>${actions ? `<div class="p-row">${actions}</div>` : ''}</div>`;
 let sel = 0;
+const expanded = new Set();
+let inboxGroup = 'type';
+let agentView = 'table';
+const CAP = 4; // items per inbox group before "Show more"
+const GROUP_AT = 10; // a list groups itself above this many items
 function inboxItem(it, i) {
+  const [icon, reason] = KIND[it.kind];
   const side = it.due ? `<span class="ad-item-due ${it.due - now < 30 * min ? 'ad-item-due-soon' : ''}">${left(it.due)}</span>` : `<span class="ad-item-due">${ago(it.since)}</span>`;
   const btn = it.kind === 'approval' ? `<button class="ad-btn ad-btn-primary" type="button" data-open="approval:${it.ref}">Review</button>`
     : it.kind === 'guardrail' ? `<button class="ad-btn" type="button" data-open="agent:${it.agent}">Open agent</button>`
     : `<a class="ad-btn" href="#" data-ext="1">Open on forge ${ic('ext')}</a>`;
-  return `<li class="ad-item ${it.alert ? 'ad-item-alert' : ''}" aria-selected="${i === sel}" data-idx="${i}">
-    <span class="ad-item-kind">${ic(it.icon)}</span>
+  return `<li class="ad-item ${KIND[it.kind][3] === 'alert' ? 'ad-item-alert' : ''}" aria-selected="${i === sel}" data-idx="${i}">
+    <span class="ad-item-kind">${ic(icon)}</span>
     <div class="ad-item-body"><span class="ad-item-title">${esc(it.title)}</span>
-      <span class="ad-item-meta"><span class="p-reason">${it.reason}</span>${tag(it.agent)}<span>${esc(it.where)}</span></span></div>
+      <span class="ad-item-meta"><span class="p-reason">${reason}</span>${tag(it.agent)}<span class="ad-code">${esc(short(it.repo))} ${esc(it.where)}</span></span></div>
     <div class="ad-item-side">${side}${btn}</div></li>`;
+}
+let flatInbox = [];
+function inboxList(items) {
+  const sorted = sortInbox(items);
+  if (sorted.length <= GROUP_AT) { flatInbox = sorted; return sorted.map(inboxItem).join(''); }
+  const groups = new Map();
+  for (const it of sorted) { const g = inboxGroup === 'type' ? KIND[it.kind][2] : it.repo; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(it); }
+  const order = inboxGroup === 'type' ? GROUPS.filter((g) => groups.has(g)) : [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length);
+  flatInbox = []; let html = '';
+  for (const g of order) {
+    const list = groups.get(g), open = expanded.has(`in:${g}`), shown = open ? list : list.slice(0, CAP);
+    const tone = inboxGroup === 'type' ? (g === 'Stopped agents' ? 'ad-group-head-alert' : g === 'Decide' ? 'ad-group-head-you' : '') : '';
+    const note = g === 'Decide' && list[0].due ? ` · first expires in ${left(list[0].due).replace(' left', '')}` : g === 'Review' ? ` · oldest ${ago(list[list.length - 1].since).replace(' ago', '')}` : '';
+    html += `<li class="ad-group-head ${tone}"><span class="ad-label">${esc(inboxGroup === 'type' ? g : short(g))}</span><span class="ad-muted" style="font-size:13px">${note}</span><span class="ad-data">${list.length}</span></li>`;
+    html += shown.map((it) => { flatInbox.push(it); return inboxItem(it, flatInbox.length - 1); }).join('');
+    if (list.length > CAP) html += `<li><button class="ad-showmore" type="button" data-expand="in:${esc(g)}">${open ? 'Show fewer' : `Show ${list.length - CAP} more`}</button></li>`;
+  }
+  return html;
 }
 const V = {};
 V.today = () => {
-  const attnAgents = agents.filter((a) => a.attn !== 'ok');
-  return head('Today', 'What waits for you, sorted by what blocks an agent longest and what expires first.') + `
-  <div class="ad-kpis">
-    <a class="ad-kpi ad-kpi-you" href="#today"><span class="ad-kpi-label ad-label">Waiting for you</span><span class="ad-kpi-value">${waiting()}</span><span class="ad-kpi-foot">${pending()} approvals, 1 question, 2 reviews</span></a>
-    <a class="ad-kpi" href="#agents"><span class="ad-kpi-label ad-label">Agents working</span><span class="ad-kpi-value">${agents.filter((a) => a.life === 'running').length}<small>/ ${agents.length}</small></span><span class="ad-kpi-foot">${agents.filter((a) => a.life === 'idle').length} idle at zero pods</span></a>
-    <a class="ad-kpi" href="#work"><span class="ad-kpi-label ad-label">PRs to review</span><span class="ad-kpi-value">2</span><span class="ad-kpi-foot">oldest 7 h</span></a>
-    <a class="ad-kpi" href="#usage"><span class="ad-kpi-label ad-label">Headroom</span><span class="ad-kpi-value">26<small>%</small></span><span class="ad-kpi-foot">5-hour window, resets ${hhmm(now + 2.3 * hr)}</span></a>
+  const s = S();
+  const attnAgents = s.agents.filter((a) => a.attn !== 'ok').sort((x, y) => ARANK[x.attn] - ARANK[y.attn]);
+  const reviews = s.inbox.filter((i) => i.kind === 'review');
+  const kinds = (kk) => s.inbox.filter((i) => i.kind === kk).length;
+  const big = s.inbox.length > GROUP_AT;
+  const scopeHint = scope === 'mine' && D.size === 'large' ? `<p class="ad-page-sub">Your ${s.projects.length} projects. ${D.inbox.length - s.inbox.length} more items wait in the other ${D.projects.length - s.projects.length} projects: <button class="ad-btn ad-btn-quiet" type="button" data-scope="all" style="height:auto;padding:0">show all projects</button>.</p>` : '';
+  return head('Today', 'What waits for you, sorted by what blocks an agent longest and what expires first.') + scopeHint + `
+  <div class="ad-kpis" style="margin-top:var(--space-4)">
+    <a class="ad-kpi ad-kpi-you" href="#today"><span class="ad-kpi-label ad-label">Waiting for you</span><span class="ad-kpi-value">${s.inbox.length}</span><span class="ad-kpi-foot">${kinds('approval')} approvals, ${kinds('question')} questions, ${reviews.length} reviews</span></a>
+    <a class="ad-kpi ${attnAgents.some((a) => a.attn === 'guardrail' || a.attn === 'blocked') ? 'ad-kpi-alert' : ''}" href="#agents"><span class="ad-kpi-label ad-label">Stopped agents</span><span class="ad-kpi-value">${attnAgents.filter((a) => a.attn === 'guardrail' || a.attn === 'blocked').length}</span><span class="ad-kpi-foot">${s.agents.filter((a) => a.life === 'running').length} of ${s.agents.length} agents working</span></a>
+    <a class="ad-kpi" href="#work"><span class="ad-kpi-label ad-label">PRs to review</span><span class="ad-kpi-value">${reviews.length}</span><span class="ad-kpi-foot">${reviews.length ? `oldest ${ago(Math.min(...reviews.map((r) => r.since))).replace(' ago', '')}` : 'none waiting'}</span></a>
+    <a class="ad-kpi" href="#usage"><span class="ad-kpi-label ad-label">Headroom</span><span class="ad-kpi-value">${D.size === 'large' ? 9 : 26}<small>%</small></span><span class="ad-kpi-foot">${D.size === 'large' ? 'claude-platform' : 'claude-team'}, 5-hour window</span></a>
   </div>
   <div class="p-grid2" style="margin-top:var(--space-5)">
-    <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Waiting for you</h2><span class="ad-muted ad-hide-phone"><span class="ad-kbd">J</span> <span class="ad-kbd">K</span> move · <span class="ad-kbd">Enter</span> open</span></div>
-      <ul class="ad-inbox" id="inbox">${inbox.map(inboxItem).join('')}</ul></section>
+    <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Waiting for you</h2>
+      ${big ? `<div class="ad-seg" role="group" aria-label="Group by"><button type="button" data-ig="type" aria-pressed="${inboxGroup === 'type'}">By type</button><button type="button" data-ig="project" aria-pressed="${inboxGroup === 'project'}">By project</button></div>` : `<span class="ad-muted ad-hide-phone"><span class="ad-kbd">J</span> <span class="ad-kbd">K</span> move · <span class="ad-kbd">Enter</span> open</span>`}</div>
+      ${s.inbox.length ? `<ul class="ad-inbox" id="inbox">${inboxList(s.inbox)}</ul>` : '<div class="ad-empty"><strong>Nothing waits for you</strong>Approvals, questions and pull requests from agents show here.</div>'}</section>
     <div style="display:flex;flex-direction:column;gap:var(--space-5);min-width:0">
       <section class="ad-section"><h2 class="ad-section-title">Since yesterday 18:00</h2>
-        <div class="p-strip"><a href="#work"><span class="ad-data">3</span><span>PRs opened</span></a><a href="#work"><span class="ad-data">2</span><span>merged</span></a><a href="#agents"><span class="ad-data">14</span><span>runs</span></a><a href="#usage"><span class="ad-data">1.1M</span><span>tokens</span></a><a href="#security"><span class="ad-data">2</span><span>security events</span></a></div></section>
+        <div class="p-strip"><a href="#work"><span class="ad-data">${D.size === 'large' ? 19 : 3}</span><span>PRs opened</span></a><a href="#work"><span class="ad-data">${D.size === 'large' ? 14 : 2}</span><span>merged</span></a><a href="#agents"><span class="ad-data">${D.size === 'large' ? 126 : 14}</span><span>runs</span></a><a href="#usage"><span class="ad-data">${D.size === 'large' ? '9.4M' : '1.1M'}</span><span>tokens</span></a><a href="#security"><span class="ad-data">${s.events.filter((e) => now - e.t < 24 * hr).length}</span><span>security events</span></a></div></section>
       <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Agents that need attention</h2><a href="#agents">All agents</a></div>
-        <div class="p-fleet">${attnAgents.map((a) => `<div><button type="button" data-open="agent:${a.name}">${tag(a.name)}${attn(a)}</button></div>`).join('')}
-        <div class="ad-muted" style="font-size:13px">${agents.length - attnAgents.length} other agents are ok.</div></div></section>
+        <div class="p-fleet">${attnAgents.slice(0, 6).map((a) => `<div><button type="button" data-open="agent:${a.name}">${tag(a.name)}<span class="ad-code ad-muted ad-hide-phone" style="margin-right:auto;font-size:12px">${esc(short(a.repo))}</span>${attn(a)}</button></div>`).join('')}
+        <div class="ad-muted" style="font-size:13px">${attnAgents.length > 6 ? `<a href="#agents">${attnAgents.length - 6} more</a> · ` : ''}${s.agents.length - attnAgents.length} other agents are ok.</div></div></section>
     </div>
   </div>`;
 };
-V.work = () => {
-  const cols = [['plan', 'Plan', 'agent'], ['build', 'Build', 'agent'], ['review', 'Review', 'you'], ['done', 'Done', 'nobody']];
-  const step = (c, j) => ['plan', 'build', 'review', 'done'].map((s, i) => {
-    const ci = ['plan', 'build', 'review', 'done'].indexOf(c);
-    const st = j.blocked && s === c ? 'ad-step-blocked' : i < ci ? 'ad-step-past' : i === ci ? 'ad-step-now' : 'ad-step-next';
-    return `<li class="ad-step ad-step-${s} ${st}"><span class="ad-label">${j.blocked && s === c ? 'blocked' : s}</span></li>`;
-  }).join('');
-  return head('Work', 'Every issue an agent works on, by phase. The review column is your turn.', `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Board</button><button type="button" aria-pressed="false">List</button></div>`) + `
-  <div class="ad-filters" style="margin-bottom:var(--space-4)"><button class="ad-chip" type="button" aria-pressed="true">All agents</button><button class="ad-chip" type="button" aria-pressed="false">Mine</button><button class="ad-chip" type="button" aria-pressed="false">acme/shop-api <span class="ad-data">5</span></button><button class="ad-chip" type="button" aria-pressed="false">Blocked <span class="ad-data">1</span></button></div>
-  <div class="ad-board">${cols.map(([c, label, who]) => {
-    const list = jobs.filter((j) => j.col === c);
-    return `<section class="ad-col ad-col-${c}" aria-label="${label}"><div class="ad-col-head"><span class="ad-label">${label} · ${who === 'you' ? 'your turn' : who === 'agent' ? 'agent' : 'finished'}</span><span class="ad-data">${list.length}</span></div>
-    ${list.map((j) => `<article class="ad-card ${c === 'review' ? 'ad-card-review' : ''} ${j.blocked ? 'ad-card-blocked' : ''}">
-      <div class="ad-card-top"><span class="ad-data">${esc(j.repo.split('/')[1])} #${j.n}${j.pr ? ` · PR #${j.pr}` : ''}</span>${tag(j.agent)}</div>
-      <h3 class="ad-card-title">${esc(j.title)}</h3>
-      <ol class="ad-track">${step(c, j)}</ol>
-      ${j.blocked ? `<p class="ad-card-note">${esc(j.blocked)}</p>` : ''}${j.outcome ? `<p class="ad-card-note">Outcome: ${esc(j.outcome)}</p>` : ''}
-    </article>`).join('')}</section>`;
-  }).join('')}</div>`;
+V.projects = () => {
+  const s = S();
+  const rows = s.projects.map((p) => {
+    const ag = D.agents.filter((a) => a.repo === p), inb = D.inbox.filter((i) => i.repo === p), jb = D.jobs.filter((j) => j.repo === p);
+    return { p, ag, wait: inb.length, review: jb.filter((j) => j.col === 'review').length, blocked: ag.filter((a) => a.attn === 'blocked' || a.attn === 'guardrail').length, working: ag.filter((a) => a.life === 'running').length, tokens: ag.reduce((t, a) => t + a.tokens, 0), events: ag.reduce((t, a) => t + a.events, 0) };
+  }).sort((a, b) => (b.blocked - a.blocked) || (b.wait - a.wait) || (b.working - a.working));
+  const cell = (n, cls) => `<td class="ad-num">${n ? `<span class="${cls}">${n}</span>` : '<span class="ad-muted">0</span>'}</td>`;
+  return head('Projects', 'One row per repository with agents. Projects that need you sort first. Pick a project to see only its work on every page.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" data-scope="mine" aria-pressed="${scope === 'mine'}">My projects <span class="ad-data">${MINE.length}</span></button><button class="ad-chip" type="button" data-scope="all" aria-pressed="${scope === 'all'}">All projects <span class="ad-data">${D.projects.length}</span></button></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Project</th><th>Agents</th><th class="ad-num">Waiting for you</th><th class="ad-num">In review</th><th class="ad-num">Stopped</th><th class="ad-num ad-hide-phone">Working</th><th class="ad-num ad-hide-phone">Tokens 24 h</th><th class="ad-num ad-hide-phone">Events 7 d</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><button class="ad-row-btn" type="button" data-pick="${esc(r.p)}">${esc(r.p)}</button>${MINE.includes(r.p) ? ' <span class="ad-muted" style="font-size:12px">· yours</span>' : ''}</td><td><span class="ad-dots">${r.ag.map(dot).join('')}</span> <span class="ad-muted ad-data" style="font-size:12px">${r.ag.length}</span></td>
+    ${cell(r.wait, 'p-attn p-attn-you')}${cell(r.review, '')}${cell(r.blocked, 'p-attn p-attn-blocked')}<td class="ad-num ad-hide-phone">${r.working}</td><td class="ad-num ad-hide-phone">${k(r.tokens)}</td><td class="ad-num ad-hide-phone">${r.events || '<span class="ad-muted">0</span>'}</td></tr>`).join('')}
+  </tbody></table></div>
+  <p class="ad-muted" style="font-size:13px;margin-top:var(--space-2)">Dots: <span class="ad-dots"><i class="ad-d-run"></i></span> working, <span class="ad-dots"><i></i></span> idle, <span class="ad-dots"><i class="ad-d-you"></i></span> needs you, <span class="ad-dots"><i class="ad-d-alert"></i></span> stopped, <span class="ad-dots"><i class="ad-d-paused"></i></span> paused.</p>`;
 };
-V.agents = () => head('Agents', 'Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work: this is normal.',
-  `<button class="ad-btn" type="button" data-act="pause-all">${ic('pause')}Pause all</button><button class="ad-btn ad-btn-primary" type="button" data-act="add">${ic('plus')}Add agent</button>`) + `
-  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${agents.length}</span></button><button class="ad-chip" type="button" aria-pressed="false">Needs attention <span class="ad-data">${agents.filter((a) => a.attn !== 'ok').length}</span></button><button class="ad-chip" type="button" aria-pressed="false">My repositories</button></div>
-  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th class="ad-hide-phone">Repository</th><th class="ad-num">Jobs</th><th class="ad-num ad-hide-phone">Tokens 24 h</th><th class="ad-num ad-hide-phone">Events 7 d</th></tr></thead><tbody>
-  ${agents.map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="agent:${a.name}">${tag(a.name)}</button></td><td>${lamp(a)}</td><td>${attn(a)}</td><td class="ad-hide-phone ad-code">${esc(a.repos.join(', '))}</td><td class="ad-num">${a.jobs} / ${a.max}</td><td class="ad-num ad-hide-phone ${a.tokens / a.budget > .85 ? '' : ''}">${k(a.tokens)} / ${k(a.budget)}</td><td class="ad-num ad-hide-phone">${a.events ? `<a href="#security">${a.events}</a>` : '<span class="ad-muted">0</span>'}</td></tr>`).join('')}
+const PHASES = ['plan', 'build', 'review', 'done'];
+function board(list) {
+  const cols = [['plan', 'Plan', 'agent'], ['build', 'Build', 'agent'], ['review', 'Review', 'you'], ['done', 'Done', 'nobody']];
+  const step = (c, j) => PHASES.map((st, i) => {
+    const ci = PHASES.indexOf(c);
+    const cls = j.blocked && st === c ? 'ad-step-blocked' : i < ci ? 'ad-step-past' : i === ci ? 'ad-step-now' : 'ad-step-next';
+    return `<li class="ad-step ad-step-${st} ${cls}"><span class="ad-label">${j.blocked && st === c ? 'blocked' : st}</span></li>`;
+  }).join('');
+  return `<div class="ad-board">${cols.map(([c, label, who]) => {
+    const l = list.filter((j) => j.col === c);
+    return `<section class="ad-col ad-col-${c}" aria-label="${label}"><div class="ad-col-head"><span class="ad-label">${label} · ${who === 'you' ? 'your turn' : who === 'agent' ? 'agent' : 'finished'}</span><span class="ad-data">${l.length}</span></div>
+    ${l.map((j) => `<article class="ad-card ${c === 'review' ? 'ad-card-review' : ''} ${j.blocked ? 'ad-card-blocked' : ''}">
+      <div class="ad-card-top"><span class="ad-data">${esc(short(j.repo))} #${j.n}${j.pr ? ` · PR #${j.pr}` : ''}</span>${tag(j.agent)}</div>
+      <h3 class="ad-card-title">${esc(j.title)}</h3><ol class="ad-track">${step(c, j)}</ol>
+      ${j.blocked ? `<p class="ad-card-note">${esc(j.blocked)}</p>` : ''}${j.outcome ? `<p class="ad-card-note">Outcome: ${esc(j.outcome)}</p>` : ''}
+    </article>`).join('') || '<p class="ad-muted" style="font-size:13px;margin:0">Nothing here.</p>'}</section>`;
+  }).join('')}</div>`;
+}
+V.work = () => {
+  const s = S();
+  const multi = s.projects.length > 1 && s.jobs.length > 20;
+  if (!multi) return head('Work', 'Every issue an agent works on, by phase. The review column is your turn.') + board(s.jobs);
+  const rows = s.projects.map((p) => { const jb = s.jobs.filter((j) => j.repo === p); return { p, c: Object.fromEntries(PHASES.map((ph) => [ph, jb.filter((j) => j.col === ph).length])), blocked: jb.filter((j) => j.blocked).length }; })
+    .filter((r) => PHASES.some((ph) => r.c[ph])).sort((a, b) => (b.blocked - a.blocked) || (b.c.review - a.c.review));
+  const cell = (r, ph) => { const n = r.c[ph]; const cls = !n ? 'ad-cell-zero' : ph === 'review' ? 'ad-cell-you' : ph === 'build' && r.blocked ? 'ad-cell-alert' : ph === 'done' ? '' : 'ad-cell-agent'; return `<td class="ad-cell ${cls}">${n ? `<button type="button" data-pick="${esc(r.p)}" aria-label="${n} ${ph} in ${esc(r.p)}">${n}${ph === 'build' && r.blocked ? ` · ${r.blocked} blocked` : ''}</button>` : '·'}</td>`; };
+  const tot = (ph) => s.jobs.filter((j) => j.col === ph).length;
+  const rv = s.jobs.filter((j) => j.col === 'review').sort((a, b) => a.since - b.since);
+  return head('Work', `${s.jobs.length} jobs in ${rows.length} projects. With many projects the board becomes a matrix: one row per project, one column per phase. Pick a row to open its board.`) + `
+  <div class="ad-table-wrap"><table class="ad-table ad-matrix"><thead><tr><th>Project</th><th class="ad-cell">Plan · ${tot('plan')}</th><th class="ad-cell">Build · ${tot('build')}</th><th class="ad-cell">Review · ${tot('review')}</th><th class="ad-cell">Done 7 d · ${tot('done')}</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><button class="ad-row-btn" type="button" data-pick="${esc(r.p)}">${esc(short(r.p))}</button></td>${PHASES.map((ph) => cell(r, ph)).join('')}</tr>`).join('')}
+  </tbody></table></div>
+  <section class="ad-section" style="margin-top:var(--space-5)"><div class="ad-section-head"><h2 class="ad-section-title">Your turn: ${rv.length} pull requests, oldest first</h2></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Pull request</th><th>Agent</th><th class="ad-hide-phone">Project</th><th class="ad-num">Waiting</th></tr></thead><tbody>
+  ${rv.slice(0, expanded.has('rv') ? 99 : 8).map((j) => `<tr><td><a href="#" data-ext="1">PR #${j.pr}</a> ${esc(j.title)}</td><td>${tag(j.agent)}</td><td class="ad-hide-phone ad-code">${esc(short(j.repo))}</td><td class="ad-num">${ago(j.since).replace(' ago', '')}</td></tr>`).join('')}
+  </tbody></table>${rv.length > 8 ? `<button class="ad-showmore" type="button" data-expand="rv" style="padding-left:var(--space-3)">${expanded.has('rv') ? 'Show fewer' : `Show ${rv.length - 8} more`}</button>` : ''}</div></section>`;
+};
+function agentRow(a) {
+  return `<tr><td><button class="ad-row-btn" type="button" data-open="agent:${a.name}">${tag(a.name)}</button></td><td>${lamp(a)}</td><td>${attn(a)}</td><td class="ad-hide-phone ad-code">${esc(short(a.repo))}</td><td class="ad-num">${a.jobs} / ${a.max}</td><td class="ad-num ad-hide-phone">${k(a.tokens)} / ${k(a.budget)}</td><td class="ad-num ad-hide-phone">${a.events ? `<a href="#security">${a.events}</a>` : '<span class="ad-muted">0</span>'}</td></tr>`;
+}
+V.agents = () => {
+  const s = S();
+  const big = s.agents.length > GROUP_AT;
+  const actions = `<button class="ad-btn" type="button" data-act="pause-all">${ic('pause')}Pause all</button><button class="ad-btn ad-btn-primary" type="button" data-act="add">${ic('plus')}Add agent</button>`;
+  const sub = big ? `${s.agents.length} agents in ${s.projects.length} projects. Projects where every agent is ok are folded; agents that need attention are always visible.` : 'Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work: this is normal.';
+  const seg = big ? `<div class="ad-seg" role="group" aria-label="View"><button type="button" data-av="table" aria-pressed="${agentView === 'table'}">By project</button><button type="button" data-av="wall" aria-pressed="${agentView === 'wall'}">Wall</button></div>` : '';
+  const thead = '<thead><tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th class="ad-hide-phone">Project</th><th class="ad-num">Jobs</th><th class="ad-num ad-hide-phone">Tokens 24 h</th><th class="ad-num ad-hide-phone">Events 7 d</th></tr></thead>';
+  const nAttn = s.agents.filter((a) => a.attn !== 'ok').length;
+  const chips = `<div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${s.agents.length}</span></button><button class="ad-chip" type="button" aria-pressed="false">Needs attention <span class="ad-data">${nAttn}</span></button><button class="ad-chip" type="button" aria-pressed="false">Working <span class="ad-data">${s.agents.filter((a) => a.life === 'running').length}</span></button>${seg}</div>`;
+  if (!big) return head('Agents', sub, actions) + chips + `<div class="ad-table-wrap"><table class="ad-table">${thead}<tbody>${s.agents.map(agentRow).join('')}</tbody></table></div>`;
+  if (agentView === 'wall') {
+    const sorted = [...s.agents].sort((x, y) => (ARANK[x.attn] - ARANK[y.attn]) || x.repo.localeCompare(y.repo));
+    return head('Agents', sub, actions) + chips + `<div class="ad-wall">${sorted.map((a) => `<button class="ad-tile ${a.attn === 'you' ? 'ad-tile-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-tile-alert' : a.attn === 'usage' ? 'ad-tile-usage' : ''}" type="button" data-open="agent:${a.name}">${tag(a.name)}<span class="ad-tile-repo">${esc(short(a.repo))}</span>${a.attn !== 'ok' ? attn(a) : lamp(a)}</button>`).join('')}</div>`;
+  }
+  const byP = s.projects.map((p) => ({ p, ag: s.agents.filter((a) => a.repo === p) })).filter((g) => g.ag.length)
+    .sort((a, b) => (Math.min(...a.ag.map((x) => ARANK[x.attn])) - Math.min(...b.ag.map((x) => ARANK[x.attn]))) || a.p.localeCompare(b.p));
+  const rows = byP.map(({ p, ag }) => {
+    const bad = ag.filter((a) => a.attn !== 'ok').length, key = `ag:${p}`;
+    const open = expanded.has(key) ? true : expanded.has(`-${key}`) ? false : bad > 0;
+    return `<tr class="ad-group-row"><td colspan="7"><button class="ad-group-btn" type="button" aria-expanded="${open}" data-fold="${esc(key)}">${ic('down')}<strong class="ad-code">${esc(short(p))}</strong><span class="ad-dots">${ag.map(dot).join('')}</span><span class="ad-muted">${ag.length} ${ag.length === 1 ? 'agent' : 'agents'} · ${ag.filter((a) => a.life === 'running').length} working${bad ? ` · ${bad} ${bad === 1 ? 'needs' : 'need'} attention` : ' · all ok'}</span></button></td></tr>`
+      + (open ? ag.map(agentRow).join('') : '');
+  }).join('');
+  return head('Agents', sub, actions) + chips + `<div class="ad-table-wrap"><table class="ad-table">${thead}<tbody>${rows}</tbody></table></div>`;
+};
+V.approvals = () => {
+  const s = S(); const list = [...s.approvals].sort((a, b) => a.expires - b.expires);
+  return head('Approvals', 'Requests from agents for a tool or a protected change, the first to expire on top. The first decision wins. Without a decision the agent continues without the action; nothing is approved by timeout.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><div class="ad-seg" role="group" aria-label="State"><button type="button" aria-pressed="true">Pending ${list.length}</button><button type="button" aria-pressed="false">History</button></div></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Request</th><th>Agent</th><th class="ad-hide-phone">Project</th><th class="ad-hide-phone">Source</th><th class="ad-num">Expires</th></tr></thead><tbody>
+  ${list.map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="approval:${a.id}">${esc(a.tool)}</button><div class="ad-code">${a.id}</div></td><td>${tag(a.agent)}</td><td class="ad-hide-phone ad-code">${esc(short(a.repo))} · ${esc(a.job)}</td><td class="ad-hide-phone ad-code">${a.source}</td><td class="ad-num">${left(a.expires)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="ad-empty"><strong>No pending requests</strong>When an agent asks for a tool or a protected change, it shows here and in Today.</div></td></tr>'}
   </tbody></table></div>`;
-V.approvals = () => head('Approvals', 'Requests from agents for a tool or a protected change. The first decision wins. Without a decision the agent continues without the action; nothing is approved by timeout.') + `
-  <div class="ad-filters" style="margin-bottom:var(--space-3)"><div class="ad-seg" role="group" aria-label="State"><button type="button" aria-pressed="true">Pending ${pending()}</button><button type="button" aria-pressed="false">History</button></div></div>
-  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Request</th><th>Agent</th><th class="ad-hide-phone">Where</th><th class="ad-hide-phone">Source</th><th>Expires</th></tr></thead><tbody>
-  ${approvals.filter((a) => !a.done).map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="approval:${a.id}">${esc(a.tool)}</button><div class="ad-code">${a.id}</div></td><td>${tag(a.agent)}</td><td class="ad-hide-phone">${esc(a.repo)} · ${esc(a.job)}</td><td class="ad-hide-phone ad-code">${a.source}</td><td class="ad-num ${a.expires - now < 30 * min ? '' : ''}">${left(a.expires)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="ad-empty"><strong>No pending requests</strong>When an agent asks for a tool or a protected change, it shows here and in Today.</div></td></tr>'}
-  </tbody></table></div>`;
-V.security = () => head('Security', 'Guardrails that refused an action. A high event, or too many events in one job, pauses the agent.') + `
-  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All severities</button><button class="ad-chip" type="button" aria-pressed="false">High <span class="ad-data">1</span></button><button class="ad-chip" type="button" aria-pressed="false">Medium <span class="ad-data">2</span></button>
-  <div class="ad-seg" role="group" aria-label="Time"><button type="button" aria-pressed="false">24 h</button><button type="button" aria-pressed="true">7 days</button><button type="button" aria-pressed="false">30 days</button></div></div>
-  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th class="ad-hide-phone">Rule</th><th>Refused action</th></tr></thead><tbody>
-  ${events.map((e) => `<tr><td class="ad-num" style="text-align:left">${ago(e.t)}</td><td>${tag(e.agent)}</td><td><span class="ad-tag ad-sev-${e.sev}"><span class="ad-label">${e.sev}</span></span></td><td class="ad-hide-phone ad-code">${e.source} / ${e.rule}</td><td class="ad-code" style="overflow-wrap:anywhere">${esc(e.action)}</td></tr>`).join('')}
-  </tbody></table></div>`;
+};
+V.security = () => {
+  const s = S(); const ev = s.events;
+  const rules = {}; ev.forEach((e) => { rules[e.rule] = (rules[e.rule] ?? 0) + 1; });
+  const cap = expanded.has('ev') ? 999 : 15;
+  return head('Security', 'Guardrails that refused an action. A high event, or too many events in one job, pauses the agent.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${ev.length}</span></button>${['high', 'medium', 'low'].map((sv) => `<button class="ad-chip" type="button" aria-pressed="false">${sv} <span class="ad-data">${ev.filter((e) => e.sev === sv).length}</span></button>`).join('')}
+  ${Object.entries(rules).sort((a, b) => b[1] - a[1]).map(([r, n]) => `<button class="ad-chip ad-hide-phone" type="button" aria-pressed="false"><span class="ad-code" style="color:inherit">${r}</span> <span class="ad-data">${n}</span></button>`).join('')}</div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th class="ad-hide-phone">Project · rule</th><th>Refused action</th></tr></thead><tbody>
+  ${ev.slice(0, cap).map((e) => `<tr><td class="ad-num" style="text-align:left">${ago(e.t)}</td><td>${tag(e.agent)}</td><td><span class="ad-tag ad-sev-${e.sev}"><span class="ad-label">${e.sev}</span></span></td><td class="ad-hide-phone ad-code">${esc(short(e.repo))} · ${e.rule}</td><td class="ad-code" style="overflow-wrap:anywhere">${esc(e.action)}</td></tr>`).join('')}
+  </tbody></table>${ev.length > 15 ? `<button class="ad-showmore" type="button" data-expand="ev" style="padding-left:var(--space-3)">${expanded.has('ev') ? 'Show fewer' : `Show ${ev.length - 15} more`}</button>` : ''}</div>`;
+};
 V.usage = () => {
   const meter = (label, v, lim, reset) => `<div class="ad-meter ${v >= lim ? 'ad-meter-over' : ''}"><div class="ad-meter-head"><span class="ad-label">${label}</span><span class="ad-data">${v}%${v >= lim ? ' · paused' : ''}</span></div>
     <div class="ad-meter-track" role="meter" aria-valuenow="${v}" aria-valuemin="0" aria-valuemax="100" aria-label="${label}"><div class="ad-meter-fill" style="width:${Math.min(v, 100)}%"></div><div class="ad-meter-limit" style="left:${lim}%"></div></div>
     <div class="ad-meter-foot">Resets ${reset} · limit ${lim}%</div></div>`;
-  return head('Usage', 'When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish. The check runs after each run, so the window can go a little over the limit.') + `
-  <section class="ad-section"><h2 class="ad-section-title">Subscriptions</h2><div class="p-meters">
-    <div class="p-sub"><h3><span>claude-team</span><span class="ad-muted ad-code">alice, erin, frank, gus</span></h3>${meter('5-hour', 64, 90, hhmm(now + 2.3 * hr))}${meter('Weekly', 71, 95, 'Thu 09:00')}</div>
-    <div class="p-sub"><h3><span>claude-mobile</span><span class="ad-muted ad-code">dave</span></h3>${meter('5-hour', 12, 90, hhmm(now + 4 * hr))}${meter('Weekly', 92, 90, 'Thu 09:00')}</div>
-    <div class="p-sub"><h3><span>claude-ops</span><span class="ad-muted ad-code">bob, carol</span></h3>${meter('5-hour', 38, 90, hhmm(now + 1.1 * hr))}${meter('Weekly', 44, 95, 'Mon 07:00')}</div>
+  const subs = [...D.subs].sort((a, b) => Math.max(b[1] / b[2], b[3] / b[4]) - Math.max(a[1] / a[2], a[3] / a[4]));
+  const who = (sub) => { const ag = D.agents.filter((a) => a.sub === sub); return ag.length > 4 ? `${ag.length} agents` : ag.map((a) => a.name).join(', '); };
+  const s = S();
+  const over = Object.entries(D.overrides).filter(([p]) => inScope(p));
+  const lim = (p, a, b, note) => `<div class="p-limit-row"><div><strong class="ad-code">${esc(p)}</strong><div class="ad-muted" style="font-size:13px">${note}</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" type="number" value="${a}" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" type="number" value="${b}" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>`;
+  return head('Usage', 'When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish. The check runs after each run, so a window can go a little over the limit.') + `
+  <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Subscriptions, closest to a limit first</h2></div><div class="p-meters">
+    ${subs.map(([n, f, fl, w, wl], i) => `<div class="p-sub"><h3><span>${n}</span><span class="ad-muted ad-code">${esc(who(n))}</span></h3>${meter('5-hour', f, fl, hhmm(now + (1 + i * 0.7) * hr))}${meter('Weekly', w, wl, 'Thu 09:00')}</div>`).join('')}
   </div></section>
   <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Limits</h2><span class="ad-muted">A project limit can only be lower than the global limit.</span></div>
     <div class="ad-table-wrap">
       <div class="p-limit-row"><div><strong>Global</strong><div class="ad-muted" style="font-size:13px">agentdev-admins</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="g5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="gw" type="number" value="95" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
-      <div class="p-limit-row"><div><strong class="ad-code">acme/mobile</strong><div class="ad-muted" style="font-size:13px">effective 90% / 90%</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="m5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="mw" type="number" value="90" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
-      <div class="p-limit-row"><div><strong class="ad-code">acme/shop-api</strong><div class="ad-muted" style="font-size:13px">uses global</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="s5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="sw" type="number" value="95" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
+      ${over.map(([p, [a, b]]) => lim(p, a, b, `own limit · effective ${a}% / ${Math.min(b, 95)}%`)).join('')}
+      <div class="p-limit-row" style="grid-template-columns:minmax(0,1fr) auto"><div class="ad-muted" style="font-size:14px">${s.projects.length - over.length} other projects use the global limits.</div><button class="ad-btn" type="button" data-act="add-limit">${ic('plus')}Set a project limit</button></div>
     </div></section>`;
 };
-V.audit = () => head('Audit', 'Every change request to the API, also refused ones. Kept for 365 days; the API cannot change or delete an entry.',
-  `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Story</button><button type="button" aria-pressed="false">Raw JSON</button></div>`) + `
+V.audit = () => {
+  const audit = [
+    { t: now - 20 * min, who: 'valentinalexeev', story: 'changed bob: max. concurrent 2 → 1', result: 'ok' },
+    { t: now - 55 * min, who: 'operator', story: 'paused carol after a high security event', result: 'ok', sys: true },
+    { t: now - 2 * hr, who: 'mia', story: 'tried to delete agent gus', result: 'denied', reason: 'needs admin access to acme/docs' },
+    { t: now - 6 * hr, who: 'valentinalexeev', story: 'approved 51be for alice, once (ui)', result: 'ok' },
+    { t: now - 26 * hr, who: 'tom', story: 'added agent gus on acme/docs', result: 'ok' },
+  ];
+  return head('Audit', 'Every change request to the API, also refused ones. Kept for 365 days; the API cannot change or delete an entry.',
+    `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Story</button><button type="button" aria-pressed="false">Raw JSON</button></div>`) + `
   <ol class="ad-timeline" style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4) var(--space-4) var(--space-1)">
   ${audit.map((e) => `<li class="ad-tl ${e.result === 'denied' ? 'ad-tl-alert' : e.sys ? 'ad-tl-agent' : 'ad-tl-person'}"><span class="ad-tl-time">${hhmm(e.t)}</span><span class="ad-tl-mark"></span><div class="ad-tl-text">${e.sys ? `<strong>${e.who}</strong>` : person(e.who)} ${esc(e.story)} <span class="ad-tag ${e.result === 'denied' ? 'ad-sev-high' : 'ad-sev-low'}"><span class="ad-label">${e.result}</span></span>${e.reason ? `<div class="ad-muted">${esc(e.reason)}</div>` : ''}</div></li>`).join('')}
   </ol>`;
+};
 V.platform = () => {
-  const comps = [['API', 'running', 'agentdev-api 2/2'], ['Webhook router', 'running', 'last webhook 40 s ago'], ['Operator', 'running', 'reconciled 7 agents'], ['Claude proxy', 'running', '14 runs today'], ['authentik', 'running', 'sign-in ok'], ['Forge (GitHub)', 'running', 'App token valid, 11 h left'], ['Egress proxy', 'running', '3 refused today'], ['Agent pool', 'stopped', '0 nodes: all agents idle or paused']];
+  const n = D.agents.length;
+  const comps = [['API', 'running', 'agentdev-api 2/2'], ['Webhook router', 'running', 'last webhook 40 s ago'], ['Operator', 'running', `reconciled ${n} agents`], ['Claude proxy', 'running', `${D.size === 'large' ? 126 : 14} runs today`], ['authentik', 'running', 'sign-in ok'], ['Forge (GitHub)', 'running', 'App token valid, 11 h left'], ['Egress proxy', 'running', '3 refused today'], ['Agent pool', D.size === 'large' ? 'running' : 'stopped', D.size === 'large' ? '6 nodes, 23 agent pods' : '0 nodes: all agents idle or paused']];
   return head('Platform', 'The parts of this instance. A part that is not running shows as a banner on every page.') + `
   <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Part</th><th>State</th><th>Detail</th></tr></thead><tbody>
-  ${comps.map(([n, s, d]) => `<tr><td><strong>${n}</strong></td><td><span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${s === 'stopped' ? 'scaled to zero' : 'running'}</span></span></td><td class="ad-muted">${d}</td></tr>`).join('')}
+  ${comps.map(([c, st, d]) => `<tr><td><strong>${c}</strong></td><td><span class="ad-lamp ad-lamp-${st}"><span class="ad-lamp-dot"></span><span class="ad-label">${st === 'stopped' ? 'scaled to zero' : 'running'}</span></span></td><td class="ad-muted">${d}</td></tr>`).join('')}
   </tbody></table></div>
   <section class="ad-section" style="margin-top:var(--space-6)"><h2 class="ad-section-title">Connection states (prototype)</h2><p class="ad-muted" style="margin:0;max-width:68ch">Pick a state to see how every page reacts (#339). The page keeps the last good data and marks its age; it never replaces the data with an error.</p>
   <div class="ad-seg" role="group" aria-label="Connection state">${Object.entries(CONN).map(([id, [, l]]) => `<button type="button" data-conn="${id}" aria-pressed="${conn === id}">${id === 'live' ? 'Live' : l}</button>`).join('')}</div></section>`;
@@ -352,20 +538,21 @@ V.system = () => {
     <div><span class="ad-label ad-muted">data</span><span class="ad-data">412k / 1.0M tokens · 64%</span></div></div></section>
   <section class="ad-section"><h2 class="ad-section-title">Components</h2><div class="p-gallery">
     <section><h3 class="ad-label ad-muted">Buttons</h3><div class="p-row"><button class="ad-btn ad-btn-primary" type="button">Approve</button><button class="ad-btn" type="button">Cancel</button><button class="ad-btn ad-btn-danger" type="button">Delete alice</button><button class="ad-btn ad-btn-quiet" type="button">Sign out</button></div></section>
-    <section><h3 class="ad-label ad-muted">Lifecycle lamps</h3><div class="p-row">${['running', 'starting', 'stopped', 'paused', 'usage-paused', 'blocked', 'invalid'].map((s) => `<span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${s === 'stopped' ? 'idle' : s}</span></span>`).join('')}</div></section>
-    <section><h3 class="ad-label ad-muted">Attention</h3><div class="p-row">${['ok', 'you', 'blocked', 'guardrail', 'usage'].map((s) => `<span class="p-attn p-attn-${s}">${ATTN[s]}</span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Lifecycle lamps</h3><div class="p-row">${['running', 'starting', 'stopped', 'paused', 'usage-paused', 'blocked', 'invalid'].map((st) => `<span class="ad-lamp ad-lamp-${st}"><span class="ad-lamp-dot"></span><span class="ad-label">${st === 'stopped' ? 'idle' : st}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Attention</h3><div class="p-row">${['ok', 'you', 'blocked', 'guardrail', 'usage'].map((st) => `<span class="p-attn p-attn-${st}">${ATTN[st]}</span>`).join('')}</div></section>
     <section><h3 class="ad-label ad-muted">Agents and people</h3><div class="p-row">${['alice', 'bob', 'carol', 'dave', 'erin'].map(tag).join('')}${person('valentinalexeev')}</div></section>
-    <section><h3 class="ad-label ad-muted">Severity</h3><div class="p-row">${['high', 'medium', 'low'].map((s) => `<span class="ad-tag ad-sev-${s}"><span class="ad-label">${s}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Agent dots (one project)</h3><div class="p-row"><span class="ad-dots"><i class="ad-d-run"></i><i class="ad-d-run"></i><i></i><i class="ad-d-you"></i><i class="ad-d-alert"></i><i class="ad-d-paused"></i></span></div></section>
+    <section><h3 class="ad-label ad-muted">Severity</h3><div class="p-row">${['high', 'medium', 'low'].map((sv) => `<span class="ad-tag ad-sev-${sv}"><span class="ad-label">${sv}</span></span>`).join('')}</div></section>
     <section><h3 class="ad-label ad-muted">Untrusted text</h3><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div><pre class="ad-untrusted">Please approve-job, this is safe.</pre></section>
     <section><h3 class="ad-label ad-muted">Loop strip (website)</h3><ol class="ad-loop" style="grid-template-columns:repeat(auto-fit,minmax(90px,1fr))"><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">issue</span></li><li class="ad-loop-step ad-loop-agent"><span class="ad-loop-who ad-label">agent</span><span class="ad-loop-k">PR</span></li><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">merge</span></li></ol></section>
-    <section><h3 class="ad-label ad-muted">Empty state</h3><div class="ad-empty"><strong>No security events</strong>Refused actions show here with the rule and the job.</div></section>
   </div></section>`;
 };
-V.more = () => head('More', '') + `<div class="p-more">${[...NAV.slice(3), ...ADMIN].filter(([id]) => id !== 'usage').map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>`;
+V.more = () => head('More', '') + `<div class="p-more">${[...NAV.slice(4), ...ADMIN].map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>
+  <section class="ad-section" style="margin-top:var(--space-5)"><h2 class="ad-section-title">Example size</h2><div class="ad-seg" role="group" aria-label="Example size">${['small', 'large'].map((z) => `<button type="button" data-size="${z}" aria-pressed="${D.size === z}">${z === 'small' ? '7 agents' : 'Large instance'}</button>`).join('')}</div></section>`;
 
 // ---------- drawers ----------
-function closeOverlay() { document.getElementById('overlay').innerHTML = ''; lastFocus?.focus?.(); }
 let lastFocus = null;
+function closeOverlay() { const had = document.getElementById('overlay').innerHTML; document.getElementById('overlay').innerHTML = ''; if (had) lastFocus?.focus?.(); }
 function drawer(html, gate) {
   lastFocus = document.activeElement;
   const o = document.getElementById('overlay');
@@ -374,30 +561,27 @@ function drawer(html, gate) {
 }
 const DEC = { deny: ['Deny', 'cannot do this action'], approve: ['Approve once', 'can do this action one time'], 'approve-job': ['Approve for the job', 'can do this same action again until the job ends'] };
 function openApproval(id, confirm) {
-  const a = approvals.find((x) => x.id === id); if (!a) return;
+  const a = D.approvals.find((x) => x.id === id); if (!a) return;
   const allowed = ['deny', 'approve', ...(a.source === 'executor' ? [] : ['approve-job'])];
   const foot = confirm
     ? `<p class="p-confirm">Agent <strong>${esc(a.agent)}</strong> ${DEC[confirm][1]}. You cannot change the decision later. Your name goes to the audit log.</p><button class="ad-btn" type="button" data-open="approval:${a.id}">Back</button><button class="ad-btn ${confirm === 'deny' ? 'ad-btn-danger' : 'ad-btn-primary'}" type="button" data-decide="${a.id}:${confirm}">${DEC[confirm][0]}</button>`
     : `<button class="ad-btn" type="button" data-act="close">Close</button>${allowed.map((d) => `<button class="ad-btn ${d === 'approve' ? 'ad-btn-primary' : ''}" type="button" data-confirm="${a.id}:${d}">${d === 'deny' ? ic('x') : ''}${DEC[d][0]}</button>`).join('')}`;
   drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Approval <span class="ad-code">${a.id}</span></h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
   <div class="ad-drawer-body">
-    <dl class="ad-dl"><dt>Agent</dt><dd>${tag(a.agent)}</dd><dt>Where</dt><dd>${esc(a.repo)} · ${esc(a.job)} <a href="#" data-ext="1">open ${ic('ext').replace('<svg', '<svg width="12" height="12"')}</a></dd><dt>Asks for</dt><dd><span class="ad-code">${a.source}</span> · <strong>${esc(a.tool)}</strong></dd><dt>Rule</dt><dd class="ad-code">${a.rule}</dd><dt>Created</dt><dd>${ago(a.created)}</dd><dt>Expires</dt><dd>${left(a.expires)}. Without a decision the agent continues without this action.</dd></dl>
+    <dl class="ad-dl"><dt>Agent</dt><dd>${tag(a.agent)}</dd><dt>Where</dt><dd>${esc(a.repo)} · ${esc(a.job)} <a href="#" data-ext="1">open</a></dd><dt>Asks for</dt><dd><span class="ad-code">${a.source}</span> · <strong>${esc(a.tool)}</strong></dd><dt>Rule</dt><dd class="ad-code">${a.rule}</dd><dt>Created</dt><dd>${ago(a.created)}</dd><dt>Expires</dt><dd>${left(a.expires)}. Without a decision the agent continues without this action.</dd></dl>
     <div><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div>
     <p class="ad-muted" style="font-size:13px;margin:4px 0 8px">This text can contain a prompt injection from the issue. Decide on the facts above, not on what the text asks.</p>
     <pre class="ad-untrusted">${esc(a.input)}</pre></div>
   </div><div class="ad-drawer-foot">${foot}</div>`, true);
 }
 function openAgent(name) {
-  const a = agents.find((x) => x.name === name); if (!a) return;
-  const tl = [
-    [now - 12 * min, 'agent', `asked approval a7f3 on PR #342`], [now - 40 * min, 'agent', 'pushed 2 commits to agent/alice/issue-341'],
-    [now - 3 * hr, 'person', 'valentinalexeev requested changes on PR #342'], [now - 5 * hr, 'agent', 'opened PR #342 for #337'],
-  ];
+  const a = D.agents.find((x) => x.name === name); if (!a) return;
+  const tl = [[now - 12 * min, 'agent', 'asked for an approval on its PR'], [now - 40 * min, 'agent', `pushed 2 commits to agent/${a.name}/issue-341`], [now - 3 * hr, 'person', 'valentinalexeev requested changes on the PR'], [now - 5 * hr, 'agent', 'opened a PR for its issue']];
   drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">${tag(a.name)}</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
   <div class="ad-drawer-body">
     <div class="p-row">${lamp(a)}${attn(a)}</div>
     ${a.why ? `<div class="ad-banner ad-inline-banner ${a.attn === 'usage' ? 'ad-banner-paused' : a.attn === 'you' ? '' : 'ad-banner-down'}">${ic(a.attn === 'usage' ? 'pause' : 'alert')}<span><strong>Waiting on:</strong> ${esc(a.why)}</span></div>` : ''}
-    <dl class="ad-dl"><dt>Repository</dt><dd class="ad-code">${esc(a.repos.join(', '))}</dd><dt>Jobs</dt><dd>${a.jobs} of max. ${a.max}</dd><dt>Tokens 24 h</dt><dd class="ad-data">${k(a.tokens)} of ${k(a.budget)}</dd><dt>Scale to zero</dt><dd>on, after 15 min with no work</dd><dt>Claude</dt><dd class="ad-code">claude-team</dd></dl>
+    <dl class="ad-dl"><dt>Project</dt><dd class="ad-code">${esc(a.repo)}</dd><dt>Jobs</dt><dd>${a.jobs} of max. ${a.max}</dd><dt>Tokens 24 h</dt><dd class="ad-data">${k(a.tokens)} of ${k(a.budget)}</dd><dt>Scale to zero</dt><dd>on, after 15 min with no work</dd><dt>Claude</dt><dd class="ad-code">${a.sub}</dd></dl>
     <section class="ad-section"><h3 class="ad-section-title">Recent</h3><ol class="ad-timeline">${tl.map(([t, w, s]) => `<li class="ad-tl ad-tl-${w}"><span class="ad-tl-time">${hhmm(t)}</span><span class="ad-tl-mark"></span><span class="ad-tl-text">${esc(s)}</span></li>`).join('')}</ol></section>
     <section class="ad-section"><h3 class="ad-section-title">Settings</h3><div class="p-row"><label class="ad-field"><span>Max. concurrent</span><input class="ad-input" id="mc-${a.name}" type="number" min="1" max="8" value="${a.max}" style="width:90px"></label><label class="p-row" style="gap:6px;align-self:end;height:36px"><input type="checkbox" id="stz-${a.name}" checked> Scale to zero</label></div></section>
   </div><div class="ad-drawer-foot"><button class="ad-btn ad-btn-quiet" type="button" data-act="close">Delete…</button>${a.life === 'paused' ? `<button class="ad-btn ad-btn-primary" type="button" data-toast="Resumed ${a.name}. It starts on the next work item.">${ic('play')}Resume</button>` : `<button class="ad-btn" type="button" data-toast="Paused ${a.name}. Runs in progress finish.">${ic('pause')}Pause</button>`}<button class="ad-btn" type="button" data-toast="Saved the settings of ${a.name}.">Save</button></div>`);
@@ -408,20 +592,14 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => { s.innerHTML = ''; }, 3500);
 }
 
-// ---------- command palette ----------
-const CMDS = [
-  ...NAV.map(([id, l]) => [`Go to ${l}`, () => go(id), `g ${id[0]}`]), ...ADMIN.map(([id, l]) => [`Go to ${l}`, () => go(id), '']),
-  ...agents.map((a) => [`Agent ${a.name}`, () => openAgent(a.name), a.repos[0]]),
-  ['Pause all agents', () => toast('Paused 5 agents. Runs in progress finish.'), 'admin'],
-  ['Switch theme', () => theme(), ''], ['Keyboard shortcuts', () => help(), '?'],
-];
-function palette() {
+// ---------- palette: commands, and the project scope picker ----------
+function palette(items, placeholder) {
   lastFocus = document.activeElement;
   const o = document.getElementById('overlay');
-  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><div class="ad-palette" role="dialog" aria-label="Search and commands"><input id="pal-q" placeholder="Search agents, pages, commands" autocomplete="off" aria-controls="pal-list"><ul id="pal-list" role="listbox"></ul></div>`;
-  const q = o.querySelector('#pal-q'); let i = 0, hits = CMDS;
-  const draw = () => { o.querySelector('#pal-list').innerHTML = hits.map(([l, , h], n) => `<li role="option" aria-selected="${n === i}" data-n="${n}">${esc(l)}<span class="ad-muted">${esc(h)}</span></li>`).join('') || '<li class="ad-muted">No match</li>'; };
-  q.addEventListener('input', () => { hits = CMDS.filter(([l, , h]) => (l + h).toLowerCase().includes(q.value.toLowerCase())); i = 0; draw(); });
+  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><div class="ad-palette" role="dialog" aria-label="${esc(placeholder)}"><input id="pal-q" placeholder="${esc(placeholder)}" autocomplete="off" aria-controls="pal-list"><ul id="pal-list" role="listbox"></ul></div>`;
+  const q = o.querySelector('#pal-q'); let i = 0, hits = items;
+  const draw = () => { o.querySelector('#pal-list').innerHTML = hits.slice(0, 60).map(([l, , h], n) => `<li role="option" aria-selected="${n === i}" data-n="${n}">${esc(l)}<span class="ad-muted">${esc(h)}</span></li>`).join('') || '<li class="ad-muted">No match</li>'; };
+  q.addEventListener('input', () => { hits = items.filter(([l, , h]) => (l + ' ' + h).toLowerCase().includes(q.value.toLowerCase())); i = 0; draw(); });
   q.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') { i = Math.min(i + 1, hits.length - 1); draw(); e.preventDefault(); }
     if (e.key === 'ArrowUp') { i = Math.max(i - 1, 0); draw(); e.preventDefault(); }
@@ -430,9 +608,24 @@ function palette() {
   o.querySelector('#pal-list').addEventListener('click', (e) => { const li = e.target.closest('[data-n]'); if (li) { closeOverlay(); hits[+li.dataset.n][1](); } });
   draw(); q.focus();
 }
+const commands = () => [
+  ...NAV.map(([id, l]) => [`Go to ${l}`, () => go(id), '']), ...ADMIN.map(([id, l]) => [`Go to ${l}`, () => go(id), 'admin']),
+  ...D.projects.map((p) => [`Project ${p}`, () => setScope(`p:${p}`), `${D.agents.filter((a) => a.repo === p).length} agents`]),
+  ...D.agents.map((a) => [`Agent ${a.name}`, () => openAgent(a.name), short(a.repo)]),
+  ['Pause all agents', () => toast(`Paused ${D.agents.filter((a) => a.life !== 'paused').length} agents. Runs in progress finish.`), 'admin'],
+  ['Switch theme', () => theme(), ''], ['Keyboard shortcuts', () => help(), '?'],
+];
+function scopePicker() {
+  const wait = (p) => D.inbox.filter((i) => i.repo === p).length;
+  palette([
+    ['My projects', () => setScope('mine'), `${MINE.length} projects`], ['All projects', () => setScope('all'), `${D.projects.length} projects`],
+    ...[...D.projects].sort((a, b) => wait(b) - wait(a)).map((p) => [p, () => setScope(`p:${p}`), wait(p) ? `${wait(p)} waiting for you` : `${D.agents.filter((a) => a.repo === p).length} agents`]),
+  ], 'Show projects: type a name');
+}
+function setScope(v) { scope = v; expanded.clear(); sel = 0; render(); }
 function help() {
   drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Keyboard</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div><div class="ad-drawer-body"><div class="p-help">
-  <span><span class="ad-kbd">Ctrl K</span> <span class="ad-kbd">/</span></span><span>Search and commands</span><span><span class="ad-kbd">G</span> <span class="ad-kbd">T</span></span><span>Today (W Work, A Agents, U Usage, S Security)</span>
+  <span><span class="ad-kbd">Ctrl K</span> <span class="ad-kbd">/</span></span><span>Search: pages, projects, agents, commands</span><span><span class="ad-kbd">P</span></span><span>Change the projects shown</span><span><span class="ad-kbd">G</span> <span class="ad-kbd">T</span></span><span>Today (P Projects, W Work, A Agents, U Usage, S Security)</span>
   <span><span class="ad-kbd">J</span> <span class="ad-kbd">K</span></span><span>Next, previous item</span><span><span class="ad-kbd">Enter</span></span><span>Open the item</span><span><span class="ad-kbd">Esc</span></span><span>Close the drawer</span>
   </div><p class="ad-muted">There is no one-key approve. A decision always opens the request first.</p></div>`);
 }
@@ -444,8 +637,8 @@ function render() {
   const view = (location.hash.slice(1) || 'today').split('?')[0];
   const v = V[view] ? view : 'today';
   renderNav(v); renderConn();
-  document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">acme</span><span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
-  const m = document.getElementById('main'); m.innerHTML = V[v](); fill(document.body);
+  document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
+  document.getElementById('main').innerHTML = V[v](); fill(document.body);
 }
 function theme() {
   const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
@@ -455,14 +648,21 @@ function theme() {
 try { const t = localStorage.getItem('ad-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],.ad-item');
+  const t = e.target.closest('[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],[data-size],[data-scope],[data-pick],[data-expand],[data-fold],[data-ig],[data-av],.ad-item');
   if (!t) return;
   if (t.dataset.ext) { e.preventDefault(); toast('In the console this opens the issue or PR on the forge.'); return; }
+  if (t.dataset.size) { setSize(t.dataset.size); toast(t.dataset.size === 'large' ? `Large example: ${D.projects.length} projects, ${D.agents.length} agents. Showing your ${MINE.length} projects.` : 'Small example: 7 agents.'); return; }
+  if (t.dataset.scope) { setScope(t.dataset.scope); return; }
+  if (t.dataset.pick) { scope = `p:${t.dataset.pick}`; expanded.clear(); location.hash === '#work' ? render() : go('work'); return; }
+  if (t.dataset.expand) { const x = t.dataset.expand; expanded.has(x) ? expanded.delete(x) : expanded.add(x); render(); return; }
+  if (t.dataset.fold) { const x = t.dataset.fold, open = t.getAttribute('aria-expanded') === 'true'; expanded.delete(x); expanded.delete(`-${x}`); expanded.add(open ? `-${x}` : x); render(); return; }
+  if (t.dataset.ig) { inboxGroup = t.dataset.ig; expanded.clear(); render(); return; }
+  if (t.dataset.av) { agentView = t.dataset.av; render(); return; }
   if (t.dataset.open) { const [kind, id] = t.dataset.open.split(':'); kind === 'approval' ? openApproval(id) : openAgent(id); return; }
   if (t.dataset.confirm) { const [id, d] = t.dataset.confirm.split(':'); openApproval(id, d); return; }
   if (t.dataset.decide) {
-    const [id, d] = t.dataset.decide.split(':'); const a = approvals.find((x) => x.id === id); a.done = d;
-    const ix = inbox.findIndex((x) => x.ref === id); if (ix >= 0) inbox.splice(ix, 1);
+    const [id, d] = t.dataset.decide.split(':'); const a = D.approvals.find((x) => x.id === id); a.done = d;
+    const ix = D.inbox.findIndex((x) => x.ref === id); if (ix >= 0) D.inbox.splice(ix, 1);
     closeOverlay(); render(); toast(`${DEC[d][0]}: ${id}. ${a.agent} continues in less than a minute.`); return;
   }
   if (t.dataset.toast) { closeOverlay(); toast(t.dataset.toast); return; }
@@ -470,27 +670,33 @@ document.addEventListener('click', (e) => {
   const act = t.dataset.act;
   if (act === 'close') closeOverlay();
   else if (act === 'conn-live') { conn = 'live'; render(); toast('Connected. The data is live again.'); }
-  else if (act === 'pause-all') toast('Paused 5 agents. Runs in progress finish.');
+  else if (act === 'pause-all') toast(`Paused ${S().agents.filter((a) => a.life !== 'paused').length} agents in the projects shown. Runs in progress finish.`);
   else if (act === 'add') toast('Add agent opens a short form: name, repository, forge, max. concurrent.');
+  else if (act === 'add-limit') toast('Pick a project, then type its limits. A project limit can only be lower than the global limit.');
   else if (act === 'saved') toast('Saved. The effective limit applies to the next run.');
-  else if (t.classList.contains('ad-item') && !e.target.closest('button,a')) { sel = +t.dataset.idx; t.querySelector('button')?.click(); }
+  else if (t.classList.contains('ad-item') && !e.target.closest('button,a')) { sel = +t.dataset.idx; t.querySelector('button, a')?.click(); }
 });
 let gKey = 0;
 document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
-  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) { e.preventDefault(); palette(); return; }
+  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) { e.preventDefault(); palette(commands(), 'Search pages, projects, agents, commands'); return; }
   if (e.key === 'Escape') { closeOverlay(); return; }
   if (typing || document.getElementById('overlay').innerHTML) return;
-  if (gKey && Date.now() - gKey < 1200) { const m = { t: 'today', w: 'work', a: 'agents', u: 'usage', s: 'security' }[e.key]; gKey = 0; if (m) go(m); return; }
+  if (gKey && Date.now() - gKey < 1200) { const m = { t: 'today', p: 'projects', w: 'work', a: 'agents', u: 'usage', s: 'security' }[e.key]; gKey = 0; if (m) go(m); return; }
   if (e.key === 'g') { gKey = Date.now(); return; }
+  if (e.key === 'p') { scopePicker(); return; }
   if (e.key === '?') { help(); return; }
   const list = document.getElementById('inbox'); if (!list) return;
-  if (e.key === 'j' || e.key === 'k') { sel = Math.max(0, Math.min(inbox.length - 1, sel + (e.key === 'j' ? 1 : -1))); list.querySelectorAll('.ad-item').forEach((li, n) => li.setAttribute('aria-selected', n === sel)); list.children[sel]?.scrollIntoView({ block: 'nearest' }); }
-  if (e.key === 'Enter') list.children[sel]?.querySelector('button, a')?.click();
+  const items = list.querySelectorAll('.ad-item');
+  if (e.key === 'j' || e.key === 'k') { sel = Math.max(0, Math.min(items.length - 1, sel + (e.key === 'j' ? 1 : -1))); items.forEach((li, n) => li.setAttribute('aria-selected', n === sel)); items[sel]?.scrollIntoView({ block: 'nearest' }); }
+  if (e.key === 'Enter') items[sel]?.querySelector('button, a')?.click();
 });
-document.getElementById('open-palette').addEventListener('click', palette);
+document.getElementById('open-palette').addEventListener('click', () => palette(commands(), 'Search pages, projects, agents, commands'));
+document.getElementById('scope').addEventListener('click', scopePicker);
 document.getElementById('theme').addEventListener('click', theme);
 window.addEventListener('hashchange', () => { closeOverlay(); render(); document.getElementById('main').focus({ preventScroll: true }); });
+// a link with #large opens the large example
+if (location.hash === '#large') { try { history.replaceState(null, '', '#today'); } catch (e) { /* not allowed */ } D = largeData(); scope = 'mine'; }
 fill(document.body); render();
 })();
 </script>

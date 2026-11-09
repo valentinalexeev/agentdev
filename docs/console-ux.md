@@ -147,6 +147,7 @@ From a review of 17 products in November 2026 (sources at the end). Each line na
 
 ```
 Today          inbox + numbers + overnight strip                   everyone
+Projects       one row per repository, sets the scope               everyone
 Work           board (plan, build, review, done) and list          everyone
 Agents         fleet table, agent drawer (overview, jobs, events,  everyone, actions by permission
                usage, settings, harness guide)
@@ -220,7 +221,34 @@ access)". Raw view: the JSON of each entry. Filters by person, agent, action and
 
 The page never replaces the data with an error. It keeps the last good data and marks its age.
 
-## 9. API needed
+## 9. At scale: 15 to 30 projects, 30 to 60 agents
+
+The layout above is designed for one team. At 20 or more projects, five things break, and each has a rule. The
+prototype has a large example (24 projects, 39 agents; the **Example size** switch at the bottom of the rail, or open
+it with `#large`).
+
+| What breaks | Rule |
+|---|---|
+| Everything is shown to everyone. A reviewer of 3 projects sees the work of 24. | **Project scope.** A scope button at the left of the top bar filters every page, count and banner: *My projects* (repositories where the person has write access; the default), *All projects*, or one project. Key `P`. Today says how many items wait in the projects that are not shown. |
+| The inbox grows to 30 or more items. | **Group above 10 items**, by type (*Decide*, *Stopped agents*, *Answer*, *Review*) or by project. Each group shows 4 items and "Show N more". The group header carries the urgency: "first expires in 18 min", "oldest 2 d". |
+| The agents table grows to 40 or more rows. | **Group by project above 10 agents.** A group row has the project, one dot per agent and a summary. Groups where every agent is ok are folded; agents that need attention are never folded. A **Wall** view shows one tile per agent, attention first, for a one-screen glance. |
+| The Work board has 70 or more cards in 4 columns. | **Phase matrix** when the scope has several projects and more than 20 jobs: one row per project, one column per phase, counts as links. Review cells have the gate tint, blocked build cells the danger tint. A row opens that project's board. Below it, "Your turn": the pull requests to review, oldest first. |
+| There is no place to compare projects. | A **Projects** page: one row per repository with agent dots, waiting for you, in review, stopped, working, tokens and events. Stopped and waiting sort first. A row sets the scope to that project. |
+
+Other rules at scale:
+
+- **Counts beat lists.** KPI tiles, rail counts, group headers and matrix cells say how many; lists show the first
+  few. Every hidden item is one click away, and the text says how many are hidden.
+- **Usage** sorts subscriptions by how close they are to a limit, and lists only projects with their own limit:
+  "21 other projects use the global limits".
+- **Security** has rule chips with counts, so a burst of one rule is visible before the table, and a capped table.
+- **Agent colours repeat.** Six lane hues cannot tell 40 agents apart. The name is the identity; the lane hue is only
+  a hint that helps inside one project.
+- **The API must filter on the server** before 50 agents: `?repo=`, `?scope=mine`, cursors on every list, and a
+  stream scoped to the projects the person can see. Today the UI loads every agent and every approval.
+- **Phone**: the scope button stays in the top bar; Projects replaces Usage in the bottom bar.
+
+## 10. API needed
 
 | Need | Today | Change |
 |---|---|---|
@@ -228,24 +256,25 @@ The page never replaces the data with an error. It keeps the last good data and 
 | Jobs for the Work board | botboard has them; the API does not | `GET /api/jobs` (agent, issue, PR, phase, outcome, times) |
 | Live updates | 15 s polling | `GET /api/stream` (SSE) with agent, approval, event and usage changes |
 | Agent detail | `GET /api/agents` list only | `GET /api/agents/{name}` with pods, recent jobs, guide |
+| Scope and size | every list returns everything | `repo` and `scope=mine` filters and cursors on agents, approvals, events and jobs |
 | Platform health | none | `GET /api/platform` (admins) and an unauthenticated `/healthz` the UI can read |
 | Audit | `GET /api/audit` exists | no change for the first version |
 | Push | none | `POST /api/push/subscriptions` (Web Push, VAPID) |
 
 Every new endpoint keeps the rules of the API: bearer token, permission check on the forge, no Secrets.
 
-## 10. Phases
+## 11. Phases
 
 | Phase | Scope | API change | Issues |
 |---|---|---|---|
 | 1 | Adopt the design system in `images/ui`: shell, rail, lamps, tags, tables, drawer, dark theme, favicon | none | new |
-| 2 | Today inbox (client-side), two-axis agent state, connection states | none | new, #339 |
+| 2 | Today inbox (client-side), two-axis agent state, connection states, project scope, grouping above 10 items, Projects page | none (filters later) | new, #339 |
 | 3 | Responsive layout and PWA manifest | none | #338 (part) |
 | 4 | Agent drawer, Audit page, Platform page | agent detail, platform | new |
 | 5 | Work board, live stream | jobs, stream | new |
 | 6 | Web Push, mobile chat sessions | push, session API | #338 |
 
-## 11. Open decisions
+## 12. Open decisions
 
 1. **Botboard.** Proposal: the Work board replaces botboard for people with a console login; botboard stays for
    instances without authentik. Blocks phase 5.

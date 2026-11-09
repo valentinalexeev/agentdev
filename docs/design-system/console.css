@@ -181,6 +181,62 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
 .ad-palette li[aria-selected="true"] { background: var(--gate-soft); }
 .ad-palette li .ad-muted { margin-left: auto; font-size: 13px; }
 
+/* ---- Scale: 15 and more projects or agents (docs/console-ux.md, "At scale") ---- */
+
+/* Scope: which projects every page shows. Default "My projects"; admins can pick "All projects". */
+.ad-scope { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 var(--space-2) 0 var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); color: var(--ink); font: 600 14px/20px var(--font-sans); cursor: pointer; white-space: nowrap; min-width: 0; max-width: 260px; }
+.ad-scope > span { overflow: hidden; text-overflow: ellipsis; }
+.ad-scope svg { width: 14px; height: 14px; flex: none; color: var(--ink-muted); }
+.ad-scope .ad-data { color: var(--ink-muted); font-size: 12px; }
+.ad-scope:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Group header: inside an inbox or a table, when a list passes about 10 items */
+.ad-group-head { display: flex; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); background: var(--sunken); border-top: 1px solid var(--line); color: var(--ink-muted); }
+.ad-inbox > .ad-group-head:first-child { border-top: 0; }
+.ad-group-head .ad-data { margin-left: auto; }
+.ad-group-head-you { color: var(--gate); }
+.ad-group-head-alert { color: var(--danger); }
+.ad-table tr.ad-group-row td { background: var(--sunken); padding: 0; }
+.ad-group-btn { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); width: 100%; padding: 6px var(--space-3); color: var(--ink); font-size: 14px; line-height: 20px; }
+.ad-group-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-group-btn svg { width: 14px; height: 14px; color: var(--ink-muted); transition: transform .15s; }
+.ad-group-btn[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.ad-group-btn .ad-muted { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .ad-group-btn svg { transition: none; } }
+
+/* Show more: the end of a capped group. Says how many are hidden. */
+.ad-showmore { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; padding: var(--space-2) var(--space-4) var(--space-2) calc(var(--space-4) + 32px); border-top: 1px solid var(--line); color: var(--link); font-size: 14px; line-height: 20px; }
+.ad-showmore:hover { background: var(--ground); }
+.ad-showmore:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Agent dots: the agents of one project in one line (lifecycle and attention) */
+.ad-dots { display: inline-flex; flex-wrap: wrap; gap: 3px; vertical-align: middle; }
+.ad-dots i { width: 9px; height: 9px; box-sizing: border-box; border: 1.5px solid var(--line-strong); border-radius: var(--radius-lamp); }
+.ad-dots i.ad-d-run { background: var(--lamp); border-color: var(--lamp-ink); }
+.ad-dots i.ad-d-you { background: var(--gate); border-color: var(--gate); border-radius: var(--radius-sm); }
+.ad-dots i.ad-d-alert { background: var(--danger); border-color: var(--danger); border-radius: var(--radius-sm); }
+.ad-dots i.ad-d-paused { background: var(--paused); border-color: var(--paused); border-radius: 0; }
+
+/* Wall: one tile per agent, for a fleet glance at 20 and more agents. Attention sorts first. */
+.ad-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-2); }
+.ad-tile { all: unset; box-sizing: border-box; cursor: pointer; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ad-tile:hover { border-color: var(--line-strong); }
+.ad-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-tile-repo { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-tile-you { border-color: var(--gate); background: var(--gate-soft); }
+.ad-tile-alert { border-color: var(--danger); background: var(--danger-soft); }
+.ad-tile-usage { border-color: var(--paused); background: var(--paused-soft); }
+
+/* Phase matrix: projects by work phase, for many projects at once. A cell is a count and a link. */
+.ad-matrix .ad-cell { text-align: center; }
+.ad-matrix td.ad-cell { font: 500 14px/20px var(--font-mono); font-variant-numeric: tabular-nums; }
+.ad-matrix .ad-cell button { all: unset; cursor: pointer; display: inline-block; min-width: 20px; padding: 2px 6px; border-radius: var(--radius-sm); }
+.ad-matrix .ad-cell button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ad-matrix .ad-cell-zero { color: var(--line-strong); }
+.ad-matrix .ad-cell-you button { background: var(--gate-soft); color: var(--gate); font-weight: 600; }
+.ad-matrix .ad-cell-alert button { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.ad-matrix .ad-cell-agent button { background: var(--lamp-soft); color: var(--ink); }
+
 /* Bottom bar: phone navigation (#338) */
 .ad-bottombar { display: none; }
 

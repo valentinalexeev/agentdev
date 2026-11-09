@@ -39,7 +39,7 @@ Every screen shows work passing between agents and people. The palette shows who
 
 Never use `lamp` for a human action or `gate` for an agent action. A screen with neither uses no brand colour.
 
-**Agent identity.** Each agent gets one of six lane hues (`lane-1` to `lane-6`), picked by a hash of its name, so an
+**Agent identity.** Six hues cannot tell 30 agents apart: the name is the identity, and the hue only helps inside one project. Each agent gets one of six lane hues (`lane-1` to `lane-6`), picked by a hash of its name, so an
 agent has the same colour on every screen. The hash: `x = (x * 31 + charCode) >>> 0` over the name, lane `x % 6 + 1`.
 
 **Contrast.** Every text token reaches 4.5:1 on the grounds its usage note names, in both themes. `line-strong` and
@@ -232,7 +232,13 @@ with no work, not an error.
 | Board | `ad-board`, `ad-col-plan / build / review / done` | Work cards by phase; the review column is the person's turn. One column per screen on phones. |
 | Empty state | `ad-empty` | Says what will appear and how to make it appear. |
 | Toast | `ad-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
-| Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, agents and commands. No one-key approve anywhere. |
+| Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, projects, agents and commands. No one-key approve anywhere. |
+| Project scope | `ad-scope` | Left of the top bar: the projects every page shows and their count. Opens a palette of projects, sorted by what waits. |
+| Group header | `ad-group-head` (lists), `ad-group-row` and `ad-group-btn` (tables) | A list groups itself above about 10 items. The header has the name, the urgency and the count. A table group folds; `aria-expanded` on the button. |
+| Show more | `ad-showmore` | The end of a capped group. Always says how many are hidden. |
+| Agent dots | `ad-dots`, `ad-d-run / -you / -alert / -paused` | One dot per agent of a project, in one line. Round = lifecycle, square = attention. Never the only signal: the row also has the counts. |
+| Wall | `ad-wall`, `ad-tile`, `-you / -alert / -usage` | One tile per agent, attention first. For a fleet glance at 20 and more agents. |
+| Phase matrix | `ad-matrix`, `ad-cell`, `-you / -alert / -agent / -zero` | Projects by work phase. A cell is a count and a link; review cells take the gate tint. Replaces the board when a scope has several projects. |
 
 ### Decisions in the console
 
