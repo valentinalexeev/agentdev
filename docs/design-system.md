@@ -14,6 +14,8 @@ The identity says what the product does: **agents propose, people merge.**
 | `design-system/tokens.css` | the tokens as CSS custom properties and type classes | no: run `node scripts/design-tokens.mjs` |
 | `design-system/fonts.css` | Google Fonts import for the three faces | replace it to self-host the fonts |
 | `design-system/components.css` | the components below as CSS classes (`ad-` prefix) | yes |
+| `design-system/console.css` | the console layer: shell, inbox, tables, drawer, untrusted text, board | yes |
+| `design-system/console-prototype.html` | every console screen with example data, built only from these files | yes |
 | `design-system/agentdev-mark.svg`, `agentdev-mark-dark.svg`, `favicon.svg` | the mark for light grounds, dark grounds, and the browser tab | yes, with care |
 
 Load order on a page: `fonts.css`, `tokens.css`, `components.css`. The theme follows the system setting;
@@ -197,22 +199,65 @@ top rule of each step names the actor (`ad-loop-agent` amber, `ad-loop-person` p
 
 ## The management UI
 
-The UI in `images/ui` moves to the system like this (planned, not done yet):
+The console design (activities, daily use, information architecture, screens, phases) is in
+[Console UX](console-ux.md). Its components are in `design-system/console.css`, on top of `components.css`, and
+`design-system/console-prototype.html` shows every screen with example data (open it from the folder, or see the
+published prototype linked from the pull request).
+
+Load order in the console: `fonts.css`, `tokens.css`, `components.css`, `console.css`.
+
+### Two axes of agent state
+
+An agent has a **lifecycle** (status lamp: running, starting, idle, paused, invalid) and an **attention** state
+(`ok`, `needs you`, `blocked`, `guardrail`, `usage limit`). They are shown side by side, never merged into one
+colour. The API's `stopped` (zero pods) is shown as **idle** with an empty lamp: it is the normal state of an agent
+with no work, not an error.
+
+### Console components (`console.css`)
+
+| Component | Classes | Rule |
+|---|---|---|
+| App shell | `ad-shell`, `ad-rail`, `ad-topbar`, `ad-main` | Left rail on `panel` with the mark, navigation and counts; top bar with breadcrumbs, search, connection state, theme, user. Below 760px the rail becomes `ad-bottombar`. |
+| Navigation item | `ad-nav`, `aria-current="page"` | Gate tint and a gate edge on the current page. `ad-count` only for things that wait for a person. |
+| Connection state | `ad-conn`, `-stale`, `-waking`, `-down` | Always in the top bar. Not live adds a banner. Keep the last data and say its age (#339). |
+| Banner | `ad-banner`, `-warn`, `-down`, `-paused` | One per cause, under the top bar, with one action. Never more than two. |
+| KPI tile | `ad-kpis`, `ad-kpi`, `-you`, `-alert` | Only numbers a person acts on, each with its unit and a foot line. `-you` (gate) for "waiting for you". |
+| Inbox | `ad-inbox`, `ad-item`, `-alert`, `-agent` | Things that wait for a person. A reason chip, the agent tag, where, and the expiry or age on the right. |
+| Data table | `ad-table-wrap`, `ad-table`, `ad-num` | `sunken` header of `label` text; numbers right-aligned in mono; the first cell is a button that opens the drawer. |
+| Filters | `ad-filters`, `ad-chip`, `ad-seg` | Chips for filters with counts, segmented control for one-of choices (time range, view). |
+| Field | `ad-field`, `ad-input`, `ad-error` | Label above, help below, `aria-invalid` for errors. |
+| Drawer | `ad-drawer`, `-gate`, `ad-scrim` | Detail beside the list so the list keeps its place. `-gate` when the drawer holds a decision. Full screen on phones. |
+| Untrusted text | `ad-untrusted`, `ad-untrusted-head` | Everything the model wrote: plain text only, never HTML or a link, a hatched lamp-ink edge, the words "Written by the agent · not checked". |
+| Timeline | `ad-timeline`, `ad-tl-agent`, `-person`, `-alert` | Square amber mark for the agent, round gate mark for a person, red for a refusal. Newest first. |
+| Board | `ad-board`, `ad-col-plan / build / review / done` | Work cards by phase; the review column is the person's turn. One column per screen on phones. |
+| Empty state | `ad-empty` | Says what will appear and how to make it appear. |
+| Toast | `ad-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
+| Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, agents and commands. No one-key approve anywhere. |
+
+### Decisions in the console
+
+- A decision (approve, deny, resume after a guardrail, delete) always opens its detail first. The trusted facts
+  come from the platform and are above the untrusted text. The confirm step states the effect in one sentence and
+  that the name goes to the audit log.
+- Only the decisions the request type allows are buttons (no "Approve for the job" for an executor).
+- No approval by timeout. The UI says what happens without a decision.
+- A push notification never contains model-written text.
+
+### Moving `images/ui` to the system
 
 | Today | In the design system |
 |---|---|
-| `.phase.running / starting / stopped / blocked / paused / usage-paused / invalid` | status lamp, same state names |
+| `.phase.running / starting / stopped / blocked / paused / usage-paused / invalid` | status lamp (lifecycle) plus attention chip |
 | `.sev.high / medium / low` | severity tag |
 | agent names in tables | agent tag |
 | `button` (black), `.secondary`, `.danger`, `.link` | `ad-btn-primary`, `ad-btn`, `ad-btn-danger`, `ad-btn-quiet` |
-| `button.tab` and the pending badge | tabs with `ad-count` |
+| `button.tab` and the pending badge | rail navigation with `ad-count` |
 | usage percent cells | usage meter |
-| page `h1` | `display-3` |
-| approval details dialog | an overlay panel over the table, gate edge, `shadow-dialog`, closes with Escape |
+| page `h1` | `ad-page-title` (`display-3`) |
+| approval details dialog | `ad-drawer-gate` with `ad-untrusted` |
+| `pre.untrusted` | `ad-untrusted` |
+| `.banner` | `ad-banner` |
 | Vite default favicon | `favicon.svg` |
-
-Layout: a top bar on `panel` with the mark, the wordmark and the tabs; content on `ground`, at most 1200px wide;
-tables on `panel` with a `sunken` header row of `label` text.
 
 ## The website
 

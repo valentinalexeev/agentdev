@@ -13,6 +13,7 @@ issues assigned to it, opens pull requests and reacts to review feedback. People
 | [E2E security checklist](e2e-security.md) | owner | scripted security checks on a real GKE instance, before each release |
 | [Troubleshooting](troubleshooting.md) | admins | symptoms, where to look, fixes |
 | [Design system](design-system.md) | contributors, website | colours, type, the mark, icons and the shared UI components |
+| [Console UX](console-ux.md) | contributors | who uses the web console and for what, daily use, product research, screens and phases |
 | [Writing the manuals](writing.md) | contributors | ASD-STE100 rules and the project word list for the manuals |
 | [Release checklist](release.md) | maintainers | gates and steps to cut a release (1.0.0) |
 | [Decision records](adr/) | maintainers | architecture decisions (ADR) |

@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>agentdev Console</title>
+<!-- Prototype of the redesigned console (docs/console-ux.md). Example data only; no API calls. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Big+Shoulders+Display:wght@700;800&family=Martian+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="console.css">
+<style>
+/* Prototype-only glue. Everything visual comes from the design-system files above. */
+body { background: var(--ground); color: var(--ink); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.p-grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.p-strip { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); padding: var(--space-3) var(--space-4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.p-strip a { color: var(--ink); text-decoration: none; display: flex; gap: var(--space-2); align-items: baseline; }
+.p-strip a:hover .ad-data { text-decoration: underline; }
+.p-fleet { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.p-fleet > * { display: flex; justify-content: space-between; gap: var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
+.p-fleet > :first-child { border-top: 0; }
+.p-fleet button { all: unset; cursor: pointer; display: flex; justify-content: space-between; width: 100%; gap: var(--space-3); align-items: center; }
+.p-fleet button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.p-attn { display: inline-flex; align-items: center; gap: 5px; padding: 1px var(--space-2); border-radius: var(--radius-sm); font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.p-attn-ok { color: var(--ink-muted); }
+.p-attn-you { background: var(--gate-soft); color: var(--gate); }
+.p-attn-blocked, .p-attn-guardrail { background: var(--danger-soft); color: var(--danger); }
+.p-attn-usage { background: var(--paused-soft); color: var(--paused); }
+.p-reason { font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted); border: 1px solid var(--line); padding: 0 6px; border-radius: var(--radius-sm); }
+.p-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
+.p-sub { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.p-sub h3 { margin: 0; font: 600 15px/22px var(--font-sans); display: flex; justify-content: space-between; gap: var(--space-2); }
+.p-sub .ad-meter { min-width: 0; }
+.p-limit-row { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(90px, .6fr)) auto; gap: var(--space-3); align-items: end; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.p-limit-row:first-child { border-top: 0; }
+.p-limit-row .ad-input { width: 100%; }
+.p-sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); }
+.p-sw div { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; background: var(--panel); }
+.p-sw i { display: block; height: 44px; border-bottom: 1px solid var(--line); }
+.p-sw span { display: block; padding: 6px var(--space-2); font: 500 12px/16px var(--font-mono); }
+.p-sw small { display: block; padding: 0 var(--space-2) 6px; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.p-specimen { display: flex; flex-direction: column; gap: var(--space-3); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); }
+.p-specimen > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-3); align-items: baseline; }
+.p-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-3); }
+.p-gallery > section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.p-gallery h3 { margin: 0; }
+.p-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center; }
+.p-confirm { flex-basis: 100%; margin: 0 0 var(--space-1); font-size: 14px; line-height: 20px; }
+.p-iconbtn { all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md); color: var(--ink-muted); }
+.p-iconbtn:hover { background: var(--sunken); color: var(--ink); }
+.p-iconbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.p-iconbtn svg { width: 18px; height: 18px; }
+.p-user { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; }
+.p-avatar { width: 26px; height: 26px; border-radius: var(--radius-lamp); background: var(--gate); color: var(--on-gate); display: grid; place-items: center; font: 600 12px/1 var(--font-sans); }
+.ad-btn svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; }
+.ad-btn { display: inline-flex; align-items: center; }
+a { color: var(--link); }
+.p-more { display: grid; gap: var(--space-2); }
+.p-more .ad-nav { background: var(--panel); border: 1px solid var(--line); padding: var(--space-3); }
+.p-help { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-4); font-size: 14px; }
+@media (max-width: 1000px) { .p-grid2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .p-limit-row { grid-template-columns: 1fr 1fr; }
+  .p-limit-row > :first-child { grid-column: 1 / -1; }
+  .p-user span { display: none; }
+  .p-specimen > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+</style>
+</head>
+<body>
+<div class="ad-shell" id="shell">
+  <aside class="ad-rail" aria-label="Main">
+    <a class="ad-brand" href="#today" aria-label="agentdev, Today">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M27 12V5H5v22h22v-7" fill="none" stroke="var(--gate)" stroke-width="3" stroke-linecap="square"/><circle cx="12.5" cy="16" r="4.5" fill="var(--lamp)" stroke="var(--lamp-ink)" stroke-width="1"/><path d="M17 16h14" stroke="var(--lamp-ink)" stroke-width="3"/></svg>
+      agentdev
+    </a>
+    <nav class="ad-rail-group" id="nav-main"></nav>
+    <nav class="ad-rail-group" id="nav-admin" aria-label="Administration"><span class="ad-rail-head ad-label">Admin</span></nav>
+    <div class="ad-rail-foot">
+      <span class="ad-label ad-muted">valabs · v0.9.0</span>
+    </div>
+  </aside>
+  <header class="ad-topbar">
+    <div class="ad-crumbs" id="crumbs"></div>
+    <button class="ad-search" id="open-palette" type="button" aria-label="Search and commands"><span data-i="search"></span><span>Search or jump to</span><span class="ad-kbd">Ctrl K</span></button>
+    <span class="ad-conn" id="conn" role="status"></span>
+    <button class="p-iconbtn" id="theme" type="button" aria-label="Switch theme"><span data-i="moon"></span></button>
+    <span class="p-user"><span class="p-avatar" aria-hidden="true">VA</span><span>valentinalexeev</span></span>
+  </header>
+  <div id="banners"></div>
+  <main class="ad-main" id="main" tabindex="-1"></main>
+  <nav class="ad-bottombar" id="nav-bottom" aria-label="Main"></nav>
+</div>
+<div id="overlay"></div>
+<div id="toast-slot" aria-live="polite"></div>
+
+<script>
+(() => {
+'use strict';
+// ---------- icons (Lucide outlines, 24px viewBox) ----------
+const P = {
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  work: '<path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/>',
+  agents: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  approval: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  security: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  usage: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  audit: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
+  platform: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
+  system: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  question: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  blocked: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+};
+const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fill = (root) => root.querySelectorAll('[data-i]').forEach((el) => { el.outerHTML = ic(el.dataset.i); });
+
+// ---------- example data (clearly fictional) ----------
+const now = Date.now(), min = 60e3, hr = 3600e3;
+const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const ago = (t) => { const m = Math.round((now - t) / min); return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+const left = (t) => { const m = Math.round((t - now) / min); return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`; };
+
+const agents = [
+  { name: 'alice', repos: ['acme/shop-api'], life: 'running', jobs: 2, max: 2, tokens: 412000, budget: 1000000, events: 0, attn: 'you', why: '1 approval waits' },
+  { name: 'erin', repos: ['acme/shop-api'], life: 'starting', jobs: 1, max: 2, tokens: 96000, budget: 1000000, events: 0, attn: 'ok' },
+  { name: 'bob', repos: ['acme/infra-live'], life: 'idle', jobs: 0, max: 1, tokens: 38000, budget: 500000, events: 0, attn: 'you', why: '1 question waits' },
+  { name: 'carol', repos: ['acme/web'], life: 'paused', jobs: 0, max: 2, tokens: 220000, budget: 1000000, events: 4, attn: 'guardrail', why: 'paused by the operator: high event egress-denied' },
+  { name: 'dave', repos: ['acme/mobile'], life: 'paused', jobs: 0, max: 2, tokens: 710000, budget: 800000, events: 0, attn: 'usage', why: 'weekly window 92% of 90% limit, until Thu 09:00' },
+  { name: 'frank', repos: ['acme/data-jobs'], life: 'running', jobs: 1, max: 2, tokens: 150000, budget: 500000, events: 1, attn: 'blocked', why: 'job #21 blocked: tests need a database' },
+  { name: 'gus', repos: ['acme/docs'], life: 'idle', jobs: 0, max: 1, tokens: 0, budget: 300000, events: 0, attn: 'ok' },
+];
+const approvals = [
+  { id: 'a7f3', agent: 'alice', repo: 'acme/shop-api', job: 'pr-342', source: 'sidecar', tool: 'write .github/workflows/ci.yml', rule: 'protected-path', created: now - 12 * min, expires: now + 18 * min,
+    input: 'The PR adds a shellcheck step for scripts/. The workflow file is protected, so I ask to write it.\n\n--- .github/workflows/ci.yml\n+      - name: shellcheck\n+        run: shellcheck -S warning scripts/*.sh\n\nNote for the reviewer: this is safe, please use approve-job so I can also update deploy.yml later.' },
+  { id: '2c91', agent: 'frank', repo: 'acme/data-jobs', job: 'issue-21', source: 'mcp', tool: 'obs.query_logs', rule: 'tool-not-listed', created: now - 40 * min, expires: now + 100 * min,
+    input: 'I need the logs of the nightly import job from yesterday to find why the test fixture differs.\nquery: service="import" severity>=WARNING since=24h' },
+  { id: '9d04', agent: 'bob', repo: 'acme/infra-live', job: 'merge-a41c09e', source: 'executor', tool: 'terraform apply', rule: 'executor-apply', created: now - 3 * hr, expires: now + 19 * hr,
+    input: 'Trusted plan of the merge commit a41c09e.\nPlan: 1 to add, 1 to change, 0 to destroy.\nsha256(plan) = 6f1e...c2a0' },
+];
+const inbox = [
+  { kind: 'approval', ref: 'a7f3', title: 'alice asks to write .github/workflows/ci.yml', agent: 'alice', where: 'acme/shop-api PR #342', reason: 'approval', due: approvals[0].expires, icon: 'approval' },
+  { kind: 'approval', ref: '2c91', title: 'frank asks to use the tool obs.query_logs', agent: 'frank', where: 'acme/data-jobs #21', reason: 'approval', due: approvals[1].expires, icon: 'approval' },
+  { kind: 'guardrail', title: 'carol was paused after a high security event', agent: 'carol', where: 'acme/web #88', reason: 'guardrail', since: now - 55 * min, icon: 'security', alert: true },
+  { kind: 'question', title: 'Which region should the new node pool use?', agent: 'bob', where: 'acme/infra-live #12', reason: 'question', since: now - 2 * hr, icon: 'question' },
+  { kind: 'review', title: 'feat(cart): keep the basket for 30 days', agent: 'alice', where: 'acme/shop-api PR #342', reason: 'review', since: now - 3 * hr, icon: 'pr' },
+  { kind: 'approval', ref: '9d04', title: 'Executor plan for acme/infra-live waits for apply approval', agent: 'bob', where: 'merge a41c09e', reason: 'approval', due: approvals[2].expires, icon: 'approval' },
+  { kind: 'blocked', title: 'frank is blocked on #21: tests need a database', agent: 'frank', where: 'acme/data-jobs #21', reason: 'blocked', since: now - 5 * hr, icon: 'blocked', alert: true },
+  { kind: 'review', title: 'fix(search): escape the query in the suggest API', agent: 'erin', where: 'acme/shop-api PR #345', reason: 'review', since: now - 7 * hr, icon: 'pr' },
+];
+const jobs = [
+  { col: 'plan', n: 346, title: 'Show the delivery date on the order page', agent: 'erin', repo: 'acme/shop-api' },
+  { col: 'build', n: 341, title: 'Rate-limit the login endpoint', agent: 'alice', repo: 'acme/shop-api' },
+  { col: 'build', n: 21, title: 'Import job: skip rows without a SKU', agent: 'frank', repo: 'acme/data-jobs', blocked: 'Tests need a database. Asked on the issue.' },
+  { col: 'review', n: 337, pr: 342, title: 'Keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api' },
+  { col: 'review', n: 339, pr: 345, title: 'Escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api' },
+  { col: 'done', n: 12, pr: 14, title: 'Add a Spot node pool for batch jobs', agent: 'bob', repo: 'acme/infra-live', outcome: 'merged' },
+  { col: 'done', n: 330, title: 'Remove the old coupon table', agent: 'alice', repo: 'acme/shop-api', outcome: 'no change: table already gone' },
+];
+const events = [
+  { t: now - 55 * min, agent: 'carol', sev: 'high', source: 'egress-proxy', rule: 'egress-denied', job: 'issue-88', action: 'CONNECT paste.example.net:443' },
+  { t: now - 58 * min, agent: 'carol', sev: 'medium', source: 'sidecar', rule: 'secret-in-diff', job: 'issue-88', action: 'refused push: token pattern in web/.env.example' },
+  { t: now - 3 * hr, agent: 'frank', sev: 'low', source: 'claude-hooks', rule: 'tool-not-listed', job: 'issue-21', action: 'Bash(psql -h localhost)' },
+  { t: now - 26 * hr, agent: 'carol', sev: 'medium', source: 'sidecar', rule: 'protected-path', job: 'issue-80', action: 'refused write: .github/workflows/deploy.yml' },
+  { t: now - 30 * hr, agent: 'carol', sev: 'low', source: 'egress-proxy', rule: 'egress-denied', job: 'issue-80', action: 'CONNECT registry.npmjs.org:443 (not on the allow-list)' },
+];
+const audit = [
+  { t: now - 20 * min, who: 'valentinalexeev', story: 'changed bob: max. concurrent 2 → 1', result: 'ok' },
+  { t: now - 55 * min, who: 'operator', story: 'paused carol after a high security event', result: 'ok', sys: true },
+  { t: now - 2 * hr, who: 'mia', story: 'tried to delete agent gus', result: 'denied', reason: 'needs admin access to acme/docs' },
+  { t: now - 6 * hr, who: 'valentinalexeev', story: 'approved 51be for alice, once (ui)', result: 'ok' },
+  { t: now - 26 * hr, who: 'tom', story: 'added agent gus on acme/docs', result: 'ok' },
+];
+const lanes = (name) => { let x = 0; for (const c of name) x = (x * 31 + c.charCodeAt(0)) >>> 0; return x % 6 + 1; };
+const tag = (name) => `<span class="ad-agent ad-lane-${lanes(name)}"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
+const person = (name) => `<span class="ad-agent ad-person"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
+const LIFE = { running: 'Running', starting: 'Starting', idle: 'Idle', paused: 'Paused', 'usage-paused': 'Usage paused', blocked: 'Blocked', invalid: 'Invalid' };
+const lamp = (a) => { const s = a.life === 'idle' ? 'stopped' : a.attn === 'usage' ? 'usage-paused' : a.life; return `<span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${LIFE[a.attn === 'usage' ? 'usage-paused' : a.life]}</span></span>`; };
+const ATTN = { ok: 'ok', you: 'needs you', blocked: 'blocked', guardrail: 'guardrail', usage: 'usage limit' };
+const attn = (a) => `<span class="p-attn p-attn-${a.attn}">${ATTN[a.attn]}</span>`;
+const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+
+// ---------- navigation ----------
+const NAV = [
+  ['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['approvals', 'Approvals', 'approval'],
+  ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+];
+const ADMIN = [['audit', 'Audit', 'audit'], ['platform', 'Platform', 'platform'], ['system', 'Design system', 'system']];
+const pending = () => approvals.filter((a) => !a.done).length;
+const waiting = () => inbox.length;
+function renderNav(view) {
+  const item = ([id, label, i]) => {
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${waiting()} waiting for you">${waiting()}</span>`
+      : id === 'approvals' && pending() ? `<span class="ad-count" aria-label="${pending()} pending">${pending()}</span>`
+      : id === 'agents' ? `<span class="ad-nav-agentcount">${agents.filter((a) => a.life === 'running').length}/${agents.length}</span>` : '';
+    return `<a class="ad-nav" href="#${id}" ${view === id ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
+  };
+  document.getElementById('nav-main').innerHTML = NAV.map(item).join('');
+  document.getElementById('nav-admin').innerHTML = '<span class="ad-rail-head ad-label">Admin</span>' + ADMIN.map(item).join('');
+  const bottom = [['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['usage', 'Usage', 'usage'], ['more', 'More', 'more']];
+  document.getElementById('nav-bottom').innerHTML = bottom.map(([id, label, i]) => {
+    const on = view === id || (id === 'more' && !['today', 'work', 'agents', 'usage'].includes(view));
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${waiting()} waiting">${waiting()}</span>` : '';
+    return `<a class="ad-nav" href="#${id}" ${on ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
+  }).join('');
+}
+
+// ---------- connection state (#339) ----------
+let conn = 'live';
+const CONN = {
+  live: ['', 'Live'], stale: ['ad-conn-stale', 'Updated 2 min ago'], waking: ['ad-conn-waking', 'Starting'],
+  down: ['ad-conn-down', 'Unavailable'], signedout: ['ad-conn-down', 'Signed out'],
+};
+function renderConn() {
+  const [cls, label] = CONN[conn];
+  document.getElementById('conn').className = `ad-conn ${cls}`;
+  document.getElementById('conn').innerHTML = `<span class="ad-conn-dot"></span><span class="ad-hide-phone">${label}</span>`;
+  const b = [];
+  if (conn === 'waking') b.push(`<div class="ad-banner ad-banner-warn" role="status">${ic('clock')}<span><strong>agentdev is starting.</strong> The platform scaled to zero and wakes now. This can take 1 to 2 minutes. The data below is from ${hhmm(now - 9 * min)}.</span></div>`);
+  if (conn === 'down') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>The API does not answer.</strong> Last good update ${hhmm(now - 6 * min)}. Actions are off until it answers.</span><button class="ad-btn" type="button" data-act="conn-live">Try again</button></div>`);
+  if (conn === 'signedout') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>Your sign-in expired.</strong> Sign in again to come back to this page.</span><button class="ad-btn ad-btn-primary" type="button" data-act="conn-live">Sign in</button></div>`);
+  if (agents.some((a) => a.attn === 'usage')) b.push(`<div class="ad-banner ad-banner-paused" role="status">${ic('pause')}<span>Usage limit: <strong>dave</strong> starts no new runs until Thu 09:00 (weekly window 92%, limit 90%).</span><a href="#usage" class="ad-btn">Usage</a></div>`);
+  document.getElementById('banners').innerHTML = b.join('');
+}
+
+// ---------- views ----------
+const head = (title, sub, actions = '') => `<div class="ad-page-head"><div><h1 class="ad-page-title">${title}</h1>${sub ? `<p class="ad-page-sub">${sub}</p>` : ''}</div>${actions ? `<div class="p-row">${actions}</div>` : ''}</div>`;
+let sel = 0;
+function inboxItem(it, i) {
+  const side = it.due ? `<span class="ad-item-due ${it.due - now < 30 * min ? 'ad-item-due-soon' : ''}">${left(it.due)}</span>` : `<span class="ad-item-due">${ago(it.since)}</span>`;
+  const btn = it.kind === 'approval' ? `<button class="ad-btn ad-btn-primary" type="button" data-open="approval:${it.ref}">Review</button>`
+    : it.kind === 'guardrail' ? `<button class="ad-btn" type="button" data-open="agent:${it.agent}">Open agent</button>`
+    : `<a class="ad-btn" href="#" data-ext="1">Open on forge ${ic('ext')}</a>`;
+  return `<li class="ad-item ${it.alert ? 'ad-item-alert' : ''}" aria-selected="${i === sel}" data-idx="${i}">
+    <span class="ad-item-kind">${ic(it.icon)}</span>
+    <div class="ad-item-body"><span class="ad-item-title">${esc(it.title)}</span>
+      <span class="ad-item-meta"><span class="p-reason">${it.reason}</span>${tag(it.agent)}<span>${esc(it.where)}</span></span></div>
+    <div class="ad-item-side">${side}${btn}</div></li>`;
+}
+const V = {};
+V.today = () => {
+  const attnAgents = agents.filter((a) => a.attn !== 'ok');
+  return head('Today', 'What waits for you, sorted by what blocks an agent longest and what expires first.') + `
+  <div class="ad-kpis">
+    <a class="ad-kpi ad-kpi-you" href="#today"><span class="ad-kpi-label ad-label">Waiting for you</span><span class="ad-kpi-value">${waiting()}</span><span class="ad-kpi-foot">${pending()} approvals, 1 question, 2 reviews</span></a>
+    <a class="ad-kpi" href="#agents"><span class="ad-kpi-label ad-label">Agents working</span><span class="ad-kpi-value">${agents.filter((a) => a.life === 'running').length}<small>/ ${agents.length}</small></span><span class="ad-kpi-foot">${agents.filter((a) => a.life === 'idle').length} idle at zero pods</span></a>
+    <a class="ad-kpi" href="#work"><span class="ad-kpi-label ad-label">PRs to review</span><span class="ad-kpi-value">2</span><span class="ad-kpi-foot">oldest 7 h</span></a>
+    <a class="ad-kpi" href="#usage"><span class="ad-kpi-label ad-label">Headroom</span><span class="ad-kpi-value">26<small>%</small></span><span class="ad-kpi-foot">5-hour window, resets ${hhmm(now + 2.3 * hr)}</span></a>
+  </div>
+  <div class="p-grid2" style="margin-top:var(--space-5)">
+    <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Waiting for you</h2><span class="ad-muted ad-hide-phone"><span class="ad-kbd">J</span> <span class="ad-kbd">K</span> move · <span class="ad-kbd">Enter</span> open</span></div>
+      <ul class="ad-inbox" id="inbox">${inbox.map(inboxItem).join('')}</ul></section>
+    <div style="display:flex;flex-direction:column;gap:var(--space-5);min-width:0">
+      <section class="ad-section"><h2 class="ad-section-title">Since yesterday 18:00</h2>
+        <div class="p-strip"><a href="#work"><span class="ad-data">3</span><span>PRs opened</span></a><a href="#work"><span class="ad-data">2</span><span>merged</span></a><a href="#agents"><span class="ad-data">14</span><span>runs</span></a><a href="#usage"><span class="ad-data">1.1M</span><span>tokens</span></a><a href="#security"><span class="ad-data">2</span><span>security events</span></a></div></section>
+      <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Agents that need attention</h2><a href="#agents">All agents</a></div>
+        <div class="p-fleet">${attnAgents.map((a) => `<div><button type="button" data-open="agent:${a.name}">${tag(a.name)}${attn(a)}</button></div>`).join('')}
+        <div class="ad-muted" style="font-size:13px">${agents.length - attnAgents.length} other agents are ok.</div></div></section>
+    </div>
+  </div>`;
+};
+V.work = () => {
+  const cols = [['plan', 'Plan', 'agent'], ['build', 'Build', 'agent'], ['review', 'Review', 'you'], ['done', 'Done', 'nobody']];
+  const step = (c, j) => ['plan', 'build', 'review', 'done'].map((s, i) => {
+    const ci = ['plan', 'build', 'review', 'done'].indexOf(c);
+    const st = j.blocked && s === c ? 'ad-step-blocked' : i < ci ? 'ad-step-past' : i === ci ? 'ad-step-now' : 'ad-step-next';
+    return `<li class="ad-step ad-step-${s} ${st}"><span class="ad-label">${j.blocked && s === c ? 'blocked' : s}</span></li>`;
+  }).join('');
+  return head('Work', 'Every issue an agent works on, by phase. The review column is your turn.', `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Board</button><button type="button" aria-pressed="false">List</button></div>`) + `
+  <div class="ad-filters" style="margin-bottom:var(--space-4)"><button class="ad-chip" type="button" aria-pressed="true">All agents</button><button class="ad-chip" type="button" aria-pressed="false">Mine</button><button class="ad-chip" type="button" aria-pressed="false">acme/shop-api <span class="ad-data">5</span></button><button class="ad-chip" type="button" aria-pressed="false">Blocked <span class="ad-data">1</span></button></div>
+  <div class="ad-board">${cols.map(([c, label, who]) => {
+    const list = jobs.filter((j) => j.col === c);
+    return `<section class="ad-col ad-col-${c}" aria-label="${label}"><div class="ad-col-head"><span class="ad-label">${label} · ${who === 'you' ? 'your turn' : who === 'agent' ? 'agent' : 'finished'}</span><span class="ad-data">${list.length}</span></div>
+    ${list.map((j) => `<article class="ad-card ${c === 'review' ? 'ad-card-review' : ''} ${j.blocked ? 'ad-card-blocked' : ''}">
+      <div class="ad-card-top"><span class="ad-data">${esc(j.repo.split('/')[1])} #${j.n}${j.pr ? ` · PR #${j.pr}` : ''}</span>${tag(j.agent)}</div>
+      <h3 class="ad-card-title">${esc(j.title)}</h3>
+      <ol class="ad-track">${step(c, j)}</ol>
+      ${j.blocked ? `<p class="ad-card-note">${esc(j.blocked)}</p>` : ''}${j.outcome ? `<p class="ad-card-note">Outcome: ${esc(j.outcome)}</p>` : ''}
+    </article>`).join('')}</section>`;
+  }).join('')}</div>`;
+};
+V.agents = () => head('Agents', 'Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work: this is normal.',
+  `<button class="ad-btn" type="button" data-act="pause-all">${ic('pause')}Pause all</button><button class="ad-btn ad-btn-primary" type="button" data-act="add">${ic('plus')}Add agent</button>`) + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${agents.length}</span></button><button class="ad-chip" type="button" aria-pressed="false">Needs attention <span class="ad-data">${agents.filter((a) => a.attn !== 'ok').length}</span></button><button class="ad-chip" type="button" aria-pressed="false">My repositories</button></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th class="ad-hide-phone">Repository</th><th class="ad-num">Jobs</th><th class="ad-num ad-hide-phone">Tokens 24 h</th><th class="ad-num ad-hide-phone">Events 7 d</th></tr></thead><tbody>
+  ${agents.map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="agent:${a.name}">${tag(a.name)}</button></td><td>${lamp(a)}</td><td>${attn(a)}</td><td class="ad-hide-phone ad-code">${esc(a.repos.join(', '))}</td><td class="ad-num">${a.jobs} / ${a.max}</td><td class="ad-num ad-hide-phone ${a.tokens / a.budget > .85 ? '' : ''}">${k(a.tokens)} / ${k(a.budget)}</td><td class="ad-num ad-hide-phone">${a.events ? `<a href="#security">${a.events}</a>` : '<span class="ad-muted">0</span>'}</td></tr>`).join('')}
+  </tbody></table></div>`;
+V.approvals = () => head('Approvals', 'Requests from agents for a tool or a protected change. The first decision wins. Without a decision the agent continues without the action; nothing is approved by timeout.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><div class="ad-seg" role="group" aria-label="State"><button type="button" aria-pressed="true">Pending ${pending()}</button><button type="button" aria-pressed="false">History</button></div></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Request</th><th>Agent</th><th class="ad-hide-phone">Where</th><th class="ad-hide-phone">Source</th><th>Expires</th></tr></thead><tbody>
+  ${approvals.filter((a) => !a.done).map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="approval:${a.id}">${esc(a.tool)}</button><div class="ad-code">${a.id}</div></td><td>${tag(a.agent)}</td><td class="ad-hide-phone">${esc(a.repo)} · ${esc(a.job)}</td><td class="ad-hide-phone ad-code">${a.source}</td><td class="ad-num ${a.expires - now < 30 * min ? '' : ''}">${left(a.expires)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="ad-empty"><strong>No pending requests</strong>When an agent asks for a tool or a protected change, it shows here and in Today.</div></td></tr>'}
+  </tbody></table></div>`;
+V.security = () => head('Security', 'Guardrails that refused an action. A high event, or too many events in one job, pauses the agent.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All severities</button><button class="ad-chip" type="button" aria-pressed="false">High <span class="ad-data">1</span></button><button class="ad-chip" type="button" aria-pressed="false">Medium <span class="ad-data">2</span></button>
+  <div class="ad-seg" role="group" aria-label="Time"><button type="button" aria-pressed="false">24 h</button><button type="button" aria-pressed="true">7 days</button><button type="button" aria-pressed="false">30 days</button></div></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th class="ad-hide-phone">Rule</th><th>Refused action</th></tr></thead><tbody>
+  ${events.map((e) => `<tr><td class="ad-num" style="text-align:left">${ago(e.t)}</td><td>${tag(e.agent)}</td><td><span class="ad-tag ad-sev-${e.sev}"><span class="ad-label">${e.sev}</span></span></td><td class="ad-hide-phone ad-code">${e.source} / ${e.rule}</td><td class="ad-code" style="overflow-wrap:anywhere">${esc(e.action)}</td></tr>`).join('')}
+  </tbody></table></div>`;
+V.usage = () => {
+  const meter = (label, v, lim, reset) => `<div class="ad-meter ${v >= lim ? 'ad-meter-over' : ''}"><div class="ad-meter-head"><span class="ad-label">${label}</span><span class="ad-data">${v}%${v >= lim ? ' · paused' : ''}</span></div>
+    <div class="ad-meter-track" role="meter" aria-valuenow="${v}" aria-valuemin="0" aria-valuemax="100" aria-label="${label}"><div class="ad-meter-fill" style="width:${Math.min(v, 100)}%"></div><div class="ad-meter-limit" style="left:${lim}%"></div></div>
+    <div class="ad-meter-foot">Resets ${reset} · limit ${lim}%</div></div>`;
+  return head('Usage', 'When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish. The check runs after each run, so the window can go a little over the limit.') + `
+  <section class="ad-section"><h2 class="ad-section-title">Subscriptions</h2><div class="p-meters">
+    <div class="p-sub"><h3><span>claude-team</span><span class="ad-muted ad-code">alice, erin, frank, gus</span></h3>${meter('5-hour', 64, 90, hhmm(now + 2.3 * hr))}${meter('Weekly', 71, 95, 'Thu 09:00')}</div>
+    <div class="p-sub"><h3><span>claude-mobile</span><span class="ad-muted ad-code">dave</span></h3>${meter('5-hour', 12, 90, hhmm(now + 4 * hr))}${meter('Weekly', 92, 90, 'Thu 09:00')}</div>
+    <div class="p-sub"><h3><span>claude-ops</span><span class="ad-muted ad-code">bob, carol</span></h3>${meter('5-hour', 38, 90, hhmm(now + 1.1 * hr))}${meter('Weekly', 44, 95, 'Mon 07:00')}</div>
+  </div></section>
+  <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Limits</h2><span class="ad-muted">A project limit can only be lower than the global limit.</span></div>
+    <div class="ad-table-wrap">
+      <div class="p-limit-row"><div><strong>Global</strong><div class="ad-muted" style="font-size:13px">agentdev-admins</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="g5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="gw" type="number" value="95" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
+      <div class="p-limit-row"><div><strong class="ad-code">acme/mobile</strong><div class="ad-muted" style="font-size:13px">effective 90% / 90%</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="m5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="mw" type="number" value="90" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
+      <div class="p-limit-row"><div><strong class="ad-code">acme/shop-api</strong><div class="ad-muted" style="font-size:13px">uses global</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="s5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="sw" type="number" value="95" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
+    </div></section>`;
+};
+V.audit = () => head('Audit', 'Every change request to the API, also refused ones. Kept for 365 days; the API cannot change or delete an entry.',
+  `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Story</button><button type="button" aria-pressed="false">Raw JSON</button></div>`) + `
+  <ol class="ad-timeline" style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4) var(--space-4) var(--space-1)">
+  ${audit.map((e) => `<li class="ad-tl ${e.result === 'denied' ? 'ad-tl-alert' : e.sys ? 'ad-tl-agent' : 'ad-tl-person'}"><span class="ad-tl-time">${hhmm(e.t)}</span><span class="ad-tl-mark"></span><div class="ad-tl-text">${e.sys ? `<strong>${e.who}</strong>` : person(e.who)} ${esc(e.story)} <span class="ad-tag ${e.result === 'denied' ? 'ad-sev-high' : 'ad-sev-low'}"><span class="ad-label">${e.result}</span></span>${e.reason ? `<div class="ad-muted">${esc(e.reason)}</div>` : ''}</div></li>`).join('')}
+  </ol>`;
+V.platform = () => {
+  const comps = [['API', 'running', 'agentdev-api 2/2'], ['Webhook router', 'running', 'last webhook 40 s ago'], ['Operator', 'running', 'reconciled 7 agents'], ['Claude proxy', 'running', '14 runs today'], ['authentik', 'running', 'sign-in ok'], ['Forge (GitHub)', 'running', 'App token valid, 11 h left'], ['Egress proxy', 'running', '3 refused today'], ['Agent pool', 'stopped', '0 nodes: all agents idle or paused']];
+  return head('Platform', 'The parts of this instance. A part that is not running shows as a banner on every page.') + `
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Part</th><th>State</th><th>Detail</th></tr></thead><tbody>
+  ${comps.map(([n, s, d]) => `<tr><td><strong>${n}</strong></td><td><span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${s === 'stopped' ? 'scaled to zero' : 'running'}</span></span></td><td class="ad-muted">${d}</td></tr>`).join('')}
+  </tbody></table></div>
+  <section class="ad-section" style="margin-top:var(--space-6)"><h2 class="ad-section-title">Connection states (prototype)</h2><p class="ad-muted" style="margin:0;max-width:68ch">Pick a state to see how every page reacts (#339). The page keeps the last good data and marks its age; it never replaces the data with an error.</p>
+  <div class="ad-seg" role="group" aria-label="Connection state">${Object.entries(CONN).map(([id, [, l]]) => `<button type="button" data-conn="${id}" aria-pressed="${conn === id}">${id === 'live' ? 'Live' : l}</button>`).join('')}</div></section>`;
+};
+V.system = () => {
+  const sw = [['ground', 'Page background'], ['panel', 'Raised surfaces'], ['sunken', 'Header rows, code'], ['ink', 'Text'], ['lamp', 'The agent'], ['gate', 'The person decides'], ['ok', 'Done, healthy'], ['danger', 'Blocked, high'], ['paused', 'Paused'], ['lane-2', 'Agent lane 2'], ['lane-3', 'Agent lane 3'], ['lane-5', 'Agent lane 5']];
+  return head('Design system', 'The tokens and components shared by this console and the product website. Source: docs/design-system.md.') + `
+  <section class="ad-section"><h2 class="ad-section-title">Two actors, two colours</h2><div class="p-sw">${sw.map(([t, u]) => `<div><i style="background:var(--${t})"></i><span>--${t}</span><small>${u}</small></div>`).join('')}</div></section>
+  <section class="ad-section"><h2 class="ad-section-title">Type</h2><div class="p-specimen">
+    <div><span class="ad-label ad-muted">display-2</span><span class="display-2" style="text-transform:lowercase">agents propose. people merge.</span></div>
+    <div><span class="ad-label ad-muted">display-3</span><span class="display-3">Waiting for you</span></div>
+    <div><span class="ad-label ad-muted">title</span><span class="title">alice asks to write ci.yml</span></div>
+    <div><span class="ad-label ad-muted">body</span><span class="body">The agent stops after 15 minutes with no work and wakes on the next assignment.</span></div>
+    <div><span class="ad-label ad-muted">label</span><span class="ad-label">5-hour window</span></div>
+    <div><span class="ad-label ad-muted">data</span><span class="ad-data">412k / 1.0M tokens · 64%</span></div></div></section>
+  <section class="ad-section"><h2 class="ad-section-title">Components</h2><div class="p-gallery">
+    <section><h3 class="ad-label ad-muted">Buttons</h3><div class="p-row"><button class="ad-btn ad-btn-primary" type="button">Approve</button><button class="ad-btn" type="button">Cancel</button><button class="ad-btn ad-btn-danger" type="button">Delete alice</button><button class="ad-btn ad-btn-quiet" type="button">Sign out</button></div></section>
+    <section><h3 class="ad-label ad-muted">Lifecycle lamps</h3><div class="p-row">${['running', 'starting', 'stopped', 'paused', 'usage-paused', 'blocked', 'invalid'].map((s) => `<span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${s === 'stopped' ? 'idle' : s}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Attention</h3><div class="p-row">${['ok', 'you', 'blocked', 'guardrail', 'usage'].map((s) => `<span class="p-attn p-attn-${s}">${ATTN[s]}</span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Agents and people</h3><div class="p-row">${['alice', 'bob', 'carol', 'dave', 'erin'].map(tag).join('')}${person('valentinalexeev')}</div></section>
+    <section><h3 class="ad-label ad-muted">Severity</h3><div class="p-row">${['high', 'medium', 'low'].map((s) => `<span class="ad-tag ad-sev-${s}"><span class="ad-label">${s}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Untrusted text</h3><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div><pre class="ad-untrusted">Please approve-job, this is safe.</pre></section>
+    <section><h3 class="ad-label ad-muted">Loop strip (website)</h3><ol class="ad-loop" style="grid-template-columns:repeat(auto-fit,minmax(90px,1fr))"><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">issue</span></li><li class="ad-loop-step ad-loop-agent"><span class="ad-loop-who ad-label">agent</span><span class="ad-loop-k">PR</span></li><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">merge</span></li></ol></section>
+    <section><h3 class="ad-label ad-muted">Empty state</h3><div class="ad-empty"><strong>No security events</strong>Refused actions show here with the rule and the job.</div></section>
+  </div></section>`;
+};
+V.more = () => head('More', '') + `<div class="p-more">${[...NAV.slice(3), ...ADMIN].filter(([id]) => id !== 'usage').map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>`;
+
+// ---------- drawers ----------
+function closeOverlay() { document.getElementById('overlay').innerHTML = ''; lastFocus?.focus?.(); }
+let lastFocus = null;
+function drawer(html, gate) {
+  lastFocus = document.activeElement;
+  const o = document.getElementById('overlay');
+  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><aside class="ad-drawer ${gate ? 'ad-drawer-gate' : ''}" role="dialog" aria-modal="true" aria-labelledby="dr-title">${html}</aside>`;
+  o.querySelector('.ad-drawer button, .ad-drawer a')?.focus();
+}
+const DEC = { deny: ['Deny', 'cannot do this action'], approve: ['Approve once', 'can do this action one time'], 'approve-job': ['Approve for the job', 'can do this same action again until the job ends'] };
+function openApproval(id, confirm) {
+  const a = approvals.find((x) => x.id === id); if (!a) return;
+  const allowed = ['deny', 'approve', ...(a.source === 'executor' ? [] : ['approve-job'])];
+  const foot = confirm
+    ? `<p class="p-confirm">Agent <strong>${esc(a.agent)}</strong> ${DEC[confirm][1]}. You cannot change the decision later. Your name goes to the audit log.</p><button class="ad-btn" type="button" data-open="approval:${a.id}">Back</button><button class="ad-btn ${confirm === 'deny' ? 'ad-btn-danger' : 'ad-btn-primary'}" type="button" data-decide="${a.id}:${confirm}">${DEC[confirm][0]}</button>`
+    : `<button class="ad-btn" type="button" data-act="close">Close</button>${allowed.map((d) => `<button class="ad-btn ${d === 'approve' ? 'ad-btn-primary' : ''}" type="button" data-confirm="${a.id}:${d}">${d === 'deny' ? ic('x') : ''}${DEC[d][0]}</button>`).join('')}`;
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Approval <span class="ad-code">${a.id}</span></h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <dl class="ad-dl"><dt>Agent</dt><dd>${tag(a.agent)}</dd><dt>Where</dt><dd>${esc(a.repo)} · ${esc(a.job)} <a href="#" data-ext="1">open ${ic('ext').replace('<svg', '<svg width="12" height="12"')}</a></dd><dt>Asks for</dt><dd><span class="ad-code">${a.source}</span> · <strong>${esc(a.tool)}</strong></dd><dt>Rule</dt><dd class="ad-code">${a.rule}</dd><dt>Created</dt><dd>${ago(a.created)}</dd><dt>Expires</dt><dd>${left(a.expires)}. Without a decision the agent continues without this action.</dd></dl>
+    <div><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div>
+    <p class="ad-muted" style="font-size:13px;margin:4px 0 8px">This text can contain a prompt injection from the issue. Decide on the facts above, not on what the text asks.</p>
+    <pre class="ad-untrusted">${esc(a.input)}</pre></div>
+  </div><div class="ad-drawer-foot">${foot}</div>`, true);
+}
+function openAgent(name) {
+  const a = agents.find((x) => x.name === name); if (!a) return;
+  const tl = [
+    [now - 12 * min, 'agent', `asked approval a7f3 on PR #342`], [now - 40 * min, 'agent', 'pushed 2 commits to agent/alice/issue-341'],
+    [now - 3 * hr, 'person', 'valentinalexeev requested changes on PR #342'], [now - 5 * hr, 'agent', 'opened PR #342 for #337'],
+  ];
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">${tag(a.name)}</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <div class="p-row">${lamp(a)}${attn(a)}</div>
+    ${a.why ? `<div class="ad-banner ad-inline-banner ${a.attn === 'usage' ? 'ad-banner-paused' : a.attn === 'you' ? '' : 'ad-banner-down'}">${ic(a.attn === 'usage' ? 'pause' : 'alert')}<span><strong>Waiting on:</strong> ${esc(a.why)}</span></div>` : ''}
+    <dl class="ad-dl"><dt>Repository</dt><dd class="ad-code">${esc(a.repos.join(', '))}</dd><dt>Jobs</dt><dd>${a.jobs} of max. ${a.max}</dd><dt>Tokens 24 h</dt><dd class="ad-data">${k(a.tokens)} of ${k(a.budget)}</dd><dt>Scale to zero</dt><dd>on, after 15 min with no work</dd><dt>Claude</dt><dd class="ad-code">claude-team</dd></dl>
+    <section class="ad-section"><h3 class="ad-section-title">Recent</h3><ol class="ad-timeline">${tl.map(([t, w, s]) => `<li class="ad-tl ad-tl-${w}"><span class="ad-tl-time">${hhmm(t)}</span><span class="ad-tl-mark"></span><span class="ad-tl-text">${esc(s)}</span></li>`).join('')}</ol></section>
+    <section class="ad-section"><h3 class="ad-section-title">Settings</h3><div class="p-row"><label class="ad-field"><span>Max. concurrent</span><input class="ad-input" id="mc-${a.name}" type="number" min="1" max="8" value="${a.max}" style="width:90px"></label><label class="p-row" style="gap:6px;align-self:end;height:36px"><input type="checkbox" id="stz-${a.name}" checked> Scale to zero</label></div></section>
+  </div><div class="ad-drawer-foot"><button class="ad-btn ad-btn-quiet" type="button" data-act="close">Delete…</button>${a.life === 'paused' ? `<button class="ad-btn ad-btn-primary" type="button" data-toast="Resumed ${a.name}. It starts on the next work item.">${ic('play')}Resume</button>` : `<button class="ad-btn" type="button" data-toast="Paused ${a.name}. Runs in progress finish.">${ic('pause')}Pause</button>`}<button class="ad-btn" type="button" data-toast="Saved the settings of ${a.name}.">Save</button></div>`);
+}
+function toast(msg) {
+  const s = document.getElementById('toast-slot');
+  s.innerHTML = `<div class="ad-toast" role="status">${esc(msg)}</div>`;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { s.innerHTML = ''; }, 3500);
+}
+
+// ---------- command palette ----------
+const CMDS = [
+  ...NAV.map(([id, l]) => [`Go to ${l}`, () => go(id), `g ${id[0]}`]), ...ADMIN.map(([id, l]) => [`Go to ${l}`, () => go(id), '']),
+  ...agents.map((a) => [`Agent ${a.name}`, () => openAgent(a.name), a.repos[0]]),
+  ['Pause all agents', () => toast('Paused 5 agents. Runs in progress finish.'), 'admin'],
+  ['Switch theme', () => theme(), ''], ['Keyboard shortcuts', () => help(), '?'],
+];
+function palette() {
+  lastFocus = document.activeElement;
+  const o = document.getElementById('overlay');
+  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><div class="ad-palette" role="dialog" aria-label="Search and commands"><input id="pal-q" placeholder="Search agents, pages, commands" autocomplete="off" aria-controls="pal-list"><ul id="pal-list" role="listbox"></ul></div>`;
+  const q = o.querySelector('#pal-q'); let i = 0, hits = CMDS;
+  const draw = () => { o.querySelector('#pal-list').innerHTML = hits.map(([l, , h], n) => `<li role="option" aria-selected="${n === i}" data-n="${n}">${esc(l)}<span class="ad-muted">${esc(h)}</span></li>`).join('') || '<li class="ad-muted">No match</li>'; };
+  q.addEventListener('input', () => { hits = CMDS.filter(([l, , h]) => (l + h).toLowerCase().includes(q.value.toLowerCase())); i = 0; draw(); });
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { i = Math.min(i + 1, hits.length - 1); draw(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { i = Math.max(i - 1, 0); draw(); e.preventDefault(); }
+    if (e.key === 'Enter' && hits[i]) { closeOverlay(); hits[i][1](); }
+  });
+  o.querySelector('#pal-list').addEventListener('click', (e) => { const li = e.target.closest('[data-n]'); if (li) { closeOverlay(); hits[+li.dataset.n][1](); } });
+  draw(); q.focus();
+}
+function help() {
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Keyboard</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div><div class="ad-drawer-body"><div class="p-help">
+  <span><span class="ad-kbd">Ctrl K</span> <span class="ad-kbd">/</span></span><span>Search and commands</span><span><span class="ad-kbd">G</span> <span class="ad-kbd">T</span></span><span>Today (W Work, A Agents, U Usage, S Security)</span>
+  <span><span class="ad-kbd">J</span> <span class="ad-kbd">K</span></span><span>Next, previous item</span><span><span class="ad-kbd">Enter</span></span><span>Open the item</span><span><span class="ad-kbd">Esc</span></span><span>Close the drawer</span>
+  </div><p class="ad-muted">There is no one-key approve. A decision always opens the request first.</p></div>`);
+}
+
+// ---------- routing and events ----------
+const TITLES = Object.fromEntries([...NAV, ...ADMIN, ['more', 'More']].map(([id, l]) => [id, l]));
+function go(v) { location.hash = v; }
+function render() {
+  const view = (location.hash.slice(1) || 'today').split('?')[0];
+  const v = V[view] ? view : 'today';
+  renderNav(v); renderConn();
+  document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">acme</span><span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
+  const m = document.getElementById('main'); m.innerHTML = V[v](); fill(document.body);
+}
+function theme() {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('ad-theme', r.dataset.theme); } catch (e) { /* storage blocked */ }
+}
+try { const t = localStorage.getItem('ad-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],.ad-item');
+  if (!t) return;
+  if (t.dataset.ext) { e.preventDefault(); toast('In the console this opens the issue or PR on the forge.'); return; }
+  if (t.dataset.open) { const [kind, id] = t.dataset.open.split(':'); kind === 'approval' ? openApproval(id) : openAgent(id); return; }
+  if (t.dataset.confirm) { const [id, d] = t.dataset.confirm.split(':'); openApproval(id, d); return; }
+  if (t.dataset.decide) {
+    const [id, d] = t.dataset.decide.split(':'); const a = approvals.find((x) => x.id === id); a.done = d;
+    const ix = inbox.findIndex((x) => x.ref === id); if (ix >= 0) inbox.splice(ix, 1);
+    closeOverlay(); render(); toast(`${DEC[d][0]}: ${id}. ${a.agent} continues in less than a minute.`); return;
+  }
+  if (t.dataset.toast) { closeOverlay(); toast(t.dataset.toast); return; }
+  if (t.dataset.conn) { conn = t.dataset.conn; render(); return; }
+  const act = t.dataset.act;
+  if (act === 'close') closeOverlay();
+  else if (act === 'conn-live') { conn = 'live'; render(); toast('Connected. The data is live again.'); }
+  else if (act === 'pause-all') toast('Paused 5 agents. Runs in progress finish.');
+  else if (act === 'add') toast('Add agent opens a short form: name, repository, forge, max. concurrent.');
+  else if (act === 'saved') toast('Saved. The effective limit applies to the next run.');
+  else if (t.classList.contains('ad-item') && !e.target.closest('button,a')) { sel = +t.dataset.idx; t.querySelector('button')?.click(); }
+});
+let gKey = 0;
+document.addEventListener('keydown', (e) => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
+  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) { e.preventDefault(); palette(); return; }
+  if (e.key === 'Escape') { closeOverlay(); return; }
+  if (typing || document.getElementById('overlay').innerHTML) return;
+  if (gKey && Date.now() - gKey < 1200) { const m = { t: 'today', w: 'work', a: 'agents', u: 'usage', s: 'security' }[e.key]; gKey = 0; if (m) go(m); return; }
+  if (e.key === 'g') { gKey = Date.now(); return; }
+  if (e.key === '?') { help(); return; }
+  const list = document.getElementById('inbox'); if (!list) return;
+  if (e.key === 'j' || e.key === 'k') { sel = Math.max(0, Math.min(inbox.length - 1, sel + (e.key === 'j' ? 1 : -1))); list.querySelectorAll('.ad-item').forEach((li, n) => li.setAttribute('aria-selected', n === sel)); list.children[sel]?.scrollIntoView({ block: 'nearest' }); }
+  if (e.key === 'Enter') list.children[sel]?.querySelector('button, a')?.click();
+});
+document.getElementById('open-palette').addEventListener('click', palette);
+document.getElementById('theme').addEventListener('click', theme);
+window.addEventListener('hashchange', () => { closeOverlay(); render(); document.getElementById('main').focus({ preventScroll: true }); });
+fill(document.body); render();
+})();
+</script>
+</body>
+</html>
