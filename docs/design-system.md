@@ -233,6 +233,12 @@ with no work, not an error.
 | Empty state | `ad-empty` | Says what will appear and how to make it appear. |
 | Toast | `ad-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
 | Health lamp | `ad-health`, `-ok / -degraded / -down / -zero` | Platform parts only (API, router, operator). Green means healthy. Agents never use it: their lamp is amber because amber is the agent, and a running agent is activity, not health. |
+| Chat layout | `ad-chat`, `ad-chat-list`, `ad-sess`, `ad-thread`, `ad-shell-fill` | Session list and thread; the page is one screen high (`ad-shell-fill` on the shell). The list folds behind a button below 1000px. |
+| Message | `ad-msg`, `ad-msg-person`, `ad-msg-text` | The person: gate-tinted block on the right. The session: full width with the agent tag. Model Markdown with raw HTML off; links print their address. |
+| Tool step | `ad-tool` (`<details>`) | One line per step the session took; the output opens in the untrusted block. |
+| Permission card | `ad-ask`, `-done` | Claude Code asks before a command. Allow once or Deny; the answer and the name stay. |
+| Issue draft | `ad-draft`, `-done` | The only path from a session to work: the session drafts, the person creates and assigns. Gate edge while it waits, ok edge when created. |
+| Composer | `ad-composer`, `ad-ctx`, `ad-working` | Context chips, the text box, Send; while the session works, a pulsing lamp and Stop. |
 | Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, projects, agents and commands. No one-key approve anywhere. |
 | Project scope | `ad-scope` | Left of the top bar: the projects every page shows and their count. Opens a palette of projects, sorted by what waits. |
 | Group header | `ad-group-head` (lists), `ad-group-row` and `ad-group-btn` (tables) | A list groups itself above about 10 items. The header has the name, the urgency and the count. A table group folds; `aria-expanded` on the button. |

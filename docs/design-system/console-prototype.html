@@ -66,6 +66,9 @@ a { color: var(--link); }
   .p-user span { display: none; }
   .p-specimen > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+.p-chat-back { display: none; }
+@media (max-width: 1000px) { .p-chat-back { display: inline-grid; } }
 @media (max-width: 760px) { #crumbs { display: none; } .ad-scope { max-width: 46vw; } }
 .ad-rail-foot .ad-seg button { padding: 4px 8px; font-size: 12px; }
 </style>
@@ -130,6 +133,7 @@ const P = {
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   blocked: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
 };
 const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -273,7 +277,7 @@ const sortInbox = (items) => [...items].sort((x, y) => (GROUPS.indexOf(KIND[x.ki
 
 // ---------- navigation ----------
 const NAV = [
-  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'],
+  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['chat', 'Chat', 'chat'], ['agents', 'Agents', 'agents'],
   ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
 ];
 const ADMIN = [['audit', 'Audit', 'audit'], ['platform', 'Platform', 'platform'], ['system', 'Design system', 'system']];
@@ -288,9 +292,9 @@ function renderNav(view) {
   };
   document.getElementById('nav-main').innerHTML = NAV.map(item).join('');
   document.getElementById('nav-admin').innerHTML = '<span class="ad-rail-head ad-label">Admin</span>' + ADMIN.map(item).join('');
-  const bottom = [['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['agents', 'Agents', 'agents'], ['more', 'More', 'more']];
+  const bottom = [['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['chat', 'Chat', 'chat'], ['agents', 'Agents', 'agents'], ['more', 'More', 'more']];
   document.getElementById('nav-bottom').innerHTML = bottom.map(([id, label, i]) => {
-    const on = view === id || (id === 'more' && !['today', 'projects', 'work', 'agents'].includes(view));
+    const on = view === id || (id === 'more' && !['today', 'work', 'chat', 'agents'].includes(view));
     const count = id === 'today' ? `<span class="ad-count" aria-label="${s.inbox.length} waiting">${s.inbox.length}</span>` : '';
     return `<a class="ad-nav" href="#${id}" ${on ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
   }).join('');
@@ -548,7 +552,133 @@ V.system = () => {
     <section><h3 class="ad-label ad-muted">Loop strip (website)</h3><ol class="ad-loop" style="grid-template-columns:repeat(auto-fit,minmax(90px,1fr))"><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">issue</span></li><li class="ad-loop-step ad-loop-agent"><span class="ad-loop-who ad-label">agent</span><span class="ad-loop-k">PR</span></li><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">merge</span></li></ol></section>
   </div></section>`;
 };
-V.more = () => head('More', '') + `<div class="p-more">${[...NAV.slice(4), ...ADMIN].map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>
+// ---------- chat: interactive sessions in a project (#38, #338) ----------
+// Example sessions. Session text is model output: in the console it is Markdown rendered with raw HTML off; here the
+// example answers are fixed markup.
+const chat = {
+  sel: 's1', listOpen: false, working: false,
+  sessions: [
+    { id: 's1', title: 'Double charge on payment retry', repo: 'acme/shop-api', agent: 'alice', state: 'ready', by: 'valentinalexeev', people: ['valentinalexeev', 'mia'], started: now - 25 * min, tokens: 61000,
+      ctx: ['#337 Keep the basket for 30 days'],
+      items: [
+        { t: 'person', who: 'valentinalexeev', text: 'Support says checkout sometimes charges twice when the payment provider times out. Where is the retry logic, and is it idempotent?' },
+        { t: 'tool', name: 'Grep', cmd: 'retry|backoff  src/payments', dur: '0.4 s', out: 'src/payments/charge.ts:41:  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {\nsrc/payments/charge.ts:58:      await sleep(backoff(attempt))\nsrc/payments/provider.ts:12:export const MAX_RETRIES = 3' },
+        { t: 'tool', name: 'Read', cmd: 'src/payments/charge.ts  lines 35-80', dur: '0.1 s', out: '35  export async function charge(order: Order) {\n36    const body = { amount: order.total, currency: order.currency, source: order.paymentToken }\n41    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {\n42      try {\n43        return await provider.post("/charges", body)\n44      } catch (e) {\n45        if (!isTimeout(e)) throw e\n...' },
+        { t: 'agent', html: '<p>The retry is in <code>src/payments/charge.ts</code>, lines 41 to 60. It retries up to 3 times on a timeout, but it sends <strong>no idempotency key</strong>. When the provider times out <em>after</em> it charged the card, the retry makes a second charge.</p><p>The provider supports an <code>Idempotency-Key</code> header (see <a href="https://docs.example-pay.com/idempotency">their docs</a>). A fix:</p><ol><li>Make the key from the order id and the attempt group, for example <code>order-8812-charge</code>.</li><li>Send the same key on every retry of one charge.</li><li>Add a test that times out once and checks that the provider gets one key.</li></ol><p>I can run the payment tests to confirm the current behaviour.</p>' },
+        { t: 'ask', cmd: 'npm test -- payments/charge', state: 'allowed', by: 'valentinalexeev' },
+        { t: 'tool', name: 'Bash', cmd: 'npm test -- payments/charge', dur: '14 s', out: ' PASS  src/payments/charge.test.ts\n  charge\n    ✓ charges once (31 ms)\n    ✓ retries on timeout (12 ms)\n\nTests: 2 passed, 2 total\nNo test checks the idempotency key.' },
+        { t: 'agent', html: '<p>Both tests pass, and neither checks the key, so the bug is not covered. Do you want me to write this up as an issue?</p>' },
+        { t: 'person', who: 'mia', text: 'Yes, and keep the change small. alice can take it.' },
+        { t: 'draft', state: 'draft', title: 'Send one idempotency key with every retry of a charge', what: 'charge() in src/payments/charge.ts retries a timed-out charge up to 3 times without an Idempotency-Key header. When the provider charged before the timeout, the retry charges the card again.', acc: ['A test makes the provider time out once and checks that every attempt sends the same Idempotency-Key.', 'Existing payment tests pass.'], open: ['Key format: order id plus "charge", or a random id stored on the order?'] },
+      ] },
+    { id: 's2', title: 'Plan the Postgres 17 upgrade', repo: 'acme/infra-live', agent: 'bob', state: 'idle', by: 'tom', people: [], started: now - 70 * min, ends: now + 18 * min, tokens: 23000, ctx: [],
+      items: [
+        { t: 'person', who: 'tom', text: 'What breaks if we move the main database from Postgres 15 to 17?' },
+        { t: 'tool', name: 'Grep', cmd: 'postgres_version|engine_version  terraform/', dur: '0.3 s', out: 'terraform/db.tf:14:  database_version = "POSTGRES_15"' },
+        { t: 'agent', html: '<p>One Cloud SQL instance in <code>terraform/db.tf</code>. The upgrade is in place, with about 10 minutes of downtime. Two things to check first: the <code>pg_stat_statements</code> extension version, and the reporting job, which uses a removed function. I can draft an issue for each.</p>' },
+      ] },
+    { id: 's3', title: 'Why is the nightly importer slow?', repo: 'acme/data-jobs', agent: 'frank', state: 'ended', by: 'valentinalexeev', people: [], started: now - 50 * hr, tokens: 88000, ctx: [], filed: ['#19 Batch the SKU lookups', '#20 Add an index on rows.sku'],
+      items: [
+        { t: 'person', who: 'valentinalexeev', text: 'The nightly import takes 3 hours now. Find out why.' },
+        { t: 'agent', html: '<p>The importer looks up every SKU with its own query: about 400 000 queries per run. Batching the lookups and an index on <code>rows.sku</code> should bring the run under 20 minutes.</p>' },
+        { t: 'draft', state: 'created', num: 19, title: 'Batch the SKU lookups in the importer', what: 'Look up SKUs in batches of 1 000.', acc: ['The import of the test file makes at most 500 queries.'], open: [], assigned: 'frank' },
+      ] },
+  ],
+};
+const sessLamp = (s) => s.state === 'ready' ? '<span class="ad-lamp ad-lamp-running"><span class="ad-lamp-dot"></span><span class="ad-label">live</span></span>'
+  : s.state === 'starting' ? '<span class="ad-lamp ad-lamp-starting"><span class="ad-lamp-dot"></span><span class="ad-label">starting</span></span>'
+  : s.state === 'idle' ? '<span class="ad-lamp ad-lamp-paused"><span class="ad-lamp-dot"></span><span class="ad-label">nobody here</span></span>'
+  : '<span class="ad-lamp ad-lamp-stopped"><span class="ad-lamp-dot"></span><span class="ad-label">ended</span></span>';
+const sessWhen = (s) => s.state === 'idle' ? `ends in ${Math.round((s.ends - now) / min)} min` : s.state === 'ended' ? `ended ${ago(s.started + 2 * hr)}` : s.state === 'starting' ? 'cloning the repository' : `${s.people.length} here`;
+function chatItem(it, s, i) {
+  if (it.t === 'person') return `<div class="ad-msg ad-msg-person"><span class="ad-msg-who">${person(it.who)}</span><div class="ad-msg-text">${esc(it.text)}</div></div>`;
+  if (it.t === 'agent') return `<div class="ad-msg"><span class="ad-msg-who">${tag(s.agent)}<span>session</span></span><div class="ad-msg-text">${it.html}</div></div>`;
+  if (it.t === 'tool') return `<details class="ad-tool"><summary>${ic('down')}<span class="ad-label">${esc(it.name)}</span><span class="ad-code">${esc(it.cmd)}</span><span class="ad-muted">${esc(it.dur)}</span></summary><div class="ad-untrusted-head ad-label" style="margin:0 12px 4px">${ic('alert')}Output · not checked</div><pre class="ad-untrusted">${esc(it.out)}</pre></details>`;
+  if (it.t === 'ask') return it.state === 'pending'
+    ? `<div class="ad-ask"><span class="ad-ask-text">The session asks to run <code class="ad-code">${esc(it.cmd)}</code> in its sandbox.</span><button class="ad-btn" type="button" data-chat-ask="${i}:deny">Deny</button><button class="ad-btn ad-btn-primary" type="button" data-chat-ask="${i}:allow">Allow once</button></div>`
+    : `<div class="ad-ask ad-ask-done"><span class="ad-ask-text">Ran <code class="ad-code">${esc(it.cmd)}</code> in the sandbox. ${it.state === 'allowed' ? 'Allowed' : 'Denied'} once by ${esc(it.by)}.</span></div>`;
+  if (it.t === 'draft') {
+    const done = it.state === 'created';
+    const body = `<div class="ad-draft-body"><h3 class="ad-draft-title">${esc(it.title)}</h3><h4>What</h4><p>${esc(it.what)}</p><h4>Acceptance criterion</h4><ul>${it.acc.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>${it.open.length ? `<h4>Open decisions</h4><ul>${it.open.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}</div>`;
+    const agentsHere = D.agents.filter((a) => a.repo === s.repo);
+    const foot = done
+      ? (it.assigned ? `<span>Assigned to ${tag(it.assigned)}. The agent starts on it.</span><a class="ad-btn" href="#" data-ext="1" style="margin-left:auto">Open #${it.num} ${ic('ext')}</a>`
+        : `<label class="p-row" style="gap:6px"><span>Give it to</span><select class="ad-select" id="assign-${i}">${agentsHere.map((a) => `<option>${esc(a.name)}</option>`).join('')}</select></label><button class="ad-btn ad-btn-primary" type="button" data-chat-assign="${i}">Assign</button><span class="ad-muted" style="font-size:13px">or leave it unassigned</span>`)
+      : `${s.state === 'ended' ? '' : `<button class="ad-btn ad-btn-primary" type="button" data-chat-create="${i}">Create issue</button><button class="ad-btn" type="button" data-toast="Edit opens the draft as a form before you create it.">Edit</button><button class="ad-btn ad-btn-quiet" type="button" data-chat-discard="${i}">Discard</button>`}<span class="ad-muted" style="font-size:13px;margin-left:auto">${esc(s.repo)} · you create it, as you</span>`;
+    return `<section class="ad-draft ${done ? 'ad-draft-done' : ''}" aria-label="Issue draft"><div class="ad-draft-head">${ic(done ? 'approval' : 'question')}<span class="ad-label">${done ? `Issue #${it.num} created` : 'Issue draft from the session'}</span></div>${body}<div class="ad-draft-foot">${foot}</div></section>`;
+  }
+  return '';
+}
+V.chat = () => {
+  const list = chat.sessions.filter((s) => inScope(s.repo));
+  const s = list.find((x) => x.id === chat.sel) ?? list[0];
+  const listHtml = `<div class="ad-chat-list"><div class="ad-chat-list-head"><button class="ad-btn ad-btn-primary" type="button" data-chat-new="1">${ic('plus')}New session</button></div><ul>
+    ${list.map((x) => `<li><button class="ad-sess ${x.state === 'ended' ? 'ad-sess-ended' : ''}" type="button" data-chat="${x.id}" aria-current="${s && x.id === s.id}"><span class="ad-sess-title">${esc(x.title)}</span><span class="ad-sess-meta">${sessLamp(x)}</span><span class="ad-sess-meta"><span class="ad-code">${esc(short(x.repo))}</span><span>${esc(sessWhen(x))}</span></span></button></li>`).join('') || '<li class="ad-muted" style="padding:12px;font-size:13px">No sessions in the projects shown.</li>'}</ul></div>`;
+  if (!s) return `<div class="ad-chat ad-chat-list-open">${listHtml}<div class="ad-thread"></div></div>`;
+  const ended = s.state === 'ended';
+  const facts = `${sessLamp(s)}<span class="ad-code">${esc(s.repo)}</span><span class="ad-hide-phone">Claude usage counts for ${tag(s.agent)} · ${k(s.tokens)} tokens</span>${s.people.length ? `<span>Here: ${s.people.map(person).join(' ')}</span>` : ''}${s.state === 'idle' ? `<span class="ad-item-due ad-item-due-soon">nobody here, ends in ${Math.round((s.ends - now) / min)} min</span>` : ''}`;
+  const composer = ended
+    ? `<div class="ad-composer"><div class="ad-composer-note" style="margin-top:0;font-size:14px">This session ended. The transcript stays for 30 days. Issues filed: ${(s.filed ?? []).map(esc).join(', ') || 'none'}. <button class="ad-btn ad-btn-quiet" type="button" data-chat-new="1" style="height:auto;padding:0">Start a new session with this context</button></div></div>`
+    : `<div class="ad-composer"><div class="ad-composer-box">
+        ${s.ctx.length ? `<div class="p-row" style="padding:8px 8px 0;gap:6px">${s.ctx.map((c) => `<span class="ad-ctx">${esc(c)}</span>`).join('')}</div>` : ''}
+        <textarea id="chat-input" rows="2" placeholder="Ask about the code of ${esc(short(s.repo))}, or ask for an issue draft" aria-label="Message to the session"></textarea>
+        <div class="ad-composer-bar">${chat.working ? `<span class="ad-working"><span class="ad-lamp-dot" style="width:10px;height:10px;border:1.5px solid;border-radius:999px;box-sizing:border-box"></span>Working</span><button class="ad-btn" type="button" data-chat-stop="1">Stop</button>` : `<button class="ad-btn" type="button" data-toast="Add context: an issue, a PR, a file or a security event. It goes into the session as fenced, untrusted text.">${ic('plus')}Context</button>`}
+          <button class="ad-btn ad-btn-primary" type="button" data-chat-send="1" ${chat.working ? 'disabled' : ''}>Send</button></div></div>
+        <p class="ad-composer-note ad-hide-phone"><span class="ad-kbd">Enter</span> send · <span class="ad-kbd">Shift Enter</span> new line · The session reads and runs code in a sandbox. It cannot push or merge.</p></div>`;
+  return `<div class="ad-chat ${chat.listOpen ? 'ad-chat-list-open' : ''}">${listHtml}
+    <section class="ad-thread" aria-label="Session ${esc(s.title)}">
+      <div class="ad-thread-head"><button class="p-iconbtn p-chat-back" type="button" data-chat-list="1" aria-label="All sessions">${ic('more')}</button><h1 class="ad-thread-title">${esc(s.title)}</h1><div class="ad-thread-facts">${facts}</div>
+        <div class="ad-thread-actions">${ended ? '' : `<button class="ad-btn" type="button" data-toast="Opens the same session as a terminal, with the full Claude Code interface.">Terminal</button><button class="ad-btn" type="button" data-chat-end="1">End</button>`}</div></div>
+      <div class="ad-thread-body" id="chat-body">${s.items.map((it, i) => chatItem(it, s, i)).join('')}${s.state === 'starting' ? '<div class="ad-msg"><span class="ad-working"><span class="ad-lamp-dot" style="width:10px;height:10px;border:1.5px solid;border-radius:999px;box-sizing:border-box"></span>Cloning the repository and starting Claude. This takes about 30 seconds.</span></div>' : ''}</div>
+      ${composer}
+    </section></div>`;
+};
+function chatSession() { return chat.sessions.find((x) => x.id === chat.sel); }
+function chatRender() { render(); const b = document.getElementById('chat-body'); if (b) b.scrollTop = b.scrollHeight; }
+function chatSend() {
+  const el = document.getElementById('chat-input'); const s = chatSession();
+  if (!el || !s || !el.value.trim() || chat.working) return;
+  s.items.push({ t: 'person', who: 'valentinalexeev', text: el.value.trim() });
+  chat.working = true; chatRender();
+  setTimeout(() => { s.items.push({ t: 'agent', html: '<p>In the console the session answers here, with each step it takes. This prototype does not run Claude.</p>' }); chat.working = false; chatRender(); document.getElementById('chat-input')?.focus(); }, 1400);
+}
+function chatNew() {
+  const opts = D.projects.filter(inScope);
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">New session</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <label class="ad-field"><span>Project</span><select class="ad-select" id="ns-project" style="height:36px">${opts.map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>
+    <label class="ad-field"><span>Start from</span><select class="ad-select" id="ns-from" style="height:36px"><option>A blank conversation</option><option>An issue</option><option>A pull request</option><option>A security event</option></select><small>The session gets the text as context, fenced as untrusted.</small></label>
+    <label class="ad-field"><span>Title</span><input class="ad-input" id="ns-title" value="Explore the search ranking"><small>You can change it later. The session can suggest one.</small></label>
+    <dl class="ad-dl"><dt>Can</dt><dd>read the code, run commands and tests in a sandbox, draft issues</dd><dt>Cannot</dt><dd>push, merge, or reach hosts outside the allow-list</dd><dt>Claude usage</dt><dd>counts for the first agent of the project</dd><dt>Ends</dt><dd>30 minutes after the last person leaves</dd></dl>
+  </div><div class="ad-drawer-foot"><button class="ad-btn" type="button" data-act="close">Cancel</button><button class="ad-btn ad-btn-primary" type="button" data-chat-start="1">Start session</button></div>`);
+}
+function chatClick(t) {
+  const d = t.dataset;
+  if (d.chat) { chat.sel = d.chat; chat.listOpen = false; chatRender(); return true; }
+  if (d.chatList) { chat.listOpen = true; render(); return true; }
+  if (d.chatNew) { chatNew(); return true; }
+  if (d.chatStart) {
+    const repo = document.getElementById('ns-project').value, title = document.getElementById('ns-title').value || 'New session';
+    const agent = D.agents.find((a) => a.repo === repo)?.name ?? 'alice';
+    const s = { id: `s${Date.now()}`, title, repo, agent, state: 'starting', by: 'valentinalexeev', people: ['valentinalexeev'], started: now, tokens: 0, ctx: [], items: [] };
+    chat.sessions.unshift(s); chat.sel = s.id; closeOverlay(); chatRender();
+    setTimeout(() => { s.state = 'ready'; s.items.push({ t: 'agent', html: `<p>Ready. I have a fresh clone of <code>${esc(repo)}</code> and can read and run its code. What do you want to look at?</p>` }); if (location.hash === '#chat') chatRender(); }, 1600);
+    return true;
+  }
+  if (d.chatSend) { chatSend(); return true; }
+  if (d.chatStop) { chat.working = false; chatSession()?.items.push({ t: 'agent', html: '<p><em>Stopped by valentinalexeev.</em></p>' }); chatRender(); return true; }
+  if (d.chatEnd) { const s = chatSession(); s.state = 'ended'; s.people = []; chatRender(); toast('Ended the session. The transcript stays for 30 days.'); return true; }
+  if (d.chatAsk) { const [i, v] = d.chatAsk.split(':'); const it = chatSession().items[+i]; it.state = v === 'allow' ? 'allowed' : 'denied'; it.by = 'valentinalexeev'; chatRender(); return true; }
+  if (d.chatCreate) { const it = chatSession().items[+d.chatCreate]; it.state = 'created'; it.num = 352; chatRender(); toast(`Created ${chatSession().repo}#352 as valentinalexeev.`); return true; }
+  if (d.chatDiscard) { chatSession().items.splice(+d.chatDiscard, 1); chatRender(); return true; }
+  if (d.chatAssign) { const i = +d.chatAssign; const it = chatSession().items[i]; it.assigned = document.getElementById(`assign-${i}`).value; chatRender(); toast(`Assigned #352 to ${it.assigned}.`); return true; }
+  return false;
+}
+document.addEventListener('keydown', (e) => {
+  if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
+});
+
+V.more = () => head('More', '') + `<div class="p-more">${[...NAV, ...ADMIN].filter(([id]) => !['today', 'work', 'chat', 'agents'].includes(id)).map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>
   <section class="ad-section" style="margin-top:var(--space-5)"><h2 class="ad-section-title">Example size</h2><div class="ad-seg" role="group" aria-label="Example size">${['small', 'large'].map((z) => `<button type="button" data-size="${z}" aria-pressed="${D.size === z}">${z === 'small' ? '7 agents' : 'Large instance'}</button>`).join('')}</div></section>`;
 
 // ---------- drawers ----------
@@ -585,7 +715,7 @@ function openAgent(name) {
     <dl class="ad-dl"><dt>Project</dt><dd class="ad-code">${esc(a.repo)}</dd><dt>Jobs</dt><dd>${a.jobs} of max. ${a.max}</dd><dt>Tokens 24 h</dt><dd class="ad-data">${k(a.tokens)} of ${k(a.budget)}</dd><dt>Scale to zero</dt><dd>on, after 15 min with no work</dd><dt>Claude</dt><dd class="ad-code">${a.sub}</dd></dl>
     <section class="ad-section"><h3 class="ad-section-title">Recent</h3><ol class="ad-timeline">${tl.map(([t, w, s]) => `<li class="ad-tl ad-tl-${w}"><span class="ad-tl-time">${hhmm(t)}</span><span class="ad-tl-mark"></span><span class="ad-tl-text">${esc(s)}</span></li>`).join('')}</ol></section>
     <section class="ad-section"><h3 class="ad-section-title">Settings</h3><div class="p-row"><label class="ad-field"><span>Max. concurrent</span><input class="ad-input" id="mc-${a.name}" type="number" min="1" max="8" value="${a.max}" style="width:90px"></label><label class="p-row" style="gap:6px;align-self:end;height:36px"><input type="checkbox" id="stz-${a.name}" checked> Scale to zero</label></div></section>
-  </div><div class="ad-drawer-foot"><button class="ad-btn ad-btn-quiet" type="button" data-act="close">Delete…</button>${a.life === 'paused' ? `<button class="ad-btn ad-btn-primary" type="button" data-toast="Resumed ${a.name}. It starts on the next work item.">${ic('play')}Resume</button>` : `<button class="ad-btn" type="button" data-toast="Paused ${a.name}. Runs in progress finish.">${ic('pause')}Pause</button>`}<button class="ad-btn" type="button" data-toast="Saved the settings of ${a.name}.">Save</button></div>`);
+  </div><div class="ad-drawer-foot"><button class="ad-btn ad-btn-quiet" type="button" data-act="close">Delete…</button><button class="ad-btn" type="button" data-chat-new="1">${ic('chat')}Discuss</button>${a.life === 'paused' ? `<button class="ad-btn ad-btn-primary" type="button" data-toast="Resumed ${a.name}. It starts on the next work item.">${ic('play')}Resume</button>` : `<button class="ad-btn" type="button" data-toast="Paused ${a.name}. Runs in progress finish.">${ic('pause')}Pause</button>`}<button class="ad-btn" type="button" data-toast="Saved the settings of ${a.name}.">Save</button></div>`);
 }
 function toast(msg) {
   const s = document.getElementById('toast-slot');
@@ -638,6 +768,7 @@ function render() {
   const view = (location.hash.slice(1) || 'today').split('?')[0];
   const v = V[view] ? view : 'today';
   renderNav(v); renderConn();
+  document.getElementById('shell').classList.toggle('ad-shell-fill', v === 'chat');
   document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
   document.getElementById('main').innerHTML = V[v](); fill(document.body);
 }
@@ -649,8 +780,9 @@ function theme() {
 try { const t = localStorage.getItem('ad-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
 
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],[data-size],[data-scope],[data-pick],[data-expand],[data-fold],[data-ig],[data-av],.ad-item');
+  const t = e.target.closest('[data-chat],[data-chat-list],[data-chat-new],[data-chat-start],[data-chat-send],[data-chat-stop],[data-chat-end],[data-chat-ask],[data-chat-create],[data-chat-discard],[data-chat-assign],[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],[data-size],[data-scope],[data-pick],[data-expand],[data-fold],[data-ig],[data-av],.ad-item');
   if (!t) return;
+  if (chatClick(t)) return;
   if (t.dataset.ext) { e.preventDefault(); toast('In the console this opens the issue or PR on the forge.'); return; }
   if (t.dataset.size) { setSize(t.dataset.size); toast(t.dataset.size === 'large' ? `Large example: ${D.projects.length} projects, ${D.agents.length} agents. Showing your ${MINE.length} projects.` : 'Small example: 7 agents.'); return; }
   if (t.dataset.scope) { setScope(t.dataset.scope); return; }

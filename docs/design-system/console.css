@@ -276,3 +276,113 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
 .ad-health-down { color: var(--danger); }
 .ad-health-down .ad-health-dot { background: var(--danger); border-color: var(--danger); border-radius: var(--radius-sm); }
 .ad-health-zero .ad-health-dot { background: transparent; }
+
+/* ---- Chat: interactive sessions in a project (docs/console-ux.md, "Chat") ---- */
+/* Fill mode: the page is exactly one screen high and the chat takes the space under the top bar and the banners. */
+.ad-shell-fill { height: 100vh; height: 100dvh; min-height: 0; box-sizing: border-box; }
+.ad-shell-fill .ad-main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.ad-shell-fill .ad-chat { flex: 1; height: auto; min-height: 0; }
+/* Layout: session list | thread. The list folds away below 1000px; on phones the thread is full screen. */
+.ad-chat { display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; height: calc(100dvh - var(--topbar-h) - 2 * var(--space-5)); min-height: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.ad-chat-list { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--ground); }
+.ad-chat-list-head { padding: var(--space-3); border-bottom: 1px solid var(--line); display: flex; gap: var(--space-2); }
+.ad-chat-list-head .ad-btn { flex: 1; justify-content: center; }
+.ad-chat-list ul { list-style: none; margin: 0; padding: var(--space-1); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.ad-sess { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); }
+.ad-sess:hover { background: var(--sunken); }
+.ad-sess[aria-current="true"] { background: var(--gate-soft); box-shadow: inset 3px 0 0 var(--gate); }
+.ad-sess:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-sess-title { font: 600 14px/20px var(--font-sans); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-sess-meta { display: flex; gap: var(--space-2); align-items: center; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.ad-sess-ended { opacity: .7; }
+
+.ad-thread { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.ad-thread-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.ad-thread-title { margin: 0; font: 600 16px/22px var(--font-sans); color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.ad-thread-facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.ad-thread-actions { margin-left: auto; display: flex; gap: var(--space-2); }
+.ad-thread-actions .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-thread-body { flex: 1; overflow-y: auto; padding: var(--space-5) var(--space-5) var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); }
+.ad-thread-body > * { flex-shrink: 0; max-width: 760px; width: 100%; margin-inline: auto; box-sizing: border-box; }
+
+/* Messages. The person writes in a gate-tinted block on the right; the session answers full width with the agent
+   mark, like a document, because its answers carry code and tables. Session text is model output: rendered from
+   Markdown with raw HTML off, no remote images, and every link shows its full address. */
+.ad-msg { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.ad-msg-who { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: 12px; line-height: 16px; }
+.ad-msg-person { align-items: flex-end; }
+.ad-msg-person .ad-msg-text { background: var(--gate-soft); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); max-width: 85%; }
+.ad-msg-text { font-size: 15px; line-height: 23px; color: var(--ink); overflow-wrap: anywhere; }
+.ad-msg-text p { margin: 0 0 var(--space-2); }
+.ad-msg-text p:last-child { margin-bottom: 0; }
+.ad-msg-text code { font: 400 13px/20px var(--font-mono); background: var(--sunken); padding: 1px 4px; border-radius: var(--radius-sm); }
+.ad-msg-text pre { margin: var(--space-2) 0; padding: var(--space-3); background: var(--sunken); border-radius: var(--radius-sm); overflow-x: auto; font: 400 13px/20px var(--font-mono); }
+.ad-msg-text pre code { background: none; padding: 0; }
+.ad-msg-text ul, .ad-msg-text ol { margin: 0 0 var(--space-2); padding-left: var(--space-5); }
+.ad-msg-text a::after { content: " (" attr(href) ")"; font: 400 12px/1 var(--font-mono); color: var(--ink-muted); }
+
+/* Tool step: what the session did in its sandbox. Folded to one line; the output is untrusted text. */
+.ad-tool { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--ground); font-size: 13px; line-height: 20px; min-width: 0; }
+.ad-tool > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-3); color: var(--ink-muted); }
+.ad-tool > summary::-webkit-details-marker { display: none; }
+.ad-tool > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-tool > summary svg { width: 14px; height: 14px; flex: none; transition: transform .15s; transform: rotate(-90deg); }
+.ad-tool[open] > summary svg { transform: none; }
+.ad-tool > summary .ad-code { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ad-tool > summary .ad-muted { margin-left: auto; white-space: nowrap; }
+.ad-tool .ad-untrusted { margin: 0 var(--space-3) var(--space-3); max-height: 12rem; }
+@media (prefers-reduced-motion: reduce) { .ad-tool > summary svg { transition: none; } }
+
+/* Permission request inside the session: the CLI asks before a command. A small gate card; the answer stays visible. */
+.ad-ask { border: 1px solid var(--gate); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; background: var(--panel); }
+.ad-ask-text { flex: 1 1 260px; min-width: 0; font-size: 14px; line-height: 20px; }
+.ad-ask .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-ask-done { border-color: var(--line); color: var(--ink-muted); }
+
+/* Issue draft: the session proposes, the person creates. The only way a session's result becomes work. */
+.ad-draft { border: 1px solid var(--gate); border-radius: var(--radius-md); background: var(--panel); box-shadow: var(--shadow-panel); overflow: hidden; }
+.ad-draft-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-4); background: var(--gate-soft); color: var(--gate); }
+.ad-draft-head svg { width: 14px; height: 14px; }
+.ad-draft-body { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.ad-draft-title { margin: 0; font: 600 16px/22px var(--font-sans); color: var(--ink); }
+.ad-draft-body h4 { margin: var(--space-1) 0 0; font: 500 11px/16px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
+.ad-draft-body p, .ad-draft-body ul { margin: 0; font-size: 14px; line-height: 21px; }
+.ad-draft-body ul { padding-left: var(--space-5); }
+.ad-draft-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.ad-draft-done { border-color: var(--ok); }
+.ad-draft-done .ad-draft-head { background: var(--ok-soft); color: var(--ok); }
+.ad-select { font: 400 14px/20px var(--font-sans); height: 32px; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel); color: var(--ink); }
+.ad-select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Working indicator: the session thinks or runs a tool. The lamp pulses; Stop is next to it. */
+.ad-working { display: flex; align-items: center; gap: var(--space-2); color: var(--lamp-ink); font-size: 13px; }
+.ad-working .ad-lamp-dot { background: var(--lamp); border-color: var(--lamp-ink); animation: ad-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ad-working .ad-lamp-dot { animation: none; opacity: .5; } }
+
+/* Composer */
+.ad-composer { border-top: 1px solid var(--line); padding: var(--space-3) var(--space-5) var(--space-3); background: var(--panel); }
+.ad-composer-box { max-width: 760px; margin-inline: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); display: flex; flex-direction: column; }
+.ad-composer-box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ad-composer textarea { all: unset; box-sizing: border-box; width: 100%; min-height: 48px; max-height: 30vh; padding: var(--space-3); font: 400 15px/22px var(--font-sans); color: var(--ink); white-space: pre-wrap; overflow-y: auto; }
+.ad-composer textarea::placeholder { color: var(--ink-muted); }
+.ad-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
+.ad-composer-bar .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-composer-bar .ad-btn-primary { margin-left: auto; }
+.ad-ctx { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--ground); font: 400 12px/16px var(--font-mono); color: var(--ink); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-composer-note { max-width: 760px; margin: var(--space-2) auto 0; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+
+@media (max-width: 1000px) {
+  .ad-chat { grid-template-columns: minmax(0, 1fr); }
+  .ad-chat-list { display: none; }
+  .ad-chat-list-open .ad-chat-list { display: flex; }
+  .ad-chat-list-open .ad-thread { display: none; }
+}
+@media (max-width: 760px) {
+  .ad-shell-fill .ad-main { padding-block: 0; }
+  .ad-chat { border-radius: 0; border-inline: 0; margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); }
+  .ad-thread-body { padding: var(--space-4) max(16px, env(safe-area-inset-right, 0px)) var(--space-3) max(16px, env(safe-area-inset-left, 0px)); }
+  .ad-composer { padding: var(--space-2) max(12px, env(safe-area-inset-right, 0px)) var(--space-2) max(12px, env(safe-area-inset-left, 0px)); }
+  .ad-thread-head { padding: var(--space-2) var(--space-3); }
+  .ad-thread-actions { margin-left: 0; }
+  .ad-msg-person .ad-msg-text { max-width: 92%; }
+}

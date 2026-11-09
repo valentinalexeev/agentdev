@@ -51,7 +51,7 @@ Frequency is per person in a normal week. "Where today" is the surface that does
 | A10 | Add, change or remove an agent | lead, admin | monthly | Agents table, modal | agent drawer and a short "Add agent" form |
 | A11 | Read the audit log | auditor | monthly; in an incident | `curl /api/audit` | **Audit** page (admin) |
 | A12 | Check platform health | admin | daily glance | `kubectl`, Cloud console | **Platform** page and the connection state |
-| A13 | Discuss the project with Claude (chat session) | reviewer | weekly | `scripts/agent-chat.sh` | later phase (#338) |
+| A13 | Discuss the project with Claude (chat session), turn the result into an issue | reviewer | weekly | `scripts/agent-chat.sh` and `kubectl exec` | **Chat** page (section 10) |
 | A14 | Credentials, egress, MCP, projects | admin | monthly | Ansible, `scripts/` | Admin pages read-only first, with the command to change |
 
 A1 to A4 are the daily core and decide the layout. A10, A11 and A14 are rare and can be one level deeper.
@@ -149,6 +149,7 @@ From a review of 17 products in November 2026 (sources at the end). Each line na
 Today          inbox + numbers + overnight strip                   everyone
 Projects       one row per repository, sets the scope               everyone
 Work           board (plan, build, review, done) and list          everyone
+Chat           sessions list, thread, issue drafts                  write access to the repository
 Agents         fleet table, agent drawer (overview, jobs, events,  everyone, actions by permission
                usage, settings, harness guide)
 Approvals      pending, history                                    everyone (inbox shows pending too)
@@ -248,7 +249,55 @@ Other rules at scale:
   stream scoped to the projects the person can see. Today the UI loads every agent and every approval.
 - **Phone**: the scope button stays in the top bar; Projects replaces Usage in the bottom bar.
 
-## 10. API needed
+## 10. Chat: interactive sessions
+
+Today a session (#38) is a Job in the agents namespace: a fresh clone, Claude Code in tmux, gVisor, the egress
+allow-list, Claude through `claude-proxy` on the budget of one agent of the project, and a forge token that can
+read code and write issues but never push. People reach it with `scripts/agent-chat.sh attach`, which needs
+`kubectl`. The Chat page brings the same session into the console and to the phone (#338), and keeps every limit.
+
+### What a person does
+
+1. **Start** a session from the Chat page, or with **Discuss** on an agent, an issue, a PR or a security event. The
+   item goes in as context, fenced as untrusted text, and shows as a chip above the composer.
+2. **Talk.** The person writes; the session answers with text and with the steps it took (search, read, run), each
+   folded to one line with its output on demand.
+3. **Allow or deny** a command when Claude Code asks, inline in the thread. The answer stays visible with the name.
+4. **Turn the result into work.** The session proposes an **issue draft** (What, Acceptance criterion, Open
+   decisions). The person edits it and presses **Create issue**; the console creates it *as the person*. Then **Give
+   it to** an agent assigns it, or adds the `agent:<name>` label on GitHub.
+5. **Leave.** The session keeps running while anyone is in it, then ends 30 minutes after the last person leaves.
+   The thread head says "nobody here, ends in 18 min". The transcript stays read-only for a set time.
+
+### Design rules
+
+- **The session drafts, the person files.** Today the session posts issues itself with the chat account. In the
+  console the draft is structured data shown as a card, and only a person's click creates it. So the issue has a
+  human author, and a prompt injection in the repository cannot file issues by itself.
+- **Model text is untrusted.** Answers are Markdown rendered with raw HTML off, no remote images, and every link
+  shows its full address. Tool output uses the untrusted block. Nothing in a message is a button except the draft
+  and permission cards, which the console builds from structured events, never from text.
+- **One session, many people.** Everyone with write access to the repository can open a live session of that
+  project. The head shows who is here. Each message carries its author. A decision (allow, create, assign) records
+  the name.
+- **Cost is visible.** The head shows whose budget the session uses and the tokens so far. A session on a
+  subscription at its limit cannot start, with the reset time in the message.
+- **Terminal stays possible.** **Terminal** opens the same session as a web terminal for people who want the full
+  CLI. It is the same tmux session, so both views stay in step.
+- **Phone.** Chat is in the bottom bar. The thread is full screen, the session list is behind the menu button, and
+  the composer sits above the keyboard.
+
+### What is needed behind it
+
+| Need | Proposal |
+|---|---|
+| A transport for the browser | A small session server in the chat pod runs Claude Code with `--input-format stream-json --output-format stream-json` and keeps the event log. The API proxies a WebSocket per session after the same permission check as other project actions. |
+| Session API | `GET/POST /api/sessions`, `DELETE /api/sessions/{id}` (end), `GET /api/sessions/{id}/events` (WebSocket or SSE), `POST .../messages`, `POST .../permissions/{id}`. |
+| Issue drafts | The session prompt asks for drafts as a fenced JSON block; the session server turns a valid block into a `draft` event and drops anything else. `POST /api/sessions/{id}/drafts/{id}/create` creates the issue with the person's forge identity. |
+| Transcripts | Kept in the platform Postgres for `CHAT_RETENTION_DAYS`, read-only, visible to people with read access to the repository. |
+| Terminal | xterm.js over the same WebSocket proxy, attached to the tmux session. |
+
+## 11. API needed
 
 | Need | Today | Change |
 |---|---|---|
@@ -263,7 +312,7 @@ Other rules at scale:
 
 Every new endpoint keeps the rules of the API: bearer token, permission check on the forge, no Secrets.
 
-## 11. Phases
+## 12. Phases
 
 | Phase | Scope | API change | Issues |
 |---|---|---|---|
@@ -272,16 +321,21 @@ Every new endpoint keeps the rules of the API: bearer token, permission check on
 | 3 | Responsive layout and PWA manifest | none | #338 (part) |
 | 4 | Agent drawer, Audit page, Platform page | agent detail, platform | new |
 | 5 | Work board, live stream | jobs, stream | new |
-| 6 | Web Push, mobile chat sessions | push, session API | #338 |
+| 6 | Chat page: sessions, thread, permission cards, issue drafts, terminal view | session API, session server | #38, #338 |
+| 7 | PWA install and Web Push for approvals and stopped agents | push | #338 |
 
-## 12. Open decisions
+## 13. Open decisions
 
 1. **Botboard.** Proposal: the Work board replaces botboard for people with a console login; botboard stays for
    instances without authentik. Blocks phase 5.
 2. **Mobile.** Proposal: a PWA, not a native app (#338). Blocks phase 6.
 3. **Push content.** Proposal: agent, repository, request type and expiry only; never agent-written text. Blocks
    phase 6.
-4. **Steer a running job** (Copilot pattern). Proposal: not now; it needs a worker change and a new trust path for
+4. **Chat transport.** Proposal: a structured chat (stream-json) as the main view, with the terminal as a second
+   view of the same session. Blocks phase 6.
+5. **Chat transcripts.** Proposal: keep them 30 days, readable by people with read access to the repository. Blocks
+   phase 6.
+6. **Steer a running job** (Copilot pattern). Proposal: not now; it needs a worker change and a new trust path for
    messages. No phase blocked.
 
 ## Sources
