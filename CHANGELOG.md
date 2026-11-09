@@ -96,6 +96,12 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
+- Worker (#336): a PR or an issue comment never gets the log line `claude exited ...` as its text. When Claude exits
+  with an error or at the turn limit, the PR description and the issue get a fixed note with the exit code and a
+  fixed class (`error`, `max-turns`, `rate-limit`). The class `max-turns` comes from the `subtype` field of the CLI
+  result event only; stderr and the transcript are still never logged. New instance value `max_turns` (default 40,
+  1 to 500; per agent `agents[].max_turns`; kind: `MAX_TURNS`), field `maxTurns` in the Agent CRD. Re-run: the
+  playbook (CRD, operator and Agents), or `./run.sh 12 06` on kind.
 - API (#322): OIDC providers with minimal access tokens (for example Pocket ID) now work. When the access
   token has no `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo_endpoint`.
   The userinfo `sub` must be the token's `sub`. An error or a different subject refuses the token. Results are

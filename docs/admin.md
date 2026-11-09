@@ -81,6 +81,13 @@ The concurrency is the number of items that one agent works on at the same time.
    On GKE: set `max_concurrent`, or `agents[].max_concurrent` for one agent.
 2. Deploy again.
 
+The turn limit is the maximum number of turns of one Claude run (#336). When a run uses all its turns, the agent
+writes "class `max-turns`" on the PR and on the issue. A large task can need more turns.
+
+1. On `kind`: set `MAX_TURNS` (the default is 40, the maximum is 500).
+   On GKE: set `max_turns`, or `agents[].max_turns` for one agent.
+2. Deploy again.
+
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
 
@@ -130,6 +137,7 @@ only when the agents have no job.
 | Own Claude credential | `.secrets/<agent>.claude` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
+| Turn limit of one Claude run (#336) | `MAX_TURNS` (default 40) | `max_turns`, `agents[].max_turns` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
