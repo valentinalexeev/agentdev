@@ -28,6 +28,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Web console in the design system (#341): left menu with the mark and the approval count, top bar with the user and
+  a light and dark theme button, status lamps (an agent at zero pods shows as "idle"), severity tags, agent tags,
+  tables, usage meters, and the approval detail as a side panel with the agent text in a marked untrusted block.
+  The fonts are self-hosted (the CSP allows no third-party styles). `npm run build` checks that the design-system
+  copies in `images/ui` match `docs/design-system`. No API change. Re-run: Ansible `deploy.yml` with the new UI image;
+  no `./run.sh` step.
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of

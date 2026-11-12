@@ -394,3 +394,47 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
   .ad-thread-actions { margin-left: 0; }
   .ad-msg-person .ad-msg-text { max-width: 92%; }
 }
+
+/* ---- Promoted from the prototype for images/ui (#341) ---- */
+/* Attention chip: the second axis of agent state, beside the lifecycle lamp. Always a word. */
+.ad-attn { display: inline-flex; align-items: center; gap: 5px; padding: 1px var(--space-2); border-radius: var(--radius-sm); font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.ad-attn-ok { color: var(--ink-muted); }
+.ad-attn-you { background: var(--gate-soft); color: var(--gate); }
+.ad-attn-blocked, .ad-attn-guardrail { background: var(--danger-soft); color: var(--danger); }
+.ad-attn-usage { background: var(--paused-soft); color: var(--paused); }
+/* Reason chip on an inbox item: why it waits for a person */
+.ad-reason { font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted); border: 1px solid var(--line); padding: 0 6px; border-radius: var(--radius-sm); }
+/* Icon-only button (theme, close). Always has an aria-label. */
+.ad-iconbtn { all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md); color: var(--ink-muted); flex: none; }
+.ad-iconbtn:hover { background: var(--sunken); color: var(--ink); }
+.ad-iconbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-iconbtn svg { width: 18px; height: 18px; }
+/* Signed-in user in the top bar */
+.ad-user { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; color: var(--ink); min-width: 0; }
+.ad-avatar { width: 26px; height: 26px; border-radius: var(--radius-lamp); background: var(--gate); color: var(--on-gate); display: grid; place-items: center; font: 600 12px/1 var(--font-sans); flex: none; text-transform: uppercase; }
+.ad-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; box-sizing: border-box; }
+.ad-btn svg { width: 16px; height: 16px; flex: none; }
+.ad-btn-sm { height: 30px; font-size: 14px; padding: 0 var(--space-3); }
+.ad-link { color: var(--link); }
+.ad-row-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.ad-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.ad-check { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; }
+.ad-check input { accent-color: var(--gate); width: 16px; height: 16px; margin: 0; }
+.ad-limit-row { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(90px, .6fr)) auto; gap: var(--space-3); align-items: end; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.ad-limit-row:first-child { border-top: 0; }
+.ad-limit-row .ad-input { width: 100%; }
+.ad-limit-row .ad-row-actions { justify-content: flex-start; }
+.ad-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
+.ad-sub { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ad-sub h3 { margin: 0; font: 600 15px/22px var(--font-sans); display: flex; justify-content: space-between; gap: var(--space-2); overflow-wrap: anywhere; }
+.ad-sub .ad-meter { min-width: 0; }
+.ad-skip { position: absolute; left: -999px; top: var(--space-2); z-index: 50; }
+.ad-skip:focus { left: var(--space-2); }
+@media (max-width: 760px) {
+  .ad-limit-row { grid-template-columns: 1fr 1fr; }
+  .ad-limit-row > :first-child, .ad-limit-row > .ad-row-actions { grid-column: 1 / -1; }
+  .ad-user > span:not(.ad-avatar) { display: none; }
+}
+/* The drawer as a native <dialog> (focus stays inside, Escape closes it): reset the dialog box, keep the scrim. */
+dialog.ad-drawer { margin: 0; inset: 0 0 0 auto; height: 100%; max-height: none; max-width: 100vw; border-top: 0; border-right: 0; border-bottom: 0; color: var(--ink); padding-left: 0; }
+dialog.ad-drawer::backdrop { background: rgba(20, 26, 22, .35); }

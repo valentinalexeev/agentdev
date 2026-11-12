@@ -1,73 +1,8 @@
-:root {
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color: #1d1d1f;
-  background: #f6f6f7;
-  line-height: 1.5;
-}
-body { margin: 0; }
-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 0.75rem 1.5rem; background: #fff; border-bottom: 1px solid #e5e5e7;
-}
-.who { display: flex; gap: 1rem; align-items: center; color: #555; }
-main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
-h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-button {
-  font: inherit; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid #1d1d1f;
-  background: #1d1d1f; color: #fff; cursor: pointer;
-}
-button.link { background: none; border: none; color: #0a58ca; padding: 0; }
-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e5e7; border-radius: 8px; }
-th, td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid #eee; }
-th { font-weight: 600; color: #555; font-size: 0.85rem; }
-.phase { padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.85rem; }
-.phase.running { background: #dcf5e3; color: #146c2e; }
-.phase.starting { background: #fff4d6; color: #7a5a00; }
-.phase.stopped { background: #eceef1; color: #555; }
-.phase.blocked { background: #fde2e1; color: #a1251f; }
-.error { color: #a1251f; }
-code { background: #eceef1; padding: 0 0.3rem; border-radius: 4px; }
-.phase.paused { background: #e7e1f7; color: #4b2e91; }
-.phase.invalid { background: #fde2e1; color: #a1251f; }
-.title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-.title h1 { margin: 0; }
-.muted { color: #888; }
-.actions { white-space: nowrap; }
-.actions button, .buttons button { margin-right: 0.4rem; padding: 0.25rem 0.7rem; }
-button.secondary { background: #fff; color: #1d1d1f; }
-button.danger { background: #a1251f; border-color: #a1251f; }
-button:disabled { opacity: 0.5; cursor: default; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #0a58ca; outline-offset: 2px; }
-form.inline { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-form.inline input[type=number] { width: 3.5rem; }
-form.stack { display: flex; flex-direction: column; gap: 0.6rem; }
-form.stack label { display: flex; flex-direction: column; gap: 0.2rem; }
-form.stack label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
-input, select { font: inherit; padding: 0.3rem 0.4rem; }
-dialog { border: 1px solid #e5e5e7; border-radius: 8px; padding: 1.5rem; max-width: 28rem; }
-dialog::backdrop { background: rgb(0 0 0 / 0.3); }
-dialog h2 { font-size: 1.1rem; margin: 0 0 1rem; }
-.buttons { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.5rem; }
-nav { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
-button.tab { background: #fff; color: #1d1d1f; border-color: #d0d0d4; }
-button.tab.on { background: #1d1d1f; color: #fff; }
-.badge { display: inline-block; min-width: 1.4rem; text-align: center; padding: 0 0.45rem; border-radius: 999px;
-  background: #fde2e1; color: #a1251f; font-weight: 600; text-decoration: none; }
-.filters { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.filters input, .filters select { font: inherit; padding: 0.3rem 0.5rem; margin-left: 0.3rem; }
-.sev { padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.85rem; }
-.sev.high { background: #fde2e1; color: #a1251f; }
-.sev.medium { background: #fff4d6; color: #7a5a00; }
-.sev.low { background: #eceef1; color: #555; }
-.nowrap { white-space: nowrap; }
-td.action { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; }
-pre.untrusted { margin: .25rem 0 0; padding: .25rem .4rem; max-height: 8rem; overflow: auto; white-space: pre-wrap;
-  word-break: break-all; background: #f6f6f6; border-left: 3px solid #c90; font-size: .85em; }
+/* agentdev console (#341). Every colour, font and shape comes from the design system (docs/design-system), copied
+   into src/design-system by scripts/sync-design-system.mjs. This file has layout glue only: no colour values. */
+@import './design-system/tokens.css';
+@import './design-system/components.css';
+@import './design-system/console.css';
 
-/* usage limits (#93) */
-.banner { background: #fff4d6; border: 1px solid #e0b84d; padding: .5rem .75rem; border-radius: 4px; }
-.phase.usage-paused { background: #fff4d6; color: #7a5a00; }
-.warning { color: #8a5a00; }
-dialog dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
-dialog dd { margin: 0; overflow-wrap: anywhere; }
-dialog pre.untrusted { max-height: 16rem; overflow: auto; white-space: pre-wrap; }
+.ad-main:focus { outline: none; }
+.ad-nowrap { white-space: nowrap; }

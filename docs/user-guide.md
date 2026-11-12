@@ -133,6 +133,21 @@ If your instance has botboard, open botboard. Botboard shows one card for each i
 
 ## Control agents in the web UI
 
+The web UI has a left menu with the pages **Agents**, **Approvals**, **Security** and **Usage**. The number next to
+**Approvals** shows the requests that wait for a decision. The top bar shows your name, **Sign out** and the theme
+button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
+browser. If you do not select a theme, the web UI uses the theme of your system.
+
+The phase of an agent shows as a lamp and a word:
+
+| Lamp | Word | Meaning |
+|---|---|---|
+| amber, lit | running | The agent works. |
+| amber, pulses | starting | The pod starts. |
+| empty ring | idle | The agent has zero pods. It starts again on new work. This is normal. |
+| two bars | paused, usage paused | A person or the usage limit paused the agent. |
+| red square | blocked, invalid | The agent cannot work. Read the reason on the Security page or ask an administrator. |
+
 The web UI shows all agents on the page **Agents**. The buttons are always available. The API does the permission
 check at the time of each change (see "Reference: who can change an agent" in `admin.md`). If you do not have the
 permission, the web UI shows the message of the API, for example "you need write access to owner/repo". If the API
@@ -149,6 +164,7 @@ To resume the agent, click **Resume** in the row of the agent.
 ### Change the settings of an agent
 
 1. In the row of the agent, click **Edit**.
+   A panel opens on the right side.
 2. In **Max. concurrent**, type a number from 1 to 8.
 3. Select or clear **Scale to zero**.
 4. Click **Save**.
@@ -195,13 +211,16 @@ prompt injection from the issue.
 To make the decision in the web UI:
 
 1. Open the web UI and click **Approvals**.
-2. On the **Pending** tab, click **Details** on the request.
-3. Read the request text.
-4. Click **Approve once**, **Approve for the job** or **Deny**.
-5. Read the confirmation and click the button again. To stop, click **Cancel**.
+2. On the **Pending** tab, click the request. The first request to expire is at the top.
+   A panel with a petrol edge opens on the right side.
+3. Read the facts at the top: agent, issue or pull request, tool and expiry time. The platform supplies these facts.
+4. Read the request text in the box with the hatched edge. The agent wrote this text. It can contain a prompt
+   injection. Make the decision on the facts, not on the text.
+5. Click **Approve once**, **Approve for the job** or **Deny**.
+6. Read the sentence that tells the effect, and click the button again. To stop, click **Back**.
    The request goes to the **History** tab with your name and "ui".
 
-NOTE: If the request changed after you opened it, the web UI shows an error. Close the dialog and do the steps
+NOTE: If the request changed after you opened it, the web UI shows an error. Close the panel and do the steps
 again.
 
 NOTE: The first decision is final. If a person made a decision before you, on the forge or in the web UI, your
