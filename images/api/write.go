@@ -146,7 +146,8 @@ type writer struct {
 	store      agentStore
 	perms      permChecker
 	adminGroup string
-	usage      usageStore // usage limits (#93); nil: the endpoints are not served
+	usage      usageStore  // usage limits (#93); nil: the endpoints are not served
+	secrets    *secretsAPI // project secrets (#202, secrets.go); nil: the endpoints are not served
 }
 
 func (w *writer) who(id *identity) auditWho {

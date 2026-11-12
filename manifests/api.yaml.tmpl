@@ -14,6 +14,7 @@ rules:
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch]}   # copied to Postgres (#70)
 - {apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list, watch]}         # approvals (#67): read
 - {apiGroups: [agentdev.dev], resources: [approvals/status], verbs: [update]}            # the decision, nothing else
+- {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, create, delete]}   # #202: no value in them
 - {apiGroups: [""], resources: [pods], verbs: [list]}                                    # void requests of gone agent pods (#67)
 # usage limits (#93): thresholds (written by admins and project writers, audited) and the operator's usage state (read)
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
@@ -54,6 +55,9 @@ spec:
         - {name: APPROVAL_DENY_ACCOUNTS, value: "${APPROVAL_DENY_ACCOUNTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # same defaults as the operator (#93), shown in the web UI
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # project secrets (#202): namespace of the value Secrets (kind store); empty = the secrets endpoints are off.
+        # The API may create, update and delete there, never read (manifests/secrets-api.yaml.tmpl)
+        - {name: SECRETS_VALUES_NS, value: "${SECRETS_VALUES_NS}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it

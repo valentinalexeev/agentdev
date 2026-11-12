@@ -34,6 +34,15 @@ done
   || die "SecretStore agentdev-secrets not ready: k -n ${AGENTS_NS} describe secretstore agentdev-secrets"
 ok "SecretStore agentdev-secrets ready"
 
+# the API writes values (write-only RBAC) and serves /api/secrets once it knows the values namespace
+SECRETS_VALUES_NS="${SECRETS_VALUES_NS}" PLATFORM_NS="${PLATFORM_NS}" \
+  envsubst '${SECRETS_VALUES_NS} ${PLATFORM_NS}' < "${SPIKE_DIR}/manifests/secrets-api.yaml.tmpl" | k apply -f - >/dev/null
+if k -n "${PLATFORM_NS}" get deploy agentdev-api >/dev/null 2>&1; then
+  k -n "${PLATFORM_NS}" set env deploy/agentdev-api SECRETS_VALUES_NS="${SECRETS_VALUES_NS}" >/dev/null
+  k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready"
+  ok "agentdev-api serves /api/secrets (values in ${SECRETS_VALUES_NS}, write-only)"
+fi
+
 # credential broker (#202, mode broker): the credproxy image (built and loaded by 06) with MODE=broker. It verifies the
 # agents' proxy keys with claude-proxy-signing, so it needs the credential proxy (06, CLAUDE_PROXY=true).
 if [[ "${CLAUDE_PROXY:-true}" == true ]] && k -n "${AGENTS_NS}" get secret claude-proxy-signing >/dev/null 2>&1; then

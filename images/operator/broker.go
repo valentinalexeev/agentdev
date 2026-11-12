@@ -337,3 +337,17 @@ func (r *AgentReconciler) secretsGuide(ctx context.Context, a *v1.Agent) string 
 	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with $AGENTDEV_BROKER_KEY " +
 		"(Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
 }
+
+// redactDir: where the forge sidecar finds the mode-env values it removes from approval text (#202).
+const redactDir = "/var/run/agentdev/redact"
+
+// redactSources: one optional projected source per mode-env ProjectSecret of the agent, same order as secretEnv.
+func redactSources(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.VolumeProjection {
+	var out []corev1.VolumeProjection
+	for _, e := range secretEnv(a, secrets, nil) { // every mode-env value, also a shadowed one: redacting more is safe
+		ref := e.ValueFrom.SecretKeyRef
+		out = append(out, corev1.VolumeProjection{Secret: &corev1.SecretProjection{LocalObjectReference: ref.LocalObjectReference,
+			Optional: ptr.To(true), Items: []corev1.KeyToPath{{Key: ProjectSecretKey, Path: ref.Name}}}})
+	}
+	return out
+}

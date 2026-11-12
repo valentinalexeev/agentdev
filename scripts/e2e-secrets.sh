@@ -153,6 +153,14 @@ else
   echo "  SKIP credential broker not deployed"
 fi
 
+# API RBAC (#202 part 3): the API writes values, never reads them
+api="system:serviceaccount:${PLATFORM_NS}:agentdev-api"
+[[ "$(k -n "$vns" auth can-i create secrets --as="$api")" == yes && "$(k -n "$vns" auth can-i update secrets --as="$api")" == yes ]] \
+  && ok "API can write values" || no "API cannot write values"
+[[ "$(k -n "$vns" auth can-i get secrets --as="$api")" == no && "$(k -n "$vns" auth can-i list secrets --as="$api")" == no ]] \
+  && ok "API cannot read values" || no "API can read values"
+[[ "$(k -n "$ns" auth can-i get secrets --as="$api")" == no ]] && ok "API cannot read ps-* Secrets" || no "API reads agent-namespace Secrets"
+
 # deletion
 k -n "$ns" delete projectsecret "$name" >/dev/null
 for _ in $(seq 30); do k -n "$ns" get secret "ps-$name" >/dev/null 2>&1 || break; sleep 2; done

@@ -6,6 +6,7 @@ import {
   getUsage, setGlobalLimits, setProjectLimits, pctError, type Usage, type UsageWindow, type UsagePause,
 } from './api'
 import { Approvals } from './Approvals'
+import { Secrets } from './Secrets'
 import { usePendingCount } from './pending'
 
 export function App({ um }: { um: UserManager }) {
@@ -78,8 +79,9 @@ function Pages({ token, onExpired }: { token: string; onExpired: () => void }) {
           Approvals{pending > 0 && <span className="badge" aria-label={`${pending} pending`}>{pending}</span>}
         </button>
         <button className={`tab ${page === 'usage' ? 'on' : ''}`} onClick={() => go('usage')}>Usage</button>
+        <button className={`tab ${page === 'secrets' ? 'on' : ''}`} onClick={() => go('secrets')}>Secrets</button>
       </nav>
-      {page === 'approvals' ? <Approvals token={token} onExpired={onExpired} /> : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} /> : page === 'security'
+      {page === 'secrets' ? <Secrets token={token} onExpired={onExpired} /> : page === 'approvals' ? <Approvals token={token} onExpired={onExpired} /> : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} /> : page === 'security'
         ? <Security key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
         : <Overview token={token} onExpired={onExpired} />}
     </>

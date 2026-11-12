@@ -1736,8 +1736,8 @@ is in the secret store, never in the object.
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
 into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
 
-> **Status:** parts 1 and 2 of #202: the object, the store, the copy and the credential broker. The write-only API
-> and the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
+> **Status:** parts 1 to 3 of #202: the object, the store, the copy, the credential broker, and the write-only API
+> and web UI. The playbook tasks for GKE come in part 4. Until then, only kind has the store.
 
 ### Set up the secret store (kind)
 
@@ -1757,7 +1757,23 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
 
 To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
 
-### Add a project secret (kind, before the API part)
+### Add a project secret in the web UI
+
+You must have admin access to the repository on the forge, or be in the group `agentdev-admins`. For scope `agent`,
+the repository of the agent counts.
+
+1. Open the web UI and select **Secrets**.
+2. Select **Add a secret**.
+3. Type the name, select the scope and the mode, and type the upstream (mode `broker`) or the variable (mode `env`).
+4. Type the value and select **Save**.
+
+You cannot read the value after you save it. To change it, select **Replace value**. To remove the secret and its
+value, select **Remove**. The audit log records each change with your name, never the value.
+
+The same operations are in the API: `GET /api/secrets`, `POST /api/secrets`, `PUT /api/secrets/<name>/value` and
+`DELETE /api/secrets/<name>`. The API has no read access to the values (RBAC: create, update and delete only).
+
+### Add a project secret with kubectl (kind)
 
 1. Apply the ProjectSecret object:
 
@@ -1828,7 +1844,8 @@ A new or removed broker secret restarts the broker once. A rotated value does no
 In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
 it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
 database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
-`HTTPS_PROXY` are not permitted. Only the agent container gets the variable, not the forge sidecar. A new or changed
+`HTTPS_PROXY` are not permitted. Only the agent container gets the variable. The forge sidecar gets the value as a read-only file and removes it
+from approval text (comments, the Approval object and the web UI), also after a rotation. A new or changed
 `env` secret restarts the agents in its scope. If two secrets set the same variable for an agent, the first by name
 is used.
 

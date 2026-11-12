@@ -34,7 +34,11 @@ func envPS(name, scope, owner, variable string) *v1.ProjectSecret {
 
 func TestBrokerRoutesScopes(t *testing.T) {
 	agents := []v1.Agent{*agent("alice", nil), *agent("bob", nil), *agent("carol", func(a *v1.Agent) { a.Spec.Repo = "other/repo" })}
-	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret { p := brokerPS("mine", "agent", "carol"); p.Spec.Project = "other/repo"; return *p }(),
+	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret {
+		p := brokerPS("mine", "agent", "carol")
+		p.Spec.Project = "other/repo"
+		return *p
+	}(),
 		*envPS("db", "project", "owner/repo", "DB_PASSWORD")}
 	routes, src := brokerRoutes(secrets, agents)
 	var m map[string]brokerRoute
@@ -108,8 +112,27 @@ func TestSecretEnvAndBrokerEnv(t *testing.T) {
 	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || !hasEnv(ag, "AGENTDEV_BROKER_KEY") {
 		t.Error("broker env missing")
 	}
-	if fc := container(s, "forge"); hasEnv(fc, "DB_PASSWORD") {
+	fc := container(s, "forge")
+	if hasEnv(fc, "DB_PASSWORD") {
 		t.Error("env secret in the forge container")
+	}
+	// #202: the sidecar gets the value as a file for redaction; the agent container does not mount it
+	if envOfC(fc, "REDACT_DIR") != redactDir {
+		t.Error("REDACT_DIR missing in the forge container")
+	}
+	for _, m := range ag.VolumeMounts {
+		if m.Name == "redact" {
+			t.Error("redact volume in the agent container")
+		}
+	}
+	var redact *corev1.Volume
+	for i := range s.Spec.Template.Spec.Volumes {
+		if s.Spec.Template.Spec.Volumes[i].Name == "redact" {
+			redact = &s.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if redact == nil || len(redact.Projected.Sources) != 1 || redact.Projected.Sources[0].Secret.Name != "ps-db" {
+		t.Errorf("redact volume %+v", redact)
 	}
 	var cm corev1.ConfigMap
 	c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: guidesCM}, &cm)
@@ -136,6 +159,15 @@ func TestBrokerEventLineSource(t *testing.T) {
 	if spec.Agent != "credential-broker" {
 		t.Errorf("agent %q", spec.Agent)
 	}
+}
+
+func envOfC(c *corev1.Container, k string) string {
+	for _, e := range c.Env {
+		if e.Name == k {
+			return e.Value
+		}
+	}
+	return ""
 }
 
 // Review of #272: a repository is (forge, name), and scope agent is bound to the agent's repository at creation.

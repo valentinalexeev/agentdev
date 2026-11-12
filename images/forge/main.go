@@ -25,6 +25,9 @@ import (
 
 type Config struct {
 	ForgeURL, ForgeUser, Token string
+	// RedactDir (#202): values of the agent's mode-env project secrets, one file each (read-only projected volume,
+	// this container only). redact() removes them from approval text; read at use, so a rotated value counts at once.
+	RedactDir string
 	// NoUsage (#66): the Claude credential proxy reports usage, so POST /usage is refused (USAGE_REPORTS=off)
 	NoUsage                  bool
 	Repos                    []string // owner/name, the only repos the API and git talk to
@@ -64,7 +67,7 @@ func splitList(s string) []string {
 func loadConfig() (*Config, error) {
 	c := &Config{
 		ForgeURL: strings.TrimRight(os.Getenv("FORGE_URL"), "/"), ForgeUser: os.Getenv("FORGE_USER"),
-		Token: os.Getenv("FORGE_TOKEN"), Repos: splitList(os.Getenv("REPO")),
+		Token: os.Getenv("FORGE_TOKEN"), RedactDir: os.Getenv("REDACT_DIR"), Repos: splitList(os.Getenv("REPO")),
 		Listen:        getenv("FORGE_API_LISTEN", "127.0.0.1:7070"),
 		WebhookListen: getenv("WEBHOOK_LISTEN", ":"+getenv("WEBHOOK_PORT", "8080")),
 		MirrorDir:     getenv("MIRROR_DIR", "/forge/repo.git"),
