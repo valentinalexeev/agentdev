@@ -6,7 +6,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
-## [1.0.0] - YYYY-MM-DD
+## [1.0.0] - 2026-11-12
 
 ### Upgrade
 Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
