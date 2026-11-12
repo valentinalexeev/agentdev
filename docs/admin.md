@@ -896,7 +896,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
 | `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). Every signed-in user sees every event for now; restriction to projects with write access is #57 |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308) |
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
@@ -913,10 +913,10 @@ Gitea tells the permission of another user only to a site admin or to an admin o
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
 
-On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+On `kind`, `./run.sh 10` (`kind.yml --tags api`) does this task for you. The playbook makes the Gitea user `agentdev-api` and makes it admin
 of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
 `read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
-works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+works, the playbook keeps it. The playbook does not show the token. After you add an agent on a new repository, run
 `./run.sh 10` again.
 
 On GKE, do these steps manually. The playbook does not do them yet (#104).
@@ -1897,7 +1897,7 @@ NOTE: The operator keeps this data in the ConfigMap `agentdev-usage`. The agent 
 | Effective limit | The lower value of the global limit and the project limit. For an agent with more than one repository, the lowest value of all its repositories. |
 | Default limits | `USAGE_FIVE_HOUR` (80) and `USAGE_WEEKLY` (90): `config.env`; Ansible `usage.five_hour`, `usage.weekly`. |
 | Scope of a rate-limit pause | All agents on the same Claude Secret. |
-| Who can read the usage | Each user who can sign in to the web UI (`GET /api/usage`). Refer to risk R35 in `security.md`. |
+| Who can read the usage | `GET /api/usage`: an `agentdev-admins` member sees all. Other users see the global limits and only the projects and agents where they have write access on the forge. Claude Secret names and windows are for admins only (R35). |
 | State and pauses | ConfigMap `agentdev-usage`. Only the operator writes it. Each agent pod mounts it read-only. |
 | Pause event | SecurityEvent, source `operator`, rule `usage-<reason>`, severity `low`. It does not pause the Agent object. |
 | Audit | `AGENTDEV_AUDIT` with `action: set-limits`, for each try (also refused tries). |
@@ -2146,10 +2146,10 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Webhook router | 06 (`kind.yml --tags agents`, role `kind_agents`) | `deploy.yml` |
 | Egress proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` |
 | Claude credential proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` (`claude_proxy: true`) |
-| Operator and CRDs | 12 | `deploy.yml` |
+| Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
-| API | 10 | role `api` (`api.oidc_issuer`) |
+| API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
 
