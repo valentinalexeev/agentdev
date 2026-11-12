@@ -36,10 +36,12 @@ claude_job_budget_units: 0
 claude_code_telemetry: {enabled: false, otlp_url: ""}
 # Telemetry (#196, ADR 0002 D4/D5): claude-proxy and the operator serve metrics on 9464, reachable only from the
 # scraper namespace (Managed Service for Prometheus: gmp-system). otlp_url: https OTLP endpoint for metrics and spans.
+# pod_monitoring: PodMonitoring for Managed Service for Prometheus (needs enable_managed_prometheus in Terraform).
 telemetry:
   scraper_ns: gmp-system
   scraper_selector: {app.kubernetes.io/name: collector}   # the GMP collector pods; only they reach 9464
   otlp_url: ""
+  pod_monitoring: false
   instance: agentdev   # label agentdev_instance on every metric (#278): one external Grafana for many instances
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts

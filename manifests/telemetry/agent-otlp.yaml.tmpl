@@ -1,0 +1,14 @@
+# Claude Code telemetry (#196, ADR 0002 D7): lets agent pods send OTLP over HTTP to the collector in the telemetry
+# namespace. Applied by ./run.sh 14 only when CLAUDE_CODE_TELEMETRY=true (deleted otherwise). NetworkPolicies add up,
+# so this opens only this one port next to agent-egress (manifests/egress.yaml.tmpl). The collector keeps only
+# claude_code.* metrics, so agents cannot forge the proxy's or the operator's series.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agent-otlp, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: coding-agent}}
+  policyTypes: [Egress]
+  egress:
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${TELEMETRY_SCRAPER_NS}}}, podSelector: {matchLabels: {app.kubernetes.io/name: opentelemetry-collector}}}
+    ports: [{port: 4318}]

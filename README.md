@@ -49,6 +49,7 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`); runs `infra/ansible/kind.yml --tags forge` (#106) |
 | `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
+| `14-telemetry.sh`, `grafana/` | optional (#196): Prometheus, OpenTelemetry Collector and Grafana with the Claude cost dashboard (`TELEMETRY_STACK=true ./run.sh 14`) |
 | `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
 
 **Connect another repo (#31).** Copy `examples/project.yaml`, set `forge.repo` to an existing repo and list the
