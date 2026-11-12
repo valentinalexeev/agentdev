@@ -7,6 +7,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
+- `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
+  `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
 - Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
   The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
   Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.

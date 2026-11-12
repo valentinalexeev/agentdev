@@ -17,6 +17,8 @@ source "${GITHUB_BOT_ENV}" || die "bot environment not found: ${GITHUB_BOT_ENV}"
 R="${GITHUB_REPO}"
 OWNER="${GITHUB_OWNER}"
 POLL="${WATCH_POLL_SECONDS}"
+# A gap is a missed poll, not a slow one: twice the poll interval, at least 5 minutes (the ghwatch default).
+GAP_AFTER="$(( POLL * 2 > 300 ? POLL * 2 : 300 ))s"
 DIR=${WATCH_STATE_DIR:-${JCODE_SCRATCH_DIR:-$HOME/.jcode/scratch}/gh-watch}
 STATE="${DIR}/${R//\//_}.ghwatch.json"
 SEEN="${DIR}/${R//\//_}.local.seen"          # pods and token only
@@ -47,7 +49,7 @@ if [[ -n "${pending}" && "${pending}" != *"pending owner events: 0"* ]]; then
 fi
 while true; do
   new=0
-  if gh_out=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -format text 2>"${DIR}/ghwatch.err"); then
+  if gh_out=$("${BIN}" -repo "${R}" -owner "${OWNER}" -state "${STATE}" -gap-after "${GAP_AFTER}" -format text 2>"${DIR}/ghwatch.err"); then
     fails=0
     while IFS= read -r line; do
       [[ -n "$line" ]] && { echo "$(date '+%H:%M:%S') ${line}"; new=1; }
