@@ -14,6 +14,7 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 4. Open GitHub Issues of `valentinalexeev/agentdev`, **only those assigned to `valentinalexeev-bot`**, in this order:
    open `incident` issues, then `in-progress`, then the rest by priority (lowest number first).
 5. Work the issue, check it against its acceptance criterion, update the issue.
+6. On every monitor check (default each 5 minutes), also do the milestone and release follow-up of §7a.
 
 ## 1. What this project is
 
@@ -257,3 +258,44 @@ required inputs.
   (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward.
 - `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
   of lower lines in version order.
+
+### 7a. Milestone and release follow-up (regular, on every monitor check)
+
+The agent does this on each check of §0 (every `WATCH_POLL_SECONDS`, default 5 minutes), after the owner events.
+
+1. **Track the next open milestones.** Read the open milestones. The **next patch** milestone is the rolling `X.Y.x`
+   of the lowest supported line (`release/X.Y`). The **next feature** milestone is the lowest open `X.Y.0` whose
+   line is `main`. The **next major** is the open `X.0.0` of `next/X.0`. Record them in the status comment of the
+   `roadmap` issue when they change.
+2. **Classify approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4) and no
+   milestone, or with a milestone that does not match its class, set the milestone by the Conventional Commits
+   type of its title:
+   - `fix`, `perf`, `revert` of a released fix, and `hotfix/` branches: the next patch milestone. The PR must target
+     `release/X.Y`; if it targets `main`, comment and ask the owner (do not retarget alone).
+   - `feat` and `refactor` without `!`: the next feature milestone.
+   - any type with `!` or a `BREAKING CHANGE` footer: the next major milestone.
+   - `docs`, `test`, `ci`, `build`, `chore`, `style`: the milestone of the line the PR targets (patch for
+     `release/X.Y`, feature for `main`).
+   - `merge/` forward merges and `chore(release)` PRs: no change.
+   A stacked PR (base is not a line branch) takes the milestone of the line at the bottom of its stack. Comment
+   on the PR with the milestone and the rule. A PR that does not fit a rule gets a comment, not a guess.
+3. **Merge** approved PRs by §4 (head pinned, green CI, review line), then go on.
+4. **Open the release PR.** When a milestone has no open issue or PR left, except its tracking issue, prepare the
+   release by `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
+   `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested. For a patch, the
+   version is the next free `X.Y.Z` on the line. Do not open a second release PR for the same milestone.
+5. **Run the full release after the owner approves the release PR.** An owner `APPROVED` review on the current head
+   of a `chore/release-X.Y.Z` PR is the owner's explicit permission (§3) for the tag `vX.Y.Z` and the rest of that
+   release only. Then, without a new question:
+   1. merge the PR (§4, head pinned);
+   2. tag the merge commit: `git tag vX.Y.Z <merge commit> && git push origin vX.Y.Z`;
+   3. for a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`; close the released milestone;
+   4. wait for `images.yml` to publish every image at `X.Y.Z`; then create the GitHub release from the CHANGELOG
+      section (`gh release create vX.Y.Z --notes-file ...`);
+   5. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop without
+      conflict resolution and with green CI merges without a new approval (§4);
+   6. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review;
+   7. report on the tracking issue: tag, images, release URL, forward-merge PRs, deployment PR, what is left.
+   A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else
+   comment on the release PR and ask the owner.
+6. Never move or delete a tag, and never release from a PR that is not approved on its current head.
