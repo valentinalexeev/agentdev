@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -51,6 +52,8 @@ type eventFilter struct {
 	Since           time.Time
 	Before          int64 // cursor: only ids below this (0 = from the newest)
 	Limit           int
+	// Agents limits the result to these agents (R35, #308); nil = every agent (admin)
+	Agents []string
 }
 
 // eventStore is the security_events table (pgStore) or an in-memory copy (tests, no database configured).
@@ -153,8 +156,9 @@ func (s *pgStore) Insert(ctx context.Context, e *securityEvent) (bool, error) {
 func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, error) {
 	q := `SELECT id, schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash, prev, chain FROM security_events
 		WHERE ($1 = '' OR agent = $1) AND ($2 = '' OR severity = $2) AND time >= $3 AND ($4 = 0 OR id < $4)
+		AND ($6::text[] IS NULL OR agent = ANY($6))
 		ORDER BY id DESC LIMIT $5`
-	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit)
+	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit, f.Agents)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +239,7 @@ func (m *memStore) List(_ context.Context, f eventFilter) ([]securityEvent, erro
 	for i := len(m.rows) - 1; i >= 0 && len(out) < f.Limit; i-- {
 		e := m.rows[i]
 		if (f.Agent == "" || e.Agent == f.Agent) && (f.Severity == "" || e.Severity == f.Severity) &&
-			!e.Time.Before(f.Since) && (f.Before == 0 || e.ID < f.Before) {
+			!e.Time.Before(f.Since) && (f.Before == 0 || e.ID < f.Before) && (f.Agents == nil || slices.Contains(f.Agents, e.Agent)) {
 			out = append(out, e)
 		}
 	}
@@ -257,7 +261,9 @@ func (m *memStore) Counts(_ context.Context, since time.Time) (map[string]int, e
 
 // listSecurityEvents serves GET /api/security-events?agent=&severity=&since=&limit=&cursor=. since is RFC 3339 or a
 // Go duration back from now (24h); limit 1..500, default 100. The response has next_cursor while more pages exist.
-func listSecurityEvents(store eventStore) http.Handler {
+// R35 (#308): an admin sees every event; any other user sees only the events of the agents with at least one
+// repository where the user has write access on the forge (the agent's owners). wr nil (tests only): no filter.
+func listSecurityEvents(store eventStore, wr *writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "security events are not configured"})
@@ -297,6 +303,10 @@ func listSecurityEvents(store eventStore) http.Handler {
 			}
 			f.Before = id
 		}
+		if wr != nil {
+			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+			f.Agents = wr.visibleAgents(r.Context(), id)
+		}
 		// one extra row tells whether another page exists
 		want := f.Limit
 		f.Limit++
@@ -314,4 +324,42 @@ func listSecurityEvents(store eventStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
+}
+
+// visibleAgents: nil for an admin (every agent), else the names of the agents with at least one repository where the
+// caller has write access on the forge. A forge error hides that repository (fail closed).
+func (w *writer) visibleAgents(ctx context.Context, id *identity) []string {
+	if id != nil && w.isAdmin(id) {
+		return nil
+	}
+	out := []string{}
+	if id == nil {
+		return out
+	}
+	lister, ok := w.store.(agentLister)
+	if !ok {
+		return out
+	}
+	list, err := lister.List(ctx)
+	if err != nil {
+		log.Printf("list agents for security event visibility: %v", err)
+		return out
+	}
+	cache := map[string]bool{}
+	for _, a := range list {
+		for _, repo := range a.Repos {
+			key := a.Forge + "\x00" + repo
+			ok, seen := cache[key]
+			if !seen {
+				p, err := w.repoPerm(ctx, id, a.Forge, repo)
+				ok = err == nil && p >= permWrite
+				cache[key] = ok
+			}
+			if ok {
+				out = append(out, a.Name)
+				break
+			}
+		}
+	}
+	return out
 }

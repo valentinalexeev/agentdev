@@ -1,0 +1,128 @@
+/* agentdev design system: generated from tokens.json by scripts/design-tokens.mjs. Do not edit. */
+:root {
+  --ground: #edefea;
+  --panel: #f8f9f6;
+  --sunken: #e2e5df;
+  --line: #cdd3cc;
+  --line-strong: #7f8981;
+  --ink: #141a16;
+  --ink-muted: #525c55;
+  --lamp: #f0a202;
+  --lamp-ink: #875000;
+  --lamp-soft: #fbe7bb;
+  --on-lamp: #141a16;
+  --gate: #0e5a5e;
+  --gate-soft: #d3ebe8;
+  --on-gate: #ffffff;
+  --ok: #2a7339;
+  --ok-soft: #dbeedd;
+  --danger: #b3261e;
+  --danger-soft: #f9dedc;
+  --on-danger: #ffffff;
+  --paused: #4c5794;
+  --paused-soft: #e3e6f5;
+  --lane-1: #8f5400;
+  --lane-2: #2c65a8;
+  --lane-3: #83399a;
+  --lane-4: #a83c39;
+  --lane-5: #566219;
+  --lane-6: #3f5b72;
+  --link: var(--gate);
+  --focus: var(--gate);
+  --shadow-panel: 0 1px 0 rgba(20,26,22,0.08);
+  --shadow-dialog: 0 16px 40px rgba(20,26,22,0.20);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lamp: 999px;
+  --font-display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  --font-sans: Archivo, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #101412;
+    --panel: #181d1a;
+    --sunken: #0b0e0c;
+    --line: #2a322d;
+    --line-strong: #6e7a71;
+    --ink: #e6ebe5;
+    --ink-muted: #9ca69f;
+    --lamp: #ffb21f;
+    --lamp-ink: #ffc24d;
+    --lamp-soft: #3a2a06;
+    --on-lamp: #141a16;
+    --gate: #5fc4be;
+    --gate-soft: #10302f;
+    --on-gate: #08201f;
+    --ok: #6fcf85;
+    --ok-soft: #13301b;
+    --danger: #ff8a80;
+    --danger-soft: #3b1513;
+    --on-danger: #2a0b09;
+    --paused: #a9b4f0;
+    --paused-soft: #20253f;
+    --lane-1: #f0a84a;
+    --lane-2: #7fb0f0;
+    --lane-3: #d49be6;
+    --lane-4: #f08a84;
+    --lane-5: #b8c76a;
+    --lane-6: #9db7cc;
+    --link: var(--gate);
+    --focus: var(--gate);
+    --shadow-panel: 0 1px 0 rgba(0,0,0,0.5);
+    --shadow-dialog: 0 16px 40px rgba(0,0,0,0.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #101412;
+  --panel: #181d1a;
+  --sunken: #0b0e0c;
+  --line: #2a322d;
+  --line-strong: #6e7a71;
+  --ink: #e6ebe5;
+  --ink-muted: #9ca69f;
+  --lamp: #ffb21f;
+  --lamp-ink: #ffc24d;
+  --lamp-soft: #3a2a06;
+  --on-lamp: #141a16;
+  --gate: #5fc4be;
+  --gate-soft: #10302f;
+  --on-gate: #08201f;
+  --ok: #6fcf85;
+  --ok-soft: #13301b;
+  --danger: #ff8a80;
+  --danger-soft: #3b1513;
+  --on-danger: #2a0b09;
+  --paused: #a9b4f0;
+  --paused-soft: #20253f;
+  --lane-1: #f0a84a;
+  --lane-2: #7fb0f0;
+  --lane-3: #d49be6;
+  --lane-4: #f08a84;
+  --lane-5: #b8c76a;
+  --lane-6: #9db7cc;
+  --link: var(--gate);
+  --focus: var(--gate);
+  --shadow-panel: 0 1px 0 rgba(0,0,0,0.5);
+  --shadow-dialog: 0 16px 40px rgba(0,0,0,0.6);
+  color-scheme: dark;
+}
+.display-1 { font-family: var(--font-display); font-size: 96px; line-height: 0.9; font-weight: 800; letter-spacing: -0.01em; }
+.display-2 { font-family: var(--font-display); font-size: 56px; line-height: 0.95; font-weight: 800; }
+.display-3 { font-family: var(--font-display); font-size: 32px; line-height: 1; font-weight: 700; }
+.title { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 600; }
+.body { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 400; }
+.body-strong { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 600; }
+.small { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; }
+.label { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.08em; }
+.code { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 400; }
+.data { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 500; }

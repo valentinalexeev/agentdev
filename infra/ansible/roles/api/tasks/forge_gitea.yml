@@ -1,0 +1,145 @@
+---
+# kind (#106, was 10-api.sh; #100): the forge account agentdev-api for the API's permission checks. Gitea shows
+# another user's permission only to a repository admin, so agentdev-api is admin collaborator of the Gitea agent
+# repositories. Its token can only read (read:repository,read:user). A token in the Secret agentdev-api-forge that
+# still works is kept. Other agentdev-api* tokens are deleted. GKE: manual step in docs/admin.md.
+- name: Gitea in {{ api_forge_ns }}
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ api_forge_ns }}", get, deploy/gitea, -o, name]
+  register: api_gitea
+  changed_when: false
+  failed_when: false
+
+- name: Forge account agentdev-api
+  when: api_gitea.rc == 0
+  vars:
+    api_gitea_cli: [kubectl, --context, "{{ kube_context }}", -n, "{{ api_forge_ns }}", exec, deploy/gitea, --, gitea]
+    api_gitea_api: "{{ api_forge_host_url }}/api/v1"
+    api_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
+  block:
+    - name: Existing forge users
+      ansible.builtin.command:
+        argv: "{{ api_gitea_cli + ['admin', 'user', 'list'] }}"
+      register: api_gitea_users
+      changed_when: false
+
+    - name: Create the account {{ api_forge_user }}
+      ansible.builtin.command:
+        argv: "{{ api_gitea_cli + ['admin', 'user', 'create', '--username', api_forge_user, '--password',
+               lookup('ansible.builtin.password', '/dev/null', length=24, chars=['hexdigits']) ~ 'Aa1!',
+               '--email', api_forge_user ~ '@agents.local', '--must-change-password=false'] }}"
+      when: api_forge_user not in (api_gitea_users.stdout | regex_findall('(?m)^\\d+\\s+(\\S+)'))
+      changed_when: true
+      no_log: true
+
+    - name: Gitea repositories of the agents
+      ansible.builtin.command:
+        argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ agents_ns }}", get, agents, -o, json]
+      register: api_agents
+      changed_when: false
+      failed_when: false
+
+    # an Agent without spec.forge is on Gitea (the operator's default)
+    - name: Repositories that need agentdev-api as admin
+      ansible.builtin.set_fact:
+        api_forge_repos: >-
+          {{ ([api_forge_repo] + (api_agent_items | selectattr('spec.repo', 'defined')
+              | selectattr('spec.forge', 'undefined') | map(attribute='spec.repo') | list)
+              + (api_agent_items | selectattr('spec.forge', 'defined') | selectattr('spec.forge', 'equalto', 'gitea')
+              | map(attribute='spec.repo') | list)) | unique | sort }}
+      vars:
+        api_agent_items: "{{ (api_agents.stdout | default('{}', true) | from_json).get('items', []) }}"
+
+    - name: Permission of agentdev-api on the repositories
+      ansible.builtin.uri:
+        url: "{{ api_gitea_api }}/repos/{{ item }}/collaborators/{{ api_forge_user }}/permission"
+        user: "{{ api_forge_admin_user }}"
+        password: "{{ api_forge_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      loop: "{{ api_forge_repos }}"
+      register: api_forge_perm
+      no_log: true
+
+    - name: Make agentdev-api admin of the repositories
+      ansible.builtin.uri:
+        url: "{{ api_gitea_api }}/repos/{{ item.item }}/collaborators/{{ api_forge_user }}"
+        method: PUT
+        user: "{{ api_forge_admin_user }}"
+        password: "{{ api_forge_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: {permission: admin}
+        status_code: [204]
+      loop: "{{ api_forge_perm.results }}"
+      loop_control: {label: "{{ item.item }}"}
+      when: (item.json | default({})).permission | default('') != 'admin'
+      changed_when: true
+      no_log: true
+
+    - name: Token in the Secret agentdev-api-forge
+      ansible.builtin.command:
+        argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", get, secret, agentdev-api-forge,
+               -o, "jsonpath={.data.FORGE_API_TOKEN}"]
+      register: api_forge_have
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: The token still works
+      ansible.builtin.uri:
+        url: "{{ api_gitea_api }}/user"
+        headers: {Authorization: "token {{ api_forge_have.stdout | b64decode }}"}
+        status_code: [200, 401, 403]
+      register: api_forge_check
+      when: api_forge_have.stdout | length > 0
+      no_log: true
+
+    - name: Keep the working token
+      ansible.builtin.set_fact:
+        api_forge_token: "{{ api_forge_have.stdout | b64decode }}"
+      when: (api_forge_check.json | default({})).login | default('') == api_forge_user
+      no_log: true
+
+    - name: New read-only token for agentdev-api
+      ansible.builtin.command:
+        argv: "{{ api_gitea_cli + ['admin', 'user', 'generate-access-token', '--username', api_forge_user,
+               '--token-name', 'agentdev-api-' ~ now(utc=true).strftime('%s'), '--scopes', 'read:repository,read:user',
+               '--raw'] }}"
+      register: api_forge_new
+      when: (api_forge_check.json | default({})).login | default('') != api_forge_user and not ansible_check_mode
+      changed_when: true
+      no_log: true
+
+    - name: Keep the new token
+      ansible.builtin.set_fact:
+        api_forge_token: "{{ api_forge_new.stdout | trim }}"
+      when: api_forge_new is not skipped
+      no_log: true
+
+    # Gitea lists token_last_eight, never the value: match the token in the Secret by it (sudo: the owner acts as
+    # agentdev-api; ids and names only)
+    - name: Tokens of agentdev-api
+      ansible.builtin.uri:
+        url: "{{ api_gitea_api }}/users/{{ api_forge_user }}/tokens?sudo={{ api_forge_user }}"
+        user: "{{ api_forge_admin_user }}"
+        password: "{{ api_forge_admin_password }}"
+        force_basic_auth: true
+      register: api_forge_tokens
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Delete stale agentdev-api tokens
+      ansible.builtin.uri:
+        url: "{{ api_gitea_api }}/users/{{ api_forge_user }}/tokens/{{ item.id }}?sudo={{ api_forge_user }}"
+        method: DELETE
+        user: "{{ api_forge_admin_user }}"
+        password: "{{ api_forge_admin_password }}"
+        force_basic_auth: true
+        status_code: [204]
+      loop: >-
+        {{ api_forge_tokens.json | default([]) | selectattr('name', 'match', '^agentdev-api')
+           | rejectattr('token_last_eight', 'equalto', api_forge_token[-8:]) | list }}
+      loop_control: {label: "{{ item.name }}"}
+      when: not ansible_check_mode
+      changed_when: true
