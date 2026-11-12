@@ -28,6 +28,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- API for the console (#344): `GET /api/agents/{name}` gives one agent with its pods, what it waits on (approvals,
+  usage pause, pause, block) and its harness guide. Admins see every agent; other users only agents with a repository
+  where they have write access (404 otherwise). `GET /api/platform` (`agentdev-admins` only) gives the health of the
+  API, router, operator, Claude proxy, authentik, forge credential, egress proxy and agent pool. The API Role gets
+  by-name `get` on the ConfigMap `agentdev-guides` and on the platform Deployments, never on Secrets. Re-run: `./run.sh
+  10` on kind, Ansible `deploy.yml` (role `api`) on GKE.
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of

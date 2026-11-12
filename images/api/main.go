@@ -91,7 +91,9 @@ func main() {
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
 	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
-		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}} // #27, 0 = no cap
+		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}, // #27, 0 = no cap
+		events: store}
+	wr.platform = newPlatformChecker(agents, forgeProbeFrom(gp, gh), cfg.Namespace, env("PLATFORM_NS", "agentdev-platform"))
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
 	}
@@ -245,6 +247,10 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
 	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
+		mux.Handle("GET /api/agents/{name}", auth(verify, http.HandlerFunc(wr.agentDetail))) // #344, detail.go
+		if wr.platform != nil {
+			mux.Handle("GET /api/platform", auth(verify, wr.platform.handler(wr.adminGroup))) // #344, admins only
+		}
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
 		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
