@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
+  Other users see only the events of agents with a repository where they have write access on the forge. Before,
+  each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
+  `deploy.yml` with the new API image; no `./run.sh` step.
 ### Fixed
 - `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
   `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
