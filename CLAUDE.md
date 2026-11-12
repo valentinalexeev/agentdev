@@ -255,47 +255,60 @@ required inputs.
 - Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
 - Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
   `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
-  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward.
+  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward. An owner
+  approval of the release PR on its current head is that permission for its one tag (§7a step 5).
 - `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
   of lower lines in version order.
 
 ### 7a. Milestone and release follow-up (regular, on every monitor check)
 
 The agent does this on each check of §0 (every `WATCH_POLL_SECONDS`, default 5 minutes), after the owner events.
+Owner request: #354.
 
-1. **Track the next open milestones.** Read the open milestones. The **next patch** milestone is the rolling `X.Y.x`
-   of the lowest supported line (`release/X.Y`). The **next feature** milestone is the lowest open `X.Y.0` whose
-   line is `main`. The **next major** is the open `X.0.0` of `next/X.0`. Record them in the status comment of the
-   `roadmap` issue when they change.
-2. **Classify approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4) and no
-   milestone, or with a milestone that does not match its class, set the milestone by the Conventional Commits
-   type of its title:
-   - `fix`, `perf`, `revert` of a released fix, and `hotfix/` branches: the next patch milestone. The PR must target
-     `release/X.Y`; if it targets `main`, comment and ask the owner (do not retarget alone).
-   - `feat` and `refactor` without `!`: the next feature milestone.
-   - any type with `!` or a `BREAKING CHANGE` footer: the next major milestone.
-   - `docs`, `test`, `ci`, `build`, `chore`, `style`: the milestone of the line the PR targets (patch for
-     `release/X.Y`, feature for `main`).
-   - `merge/` forward merges and `chore(release)` PRs: no change.
-   A stacked PR (base is not a line branch) takes the milestone of the line at the bottom of its stack. Comment
-   on the PR with the milestone and the rule. A PR that does not fit a rule gets a comment, not a guess.
+1. **Track the open milestones.** For each supported line (§4 support window), the **patch** milestone is its rolling
+   `X.Y.x`. The **feature** milestone is the lowest open `X.Y.0` whose line is `main`. The **major** milestone is the
+   open `X.0.0` of `next/X.0`. Keep them in **one** status comment on the `roadmap` issue: edit that comment when
+   the set changes, do not add a new comment on each check.
+2. **Set the milestone of approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4)
+   and **no milestone**, set it by these rules, in this order:
+   1. `merge/` forward merges and `chore(release)` PRs: no milestone.
+   2. A stacked PR (base is not a line branch) takes the milestone of the PR at the bottom of its stack. This rule
+      wins over the type of its title.
+   3. A PR that closes or refers to an issue with a milestone takes that milestone.
+   4. `fix`, `perf`: the milestone of the line the PR targets. That is the patch milestone `X.Y.x` for
+      `release/X.Y` (the lowest supported line with the defect, §4), the feature milestone for `main` (`bugfix/`,
+      code not released yet), the major milestone for `next/X.0`.
+   5. `feat`, `refactor` into `main`: the feature milestone.
+   6. Any type with `!` or a `BREAKING CHANGE` footer: the major milestone. If there is no open major milestone or no
+      `next/X.0` line, comment and ask.
+   7. `docs`, `test`, `ci`, `build`, `chore`, `style`, `revert`: the milestone of the line the PR targets.
+   A PR that has a milestone keeps it: on a mismatch with these rules, comment and ask, do not change it. Any case
+   the rules do not cover (for example a `feat` into `release/X.Y`) gets a comment, not a guess.
 3. **Merge** approved PRs by §4 (head pinned, green CI, review line), then go on.
-4. **Open the release PR.** When a milestone has no open issue or PR left, except its tracking issue, prepare the
-   release by `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
-   `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested. For a patch, the
-   version is the next free `X.Y.Z` on the line. Do not open a second release PR for the same milestone.
-5. **Run the full release after the owner approves the release PR.** An owner `APPROVED` review on the current head
-   of a `chore/release-X.Y.Z` PR is the owner's explicit permission (§3) for the tag `vX.Y.Z` and the rest of that
-   release only. Then, without a new question:
+4. **Open the release PR** when all of these are true for a milestone:
+   - it has at least one closed issue or merged PR, and no open issue or PR except its tracking issue;
+   - the `## [Unreleased]` section of its line is not empty;
+   - its line branch exists. For a new minor `X.Y.0`, the scope freeze and the cut of `release/X.Y` are owner
+     decisions: ask on the tracking issue, do not cut the line alone.
+   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
+   `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested, an independent review
+   (§4). For a patch, the version is the next free `X.Y.Z` on the line. Never open a second release PR for one
+   milestone.
+5. **Run the full release after the owner approves the release PR.** Owner decision (#354, PR #355): an owner
+   `APPROVED` review on the current head of a `chore/release-X.Y.Z` PR is the explicit permission (§3) for the tag
+   `vX.Y.Z` and the other steps of that one release. It is not permission for any other tag. Before the merge, CI
+   must be green (`Release lines` included) and the independent review line must name the head. Then, without a new
+   question, follow `docs/release.md` §6 steps 5 to 9:
    1. merge the PR (§4, head pinned);
-   2. tag the merge commit: `git tag vX.Y.Z <merge commit> && git push origin vX.Y.Z`;
+   2. tag the merge commit and push the tag;
    3. for a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`; close the released milestone;
-   4. wait for `images.yml` to publish every image at `X.Y.Z`; then create the GitHub release from the CHANGELOG
-      section (`gh release create vX.Y.Z --notes-file ...`);
-   5. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop without
-      conflict resolution and with green CI merges without a new approval (§4);
-   6. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review;
-   7. report on the tracking issue: tag, images, release URL, forward-merge PRs, deployment PR, what is left.
+   4. wait for `images.yml` to publish every image at `X.Y.Z`, at most 6 checks (30 minutes); then create the GitHub
+      release from the CHANGELOG section. If the images are not there after 6 checks, comment and stop;
+   5. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review. If
+      the bot has no write access there, post the diff on the tracking issue and ask (§3);
+   6. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
+      without conflict resolution and with green CI merges without a new approval (§4);
+   7. report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
    A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else
    comment on the release PR and ask the owner.
 6. Never move or delete a tag, and never release from a PR that is not approved on its current head.
