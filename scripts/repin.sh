@@ -67,13 +67,13 @@ image_digests() {  # every <image>:<tag>@sha256:<digest> in config.env and the w
       if [ -z "$new" ]; then echo "| $img ($f) | \`${dig:7:12}\` | \`?\` | error |"; continue; fi
       if [ "$new" = "$dig" ]; then echo "| $img ($f) | \`${dig:7:12}\` | \`${new:7:12}\` | current |"; continue; fi
       echo "| $img ($f) | \`${dig:7:12}\` | \`${new:7:12}\` | update (digest) |"
-      [ "$WRITE" = 1 ] && sed -i.bak "s|$ref|$img@$new|g" "$f" && rm -f "$f.bak"
+      [ "$WRITE" = 1 ] && sed -i.bak "s|${ref//./\\.}|$img@$new|g" "$f" && rm -f "$f.bak"   # ref is [a-z0-9._/:@-]: escape the dots
     done
   done
 }
 
 newer_tags() {  # list a newer same-major tag for pinned images (informational: tags are bumped by hand)
-  local f ref img tag repo cur new
+  local f ref img tag repo cur new tok
   for f in config.env .github/workflows/*.yml; do
     grep -oE '(ghcr\.io)/[a-z0-9._/-]+:v?[0-9]+\.[0-9]+(\.[0-9]+)?' "$f" | sort -u | while read -r ref; do
       img=${ref%:*}; tag=${ref##*:}; repo=${img#ghcr.io/}
