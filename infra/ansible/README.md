@@ -117,6 +117,10 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
+| 07 | `botboard` (optional) | `botboard` |
+| 08 | `mcp` | `platform` |
+| 10 | `api` | `api` (same role as GKE) |
+| 12 | `operator` | `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -157,6 +161,25 @@ password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every 
 changes nothing. An existing token file is kept when it still logs in as its agent; a file from an older cluster
 (HTTP 401) is replaced by a new token, then run `--tags agents` (step 06) so the agent gets it. Delete a file to mint
 a new token. GKE uses GitHub (#2), not this role.
+
+```bash
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags api    # API, database grants, agentdev-api
+```
+The role `api` does the old step 10 on kind with `api_secret_source: files`. The database password is the file
+`.secrets/platform/pg-agentdev-api` (made once, mode 600). SIEM values come from `.secrets/platform/siem-webhook`
+(optional). With `forge_kind: github` the App comes from `.secrets/github-app`. On Gitea, the role makes the account
+`agentdev-api` (admin of the agent repositories, token `read:repository,read:user`). It keeps a token that works and
+deletes the other `agentdev-api*` tokens. A local `agentdev-api:*` tag is built and loaded into kind. A new image or a
+changed Secret restarts the API. The web UI is step 11 (`api_ui: false` here).
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
+```
+The role `operator` does the old step 12: the namespaces with `operator_cost_labels` (#184), the operator image (a
+local `agentdev-operator:*` tag is built and loaded into kind), the six `agentdev.dev` CRDs, `manifests/operator.yaml.tmpl`
+and the executor egress manifests, through `templates/render.j2`. The scoped secrets store is on only when the External
+Secrets Operator CRD exists (step 13). The operator restarts only after a new image or a manifest change. GKE keeps
+the operator tasks in `deploy.yml`.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
