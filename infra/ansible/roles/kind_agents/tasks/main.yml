@@ -150,7 +150,7 @@
     set -euo pipefail
     k=$(cat {{ (kind_agents_secrets_dir ~ '/claude-proxy-signing.key') | quote }})
     for a in {{ kind_agents_agents | map('quote') | join(' ') }}; do
-      printf '%s\t%s.%s\n' "$a" "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
+      printf '%s %s.%s\n' "$a" "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
     done
   args: {executable: /bin/bash}
   register: kind_agents_proxy_keys

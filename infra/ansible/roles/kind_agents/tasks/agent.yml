@@ -84,7 +84,7 @@
       type: Opaque
       stringData:
         ANTHROPIC_AUTH_TOKEN: >-
-          {{ (kind_agents_proxy_keys.stdout_lines | select('match', '^' ~ kind_agents_agent ~ '\t') | first).split('\t')[1] }}
+          {{ (kind_agents_proxy_keys.stdout_lines | map('split', ' ') | map('list') | items2dict(key_name=0, value_name=1))[kind_agents_agent] }}
   register: kind_agents_proxy_secret
   no_log: true
 
