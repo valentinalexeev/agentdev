@@ -913,10 +913,10 @@ Gitea tells the permission of another user only to a site admin or to an admin o
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
 
-On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+On `kind`, `./run.sh 10` (`kind.yml --tags api`) does this task for you. The playbook makes the Gitea user `agentdev-api` and makes it admin
 of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
 `read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
-works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+works, the playbook keeps it. The playbook does not show the token. After you add an agent on a new repository, run
 `./run.sh 10` again.
 
 On GKE, do these steps manually. The playbook does not do them yet (#104).
@@ -2147,7 +2147,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Operator and CRDs | 12 | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
-| API | 10 | role `api` (`api.oidc_issuer`) |
+| API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
 
