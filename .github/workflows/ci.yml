@@ -80,6 +80,11 @@ jobs:
         run: |
           shellcheck -S warning ./*.sh images/worker/agent-loop.sh
           for f in ./*.sh images/worker/agent-loop.sh; do bash -n "$f"; done
+      - name: shell script tests (scripts/test; #315 #317 #313)
+        if: needs.scope.outputs.shell == 'true'
+        run: |
+          shopt -s nullglob
+          for t in scripts/test/*.test.sh scripts/test/*-test.sh; do echo "::group::$t"; bash "$t"; echo "::endgroup::"; done
       - name: kubeconform (plain manifests and the rendered agent template)
         if: needs.scope.outputs.shell == 'true'
         run: |
@@ -90,6 +95,14 @@ jobs:
           for _ in 1 2 3; do docker pull -q "$img" && break; sleep 10; done
           printf '#!/bin/sh\nexec docker run --rm -i -v "$PWD:/w:ro" -w /w %s "$@"\n' "$img" > kubeconform
           chmod +x kubeconform
+          # Defaults of every template variable come from config.env, so a new variable in a PR renders without a CI
+          # change. Only values that config.env does not set, or that need a CI value, are given on each line below.
+          set -a; . ./config.env; set +a
+          # variables that open PRs add to templates without a config.env default (render only; empty is valid)
+          export CREDENTIAL_BROKER_URL="${CREDENTIAL_BROKER_URL:-}" FORWARDER_NS="${FORWARDER_NS:-}"
+          export FORWARDER_NOT_READY_MINUTES="${FORWARDER_NOT_READY_MINUTES:-10}" SECRETS_STORE="${SECRETS_STORE:-}"
+          export SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY:-}" SECRETS_GCP_PROJECT="${SECRETS_GCP_PROJECT:-}"
+          [ -n "${FORWARDER_SELECTOR:-}" ] || export FORWARDER_SELECTOR='{}'
           ./kubeconform -strict -summary manifests/gitea.yaml manifests/postgres.yaml
           BOTBOARD_NS=botboard BOTBOARD_IMAGE=img envsubst < manifests/botboard.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform CONTEXTFORGE_IMAGE=img POSTGRES_IMAGE=img CF_ADMIN_EMAIL=a@b.c SERVICE_CIDR=10.96.0.0/12 \

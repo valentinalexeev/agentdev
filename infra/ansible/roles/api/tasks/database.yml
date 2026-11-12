@@ -5,7 +5,10 @@
 - name: Check the database password
   ansible.builtin.assert:
     that: api_db_password is match('^[0-9a-f]{32,}$')
-    fail_msg: "Secret Manager {{ api_sm_db_password }} must hold a hex password (openssl rand -hex 24)"
+    # kind (files) has no Secret Manager names (platform_sm_prefix): name the file there
+    fail_msg: >-
+      {{ ('Secret Manager ' ~ api_sm_db_password) if api_secret_source == 'gcp' else (api_secrets_dir ~ '/pg-agentdev-api') }}
+      must hold a hex password (openssl rand -hex 24)
     quiet: true
   when: not ansible_check_mode
   no_log: true

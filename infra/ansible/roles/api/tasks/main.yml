@@ -15,11 +15,20 @@
       api.max_agents_per_user whole numbers 0 or more (0 = no limit) (example.vars.yml)
     quiet: true
 
+- name: API image on kind (build or pull, load)
+  ansible.builtin.include_tasks: kind_image.yml
+  when: api_kind_cluster | length > 0
+
 - name: Read the API secrets
   ansible.builtin.include_tasks: "secrets_{{ api_secret_source }}.yml"
 
 - name: Database roles, schema and grants
   ansible.builtin.include_tasks: database.yml
+
+# kind only: Gitea in the cluster; on GKE the forge token is a manual step (docs/admin.md)
+- name: Forge account agentdev-api on Gitea (kind)
+  ansible.builtin.include_tasks: forge_gitea.yml
+  when: api_secret_source == 'files' and not api_github
 
 - name: Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem
   ansible.builtin.include_tasks: secrets_k8s.yml
@@ -50,11 +59,12 @@
       replace: []
   register: api_applied
 
+# a new local image on kind keeps its tag, so it also needs a restart.
 # a changed Secret does not change the pod template, and the apply may have changed only a Service, RBAC or a
 # NetworkPolicy: restart on every Secret change so the API reads the new values
 - name: Restart the API after a Secret change
   ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
-  when: (api_secrets_changed | default(false)) and not ansible_check_mode
+  when: ((api_secrets_changed | default(false)) or (api_load is changed)) and not ansible_check_mode
   changed_when: true
 
 - name: Wait for the API
