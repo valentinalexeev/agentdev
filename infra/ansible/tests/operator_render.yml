@@ -1,0 +1,52 @@
+# Render checks of the role operator (#106, was 12-operator.sh), without a cluster: every ${VAR} of the operator and
+# executor egress manifests gets a value, and the agents' egress list drops api.anthropic.com with the Claude proxy.
+# The kind e2e (kind.yml --tags operator) covers the cluster side.
+# Run: ansible-playbook infra/ansible/tests/operator_render.yml
+- name: Role operator values (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/operator/defaults/main.yml
+
+    - name: Render the manifests
+      ansible.builtin.set_fact:
+        t_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=item) | from_yaml_all | list }}"
+      loop:
+        - src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
+          values: {EXEC_NS: x, FORGE_NS: forge, EGRESS_PROXY_IMAGE: squid}
+          replace: []
+        - src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
+          values: {EXEC_NS: x}
+          replace: []
+      register: t_render
+
+    - name: The operator manifest gets every value from the role
+      ansible.builtin.set_fact:
+        t_op: >-
+          {{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars={'src': repo_root ~ '/manifests/operator.yaml.tmpl',
+             'values': t_values, 'replace': []}) | from_yaml_all | list }}
+      vars:
+        # the keys of the role's render (roles/operator/tasks/main.yml); a new ${VAR} in the manifest fails here
+        t_values: "{{ dict(lookup('ansible.builtin.file', '../roles/operator/tasks/main.yml')
+                      | regex_findall('(?m)^        ([A-Z_]+):') | zip_longest([], fillvalue='v')) }}"
+
+    - name: Rendered
+      ansible.builtin.assert:
+        that:
+          - t_op | selectattr('kind', 'equalto', 'Deployment') | list | length == 1
+          - t_render.results | length == 2
+        quiet: true
+
+    - name: The agents' egress list without api.anthropic.com (Claude proxy on)
+      ansible.builtin.assert:
+        that:
+          - "'api.anthropic.com' not in t_hosts"
+          - "'pypi.org' in t_hosts"
+        quiet: true
+      vars:
+        t_hosts: >-
+          {{ (operator_egress_hosts + operator_egress_extra_hosts)
+             | reject('in', ['api.anthropic.com'] if operator_claude_proxy | bool else []) | list }}
