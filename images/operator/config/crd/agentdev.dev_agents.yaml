@@ -83,6 +83,13 @@ spec:
                 maximum: 8
                 minimum: 1
                 type: integer
+              maxTurns:
+                description: 'Turn limit of one Claude run (`claude -p --max-turns`,
+                  #336). A larger task may need more. 0 or unset: 40.'
+                format: int32
+                maximum: 500
+                minimum: 1
+                type: integer
               paused:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'

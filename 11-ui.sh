@@ -16,6 +16,7 @@ else ok "using published image"; fi
 
 log "Deploy (${PLATFORM_NS})"
 PLATFORM_NS="${PLATFORM_NS}" UI_IMAGE="${UI_IMAGE}" OIDC_ISSUER="${API_OIDC_ISSUER}" \
+  OIDC_CLIENT_ID="${UI_OIDC_CLIENT_ID:-agentdev}" OIDC_SCOPES="${UI_OIDC_SCOPES:-openid profile email forge}" \
   envsubst < "${SPIKE_DIR}/manifests/ui.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${PLATFORM_NS}" rollout restart deploy/agentdev-ui >/dev/null   # local images keep their tag
 k -n "${PLATFORM_NS}" rollout status deploy/agentdev-ui --timeout=120s >/dev/null || die "agentdev-ui did not become ready"
