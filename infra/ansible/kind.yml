@@ -10,8 +10,12 @@
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
 #   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
+#   ansible-playbook kind.yml --tags authentik         # was ./run.sh 09 (after mcp)
+#   ansible-playbook kind.yml --tags api               # was ./run.sh 10
+#   ansible-playbook kind.yml --tags operator          # was ./run.sh 12
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08,
+# authentik: 09, api: 10, operator: 12.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -27,6 +31,8 @@
     mcp_projects: []
     mcp_allowed_hosts: []
     obs_mcp: {enabled: false}
+    authentik: {version: 2026.8.5, admin_email: admin@agentdev.dev}   # config.env AUTHENTIK_VERSION, AUTHENTIK_ADMIN_EMAIL
+    approvals: {enabled: false}   # APPROVALS in config.env; the API and the operator read the same switch (#67)
   tasks:
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
@@ -79,3 +85,54 @@
         platform_secret_source: files
         platform_kind_cluster: "{{ kind_cluster_name }}"
       tags: [mcp]
+
+    # authentik on the platform Postgres: the GKE role (secrets in .secrets/platform), then the kind-only checks and the
+    # company SSO stand-in (#122). Not in the default run, as ./run.sh without arguments does not run step 09.
+    - name: The platform Postgres is deployed (run --tags mcp first)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        tasks_from: precheck
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
+
+    - name: Identity provider authentik (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik
+        apply: {tags: [authentik]}
+      vars:
+        authentik_secret_source: files
+      tags: [authentik, never]
+
+    - name: Membership check of agentdev-admins, company SSO stand-in (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
+
+    # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager and the Gitea
+    # account agentdev-api (#100). The web UI is step 11 (tag ui). Needs authentik (09) and Postgres (08).
+    - name: Management API (was 10-api.sh)
+      ansible.builtin.include_role:
+        name: api
+        apply: {tags: [api]}
+      vars:
+        api_secret_source: files
+        api_kind_cluster: "{{ kind_cluster_name }}"
+        api_image: agentdev-api:dev
+        api_ui: false
+        api_oidc_issuer: https://localhost:9443/application/o/agentdev/
+        api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
+        api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
+        api_secrets_values_ns: agentdev-secret-values   # config.env SECRETS_VALUES_NS (#202)
+      tags: [api]
+    # Agent CRD and controller (#47); 06-agents.sh runs it when the operator is missing (#57). Needs nothing else.
+    - name: Operator, CRDs and executor egress (was 12-operator.sh)
+      ansible.builtin.include_role:
+        name: operator
+        apply: {tags: [operator]}
+      vars:
+        operator_context: kind-{{ kind_cluster_name }}
+        operator_kind_cluster: "{{ kind_cluster_name }}"
+        operator_platform_ns: "{{ platform_ns }}"
+        operator_agents_ns: "{{ agents_ns }}"
+      tags: [operator]

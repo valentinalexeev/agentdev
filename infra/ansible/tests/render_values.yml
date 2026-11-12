@@ -15,7 +15,7 @@
     platform_sm_prefix: platform-
     approvals: {enabled: true}
     usage: {five_hour: 70, weekly: 85}
-    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b]}
+    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2}
   tasks:
     - name: Load the role defaults
       ansible.builtin.include_vars: ../roles/api/defaults/main.yml
@@ -39,6 +39,8 @@
             APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            MAX_AGENTS: "{{ api_max_agents }}"
+            MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
             SECRETS_VALUES_NS: ""
           replace: []
 
@@ -52,6 +54,8 @@
           - env.APPROVAL_DENY_ACCOUNTS == 'bot-a,bot-b'
           - env.USAGE_FIVE_HOUR == '70'
           - env.USAGE_WEEKLY == '85'
+          - env.MAX_AGENTS == '2'   # #27
+          - env.MAX_AGENTS_PER_USER == '0'
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder

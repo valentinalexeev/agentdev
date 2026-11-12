@@ -8,8 +8,16 @@
       - api_oidc_issuer is match('^https://')
       - api_oidc_discovery_url is match('^https?://')
       - api_db_retention_days | string is match('^[1-9][0-9]*$')
-    fail_msg: "api.oidc_issuer must be https://, api.db_retention_days a positive number (example.vars.yml)"
+      - api_max_agents | string is match('^[0-9]{1,6}$')
+      - api_max_agents_per_user | string is match('^[0-9]{1,6}$')
+    fail_msg: >-
+      api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents and
+      api.max_agents_per_user whole numbers 0 or more (0 = no limit) (example.vars.yml)
     quiet: true
+
+- name: API image on kind (build or pull, load)
+  ansible.builtin.include_tasks: kind_image.yml
+  when: api_kind_cluster | length > 0
 
 - name: Read the API secrets
   ansible.builtin.include_tasks: "secrets_{{ api_secret_source }}.yml"
@@ -17,8 +25,21 @@
 - name: Database roles, schema and grants
   ansible.builtin.include_tasks: database.yml
 
+# kind only: Gitea in the cluster; on GKE the forge token is a manual step (docs/admin.md)
+- name: Forge account agentdev-api on Gitea (kind)
+  ansible.builtin.include_tasks: forge_gitea.yml
+  when: api_secret_source == 'files' and not api_github
+
 - name: Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem
   ansible.builtin.include_tasks: secrets_k8s.yml
+
+- name: Value namespace of the project secrets (#202, kind store from step 13)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Namespace
+    name: "{{ api_secrets_values_ns }}"
+  register: api_values_ns
+  when: api_secrets_values_ns | length > 0
 
 - name: API Deployment, Service, RBAC and NetworkPolicies
   kubernetes.core.k8s:
@@ -41,15 +62,20 @@
         APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
-        SECRETS_VALUES_NS: ""   # #202: the GKE backend (Secret Manager) follows in part 4
+        MAX_AGENTS: "{{ api_max_agents }}"
+        MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+        # project secrets (#202): the kind store's value namespace, only when step 13 made it; GKE: part 4 (empty = off)
+        SECRETS_VALUES_NS: >-
+          {{ api_secrets_values_ns if api_secrets_values_ns | length > 0 and api_values_ns.resources | default([]) | length > 0 else '' }}
       replace: []
   register: api_applied
 
+# a new local image on kind keeps its tag, so it also needs a restart.
 # a changed Secret does not change the pod template, and the apply may have changed only a Service, RBAC or a
 # NetworkPolicy: restart on every Secret change so the API reads the new values
 - name: Restart the API after a Secret change
   ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
-  when: (api_secrets_changed | default(false)) and not ansible_check_mode
+  when: ((api_secrets_changed | default(false)) or (api_load is changed)) and not ansible_check_mode
   changed_when: true
 
 - name: Wait for the API

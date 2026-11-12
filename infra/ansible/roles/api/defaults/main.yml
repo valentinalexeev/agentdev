@@ -16,10 +16,25 @@ api_forge_url: "{{ api.forge_url | default(forge_url) }}"
 # forge logins that never decide an approval (service accounts, executor accounts: docs/security.md R83);
 # APPROVAL_DENY_ACCOUNTS on kind. The API's own token user is excluded automatically.
 api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
+# agent caps (#27) for POST /api/agents (MAX_AGENTS, MAX_AGENTS_PER_USER on kind); 0 = no cap. Checked in tasks/main.yml.
+api_max_agents: "{{ api.max_agents | default(0) }}"
+api_max_agents_per_user: "{{ api.max_agents_per_user | default(0) }}"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
-# Where secrets come from. Only `gcp` (Secret Manager) exists now; a `local` source (.secrets/ on kind) can be
-# added as tasks/secrets_local.yml when run.sh moves to Ansible (#106).
+# Where secrets come from: gcp (Secret Manager, deploy.yml) or files (kind.yml, #106: api_secrets_dir).
 api_secret_source: gcp
+# kind only (#106, was 10-api.sh): the cluster to load the image into (empty on GKE), the secret files, the
+# GitHub App files (forge_kind github), and the in-cluster Gitea for the agentdev-api account (tasks/forge_gitea.yml)
+api_kind_cluster: ""
+api_container_engine: docker
+# project secrets (#202): namespace of the kind store's value Secrets (config.env SECRETS_VALUES_NS); empty = off (GKE: part 4)
+api_secrets_values_ns: ""
+api_secrets_dir: "{{ repo_root }}/.secrets/platform"
+api_github_app_dir: "{{ repo_root }}/.secrets/github-app"
+api_forge_ns: forge
+api_forge_host_url: http://localhost:3000          # Gitea as Ansible reaches it (the 05 port-forward)
+api_forge_admin_user: owner                        # password from the environment FORGE_ADMIN_PASSWORD
+api_forge_user: agentdev-api
+api_forge_repo: owner/playground
 # Secret Manager names. The DB password uses the platform prefix and the kind file name (.secrets/platform/pg-agentdev-api).
 api_sm_db_password: "{{ platform_sm_prefix }}pg-agentdev-api"
 api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner (README.md)

@@ -21,42 +21,50 @@
       authentik_trusted_proxy_cidrs (a list of CIDRs, not wider than /8 unless authentik_trusted_proxy_allow_wide: true): example.vars.yml
     quiet: true
 
-- name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)
-  ansible.builtin.shell: |
-    set -euo pipefail
-    name="{{ platform_sm_prefix }}{{ item }}"
-    p="{{ gcp_project }}"
-    if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
-      gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
-        || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
-      openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project "$p" --data-file=- >/dev/null
-      echo created
-    fi
-  args: {executable: /bin/bash}
-  loop: "{{ authentik_sm_keys }}"
-  register: authentik_sm_created
-  changed_when: "'created' in authentik_sm_created.stdout"
-  no_log: true
+# authentik_secret_source: secret_manager (GKE) or files (kind.yml, #106: .secrets/platform, as 09-authentik.sh)
+- name: Authentik secrets from files (kind)
+  ansible.builtin.include_tasks: secrets_files.yml
+  when: authentik_secret_source == 'files'
 
-- name: Read the authentik secrets
-  ansible.builtin.command: >-
-    gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
-  loop: "{{ authentik_sm_keys }}"
-  register: authentik_sm
-  changed_when: false
-  check_mode: false
-  failed_when: authentik_sm.rc != 0 and not ansible_check_mode
-  no_log: true
+- name: Authentik secrets from Secret Manager
+  when: authentik_secret_source == 'secret_manager'
+  block:
+    - name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ platform_sm_prefix }}{{ item }}"
+        p="{{ gcp_project }}"
+        if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
+          gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
+            || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
+          openssl rand -hex 48 | tr -d '\n' | gcloud secrets versions add "$name" --project "$p" --data-file=- >/dev/null
+          echo created
+        fi
+      args: {executable: /bin/bash}
+      loop: "{{ authentik_sm_keys }}"
+      register: authentik_sm_created
+      changed_when: "'created' in authentik_sm_created.stdout"
+      no_log: true
 
-- name: Keep them in a fact (not logged)
-  ansible.builtin.set_fact:
-    authentik_secret: "{{ dict(authentik_sm_keys | zip(authentik_sm.results | map(attribute='stdout') | map('trim'))) }}"
-  no_log: true
+    - name: Read the authentik secrets
+      ansible.builtin.command: >-
+        gcloud secrets versions access latest --secret {{ platform_sm_prefix }}{{ item }} --project {{ gcp_project }}
+      loop: "{{ authentik_sm_keys }}"
+      register: authentik_sm
+      changed_when: false
+      check_mode: false
+      failed_when: authentik_sm.rc != 0 and not ansible_check_mode
+      no_log: true
+
+    - name: Keep them in a fact (not logged)
+      ansible.builtin.set_fact:
+        authentik_secret: "{{ dict(authentik_sm_keys | zip(authentik_sm.results | map(attribute='stdout') | map('trim'))) }}"
+      no_log: true
 
 - name: Check the database password
   ansible.builtin.assert:
     that: authentik_secret['pg-authentik'] is match('^[0-9a-f]{32,}$')
-    fail_msg: "Secret Manager {{ platform_sm_prefix }}pg-authentik must hold a hex password"
+    fail_msg: "the platform secret pg-authentik must hold a hex password"
     quiet: true
   when: not ansible_check_mode
   no_log: true
