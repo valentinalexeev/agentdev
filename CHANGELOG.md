@@ -336,6 +336,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `.secrets/github-app`), the image built and loaded into kind, and the Gitea account `agentdev-api` (#100). Same
   result (database roles and grants, Secrets `agentdev-api-db`, `-forge`, `-github`, `-siem`, Deployment). Changed:
   the API restarts only when a Secret or the loaded image changes, so a second run changes nothing. GKE does not change.
+- Step 12 (#106): `12-operator.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags operator`
+  (new role `operator`, the same manifests through `templates/render.j2`). Same result (namespace labels, CRDs,
+  operator, executor egress; secrets store on only with External Secrets Operator). A first run over a cluster from the
+  old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
+  run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

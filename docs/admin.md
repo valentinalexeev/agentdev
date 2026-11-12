@@ -2144,7 +2144,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
-| Operator and CRDs | 12 | `deploy.yml` |
+| Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |

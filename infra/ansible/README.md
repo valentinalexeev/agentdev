@@ -120,6 +120,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 07 | `botboard` (optional) | `botboard` |
 | 08 | `mcp` | `platform` |
 | 10 | `api` | `api` (same role as GKE) |
+| 12 | `operator` | `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -170,6 +171,15 @@ The role `api` does the old step 10 on kind with `api_secret_source: files`. The
 `agentdev-api` (admin of the agent repositories, token `read:repository,read:user`). It keeps a token that works and
 deletes the other `agentdev-api*` tokens. A local `agentdev-api:*` tag is built and loaded into kind. A new image or a
 changed Secret restarts the API. The web UI is step 11 (`api_ui: false` here).
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
+```
+The role `operator` does the old step 12: the namespaces with `operator_cost_labels` (#184), the operator image (a
+local `agentdev-operator:*` tag is built and loaded into kind), the six `agentdev.dev` CRDs, `manifests/operator.yaml.tmpl`
+and the executor egress manifests, through `templates/render.j2`. The scoped secrets store is on only when the External
+Secrets Operator CRD exists (step 13). The operator restarts only after a new image or a manifest change. GKE keeps
+the operator tasks in `deploy.yml`.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.
