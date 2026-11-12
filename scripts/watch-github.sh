@@ -73,5 +73,6 @@ while true; do
   else
     echo "JCODE_PROGRESS {\"message\":\"quiet $(date +%H:%M)\"}"
   fi
-  sleep "$POLL"
+  # GitHub 502/503 are short: after a failed poll retry in 30 s (3 times), so it does not become a gap
+  if (( fails > 0 && fails <= 3 )); then sleep 30; else sleep "$POLL"; fi
 done
