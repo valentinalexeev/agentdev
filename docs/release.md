@@ -88,7 +88,10 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    review. The `Release lines` workflow fails the PR if a lower line is not merged in.
 5. After the owner merges, the owner (or the bot on explicit permission) pushes the tag on that merge commit:
    `git tag vX.Y.Z <merge commit on release/X.Y> && git push origin vX.Y.Z`.
-   For a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`.
+   An owner `APPROVED` review on the current head of the release PR is that permission for this one tag
+   (`CLAUDE.md` §7a step 5); the bot then also merges the PR and does steps 6 to 9.
+   For a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`. Close the released milestone.
 6. Check that `images.yml` publishes the images at `X.Y.Z`, then make the GitHub release with the CHANGELOG section.
 7. Upgrade the reference private deployment by its normal PR flow.
 8. Merge the line forward, one PR per hop up to the highest line: `scripts/release-lines.sh forward release/X.Y`.
+9. Report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
