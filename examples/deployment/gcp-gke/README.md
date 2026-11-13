@@ -8,7 +8,7 @@ instance. The product (modules, playbook, images) stays in `valentinalexeev/agen
 terraform/main.tf                root module → agentdev//infra/terraform?ref=vX.Y.Z
 terraform/instance.tfvars        your project, region, zone, billing account, this repo's name
 ansible/instance.yml             your project, zone, image_tag (X.Y.Z of the same release), reviewer, agents
-.github/workflows/deploy.yml     PR: plan + check   main: apply + deploy   (Workload Identity, no keys)
+.github/workflows/deploy.yml     PR: fmt, validate, syntax-check (no credentials)   main: plan, apply, deploy (Workload Identity)
 AGENTS.md / CLAUDE.md            how an agent operates this instance
 ```
 
