@@ -28,6 +28,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Web console: Today page, project scope and connection states (#342, #339). **Today** is the new start page with one
+  inbox (approvals, guardrail and blocked agents, usage pauses), sorted by expiry, then by age. Agents show two axes:
+  lifecycle and attention. A project scope in the top bar (My projects, All projects, one project; key `P`) filters
+  every page and count. A new **Projects** page has one row per repository. Lists with more than 10 items group
+  themselves (4 per group, "Show N more"). When the API is away, the page keeps the last data and a banner shows live,
+  stale, starting, unavailable, offline or signed out. Sign-in returns to the same page. "My projects" shows only when
+  `GET /api/me` returns `repos` (open decision on #342). Re-run: Ansible `deploy.yml` with the new UI image; no
+  `./run.sh` step.
 - Web console in the design system (#341): left menu with the mark and the approval count, top bar with the user and
   a light and dark theme button, status lamps (an agent at zero pods shows as "idle"), severity tags, agent tags,
   tables, usage meters, and the approval detail as a side panel with the agent text in a marked untrusted block.
