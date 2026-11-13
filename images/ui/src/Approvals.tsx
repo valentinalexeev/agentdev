@@ -62,7 +62,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
         : <Empty title="No decided requests" />)}
       {pendingSorted && pendingSorted.length > 0 && (
         <div className="ad-table-wrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-2l">
             <thead><tr>
               <th>Request</th><th>Agent</th><th>Issue / PR</th><th>Created</th>
               <th>{tab === 'pending' ? 'Agent waits until' : 'Outcome'}</th>

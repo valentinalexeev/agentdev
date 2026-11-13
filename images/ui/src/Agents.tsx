@@ -125,7 +125,7 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
           : <Empty title="No agent matches this filter" />)
         : (
           <div className="ad-table-wrap">
-            <table className="ad-table">
+            <table className="ad-table ad-table-2l">
               <thead>
                 <tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th className="ad-hide-phone">Repositories</th><th className="ad-num ad-hide-phone">Events 7 d</th>
                   <th className="ad-num ad-hide-phone">Tokens 24 h</th><th className="ad-hide-phone ad-hide-narrow">Settings</th><th><span className="ad-sr">Actions</span></th></tr>
