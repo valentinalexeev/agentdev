@@ -6,6 +6,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+1. **Deployment template clone ref (#332).** Copy `examples/deployment/gcp-gke/.github/workflows/deploy.yml` again and
+   add `agentdev_ref: vX.Y.Z` (the git tag, with the `v`) to `ansible/instance.yml`, next to `image_tag: "X.Y.Z"`.
+
+### Fixed
+- Deployment template: the CI clones agentdev at `agentdev_ref` (the git tag `vX.Y.Z`), not at `image_tag`, which has
+  no `v` and is not a git tag (#332). `infra/ansible/tests/deployment_template.yml` checks the template.
+
 ## [1.0.0] - 2026-11-12
 
 ### Upgrade
