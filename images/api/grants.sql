@@ -13,3 +13,10 @@ GRANT EXECUTE ON FUNCTION api_audit_prune() TO agentdev_api;
 -- nobody can plant a shadowing object in the SECURITY DEFINER function's search_path (pg_catalog, public).
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CREATE ON SCHEMA public TO agentdev_owner;
+-- chat sessions (#346): events append-only, sessions updatable (end, last event), removal only by chat_prune()
+REVOKE ALL ON chat_settings, chat_sessions, chat_events FROM agentdev_api;
+GRANT SELECT, INSERT ON chat_events TO agentdev_api;
+GRANT USAGE ON SEQUENCE chat_events_id_seq TO agentdev_api;
+GRANT SELECT, INSERT ON chat_sessions TO agentdev_api;
+GRANT UPDATE (ended_at, ended_reason, last_seq) ON chat_sessions TO agentdev_api;
+GRANT EXECUTE ON FUNCTION chat_prune() TO agentdev_api;
