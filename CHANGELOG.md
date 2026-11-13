@@ -8,6 +8,17 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [1.0.0] - 2026-11-12
 
+### Known issues
+Found after the release. The fixes are in 1.0.1. Until then, use the workaround.
+- #332: the deployment workflow template clones agentdev at `image_tag` (`1.0.0`), but the git tag is `v1.0.0`, so
+  every CI run of a new deployment repository fails at the clone. Workaround: in your copy of
+  `.github/workflows/deploy.yml`, change both `--branch "$tag"` to `--branch "v$tag"`.
+- #333: with `api.oidc_issuer` set, the `api` role stops with `'platform_sm_prefix' is undefined`. Workaround: add
+  `platform_sm_prefix: platform-` to `ansible/instance.yml`.
+- #334: when the OIDC provider is outside the playbook (for example Pocket ID) and does not answer yet, the API exits
+  and the rollout wait times out after 180 s. Workaround: make sure that the issuer URL answers before the deploy; if
+  the wait times out, run the playbook again when the issuer answers.
+
 ### Upgrade
 Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
 1. **Claude secrets (#212).** Each `claude-shared` and `agent-<name>-claude` secret must have a line
