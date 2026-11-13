@@ -105,8 +105,8 @@
       ansible.builtin.assert:
         that:
           - gw_hook.spec.ingress[3].from | map(attribute='ipBlock.cidr') | list == ingress_gfe_ranges
-          # deliveries and the load balancer health check (/healthz on the internal port, #214)
-          - gw_hook.spec.ingress[3].ports | map(attribute='port') | list == [8080, 8081]
+          # deliveries and the load balancer health check on the health-only port (#218), never the internal 8081
+          - gw_hook.spec.ingress[3].ports | map(attribute='port') | list == [8080, 8082]
         quiet: true
 
     - name: Refuse invalid settings

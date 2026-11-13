@@ -78,6 +78,9 @@ func TestCreatesChildrenFromSpec(t *testing.T) {
 	if s.Annotations["agentdev/repos"] != "owner/repo" || s.Labels["app"] != "coding-agent" {
 		t.Errorf("router annotations/labels missing: %v %v", s.Annotations, s.Labels)
 	}
+	if envOf(s, "MAX_TURNS") != "40" { // #336: default when the Agent has no maxTurns
+		t.Errorf("MAX_TURNS default = %q, want 40", envOf(s, "MAX_TURNS"))
+	}
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "alice" {
 		t.Errorf("owner reference missing: %v", s.OwnerReferences)
 	}
@@ -552,5 +555,13 @@ func TestGitHubAgentEgressProxy(t *testing.T) {
 		if e.Name == "EGRESS_FORGE_KEY" || strings.HasPrefix(e.Name, "GITHUB_APP") || strings.Contains(e.Value, "EGRESS_FORGE_KEY") {
 			t.Errorf("agent container has %s=%s", e.Name, e.Value)
 		}
+	}
+}
+
+func TestMaxTurnsFromSpec(t *testing.T) { // #336: maxTurns in the Agent reaches the worker as MAX_TURNS
+	r, c := setup(t, agent("alice", func(a *v1.Agent) { a.Spec.MaxTurns = 120 }))
+	reconcile(t, r, "alice")
+	if got := envOf(getSTS(t, c, "alice"), "MAX_TURNS"); got != "120" {
+		t.Fatalf("MAX_TURNS = %q, want 120", got)
 	}
 }

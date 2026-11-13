@@ -3,6 +3,7 @@
 export interface Config {
   oidcIssuer: string // the URL users reach authentik through, e.g. https://localhost:9443/application/o/agentdev/
   oidcClientId: string
+  oidcScopes?: string // space-separated (#323); default 'openid profile email forge'
 }
 
 export async function loadConfig(): Promise<Config> {
