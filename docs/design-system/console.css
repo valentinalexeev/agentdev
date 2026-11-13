@@ -438,3 +438,7 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
 /* The drawer as a native <dialog> (focus stays inside, Escape closes it): reset the dialog box, keep the scrim. */
 dialog.ad-drawer { margin: 0; inset: 0 0 0 auto; height: 100%; max-height: none; max-width: 100vw; border-top: 0; border-right: 0; border-bottom: 0; color: var(--ink); padding-left: 0; }
 dialog.ad-drawer::backdrop { background: rgba(20, 26, 22, .35); }
+dialog.ad-palette { margin: 0; padding: 0; color: var(--ink); max-height: none; }
+dialog.ad-palette::backdrop { background: rgba(20, 26, 22, .35); }
+.ad-palette li button { all: unset; flex: 1; display: flex; gap: var(--space-3); align-items: center; cursor: pointer; min-width: 0; }
+.ad-palette li button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

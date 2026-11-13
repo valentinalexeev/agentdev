@@ -139,3 +139,21 @@ export function Untrusted({ text, note }: { text: string; note?: string }) {
     </div>
   )
 }
+
+// The second axis of agent state: what the agent waits for. Always a word.
+export function Attention({ attn, label }: { attn: string; label: string }) {
+  return <span className={`ad-attn ad-attn-${attn}`}>{label}</span>
+}
+
+// One dot per agent of a project: round = lifecycle, square = attention (console.css, "Agent dots")
+export function Dots({ agents }: { agents: { name: string; life: string; attn: string }[] }) {
+  return (
+    <span className="ad-dots">
+      {agents.map((a) => (
+        <i key={a.name} title={`${a.name}: ${a.life === 'stopped' ? 'idle' : a.life}, ${a.attn}`}
+          className={a.attn === 'you' ? 'ad-d-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-d-alert'
+            : a.life === 'paused' || a.life === 'usage-paused' ? 'ad-d-paused' : a.life === 'running' || a.life === 'starting' ? 'ad-d-run' : ''} />
+      ))}
+    </span>
+  )
+}

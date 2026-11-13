@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listSecurityEvents, Unauthorized, type EventFilter, type SecurityEvent } from './api'
 import { AgentTag, Empty, PageHead, SevTag } from './ui'
+import { useData } from './useData'
 
 const SINCE: [string, string][] = [['24h', '24 h'], ['168h', '7 days'], ['720h', '30 days'], ['', 'all']]
 const SEV: [EventFilter['severity'], string][] = [['', 'all'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']]
@@ -19,7 +20,8 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
       .catch(fail)
   }, [token, filter, fail])
 
-  const events = result && result.for === filter ? result.events : null
+  const d = useData()
+  const events = result && result.for === filter ? result.events.filter((e) => d.inScopeAgent(e.agent)) : null
   const next = result && result.for === filter ? result.next : undefined
   const more = () => {
     if (!next) return

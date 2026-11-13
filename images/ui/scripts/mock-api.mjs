@@ -2,7 +2,8 @@
 // Development mock of the agentdev API for UI screenshots and manual checks (#341). Serves dist/ (npm run build),
 // /config.json and the /api calls the console uses, with fictional example data. Never used in the image.
 // Usage: node scripts/mock-api.mjs [port] [--large]   then open http://localhost:<port>/#agents
-// State switches for connection tests: POST /mock/down, /mock/up, /mock/expire (the next calls answer 503 or 401).
+// State switches for connection tests (#339): GET /mock/starting (HTML 502 as from the ingress), /mock/down (no answer),
+// /mock/expire (401), /mock/up.
 import { createServer } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
 import { extname, join } from 'node:path'
@@ -76,14 +77,17 @@ function largeData() {
 }
 
 const D = large ? largeData() : smallData()
-let mode = 'up' // up | down | expire
+// "My projects": the small example has every project; the large one only the first six (#342)
+const MINE = large ? ['acme/shop-api', 'acme/web', 'acme/mobile', 'acme/infra-live', 'acme/data-jobs', 'acme/docs'] : [...new Set(D.agents.flatMap((a) => a.repos))]
+let mode = 'up' // up | starting | down | expire
 
 function api(req, res, url) {
-  if (mode === 'down') return send(res, 503, { error: 'upstream unavailable' })
+  if (mode === 'starting') { res.writeHead(502, { 'Content-Type': 'text/html' }); return res.end('<html>502 Bad Gateway</html>') }
+  if (mode === 'down') return req.socket.destroy()
   if (mode === 'expire') return send(res, 401, { error: 'token expired' })
   const p = url.pathname
   if (req.method === 'GET' && p === '/api/agents') return send(res, 200, { agents: D.agents })
-  if (req.method === 'GET' && p === '/api/me') return send(res, 200, { sub: 'u1', preferred_username: 'valentinalexeev', email: 'v@example.com', groups: ['agentdev-admins'] })
+  if (req.method === 'GET' && p === '/api/me') return send(res, 200, { sub: 'u1', preferred_username: 'valentinalexeev', email: 'v@example.com', groups: ['agentdev-admins'], repos: MINE })
   if (req.method === 'GET' && p === '/api/approvals') {
     const st = url.searchParams.get('state')
     return send(res, 200, { approvals: st === 'pending' ? D.approvals : st === 'decided' ? D.decided : [...D.approvals, ...D.decided] })
