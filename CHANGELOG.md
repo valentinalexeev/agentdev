@@ -28,6 +28,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- API for the console (#345): `GET /api/jobs` gives the jobs of the agents (issue, PR, phase, outcome, times) from the
+  forge and the pending approvals, never from agent output. `GET /api/stream` sends live updates as server-sent events
+  (agents, approvals, security events, usage, heartbeat), only for items the caller may see. The lists take `repo` and
+  `scope=mine` filters and `limit`/`cursor` paging. The agent drawer fills `recentJobs`. No RBAC change. Re-run:
+  `./run.sh 10` on kind, Ansible `deploy.yml` (role `api`) on GKE.
 - API for the console (#344): `GET /api/agents/{name}` gives one agent with its pods, what it waits on (approvals,
   usage pause, pause, block) and its harness guide. Admins see every agent; other users only agents with a repository
   where they have write access (404 otherwise). `GET /api/platform` (`agentdev-admins` only) gives the health of the

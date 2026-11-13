@@ -153,7 +153,7 @@ func (w *writer) agentDetail(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	d.WaitingOn = w.waitingOn(r.Context(), *a)
-	d.RecentJobs = w.recentJobs(r.Context(), *a)
+	d.RecentJobs = w.recentJobs(r.Context(), id, *a)
 	writeJSON(rw, http.StatusOK, d)
 }
 
@@ -195,11 +195,3 @@ func (w *writer) waitingOn(ctx context.Context, a agent) []waitingItem {
 	}
 	return out
 }
-
-// job is one unit of agent work (an issue or a PR feedback round). Filled by GET /api/jobs (#345).
-type job struct {
-	Agent string `json:"agent"`
-}
-
-// recentJobs: none until the jobs source of #345.
-func (w *writer) recentJobs(context.Context, agent) []job { return []job{} }
