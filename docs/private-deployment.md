@@ -132,7 +132,7 @@ WARNING: Do not show a secret value on the screen or in a shell history. Read it
 
    | Secret | Value |
    |---|---|
-   | `claude-shared` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
+   | `claude-shared` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` (with the key name, not only the token) |
    | `router-register-token` | a random string (step 2) |
    | `github-app-webhook-secret` | the webhook secret from `.secrets/github-app/` |
    | `github-app-private-key` | the private key from `.secrets/github-app/private-key.pem` |
