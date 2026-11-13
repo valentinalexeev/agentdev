@@ -10,9 +10,14 @@
       - api_db_retention_days | string is match('^[1-9][0-9]*$')
       - api_max_agents | string is match('^[0-9]{1,6}$')
       - api_max_agents_per_user | string is match('^[0-9]{1,6}$')
+      - api_chat_idle_seconds | string is match('^[1-9][0-9]{0,5}$')
+      - api_chat_retention_days | string is match('^[1-9][0-9]{0,4}$')
+      - api_chat_max_sessions | string is match('^[0-9]{1,6}$')
+      - api_chat_max_sessions_per_user | string is match('^[0-9]{1,6}$')
     fail_msg: >-
       api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents and
-      api.max_agents_per_user whole numbers 0 or more (0 = no limit) (example.vars.yml)
+      api.max_agents_per_user whole numbers 0 or more (0 = no limit), api.chat.idle_minutes and
+      api.chat.retention_days positive numbers, api.chat.max_sessions(_per_user) 0 or more (example.vars.yml)
     quiet: true
 
 - name: API image on kind (build or pull, load)
@@ -30,7 +35,14 @@
   ansible.builtin.include_tasks: forge_gitea.yml
   when: api_secret_source == 'files' and not api_github
 
-- name: Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem
+# kind: the chat clone uses agentdev-api's read-only token (set by forge_gitea.yml); GKE reads its own (secrets_gcp.yml)
+- name: Chat clone token on kind
+  ansible.builtin.set_fact:
+    api_chat_clone_token: "{{ api_forge_token | default('') if api_chat else '' }}"
+  when: api_secret_source == 'files'
+  no_log: true
+
+- name: Secrets agentdev-api-db, agentdev-api-forge, agentdev-api-siem and the chat Secrets
   ansible.builtin.include_tasks: secrets_k8s.yml
 
 - name: API Deployment, Service, RBAC and NetworkPolicies
@@ -56,6 +68,14 @@
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
         MAX_AGENTS: "{{ api_max_agents }}"
         MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+        CHAT_SESSIONS: "{{ api_chat | string | lower }}"
+        CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"
+        CHAT_IMAGE_PULL_POLICY: "{{ api_chat_image_pull_policy }}"
+        CHAT_FORGE_URL: "{{ api_chat_forge_url }}"
+        CHAT_IDLE_SECONDS: "{{ api_chat_idle_seconds }}"
+        CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
+        CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
+        CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
       replace: []
   register: api_applied
 
