@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+1. **`platform_sm_prefix` (#333).** The default (`platform-`) is now in `infra/ansible/group_vars/all.yml`. An instance
+   that set `platform_sm_prefix: platform-` in `instance.yml` as a workaround may remove it; keeping it changes nothing.
+
+### Fixed
+- Ansible: the roles `api` and `authentik` failed with `'platform_sm_prefix' is undefined`, because `include_role` does
+  not share the `platform` role's defaults with later roles. The variable moved to `group_vars/all.yml` (#333).
+  `infra/ansible/tests/role_defaults_scope.yml` renders the `api` role without the `platform` role and fails when a
+  role reads a variable that only another role's defaults define.
+
 ## [1.0.0] - 2026-11-12
 
 ### Upgrade
