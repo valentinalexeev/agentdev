@@ -27,3 +27,10 @@
       ingress.forwarder: keys namespace, pod_selector (needs namespace) and cidrs (a list of IPv4 CIDRs, a.b.c.d/n,
       n 8 or more unless ingress.forwarder_allow_wide_cidrs: true)
     quiet: true
+
+- name: Check ingress.forwarder_not_ready_minutes
+  ansible.builtin.assert:
+    that:
+      - (ingress | default({})).forwarder_not_ready_minutes | default(10) | string is match('^[1-9][0-9]*$')
+    fail_msg: ingress.forwarder_not_ready_minutes is a whole number of minutes, 1 or more (#213)
+    quiet: true

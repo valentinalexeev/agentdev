@@ -12,6 +12,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
   `deploy.yml` with the new API image; no `./run.sh` step.
 ### Fixed
+- kind step 09 (#304): the SSO stand-in check no longer fails on a new cluster. The step restarts authentik just
+  before the check, and the source `agentdev-sso` is not usable for a short time. `scripts/sso-check.py` now tries
+  the first redirect again for up to 60 seconds. Re-run: `./run.sh 09`. GKE does not change.
 - `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
   `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
 - Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
@@ -48,6 +51,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   API, router, operator, Claude proxy, authentik, forge credential, egress proxy and agent pool. The API Role gets
   by-name `get` on the ConfigMap `agentdev-guides` and on the platform Deployments, never on Secrets. Re-run: `./run.sh
   10` on kind, Ansible `deploy.yml` (role `api`) on GKE.
+- External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
+  SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
+  `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
+  namespace. Re-run: `deploy.yml` (operator and role `ingress`); kind is not changed.
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of
