@@ -197,6 +197,9 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
 | Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
+| Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
+| Accepted identity | `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE): `key`, `both` (default) or `token` |
+| Access to the API server | the proxy has the service account `claude-proxy`, bound to `system:auth-delegator`. Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
 | Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
@@ -204,6 +207,35 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
 | Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
 | Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
+
+### Agent identity at the Claude proxy (#352)
+
+Each agent has its own Kubernetes service account `agent-<agent>`. The operator makes it. The agent container gets a
+token of this service account with the audience `claude-proxy`. The token expires after 10 minutes, and Kubernetes
+renews it. The proxy checks the token with the Kubernetes TokenReview API.
+
+The setting `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE) selects what the proxy accepts:
+
+| Value | The proxy accepts |
+|---|---|
+| `key` | only the proxy key (the behaviour before 1.1) |
+| `both` | the proxy key or the token. This is the default |
+| `token` | only the token. The proxy refuses the proxy key |
+
+A worker of 1.1 or later sends the token. An older worker sends the proxy key.
+
+To accept only the token:
+
+1. Make sure that each agent runs a worker of 1.1 or later:
+   `kubectl -n coding-agents get pods -l app=coding-agent -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'`
+2. Make sure that no `proxy-key-invalid` security event shows `wrong agent token` after the upgrade.
+3. On `kind`: set `CLAUDE_PROXY_AUTH=token` in `config.env`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
+4. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+5. Run `scripts/e2e-gke-security.sh`. Make sure that the proxy key check shows PASS.
+
+CAUTION: Do not set `token` while an agent runs an older worker. The proxy then refuses all calls of that agent.
+
+To go back, set `both` and deploy again.
 
 WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that
 agent from inside the cluster.

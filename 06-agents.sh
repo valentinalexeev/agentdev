@@ -97,10 +97,14 @@ printf '%s' "${PROXY_SIGNING}" | k -n "${AGENTS_NS}" create secret generic claud
   --dry-run=client -o yaml | k apply -f - >/dev/null
 proxy_key() { printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "${PROXY_SIGNING}" -r | cut -d' ' -f1; }
 [[ "${CLAUDE_BUDGET_TOKENS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_TOKENS must be a number of tokens (0 = no limit)"
+[[ "${CLAUDE_PROXY_AUTH}" =~ ^(key|both|token)$ ]] || die "CLAUDE_PROXY_AUTH must be key, both or token (#352)"
+# workload identity (#352): the proxy reaches the API server for TokenReview, only at the addresses of default/kubernetes
+KUBE_API_EGRESS=$(KUBECTL="${KUBECTL}" "${SPIKE_DIR}/scripts/kube-api-egress.sh") || die "API server addresses not found"
 # shellcheck disable=SC2086 # AGENTS is a space-separated list
 AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
   CLAUDE_BUDGET_TOKENS="${CLAUDE_BUDGET_TOKENS}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_TOKENS} ${CLAUDE_SECRET_SOURCES}' \
+  CLAUDE_PROXY_AUTH="${CLAUDE_PROXY_AUTH}" KUBE_API_EGRESS="${KUBE_API_EGRESS}" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_TOKENS} ${CLAUDE_SECRET_SOURCES} ${CLAUDE_PROXY_AUTH} ${KUBE_API_EGRESS}' \
   < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"

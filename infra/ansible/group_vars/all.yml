@@ -28,6 +28,9 @@ credproxy_image: "{{ image_registry }}/agentdev-credproxy:{{ image_tag }}"   # C
 claude_proxy: true                  # false: credential in the agent pod (deprecated rollback, docs/security.md R11)
 claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the proxy on GKE (FQDNNetworkPolicy)
 claude_budget_tokens: 0             # tokens per agent per 24 h (input, cache and output); 0 = no limit
+# How agents prove who they are to the proxy (#352): key = HMAC key only (before 1.1), both = key or projected service
+# account token (TokenReview), token = token only. Set token after every agent runs a 1.1 worker (docs/admin.md).
+claude_proxy_auth: both
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts

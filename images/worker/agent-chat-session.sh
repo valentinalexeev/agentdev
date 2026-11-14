@@ -40,6 +40,14 @@ mkdir -p "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 jq -n --arg d "${WORK}" '{hasCompletedOnboarding: true, theme: "dark", projects: {($d): {hasTrustDialogAccepted: true}}}' \
   > "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
 cd "${WORK}" || exit 1
+# #352: with the projected token, Claude Code reads it through apiKeyHelper (re-read each minute) instead of the HMAC key
+tok=/var/run/secrets/agentdev/proxy/token
+if [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${tok}" ]]; then
+  jq -n --arg f "${tok}" '{apiKeyHelper: ("cat " + $f)}' > /state/claude-auth.json
+  rc+=(--settings /state/claude-auth.json)
+  export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+  unset ANTHROPIC_AUTH_TOKEN
+fi
 tmux new-session -d -s chat -x 200 -y 50 \
   "claude ${rc[*]} --append-system-prompt \"\$(cat /state/session-prompt.md)\"; echo 'claude exited; detach with Ctrl-b d'; sleep infinity"
 log "session ready: attach with scripts/agent-chat.sh attach (idle timeout ${IDLE_SECONDS}s)"
