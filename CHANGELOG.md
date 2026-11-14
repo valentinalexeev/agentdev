@@ -7,6 +7,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
+- Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
+  request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
+  compat e2e). New worker image; no `./run.sh` step.
 - Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
   engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
   the agents.
