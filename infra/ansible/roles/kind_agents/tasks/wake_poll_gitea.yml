@@ -1,0 +1,81 @@
+---
+# Wake poll on Gitea (#181, was 06-agents.sh): the account agentdev-router, read collaborator of the repo, and a token
+# with read:repository,read:issue, kept in router-poll.token (minted once). Sets kind_agents_poll_token (not logged).
+- name: Gitea CLI
+  ansible.builtin.set_fact:
+    kind_agents_gitea_cli: [kubectl, --context, "{{ kind_agents_context }}", -n, "{{ kind_agents_forge_ns }}", exec,
+                            deploy/gitea, --, gitea]
+
+- name: Existing forge users
+  ansible.builtin.command:
+    argv: "{{ kind_agents_gitea_cli + ['admin', 'user', 'list'] }}"
+  register: kind_agents_users
+  changed_when: false
+  check_mode: false
+
+- name: Account agentdev-router
+  ansible.builtin.command:
+    argv: "{{ kind_agents_gitea_cli + ['admin', 'user', 'create', '--username', 'agentdev-router',
+           '--password', lookup('ansible.builtin.password', '/dev/null', length=24) ~ 'Aa1!',
+           '--email', 'agentdev-router@agents.local', '--must-change-password=false'] }}"
+  when: "'agentdev-router' not in (kind_agents_users.stdout | regex_findall('(?m)^\\d+\\s+(\\S+)'))"
+  changed_when: true
+  no_log: true
+
+- name: Collaborator check of agentdev-router
+  ansible.builtin.uri:
+    url: "{{ kind_agents_forge_url }}/api/v1/repos/{{ kind_agents_repo }}/collaborators/agentdev-router"
+    user: "{{ kind_agents_forge_admin_user }}"
+    password: "{{ kind_agents_forge_admin_password }}"
+    force_basic_auth: true
+    status_code: [204, 404]
+  register: kind_agents_router_collab
+  check_mode: false
+  no_log: true
+
+- name: Read collaborator agentdev-router
+  ansible.builtin.uri:
+    url: "{{ kind_agents_forge_url }}/api/v1/repos/{{ kind_agents_repo }}/collaborators/agentdev-router"
+    method: PUT
+    user: "{{ kind_agents_forge_admin_user }}"
+    password: "{{ kind_agents_forge_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: {permission: read}
+    status_code: 204
+  when: kind_agents_router_collab.status == 404
+  changed_when: true
+  no_log: true
+
+- name: Wake poll token file
+  ansible.builtin.stat: {path: "{{ kind_agents_secrets_dir }}/router-poll.token"}
+  register: kind_agents_poll_file
+
+- name: Mint the wake poll token (read:repository,read:issue)
+  when: not kind_agents_poll_file.stat.exists or kind_agents_poll_file.stat.size == 0
+  block:
+    - name: Mint a token
+      ansible.builtin.command:
+        argv: "{{ kind_agents_gitea_cli + ['admin', 'user', 'generate-access-token', '--username', 'agentdev-router',
+               '--token-name', 'wake-poll-' ~ now(utc=true, fmt='%s'), '--scopes', 'read:repository,read:issue', '--raw'] }}"
+      register: kind_agents_poll_minted
+      changed_when: true
+      no_log: true
+
+    - name: Write the token file (0600)
+      ansible.builtin.copy:
+        content: "{{ kind_agents_poll_minted.stdout | trim }}"
+        dest: "{{ kind_agents_secrets_dir }}/router-poll.token"
+        mode: "0600"
+      no_log: true
+
+- name: Read the wake poll token
+  ansible.builtin.slurp: {src: "{{ kind_agents_secrets_dir }}/router-poll.token"}
+  register: kind_agents_poll_read
+  failed_when: kind_agents_poll_read.failed | default(false) and not ansible_check_mode
+  no_log: true
+
+- name: Keep the wake poll token in a fact (not logged)
+  ansible.builtin.set_fact:
+    kind_agents_poll_token: "{{ kind_agents_poll_read.content | default('') | b64decode | trim }}"
+  no_log: true

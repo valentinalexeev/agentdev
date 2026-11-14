@@ -234,7 +234,7 @@ NOTE: The first response of a stopped agent is slower. The pod must start (and o
 The wake poll uses a read-only forge credential in the Secret `webhook-router-poll`. Only the router pod reads it.
 
 - GitHub: the router uses the GitHub App. It asks for installation tokens with read access only.
-- Gitea on `kind`: `06-agents.sh` makes the account `agentdev-router` (read access to the repository) and its token.
+- Gitea on `kind`: step 06 (role `kind_agents`) makes the account `agentdev-router` (read access to the repository) and its token.
 - Gitea on GKE: put a read-only token (scopes `read:repository`, `read:issue`) in the Secret Manager entry
   `router-poll-forge-token`.
 
@@ -2206,7 +2206,9 @@ shows a `DEPRECATED` message and runs the playbook. You must install `ansible-pl
 The shell wrapper of a step is removed one MINOR release after the step moved. Then use the playbook command in the
 message.
 
-NOTE: Step 06 runs step 12 only when the operator is not installed. On an existing cluster, step 12 must come after
+NOTE: Step 06 runs the playbook `infra/ansible/kind.yml` with the tag `agents` (#106). The playbook restarts the
+router, the Claude proxy and the agents only when an image or a Secret changed. Step 06 runs step 12 only when the
+operator is not installed. On an existing cluster, step 12 must come after
 step 06 to update the CRDs.
 
 ## Remove agentdev
@@ -2223,9 +2225,9 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
 | botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
-| Webhook router | 06 | `deploy.yml` |
-| Egress proxy | 06 | `deploy.yml` |
-| Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
+| Webhook router | 06 (`kind.yml --tags agents`, role `kind_agents`) | `deploy.yml` |
+| Egress proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` |
+| Claude credential proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |

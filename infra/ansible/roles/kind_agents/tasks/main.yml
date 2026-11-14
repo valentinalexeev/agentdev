@@ -1,0 +1,302 @@
+---
+# Same result as the old 06-agents.sh. Generated values stay in kind_agents_secrets_dir, so a redeploy keeps the router
+# secrets, wake tokens and proxy keys. A second run reports changed=0 (restarts only after a new image or Secret).
+- name: Check the agent settings
+  ansible.builtin.assert:
+    that:
+      - kind_agents_forge_kind in ['gitea', 'github']
+      - kind_agents_agents | length > 0
+      - kind_agents_agents | reject('match', kind_agents_name_re) | list | length == 0
+      - kind_agents_claude_budget_tokens | string is match('^[0-9]+$')
+      - kind_agents_wake_poll_seconds | string is match('^[0-9]+$')
+      - kind_agents_github_installation_id | string is match('^([1-9][0-9]{0,15})?$')
+    fail_msg: >-
+      FORGE_KIND must be gitea or github; AGENTS are DNS labels; CLAUDE_BUDGET_TOKENS and WAKE_POLL_SECONDS are
+      numbers; GITHUB_INSTALLATION_ID is empty or a number
+    quiet: true
+
+- name: Secrets directory (0700)
+  ansible.builtin.file: {path: "{{ kind_agents_secrets_dir }}", state: directory, mode: "0700"}
+
+- name: GitHub App files (#2, scripts/github-app.sh convert)
+  when: kind_agents_forge_kind == 'github'
+  block:
+    - name: Read the GitHub App files
+      ansible.builtin.slurp: {src: "{{ kind_agents_secrets_dir }}/github-app/{{ item }}"}
+      loop: [app-id, private-key.pem, webhook-secret]
+      register: kind_agents_gh_files
+      failed_when: false
+      no_log: true
+
+    - name: Keep the GitHub App values in a fact (not logged)
+      ansible.builtin.set_fact:
+        kind_agents_gh:
+          app_id: "{{ (kind_agents_gh_files.results[0].content | default('') | b64decode | trim) }}"
+          key: "{{ (kind_agents_gh_files.results[1].content | default('') | b64decode) }}"
+          webhook: "{{ (kind_agents_gh_files.results[2].content | default('') | b64decode | trim) }}"
+      no_log: true
+
+    - name: The GitHub App is registered
+      ansible.builtin.assert:
+        that:
+          - kind_agents_gh_files.results | selectattr('content', 'undefined') | list | length == 0
+          - kind_agents_gh.app_id is match('^[1-9][0-9]{0,15}$')
+          - kind_agents_gh.key | length > 0 and kind_agents_gh.webhook | length > 0
+        fail_msg: >-
+          FORGE_KIND=github: register the App first (scripts/github-app.sh, docs/admin.md); app-id must be a number
+        quiet: true
+      no_log: true
+
+# A published image is pulled for one platform and re-tagged through a one-line build (#378): with the containerd
+# image store a pulled image keeps the multi-arch index, and `kind load` fails on the missing platforms.
+- name: Container engine architecture
+  ansible.builtin.shell: >-
+    {{ kind_agents_container_engine }} info -f '{{ '{{' }}.Architecture{{ '}}' }}' 2>/dev/null ||
+    {{ kind_agents_container_engine }} info -f '{{ '{{' }}.Host.Arch{{ '}}' }}'
+  register: kind_agents_engine_arch
+  changed_when: false
+  when: kind_agents_build | bool
+
+- name: Platform of pulled images
+  ansible.builtin.set_fact:
+    kind_agents_pull_platform: >-
+      linux/{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(kind_agents_engine_arch.stdout | trim,
+                                                              kind_agents_engine_arch.stdout | trim) }}
+  when: kind_agents_build | bool
+
+- name: Known container engine architecture
+  ansible.builtin.assert:
+    that: kind_agents_pull_platform in ['linux/amd64', 'linux/arm64']
+    fail_msg: "unknown container engine architecture: {{ kind_agents_engine_arch.stdout | trim }}"
+    quiet: true
+  when: kind_agents_build | bool
+
+- name: Local images (worker, forge sidecar, router, Claude proxy)
+  ansible.builtin.include_tasks: image.yml
+  loop:
+    - {dir: worker, tag: "{{ kind_agents_worker_image }}", pull: true}
+    - {dir: forge, tag: "{{ kind_agents_forge_image }}", pull: true}
+    - {dir: router, tag: "{{ kind_agents_router_image }}"}
+    - {dir: credproxy, tag: "{{ kind_agents_credproxy_image }}"}
+  loop_control: {loop_var: kind_agents_img, label: "{{ kind_agents_img.tag }}"}
+  when: kind_agents_build | bool
+
+- name: Namespace {{ kind_agents_ns }}
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ kind_agents_ns }}"}}
+
+- name: Shared Claude credential (claude-shared), from ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: claude-shared, namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData: "{{ kind_agents_shared_claude }}"
+  when: kind_agents_shared_claude | length > 0
+  no_log: true
+
+# cluster-wide webhook secrets (#3): one forge secret (Gitea -> router), one registration token (agents -> router),
+# the Claude proxy signing key (#66), the forge sidecar's egress proxy key (#65), and one wake token per agent
+- name: Generated secret files
+  ansible.builtin.include_tasks: secret_file.yml
+  loop: "{{ ['router-gitea.secret', 'router-register.token', 'claude-proxy-signing.key', 'egress-forge-proxy.key']
+            + kind_agents_agents | map('regex_replace', '$', '.wake') | list }}"
+  loop_control: {loop_var: kind_agents_sf}
+
+- name: Webhook secret of the router
+  ansible.builtin.set_fact:
+    kind_agents_forge_secrets: >-
+      {{ ('github=' ~ kind_agents_gh.webhook) if kind_agents_forge_kind == 'github'
+         else ('gitea=' ~ kind_agents_secret['router-gitea.secret']) }}
+  no_log: true
+
+# ---------- wake poll (#181): the router's read-only forge credential, router pod only ----------
+- name: Wake poll account on Gitea (agentdev-router, read collaborator, read token)
+  ansible.builtin.include_tasks: wake_poll_gitea.yml
+  when: kind_agents_forge_kind == 'gitea' and kind_agents_scale_to_zero | bool and (kind_agents_wake_poll_seconds | int) > 0
+
+- name: Wake poll credential (Secret webhook-router-poll)
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    state: "{{ 'present' if kind_agents_scale_to_zero | bool and (kind_agents_wake_poll_seconds | int) > 0 else 'absent' }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: webhook-router-poll, namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData: >-
+        {{ {'github-app-id': kind_agents_gh.app_id, 'private-key.pem': kind_agents_gh.key,
+            'github-installation-id': kind_agents_github_installation_id | string}
+           if kind_agents_forge_kind == 'github' else {'gitea-token': kind_agents_poll_token | default('')} }}
+  register: kind_agents_poll_secret
+  no_log: true
+
+- name: Webhook router
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition: "{{ lookup('ansible.builtin.template', '../../templates/render.j2', template_vars=kind_agents_vars_router) | from_yaml_all | list }}"
+  vars:
+    kind_agents_vars_router:
+      src: "{{ kind_agents_repo_root }}/manifests/router.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ kind_agents_ns }}"
+        FORGE_SECRETS: "{{ kind_agents_forge_secrets }}"
+        REGISTER_TOKEN: "{{ kind_agents_secret['router-register.token'] }}"
+        ROUTER_IMAGE: "{{ kind_agents_router_image }}"
+        IMAGE_PULL_POLICY: Never
+        WAKE_POLL_SECONDS: "{{ kind_agents_wake_poll_seconds | int }}"
+        GITEA_URL: http://gitea.{{ kind_agents_forge_ns }}.svc.cluster.local:3000
+        GITHUB_API_URL: https://api.github.com
+      replace: []
+  register: kind_agents_router
+  no_log: true
+
+- name: Restart the router (new local image or Secret)
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout restart deploy/webhook-router
+  when: >-
+    (kind_agents_image_changed | default({})).router | default(false) or kind_agents_poll_secret is changed
+    or kind_agents_router is changed
+  changed_when: true
+
+- name: Router is ready
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout status deploy/webhook-router
+    --timeout={{ kind_agents_timeout }}s
+  changed_when: false
+
+# ---------- Claude credential proxy (#66): the only pod with the Claude credentials ----------
+- name: Claude proxy keys of the agents (HMAC of the agent name; never the credential)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k=$(cat {{ (kind_agents_secrets_dir ~ '/claude-proxy-signing.key') | quote }})
+    for a in {{ kind_agents_agents | map('quote') | join(' ') }}; do
+      printf '%s %s.%s\n' "$a" "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
+    done
+  args: {executable: /bin/bash}
+  register: kind_agents_proxy_keys
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Claude proxy signing Secret
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: claude-proxy-signing, namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData: {key: "{{ kind_agents_secret['claude-proxy-signing.key'] }}"}
+  register: kind_agents_signing
+  no_log: true
+
+- name: Claude credential proxy
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition: "{{ lookup('ansible.builtin.template', '../../templates/render.j2', template_vars=kind_agents_vars_proxy) | from_yaml_all | list }}"
+  vars:
+    agents: "{{ kind_agents_agents | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_json') | list }}"
+    kind_agents_vars_proxy:
+      src: "{{ kind_agents_repo_root }}/manifests/claude-proxy.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ kind_agents_ns }}"
+        PLATFORM_NS: "{{ kind_agents_platform_ns }}"
+        CLAUDE_PROXY_IMAGE: "{{ kind_agents_credproxy_image }}"
+        IMAGE_PULL_POLICY: Never
+        CLAUDE_BUDGET_TOKENS: "{{ kind_agents_claude_budget_tokens | int }}"
+        # same output as scripts/claude-proxy-sources.sh (tests/kind_agents.yml compares them)
+        CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', '../../templates/claude-proxy-sources.j2') | trim }}"
+      replace: []
+  register: kind_agents_proxy
+
+# ---------- egress allow-list (#65): proxy and NetworkPolicy ----------
+- name: Forge sidecar egress credential Secret (password for the sidecar, header regex for Squid)
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: egress-forge-proxy, namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData:
+        password: "{{ kind_agents_secret['egress-forge-proxy.key'] }}"
+        auth: "{{ kind_agents_forge_auth }}"
+  vars:
+    kind_agents_forge_auth: "^Basic {{ ('forge:' ~ kind_agents_secret['egress-forge-proxy.key']) | b64encode }}$"
+  no_log: true
+
+- name: Egress proxy and agent NetworkPolicy
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition: "{{ lookup('ansible.builtin.template', '../../templates/render.j2', template_vars=kind_agents_vars_egress) | from_yaml_all | list }}"
+  vars:
+    kind_agents_vars_egress:
+      src: "{{ kind_agents_repo_root }}/manifests/egress.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ kind_agents_ns }}"
+        PLATFORM_NS: "{{ kind_agents_platform_ns }}"
+        FORGE_NS: "{{ kind_agents_forge_ns }}"
+        BOTBOARD_NS: "{{ kind_agents_botboard_ns }}"
+        EGRESS_HOSTS: "{{ kind_agents_agent_egress_hosts | join(' ') }}"
+        FORGE_EGRESS_HOSTS: "{{ kind_agents_forge_egress_hosts | join(' ') }}"
+        EGRESS_PROXY_IMAGE: "{{ kind_agents_egress_proxy_image }}"
+        FORGE_PROXY_AUTH_SHA: >-
+          {{ (('^Basic ' ~ (('forge:' ~ kind_agents_secret['egress-forge-proxy.key']) | b64encode) ~ '$') | hash('sha256'))[:16] }}
+      replace: []
+
+- name: Egress proxy may reach any address on 80/443 (kind has no FQDN policy; Squid enforces the list)
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition: "{{ lookup('ansible.builtin.template', '../../templates/render.j2', template_vars=kind_agents_vars_web) | from_yaml }}"
+  vars:
+    kind_agents_vars_web:
+      src: "{{ kind_agents_repo_root }}/manifests/egress-proxy-web.yaml.tmpl"
+      values: {AGENTS_NS: "{{ kind_agents_ns }}"}
+      replace: []
+
+- name: Restart the Claude proxy (new local image or Secret)
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout restart deploy/claude-proxy
+  # per-agent Claude Secrets are projected volumes: the kubelet updates them in the running pod
+  when: >-
+    (kind_agents_image_changed | default({})).credproxy | default(false) or kind_agents_signing is changed
+    or kind_agents_proxy is changed
+  changed_when: true
+
+- name: Claude proxy and egress proxy are ready
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout status deploy/{{ item }}
+    --timeout={{ kind_agents_timeout }}s
+  loop: [claude-proxy, egress-proxy]
+  changed_when: false
+
+# ---------- agents (#47, #57): Agent objects; the operator renders their StatefulSets ----------
+- name: The operator runs (was installed by 06-agents.sh when missing; run ./run.sh 12 first)
+  kubernetes.core.k8s_info:
+    context: "{{ kind_agents_context }}"
+    kind: Deployment
+    namespace: "{{ kind_agents_platform_ns }}"
+    name: agentdev-operator
+  register: kind_agents_operator
+  failed_when: kind_agents_operator.resources | length == 0
+
+- name: One agent (Secrets, Agent object, restart)
+  ansible.builtin.include_tasks: agent.yml
+  loop: "{{ kind_agents_agents }}"
+  loop_control: {loop_var: kind_agents_agent}
+
+# agent StatefulSets use updateStrategy OnDelete (#174): `rollout status` does not work; wait for the pod instead
+- name: Agents are ready (blocked agents stay at 0)
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} wait
+    --for=jsonpath={.status.readyReplicas}=1 statefulset/agent-{{ item }} --timeout={{ kind_agents_timeout }}s
+  loop: "{{ kind_agents_agents | difference(kind_agents_blocked | default([])) }}"
+  changed_when: false
+
+- name: Forge webhook to the router for {{ kind_agents_repo }}
+  ansible.builtin.include_tasks: webhook.yml
+  when: kind_agents_forge_kind == 'gitea'

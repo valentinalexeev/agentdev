@@ -8,6 +8,7 @@
 #   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
 #   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
 #   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
+#   ansible-playbook kind.yml --tags agents            # was ./run.sh 06 (needs the operator: ./run.sh 12)
 #   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
 #   ansible-playbook kind.yml --tags authentik         # was ./run.sh 09 (after mcp)
@@ -15,8 +16,8 @@
 #   ansible-playbook kind.yml --tags ui                # was ./run.sh 11
 #   ansible-playbook kind.yml --tags operator          # was ./run.sh 12
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08,
-# authentik: 09, api: 10, ui: 11, operator: 12.
+# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06, botboard:
+# 07, mcp: 08, authentik: 09, api: 10, ui: 11, operator: 12.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -65,6 +66,17 @@
       vars:
         gitea_forge_context: kind-{{ kind_cluster_name }}
       tags: [forge]
+
+    # Router, Claude proxy, egress allow-list and one Agent object per agent. Same manifests as deploy.yml on GKE;
+    # secrets are files in .secrets (generated once). 06-agents.sh passes the config.env values with -e.
+    - name: Local images, router, Claude proxy, egress proxy, Agent objects, forge webhook (was 06-agents.sh)
+      ansible.builtin.include_role:
+        name: kind_agents
+        apply: {tags: [agents]}
+      vars:
+        kind_agents_context: kind-{{ kind_cluster_name }}
+        kind_agents_cluster_name: "{{ kind_cluster_name }}"
+      tags: [agents]
 
     # optional (#26): not in the default run. Agents get BOTBOARD_URL from ./run.sh 06 when the namespace exists.
     - name: Botboard dashboard (was 07-botboard.sh)

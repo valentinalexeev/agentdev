@@ -1,0 +1,149 @@
+---
+# One agent (was the loop in 06-agents.sh). Claude credential: .secrets/<agent>.claude (KEY=VALUE lines) when present,
+# else claude-shared. A blocked agent (#27, scripts/agent-block.sh) keeps its Secrets and Agent object, but is not
+# restarted and not waited for: the operator keeps it at 0.
+- name: Claude credential file of {{ kind_agents_agent }}
+  ansible.builtin.slurp: {src: "{{ kind_agents_secrets_dir }}/{{ kind_agents_agent }}.claude"}
+  register: kind_agents_claude_file
+  failed_when: false
+  no_log: true
+
+- name: Claude credential of {{ kind_agents_agent }}
+  ansible.builtin.set_fact:
+    kind_agents_own_claude: >-
+      {{ dict((kind_agents_claude_file.content | default('') | b64decode).splitlines()
+              | map('trim') | reject('match', '^(#|$)') | select('search', '=') | map('split', '=', 1)) }}
+  no_log: true
+
+- name: Claude credential is present for {{ kind_agents_agent }}
+  ansible.builtin.assert:
+    that: kind_agents_own_claude | length > 0 or kind_agents_shared_claude | length > 0
+    fail_msg: "{{ kind_agents_agent }} has no Claude credential: add .secrets/{{ kind_agents_agent }}.claude or set ANTHROPIC_API_KEY"
+    quiet: true
+
+# removed when the agent uses the shared credential
+- name: Own Claude Secret of {{ kind_agents_agent }}
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    state: "{{ 'present' if kind_agents_own_claude | length > 0 else 'absent' }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: "claude-{{ kind_agents_agent }}", namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData: "{{ kind_agents_own_claude }}"
+  register: kind_agents_claude_secret
+  no_log: true
+
+- name: Blocked state of {{ kind_agents_agent }}
+  kubernetes.core.k8s_info:
+    context: "{{ kind_agents_context }}"
+    kind: StatefulSet
+    namespace: "{{ kind_agents_ns }}"
+    name: agent-{{ kind_agents_agent }}
+  register: kind_agents_sts
+
+# Gitea: written by the forge step
+- name: Forge token file of {{ kind_agents_agent }}
+  ansible.builtin.slurp: {src: "{{ kind_agents_secrets_dir }}/{{ kind_agents_agent }}.token"}
+  register: kind_agents_token_file
+  when: kind_agents_forge_kind == 'gitea'
+  failed_when: kind_agents_token_file.failed | default(false) and not ansible_check_mode
+  no_log: true
+
+# GitHub (#2): the App's id and key instead of a forge token, in the same per-agent Secret (forge container only).
+# Server-side apply with the field manager agentdev, as 06-agents.sh did, so other writers' keys stay.
+- name: Token Secret (agent-<name>, read by the operator-rendered pod) of {{ kind_agents_agent }}
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    apply: true
+    server_side_apply: {field_manager: agentdev, force_conflicts: true}
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: "agent-{{ kind_agents_agent }}", namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData: >-
+        {{ {'WAKE_TOKEN': kind_agents_secret[kind_agents_agent ~ '.wake'],
+            'REGISTER_TOKEN': kind_agents_secret['router-register.token']}
+           | combine({'GITHUB_APP_ID': kind_agents_gh.app_id, 'GITHUB_APP_PRIVATE_KEY': kind_agents_gh.key,
+                      'GITHUB_INSTALLATION_ID': kind_agents_github_installation_id | string}
+                     if kind_agents_forge_kind == 'github' else
+                     {'FORGE_TOKEN': kind_agents_token_file.content | default('') | b64decode | trim}) }}
+  register: kind_agents_token_secret
+  no_log: true
+
+# the agent container gets this key, never the credential
+- name: Proxy key Secret (agent-<name>-proxy) of {{ kind_agents_agent }}
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: "agent-{{ kind_agents_agent }}-proxy", namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData:
+        ANTHROPIC_AUTH_TOKEN: >-
+          {{ (kind_agents_proxy_keys.stdout_lines | map('split', ' ') | map('list') | items2dict(key_name=0, value_name=1))[kind_agents_agent] }}
+  register: kind_agents_proxy_secret
+  no_log: true
+
+# the operator renders its Service and StatefulSet
+- name: Agent object {{ kind_agents_agent }}
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    apply: true
+    server_side_apply: {field_manager: agentdev, force_conflicts: true}
+    definition:
+      apiVersion: agentdev.dev/v1alpha1
+      kind: Agent
+      metadata: {name: "{{ kind_agents_agent }}", namespace: "{{ kind_agents_ns }}"}
+      spec:
+        repo: "{{ kind_agents_repo }}"
+        forge: "{{ kind_agents_forge_kind }}"
+        claudeSecret: "{{ ('claude-' ~ kind_agents_agent) if kind_agents_own_claude | length > 0 else 'claude-shared' }}"
+        maxConcurrent: "{{ kind_agents_max_concurrent | int }}"
+        maxTurns: "{{ kind_agents_max_turns | int }}"
+        scaleToZero: "{{ kind_agents_scale_to_zero | bool }}"
+  register: kind_agents_agent_obj
+
+- name: Remember a blocked agent
+  ansible.builtin.set_fact:
+    kind_agents_blocked: "{{ (kind_agents_blocked | default([])) + [kind_agents_agent] }}"
+  when: >-
+    (kind_agents_sts.resources | length > 0) and
+    ((kind_agents_sts.resources[0].metadata.annotations | default({}))['agentdev/blocked'] | default('')) == 'true'
+
+- name: Blocked agent stays at 0 (scripts/agent-block.sh unblock) for {{ kind_agents_agent }}
+  ansible.builtin.debug:
+    msg: "{{ kind_agents_agent }} is blocked and stays stopped"
+  when: kind_agents_agent in (kind_agents_blocked | default([]))
+
+- name: Operator reconciled {{ kind_agents_agent }}
+  kubernetes.core.k8s_info:
+    context: "{{ kind_agents_context }}"
+    api_version: agentdev.dev/v1alpha1
+    kind: Agent
+    namespace: "{{ kind_agents_ns }}"
+    name: "{{ kind_agents_agent }}"
+  register: kind_agents_agent_state
+  until: >-
+    kind_agents_agent_state.resources | length > 0 and
+    (kind_agents_agent_state.resources[0].status.observedGeneration | default(0)) ==
+    kind_agents_agent_state.resources[0].metadata.generation
+  retries: 30
+  delay: 2
+  when: kind_agents_agent not in (kind_agents_blocked | default([])) and not ansible_check_mode
+
+# pick up a rebuilt image or a changed Secret. OnDelete (#174): a restart annotation alone does not replace the pod,
+# so delete it; the StatefulSet makes a new one (the job resumes, #175).
+- name: Replace the pod after a new local image or Secret of {{ kind_agents_agent }}
+  ansible.builtin.command: >-
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} delete pod agent-{{ kind_agents_agent }}-0
+    --ignore-not-found --wait=false
+  when: >-
+    kind_agents_agent not in (kind_agents_blocked | default([])) and
+    ((kind_agents_image_changed | default({})).worker | default(false) or
+     (kind_agents_image_changed | default({})).forge | default(false) or
+     kind_agents_claude_secret is changed or kind_agents_token_secret is changed or kind_agents_proxy_secret is changed)
+  changed_when: true
