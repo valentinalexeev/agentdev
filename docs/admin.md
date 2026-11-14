@@ -81,6 +81,13 @@ The concurrency is the number of items that one agent works on at the same time.
    On GKE: set `max_concurrent`, or `agents[].max_concurrent` for one agent.
 2. Deploy again.
 
+The turn limit is the maximum number of turns of one Claude run (#336). When a run uses all its turns, the agent
+writes "class `max-turns`" on the PR and on the issue. A large task can need more turns.
+
+1. On `kind`: set `MAX_TURNS` (the default is 40, the maximum is 500).
+   On GKE: set `max_turns`, or `agents[].max_turns` for one agent.
+2. Deploy again.
+
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
 
@@ -148,6 +155,7 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Own Claude credential | `.secrets/<agent>.claude` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
+| Turn limit of one Claude run (#336) | `MAX_TURNS` (default 40) | `max_turns`, `agents[].max_turns` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
@@ -555,7 +563,8 @@ Do this task after run.sh step 08.
 
 1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
 2. Run run.sh step 09: `./run.sh 09`
-   The script installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
+   The step runs the playbook `infra/ansible/kind.yml` with the tag `authentik` (#106), with the values from `config.env`.
+   The playbook installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
 
 ### Deploy authentik on GKE
 
@@ -849,11 +858,28 @@ WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Man
    ```
 
 4. Optional: give the API access to the forge. Refer to "Give the API access to the forge".
-5. Open a pull request in the deployment repository. Merge it after the dry run.
+5. Open a pull request in the deployment repository. Do the dry run (`--check`). Merge after the checks pass.
    The playbook deploys the API in `agentdev-platform`.
 6. Make sure that the API is ready: `kubectl -n agentdev-platform rollout status deploy/agentdev-api`
 
 NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
+
+### External OIDC provider
+
+The API reads the issuer's discovery document when it starts and exits when it cannot (#334). With a provider that
+the playbook does not deploy (for example Pocket ID behind a reverse proxy), use this order:
+
+1. Deploy the provider first. If the deployment repository has its own manifests for it, apply them before the
+   playbook, or in an earlier CI step.
+2. Make sure that `<api.oidc_discovery_url>/.well-known/openid-configuration` answers from the cluster and from the
+   machine that runs the playbook.
+3. Run the playbook. Before the API rollout, the role `api` waits for that URL for `api.oidc_wait_seconds`
+   (default `300`). If the URL does not answer in that time, the playbook stops with a message that names it.
+   If the API rollout still fails (a pod in crash-loop back-off from an earlier run), the role restarts the API once
+   and waits again.
+
+A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on GKE) is not waited for: the role
+`authentik` waits for authentik.
 
 ### Reference: the API settings on GKE
 
@@ -862,6 +888,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
 | `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
 | `api.oidc_audience` | `agentdev` | `agentdev` |
+| `api.oidc_wait_seconds` | `300` | none |
 | `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
 | `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
@@ -895,7 +922,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
 | `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). Every signed-in user sees every event for now; restriction to projects with write access is #57 |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308) |
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
@@ -912,10 +939,10 @@ Gitea tells the permission of another user only to a site admin or to an admin o
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
 
-On `kind`, `./run.sh 10` does this task for you. The script makes the Gitea user `agentdev-api` and makes it admin
+On `kind`, `./run.sh 10` (`kind.yml --tags api`) does this task for you. The playbook makes the Gitea user `agentdev-api` and makes it admin
 of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
 `read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
-works, the script keeps it. The script does not show the token. After you add an agent on a new repository, run
+works, the playbook keeps it. The playbook does not show the token. After you add an agent on a new repository, run
 `./run.sh 10` again.
 
 On GKE, do these steps manually. The playbook does not do them yet (#104).
@@ -967,6 +994,31 @@ in `user-guide.md`.
    `curl -X PATCH -H "Authorization: Bearer $TOKEN" -d '{"paused":true}' http://localhost:8088/api/agents/carol`
    The API gives 200 and the agent with `"paused": true`.
 2. To resume the agent, send the same request with `"paused":false`.
+
+### Limit the number of agents
+
+An administrator can set two limits for agents that people add in the web UI or through the API (#27). The value
+`0` means no limit (the default).
+
+| Limit | Counts | Who it stops | Setting |
+|---|---|---|---|
+| Instance limit | all Agent objects in the agents namespace, also agents from Ansible or `kubectl` | all users, also `agentdev-admins` | Ansible `api.max_agents`; `kind`: `MAX_AGENTS` |
+| Limit for each person | the agents that one person added in the web UI or through the API | all users except `agentdev-admins` | Ansible `api.max_agents_per_user`; `kind`: `MAX_AGENTS_PER_USER` |
+
+1. Set the limits. For GKE, in `ansible/instance.yml`:
+   `api: {max_agents: 2, max_agents_per_user: 1}`
+   For `kind`, in `.env`: `MAX_AGENTS=2` and `MAX_AGENTS_PER_USER=1`.
+2. Deploy again. For GKE, run the playbook. For `kind`, run `./run.sh 10`.
+3. Make sure that the API log shows `agent limits: max 2 in total, 1 per user`.
+
+When a limit is reached, the API refuses a new agent with 403 and a message that gives the limit. The audit line has
+the result `denied`. To add the agent, remove an agent or set a larger limit. The API writes the OIDC subject of the
+person into the annotation `agentdev/created-by` of each agent that it adds.
+
+NOTE: The limits apply only to new agents through the API. They do not stop agents that already exist, and they do not
+stop Ansible or `kubectl`. The ResourceQuota from `limits:` in the project spec is the Kubernetes limit for all
+callers. To stop one agent and prevent a new start, use the annotation `agentdev/blocked` (refer to "Agents as
+resources (operator)").
 
 ### Reference: who can change an agent
 
@@ -1253,6 +1305,12 @@ selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs
 is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarder_allow_wide_cidrs: true`. The
 playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
 `authentik_trusted_proxy_allow_wide: true`.
+
+NOTE: With `ingress.forwarder.namespace` and `pod_selector`, the operator monitors the forwarder pods (#213). When
+no pod is Ready for 10 minutes, the operator writes a warning to its log. It also records one SecurityEvent with
+source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event. Each outage gives one event. To
+change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
+namespace that can only read pods. Without `pod_selector`, the monitor is off.
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
@@ -1871,7 +1929,7 @@ NOTE: The operator keeps this data in the ConfigMap `agentdev-usage`. The agent 
 | Effective limit | The lower value of the global limit and the project limit. For an agent with more than one repository, the lowest value of all its repositories. |
 | Default limits | `USAGE_FIVE_HOUR` (80) and `USAGE_WEEKLY` (90): `config.env`; Ansible `usage.five_hour`, `usage.weekly`. |
 | Scope of a rate-limit pause | All agents on the same Claude Secret. |
-| Who can read the usage | Each user who can sign in to the web UI (`GET /api/usage`). Refer to risk R35 in `security.md`. |
+| Who can read the usage | `GET /api/usage`: an `agentdev-admins` member sees all. Other users see the global limits and only the projects and agents where they have write access on the forge. Claude Secret names and windows are for admins only (R35). |
 | State and pauses | ConfigMap `agentdev-usage`. Only the operator writes it. Each agent pod mounts it read-only. |
 | Pause event | SecurityEvent, source `operator`, rule `usage-<reason>`, severity `low`. It does not pause the Agent object. |
 | Audit | `AGENTDEV_AUDIT` with `action: set-limits`, for each try (also refused tries). |
@@ -1962,6 +2020,26 @@ permission. The agent examines this before each start. Else it does not do the w
 | Branches | `agent/<agent>/...` |
 | Security findings | the agent replies in the thread of each `github-advanced-security[bot]` comment. It does not resolve the thread |
 | Not permitted | merge, labels, issue changes, GraphQL, `.github/workflows/` |
+
+### Reference: agents on Gitea
+
+| Item | Value |
+|---|---|
+| Account on Gitea | one account for each agent (the agent name) |
+| Work | open issues assigned to the agent by a person with write access |
+| Branches | `agent/<agent>/...` |
+| Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (`./run.sh 05`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
+| Router | finds the agent from the logins in the event and from the label `agent:<agent>` |
+| Not permitted | merge, other labels, issue changes |
+
+Differences from GitHub (#241):
+
+- **Code scanning:** Gitea has no code scanning API. The agent does not reply to security findings on Gitea.
+- **Inline review comments:** Gitea has no reply endpoint for a review comment. The agent answers all review
+  comments in one PR comment. Gitea shows that comment in the conversation of the PR.
+- **Session monitor:** `tools/ghwatch -forge gitea` reads a Gitea repository (token in `GITEA_TOKEN`). Gitea has no
+  repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
+  label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
 
 ## Limits and blocked agents
 
@@ -2055,9 +2133,10 @@ Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh
 
 - The router examines the forge signature with `FORGE_SECRETS`.
 - The router accepts agent registrations with `REGISTER_TOKEN`.
-- The router has two ports (#214). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and `POST /`)
-  and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
-  `/register` and `/idle` to the agents, the probes and the operators of the instance. Publish only the public port.
+- The router has three ports (#214, #218). The public port 8080 (`PORT`) accepts only webhooks (`POST /hook` and
+  `POST /`) and answers 404 for all other paths. The internal port 8081 (`INTERNAL_PORT`) gives `/healthz`, `/status`,
+  `/register` and `/idle` to the agents and the operators of the instance. The health port 8082 (`HEALTH_PORT`) gives
+  only `GET /healthz` to the probes and to the health check of the load balancer. Publish only the public port.
 - For github.com, the router must have a public HTTPS URL and a GitHub App. On GKE, the public entry point gives the
   URL `https://<ingress.webhook_host>/hook` (refer to [Public HTTPS entry point (GKE)](#public-https-entry-point-gke)).
 - On GitHub, the router finds the agent from the label `agent:<name>` and from the branch `agent/<name>/...`. The
@@ -2072,9 +2151,38 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 1. Read `CHANGELOG.md`.
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
-4. Make sure that the dry run of the pull request has no error. If the dry run shows `no value for ${...}`, the new
+4. Make sure that the checks of the pull request pass. The pull request checks do not use cloud credentials, so
+   also do the dry run manually: `ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff`.
+   If the dry run shows `no value for ${...}`, the new
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
+5. Look for the `template-drift` warning in the job summary of the pull request (#317). If there is a warning,
+   copy the changed parts of `examples/deployment/gcp-gke` at the new release into your repository.
+   An upgrade does not change your copy of `.github/workflows/deploy.yml`. You must copy it.
+
+You can also run the check on your computer:
+`<agentdev checkout>/scripts/template-drift.sh <deployment repo dir>`. The script reads `ref=` from
+`terraform/main.tf`. It shows the diff of `deploy.yml`, the blocks and module arguments of `main.tf`, and the keys
+of `ansible/instance.yml`. Instance values are not compared. With `--strict`, the script exits 1 on drift.
+
+### What happens to running jobs during an upgrade
+
+The operator replaces an agent pod only when the agent has no running job (#174). An idle or stopped agent changes at
+once. A busy agent finishes its jobs first, for at most `rollout.drain_max_minutes` (default 60). After that time, the
+operator replaces the pod. The agent saves its work in progress, and the job continues on the new pod.
+
+1. Look at the state of the agents:
+   `kubectl -n coding-agents get agents -o custom-columns='NAME:.metadata.name,UPDATED:.status.conditions[?(@.type=="Updated")].reason'`
+2. Wait until all agents show `Current`.
+
+### Drain an agent by hand
+
+Do this task before maintenance of a node, for example.
+
+1. Set the annotation: `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain=$(date +%s)`
+2. Look for the line `drain requested: no new jobs` in `kubectl -n coding-agents logs agent-<name>-0 -c agent`.
+3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
+   `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
 
 ### Upgrade the local installation
 
@@ -2118,10 +2226,11 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Webhook router | 06 | `deploy.yml` |
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
-| Operator and CRDs | 12 | `deploy.yml` |
+| Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
-| API | 10 | role `api` (`api.oidc_issuer`) |
-| Web UI | 11 | role `api` (`api.ui`) |
+| authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
+| API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
+| Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of

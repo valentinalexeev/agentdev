@@ -1,0 +1,22 @@
+# Deployment template (#332): the CI of examples/deployment/gcp-gke clones agentdev at agentdev_ref (a git tag such as
+# v1.0.0), never at image_tag (1.0.0, no git tag of that name). Both keys pin the same release as terraform ref=.
+# Run: ansible-playbook infra/ansible/tests/deployment_template.yml
+- name: Deployment template pins one release (#332)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tpl: "{{ playbook_dir }}/../../../examples/deployment/gcp-gke"
+    inst: "{{ lookup('ansible.builtin.file', tpl ~ '/ansible/instance.yml.example') | from_yaml }}"
+    workflow: "{{ lookup('ansible.builtin.file', tpl ~ '/.github/workflows/deploy.yml') }}"
+    main_tf: "{{ lookup('ansible.builtin.file', tpl ~ '/terraform/main.tf') }}"
+  tasks:
+    - name: Check the example values and the clone ref
+      ansible.builtin.assert:
+        that:
+          - inst.agentdev_ref is match('^v[0-9]+\.[0-9]+\.[0-9]+')
+          - inst.agentdev_ref == 'v' ~ inst.image_tag
+          - ('ref=' ~ inst.agentdev_ref ~ '"') in main_tf
+          - workflow is search('/\^agentdev_ref:/')
+          - workflow is not search('/\^image_tag:/')
+          - workflow is search('--branch "\$ref"')
+        fail_msg: "the template must clone agentdev_ref (= v + image_tag = terraform ref=), not image_tag"

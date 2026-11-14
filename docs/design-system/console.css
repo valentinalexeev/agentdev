@@ -1,0 +1,396 @@
+/* agentdev console components. Needs tokens.css and components.css. Source: docs/design-system.md, "Console".
+   Layout: a left rail (navigation) and a top bar on panel; content on ground. Below 760px the rail becomes a bottom
+   bar and detail drawers become full-screen sheets (#338). */
+:root { --rail-w: 232px; --topbar-h: 52px; --content-max: 1200px; --drawer-w: 520px; }
+
+/* App shell */
+.ad-shell { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); grid-template-rows: var(--topbar-h) auto minmax(0, 1fr); min-height: 100vh; min-height: 100dvh; background: var(--ground); }
+.ad-rail { grid-row: 1 / -1; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-2); position: sticky; top: 0; height: 100vh; height: 100dvh; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; }
+.ad-brand { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2) var(--space-4); font: 800 24px/1 var(--font-display); color: var(--ink); text-decoration: none; }
+.ad-brand svg { width: 24px; height: 24px; flex: none; }
+.ad-rail-group { display: flex; flex-direction: column; gap: 2px; }
+.ad-rail-group + .ad-rail-group { margin-top: var(--space-4); }
+.ad-rail-head { padding: 0 var(--space-2) var(--space-1); color: var(--ink-muted); }
+.ad-nav { box-sizing: border-box; display: flex; align-items: center; gap: var(--space-2); padding: 7px var(--space-2); border-radius: var(--radius-md); color: var(--ink-muted); font: 500 14px/20px var(--font-sans); text-decoration: none; border: 0; background: none; cursor: pointer; text-align: left; width: 100%; }
+.ad-nav svg { width: 16px; height: 16px; flex: none; }
+.ad-nav:hover { background: var(--sunken); color: var(--ink); }
+.ad-nav[aria-current="page"] { background: var(--gate-soft); color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--gate); }
+.ad-nav .ad-count { margin-left: auto; }
+.ad-nav-agentcount { margin-left: auto; font: 500 11px/18px var(--font-mono); color: var(--ink-muted); }
+.ad-rail-foot { margin-top: auto; padding: var(--space-3) var(--space-2) 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-2); }
+
+.ad-topbar { grid-column: 2; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; min-width: 0; }
+.ad-crumbs { display: flex; gap: var(--space-2); align-items: center; color: var(--ink-muted); font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ad-crumbs strong { color: var(--ink); font-weight: 600; }
+.ad-search { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); height: 32px; padding: 0 var(--space-2) 0 var(--space-3); min-width: 220px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--ground); color: var(--ink-muted); font: 400 14px/20px var(--font-sans); cursor: pointer; }
+.ad-search .ad-kbd { margin-left: auto; }
+.ad-search svg { width: 16px; height: 16px; flex: none; }
+.ad-search > span { white-space: nowrap; }
+.ad-main { grid-column: 2; padding: var(--space-5); min-width: 0; }
+.ad-main > * { max-width: var(--content-max); }
+.ad-page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-5); }
+.ad-page-title { margin: 0; font: 700 32px/1 var(--font-display); color: var(--ink); text-wrap: balance; }
+.ad-page-sub { margin: var(--space-2) 0 0; color: var(--ink-muted); max-width: 68ch; }
+.ad-section { display: flex; flex-direction: column; gap: var(--space-3); }
+.ad-section + .ad-section { margin-top: var(--space-6); }
+.ad-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.ad-section-title { margin: 0; font: 600 17px/24px var(--font-sans); color: var(--ink); }
+
+/* Keyboard key */
+.ad-kbd { font: 500 11px/16px var(--font-mono); padding: 1px 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: var(--radius-sm); color: var(--ink-muted); background: var(--panel); }
+
+/* Connection state (#339): always in the top bar; a banner under it when not live */
+.ad-conn { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-muted); white-space: nowrap; }
+.ad-conn-dot { width: 8px; height: 8px; border-radius: var(--radius-lamp); background: var(--ok); flex: none; }
+.ad-conn-stale .ad-conn-dot { background: var(--lamp); }
+.ad-conn-waking .ad-conn-dot { background: var(--lamp); animation: ad-pulse 1.2s ease-in-out infinite; }
+.ad-conn-down .ad-conn-dot { background: var(--danger); border-radius: var(--radius-sm); }
+@media (prefers-reduced-motion: reduce) { .ad-conn-waking .ad-conn-dot { animation: none; opacity: .5; } }
+
+/* Banner: platform state and pauses. One per cause, never stacked more than two. */
+.ad-banner { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-2) var(--space-5); border-bottom: 1px solid var(--line); background: var(--sunken); color: var(--ink); font-size: 14px; line-height: 20px; }
+.ad-banner > svg { width: 16px; height: 16px; flex: none; }
+.ad-banner-warn { background: var(--lamp-soft); color: var(--ink); }
+.ad-banner-warn > svg { color: var(--lamp-ink); }
+.ad-banner-down { background: var(--danger-soft); }
+.ad-banner-down > svg { color: var(--danger); }
+.ad-banner-paused { background: var(--paused-soft); }
+.ad-banner-paused > svg { color: var(--paused); }
+.ad-banner .ad-btn { height: 28px; padding: 0 var(--space-3); font-size: 13px; margin-left: auto; }
+.ad-inline-banner { grid-column: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
+
+/* KPI tile: a number a person acts on, with its unit and the change */
+.ad-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-3); }
+.ad-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; color: inherit; text-decoration: none; }
+a.ad-kpi:hover { border-color: var(--line-strong); }
+.ad-kpi-label { color: var(--ink-muted); }
+.ad-kpi-value { font: 700 32px/1 var(--font-display); color: var(--ink); font-variant-numeric: tabular-nums; }
+.ad-kpi-value small { font: 500 13px/1 var(--font-mono); color: var(--ink-muted); margin-left: 4px; }
+.ad-kpi-foot { font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.ad-kpi-you { border-color: var(--gate); box-shadow: inset 0 3px 0 var(--gate); }
+.ad-kpi-you .ad-kpi-label { color: var(--gate); }
+.ad-kpi-alert { border-color: var(--danger); box-shadow: inset 0 3px 0 var(--danger); }
+.ad-kpi-alert .ad-kpi-label { color: var(--danger); }
+
+/* Inbox: things that wait for a person. Gate edge = your decision. */
+.ad-inbox { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); }
+.ad-item { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); align-items: start; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); position: relative; }
+.ad-item:first-child { border-top: 0; }
+.ad-item:hover, .ad-item[aria-selected="true"] { background: var(--ground); }
+.ad-item[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--gate); }
+.ad-item-kind { width: 20px; height: 20px; color: var(--gate); margin-top: 1px; }
+.ad-item-kind svg { width: 18px; height: 18px; }
+.ad-item-alert .ad-item-kind { color: var(--danger); }
+.ad-item-agent .ad-item-kind { color: var(--lamp-ink); }
+.ad-item-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ad-item-title { font: 600 15px/22px var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
+.ad-item-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; color: var(--ink-muted); font-size: 13px; line-height: 20px; }
+.ad-item-side { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); }
+.ad-item-due { font: 500 12px/16px var(--font-mono); color: var(--ink-muted); white-space: nowrap; }
+.ad-item-due-soon { color: var(--danger); }
+.ad-item .ad-btn { height: 30px; font-size: 14px; padding: 0 var(--space-3); }
+
+/* Data table */
+.ad-table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); overflow-x: auto; }
+.ad-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
+.ad-table th { text-align: left; padding: var(--space-2) var(--space-3); background: var(--sunken); color: var(--ink-muted); font: 500 11px/16px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.ad-table td { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); vertical-align: middle; }
+.ad-table tbody tr:first-child td { border-top: 0; }
+.ad-table tbody tr:hover { background: var(--ground); }
+.ad-table tbody tr[aria-selected="true"] { background: var(--gate-soft); }
+.ad-table .ad-num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ad-table .ad-row-btn { all: unset; cursor: pointer; font-weight: 600; color: var(--ink); }
+.ad-table .ad-row-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-muted { color: var(--ink-muted); }
+
+/* Filter bar and chips */
+.ad-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.ad-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); color: var(--ink); font: 500 13px/18px var(--font-sans); cursor: pointer; }
+.ad-chip[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+.ad-chip .ad-data { font-size: 12px; color: inherit; opacity: .8; }
+
+/* Segmented control (time range, theme) */
+.ad-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius-md); overflow: hidden; }
+.ad-seg button { font: 500 13px/18px var(--font-sans); padding: 5px var(--space-3); border: 0; background: var(--panel); color: var(--ink-muted); cursor: pointer; }
+.ad-seg button + button { border-left: 1px solid var(--line); }
+.ad-seg button[aria-pressed="true"] { background: var(--sunken); color: var(--ink); font-weight: 600; }
+
+/* Form field */
+.ad-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.ad-field > span { font: 600 13px/18px var(--font-sans); color: var(--ink); }
+.ad-field small { color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.ad-input { font: 400 15px/22px var(--font-sans); height: 36px; box-sizing: border-box; padding: 0 var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel); color: var(--ink); }
+.ad-input:focus-visible, .ad-chip:focus-visible, .ad-seg button:focus-visible, .ad-nav:focus-visible, .ad-search:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-input[aria-invalid="true"] { border-color: var(--danger); }
+.ad-error { color: var(--danger); font-size: 13px; line-height: 18px; }
+
+/* Drawer: detail beside a list, so the list keeps its place. Escape closes it. */
+.ad-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--drawer-w), 100vw); background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow-dialog); z-index: 20; display: flex; flex-direction: column; box-sizing: border-box; padding-top: env(safe-area-inset-top, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.ad-drawer-gate { border-left: 3px solid var(--gate); }
+.ad-drawer-head { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line); }
+.ad-drawer-title { margin: 0; font: 600 20px/28px var(--font-sans); color: var(--ink); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ad-drawer-body { padding: var(--space-4) var(--space-5); overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: var(--space-4); }
+.ad-drawer-foot { padding: var(--space-3) var(--space-5); border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; background: var(--panel); }
+.ad-scrim { position: fixed; inset: 0; background: rgba(20, 26, 22, .35); z-index: 19; }
+
+/* Key-value list */
+.ad-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; font-size: 14px; line-height: 20px; }
+.ad-dl dt { color: var(--ink-muted); }
+.ad-dl dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Untrusted text: anything the model wrote. Plain text only, never HTML or a link; a hatched edge marks it. */
+.ad-untrusted { margin: 0; border: 1px solid var(--line); border-left: 0; border-radius: var(--radius-sm); background: var(--sunken); position: relative; padding: var(--space-3) var(--space-3) var(--space-3) calc(var(--space-3) + 6px); font: 400 13px/20px var(--font-mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 18rem; overflow-y: auto; }
+.ad-untrusted::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: repeating-linear-gradient(45deg, var(--lamp-ink) 0 3px, transparent 3px 6px); }
+.ad-untrusted-head { display: flex; align-items: center; gap: var(--space-2); color: var(--lamp-ink); }
+.ad-untrusted-head svg { width: 14px; height: 14px; }
+
+/* Timeline: what an agent or a job did, newest first */
+.ad-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ad-tl { display: grid; grid-template-columns: 64px 14px minmax(0, 1fr); gap: var(--space-3); padding-bottom: var(--space-3); position: relative; }
+.ad-tl-time { font: 500 12px/20px var(--font-mono); color: var(--ink-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.ad-tl-mark { width: 10px; height: 10px; margin-top: 5px; box-sizing: border-box; border: 2px solid var(--line-strong); background: var(--panel); position: relative; z-index: 1; }
+.ad-tl:not(:last-child) .ad-tl-mark::after { content: ""; position: absolute; left: 2px; top: 10px; width: 2px; height: 200px; background: var(--line); }
+.ad-tl { overflow: hidden; }
+.ad-tl-agent .ad-tl-mark { background: var(--lamp); border-color: var(--lamp-ink); }
+.ad-tl-person .ad-tl-mark { background: var(--gate); border-color: var(--gate); border-radius: var(--radius-lamp); }
+.ad-tl-alert .ad-tl-mark { background: var(--danger); border-color: var(--danger); }
+.ad-tl-text { font-size: 14px; line-height: 20px; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.ad-tl-text .ad-muted { font-size: 13px; }
+
+/* Board: jobs by phase (plan, build, review, done), as on botboard */
+.ad-board { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: var(--space-3); overflow-x: auto; padding-bottom: var(--space-2); }
+.ad-col { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.ad-col-head { display: flex; justify-content: space-between; align-items: center; padding: var(--space-1) var(--space-1) var(--space-2); border-bottom: 3px solid var(--line-strong); color: var(--ink-muted); }
+.ad-col-plan .ad-col-head, .ad-col-build .ad-col-head { border-bottom-color: var(--lamp); }
+.ad-col-review .ad-col-head { border-bottom-color: var(--gate); color: var(--gate); }
+.ad-col-done .ad-col-head { border-bottom-color: var(--ok); }
+.ad-board .ad-card { max-width: none; }
+
+/* Empty state: says what will appear and how to make it appear */
+.ad-empty { padding: var(--space-6) var(--space-4); text-align: center; color: var(--ink-muted); background: var(--panel); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+.ad-empty strong { display: block; color: var(--ink); font: 600 15px/22px var(--font-sans); margin-bottom: var(--space-1); }
+
+/* Toast: the result of an action. Bottom left, above the bottom bar on phones. */
+.ad-toast { position: fixed; left: calc(var(--rail-w) + var(--space-5)); bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px)); z-index: 30; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); background: var(--ink); color: var(--ground); border-radius: var(--radius-md); box-shadow: var(--shadow-dialog); font-size: 14px; line-height: 20px; max-width: calc(100vw - 2 * var(--space-4)); }
+
+/* Command palette (Ctrl+K or /) */
+.ad-palette { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-dialog); z-index: 40; overflow: hidden; }
+.ad-palette input { width: 100%; box-sizing: border-box; border: 0; border-bottom: 1px solid var(--line); padding: var(--space-3) var(--space-4); font: 400 16px/24px var(--font-sans); background: var(--panel); color: var(--ink); outline: none; }
+.ad-palette ul { list-style: none; margin: 0; padding: var(--space-1) 0; max-height: 50vh; overflow-y: auto; }
+.ad-palette li { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-2) var(--space-4); font-size: 14px; color: var(--ink); cursor: pointer; }
+.ad-palette li[aria-selected="true"] { background: var(--gate-soft); }
+.ad-palette li .ad-muted { margin-left: auto; font-size: 13px; }
+
+/* ---- Scale: 15 and more projects or agents (docs/console-ux.md, "At scale") ---- */
+
+/* Scope: which projects every page shows. Default "My projects"; admins can pick "All projects". */
+.ad-scope { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 var(--space-2) 0 var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); color: var(--ink); font: 600 14px/20px var(--font-sans); cursor: pointer; white-space: nowrap; min-width: 0; max-width: 260px; }
+.ad-scope > span { overflow: hidden; text-overflow: ellipsis; }
+.ad-scope svg { width: 14px; height: 14px; flex: none; color: var(--ink-muted); }
+.ad-scope .ad-data { color: var(--ink-muted); font-size: 12px; }
+.ad-scope:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Group header: inside an inbox or a table, when a list passes about 10 items */
+.ad-group-head { display: flex; align-items: center; gap: var(--space-3); padding: 6px var(--space-4); background: var(--sunken); border-top: 1px solid var(--line); color: var(--ink-muted); }
+.ad-inbox > .ad-group-head:first-child { border-top: 0; }
+.ad-group-head .ad-data { margin-left: auto; }
+.ad-group-head-you { color: var(--gate); }
+.ad-group-head-alert { color: var(--danger); }
+.ad-table tr.ad-group-row td { background: var(--sunken); padding: 0; }
+.ad-group-btn { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); width: 100%; padding: 6px var(--space-3); color: var(--ink); font-size: 14px; line-height: 20px; }
+.ad-group-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-group-btn svg { width: 14px; height: 14px; color: var(--ink-muted); transition: transform .15s; }
+.ad-group-btn[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.ad-group-btn .ad-muted { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .ad-group-btn svg { transition: none; } }
+
+/* Show more: the end of a capped group. Says how many are hidden. */
+.ad-showmore { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; padding: var(--space-2) var(--space-4) var(--space-2) calc(var(--space-4) + 32px); border-top: 1px solid var(--line); color: var(--link); font-size: 14px; line-height: 20px; }
+.ad-showmore:hover { background: var(--ground); }
+.ad-showmore:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Agent dots: the agents of one project in one line (lifecycle and attention) */
+.ad-dots { display: inline-flex; flex-wrap: wrap; gap: 3px; vertical-align: middle; }
+.ad-dots i { width: 9px; height: 9px; box-sizing: border-box; border: 1.5px solid var(--line-strong); border-radius: var(--radius-lamp); }
+.ad-dots i.ad-d-run { background: var(--lamp); border-color: var(--lamp-ink); }
+.ad-dots i.ad-d-you { background: var(--gate); border-color: var(--gate); border-radius: var(--radius-sm); }
+.ad-dots i.ad-d-alert { background: var(--danger); border-color: var(--danger); border-radius: var(--radius-sm); }
+.ad-dots i.ad-d-paused { background: var(--paused); border-color: var(--paused); border-radius: 0; }
+
+/* Wall: one tile per agent, for a fleet glance at 20 and more agents. Attention sorts first. */
+.ad-wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: var(--space-2); }
+.ad-tile { all: unset; box-sizing: border-box; cursor: pointer; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ad-tile:hover { border-color: var(--line-strong); }
+.ad-tile:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-tile-repo { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-tile-you { border-color: var(--gate); background: var(--gate-soft); }
+.ad-tile-alert { border-color: var(--danger); background: var(--danger-soft); }
+.ad-tile-usage { border-color: var(--paused); background: var(--paused-soft); }
+
+/* Phase matrix: projects by work phase, for many projects at once. A cell is a count and a link. */
+.ad-matrix .ad-cell { text-align: center; }
+.ad-matrix td.ad-cell { font: 500 14px/20px var(--font-mono); font-variant-numeric: tabular-nums; }
+.ad-matrix .ad-cell button { all: unset; cursor: pointer; display: inline-block; min-width: 20px; padding: 2px 6px; border-radius: var(--radius-sm); }
+.ad-matrix .ad-cell button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ad-matrix .ad-cell-zero { color: var(--line-strong); }
+.ad-matrix .ad-cell-you button { background: var(--gate-soft); color: var(--gate); font-weight: 600; }
+.ad-matrix .ad-cell-alert button { background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.ad-matrix .ad-cell-agent button { background: var(--lamp-soft); color: var(--ink); }
+
+/* Columns that drop out on narrow screens: ad-hide-narrow below 1100px, ad-hide-phone below 760px */
+@media (max-width: 1100px) { .ad-hide-narrow { display: none; } }
+@media (min-width: 761px) and (max-width: 1100px) { .ad-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ad-table .ad-row-btn { overflow-wrap: anywhere; }
+.ad-phone-only { display: none; }
+
+/* Bottom bar: phone navigation (#338) */
+.ad-bottombar { display: none; }
+
+@media (max-width: 760px) {
+  .ad-shell { grid-template-columns: minmax(0, 1fr); padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)); }
+  .ad-rail { display: none; }
+  .ad-topbar, .ad-main, .ad-banner { grid-column: 1; }
+  .ad-topbar { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); top: env(safe-area-inset-top, 0px); }
+  .ad-main { padding: var(--space-4) max(16px, env(safe-area-inset-right, 0px)) var(--space-4) max(16px, env(safe-area-inset-left, 0px)); }
+  .ad-banner { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .ad-search { min-width: 0; }
+  .ad-search > span:not(.ad-kbd) { display: none; }
+  .ad-search .ad-kbd { display: none; }
+  .ad-page-title { font-size: 28px; }
+  .ad-item { grid-template-columns: 20px minmax(0, 1fr); }
+  .ad-item-side { grid-column: 2; flex-direction: row; align-items: center; justify-content: space-between; }
+  .ad-drawer { width: 100vw; border-left: 0; }
+  .ad-toast { left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .ad-board { grid-template-columns: repeat(4, minmax(78vw, 1fr)); scroll-snap-type: x mandatory; }
+  .ad-col { scroll-snap-align: start; }
+  .ad-hide-phone { display: none; }
+  .ad-phone-only { display: block; }
+  .ad-table th, .ad-table th.ad-num { white-space: normal; }
+  .ad-bottombar { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--panel); border-top: 1px solid var(--line); padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+  .ad-bottombar .ad-nav { flex-direction: column; gap: 2px; justify-content: center; height: 60px; padding: 0; font-size: 11px; line-height: 14px; border-radius: 0; position: relative; text-align: center; }
+  .ad-bottombar .ad-nav[aria-current="page"] { box-shadow: inset 0 3px 0 var(--gate); }
+  .ad-bottombar .ad-nav svg { width: 20px; height: 20px; }
+  .ad-bottombar .ad-count { position: absolute; top: 6px; left: calc(50% + 6px); margin: 0; }
+}
+
+/* Health lamp: platform parts (API, router, operator...). Not for agents: an agent's lamp is amber because amber is
+   the agent, and running is not "good" (idle at zero pods is normal). A platform part uses traffic-light health. */
+.ad-health { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); }
+.ad-health-dot { width: 10px; height: 10px; box-sizing: border-box; border-radius: var(--radius-lamp); border: 1.5px solid var(--line-strong); flex: none; }
+.ad-health-ok { color: var(--ok); }
+.ad-health-ok .ad-health-dot { background: var(--ok); border-color: var(--ok); }
+.ad-health-degraded { color: var(--lamp-ink); }
+.ad-health-degraded .ad-health-dot { background: var(--lamp); border-color: var(--lamp-ink); border-radius: var(--radius-sm); }
+.ad-health-down { color: var(--danger); }
+.ad-health-down .ad-health-dot { background: var(--danger); border-color: var(--danger); border-radius: var(--radius-sm); }
+.ad-health-zero .ad-health-dot { background: transparent; }
+
+/* ---- Chat: interactive sessions in a project (docs/console-ux.md, "Chat") ---- */
+/* Fill mode: the page is exactly one screen high and the chat takes the space under the top bar and the banners. */
+.ad-shell-fill { height: 100vh; height: 100dvh; min-height: 0; box-sizing: border-box; }
+.ad-shell-fill .ad-main { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.ad-shell-fill .ad-chat { flex: 1; height: auto; min-height: 0; }
+/* Layout: session list | thread. The list folds away below 1000px; on phones the thread is full screen. */
+.ad-chat { display: grid; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; height: calc(100dvh - var(--topbar-h) - 2 * var(--space-5)); min-height: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.ad-chat-list { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--ground); }
+.ad-chat-list-head { padding: var(--space-3); border-bottom: 1px solid var(--line); display: flex; gap: var(--space-2); }
+.ad-chat-list-head .ad-btn { flex: 1; justify-content: center; }
+.ad-chat-list ul { list-style: none; margin: 0; padding: var(--space-1); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.ad-sess { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 2px; width: 100%; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); }
+.ad-sess:hover { background: var(--sunken); }
+.ad-sess[aria-current="true"] { background: var(--gate-soft); box-shadow: inset 3px 0 0 var(--gate); }
+.ad-sess:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-sess-title { font: 600 14px/20px var(--font-sans); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-sess-meta { display: flex; gap: var(--space-2); align-items: center; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.ad-sess-ended { opacity: .7; }
+
+.ad-thread { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.ad-thread-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.ad-thread-title { margin: 0; font: 600 16px/22px var(--font-sans); color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.ad-thread-facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.ad-thread-actions { margin-left: auto; display: flex; gap: var(--space-2); }
+.ad-thread-actions .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-thread-body { flex: 1; overflow-y: auto; padding: var(--space-5) var(--space-5) var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); }
+.ad-thread-body > * { flex-shrink: 0; max-width: 760px; width: 100%; margin-inline: auto; box-sizing: border-box; }
+
+/* Messages. The person writes in a gate-tinted block on the right; the session answers full width with the agent
+   mark, like a document, because its answers carry code and tables. Session text is model output: rendered from
+   Markdown with raw HTML off, no remote images, and every link shows its full address. */
+.ad-msg { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.ad-msg-who { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font-size: 12px; line-height: 16px; }
+.ad-msg-person { align-items: flex-end; }
+.ad-msg-person .ad-msg-text { background: var(--gate-soft); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); max-width: 85%; }
+.ad-msg-text { font-size: 15px; line-height: 23px; color: var(--ink); overflow-wrap: anywhere; }
+.ad-msg-text p { margin: 0 0 var(--space-2); }
+.ad-msg-text p:last-child { margin-bottom: 0; }
+.ad-msg-text code { font: 400 13px/20px var(--font-mono); background: var(--sunken); padding: 1px 4px; border-radius: var(--radius-sm); }
+.ad-msg-text pre { margin: var(--space-2) 0; padding: var(--space-3); background: var(--sunken); border-radius: var(--radius-sm); overflow-x: auto; font: 400 13px/20px var(--font-mono); }
+.ad-msg-text pre code { background: none; padding: 0; }
+.ad-msg-text ul, .ad-msg-text ol { margin: 0 0 var(--space-2); padding-left: var(--space-5); }
+.ad-msg-text a::after { content: " (" attr(href) ")"; font: 400 12px/1 var(--font-mono); color: var(--ink-muted); }
+
+/* Tool step: what the session did in its sandbox. Folded to one line; the output is untrusted text. */
+.ad-tool { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--ground); font-size: 13px; line-height: 20px; min-width: 0; }
+.ad-tool > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-3); color: var(--ink-muted); }
+.ad-tool > summary::-webkit-details-marker { display: none; }
+.ad-tool > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ad-tool > summary svg { width: 14px; height: 14px; flex: none; transition: transform .15s; transform: rotate(-90deg); }
+.ad-tool[open] > summary svg { transform: none; }
+.ad-tool > summary .ad-code { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ad-tool > summary .ad-muted { margin-left: auto; white-space: nowrap; }
+.ad-tool .ad-untrusted { margin: 0 var(--space-3) var(--space-3); max-height: 12rem; }
+@media (prefers-reduced-motion: reduce) { .ad-tool > summary svg { transition: none; } }
+
+/* Permission request inside the session: the CLI asks before a command. A small gate card; the answer stays visible. */
+.ad-ask { border: 1px solid var(--gate); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; background: var(--panel); }
+.ad-ask-text { flex: 1 1 260px; min-width: 0; font-size: 14px; line-height: 20px; }
+.ad-ask .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-ask-done { border-color: var(--line); color: var(--ink-muted); }
+
+/* Issue draft: the session proposes, the person creates. The only way a session's result becomes work. */
+.ad-draft { border: 1px solid var(--gate); border-radius: var(--radius-md); background: var(--panel); box-shadow: var(--shadow-panel); overflow: hidden; }
+.ad-draft-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-4); background: var(--gate-soft); color: var(--gate); }
+.ad-draft-head svg { width: 14px; height: 14px; }
+.ad-draft-body { padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.ad-draft-title { margin: 0; font: 600 16px/22px var(--font-sans); color: var(--ink); }
+.ad-draft-body h4 { margin: var(--space-1) 0 0; font: 500 11px/16px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-muted); }
+.ad-draft-body p, .ad-draft-body ul { margin: 0; font-size: 14px; line-height: 21px; }
+.ad-draft-body ul { padding-left: var(--space-5); }
+.ad-draft-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.ad-draft-done { border-color: var(--ok); }
+.ad-draft-done .ad-draft-head { background: var(--ok-soft); color: var(--ok); }
+.ad-select { font: 400 14px/20px var(--font-sans); height: 32px; padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel); color: var(--ink); }
+.ad-select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Working indicator: the session thinks or runs a tool. The lamp pulses; Stop is next to it. */
+.ad-working { display: flex; align-items: center; gap: var(--space-2); color: var(--lamp-ink); font-size: 13px; }
+.ad-working .ad-lamp-dot { background: var(--lamp); border-color: var(--lamp-ink); animation: ad-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ad-working .ad-lamp-dot { animation: none; opacity: .5; } }
+
+/* Composer */
+.ad-composer { border-top: 1px solid var(--line); padding: var(--space-3) var(--space-5) var(--space-3); background: var(--panel); }
+.ad-composer-box { max-width: 760px; margin-inline: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); display: flex; flex-direction: column; }
+.ad-composer-box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ad-composer textarea { all: unset; box-sizing: border-box; width: 100%; min-height: 48px; max-height: 30vh; padding: var(--space-3); font: 400 15px/22px var(--font-sans); color: var(--ink); white-space: pre-wrap; overflow-y: auto; }
+.ad-composer textarea::placeholder { color: var(--ink-muted); }
+.ad-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
+.ad-composer-bar .ad-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
+.ad-composer-bar .ad-btn-primary { margin-left: auto; }
+.ad-ctx { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--ground); font: 400 12px/16px var(--font-mono); color: var(--ink); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ad-composer-note { max-width: 760px; margin: var(--space-2) auto 0; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+
+@media (max-width: 1000px) {
+  .ad-chat { grid-template-columns: minmax(0, 1fr); }
+  .ad-chat-list { display: none; }
+  .ad-chat-list-open .ad-chat-list { display: flex; }
+  .ad-chat-list-open .ad-thread { display: none; }
+}
+@media (max-width: 760px) {
+  .ad-shell-fill .ad-main { padding-block: 0; }
+  .ad-chat { border-radius: 0; border-inline: 0; margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); }
+  .ad-thread-body { padding: var(--space-4) max(16px, env(safe-area-inset-right, 0px)) var(--space-3) max(16px, env(safe-area-inset-left, 0px)); }
+  .ad-composer { padding: var(--space-2) max(12px, env(safe-area-inset-right, 0px)) var(--space-2) max(12px, env(safe-area-inset-left, 0px)); }
+  .ad-thread-head { padding: var(--space-2) var(--space-3); }
+  .ad-thread-actions { margin-left: 0; }
+  .ad-msg-person .ad-msg-text { max-width: 92%; }
+}

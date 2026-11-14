@@ -15,7 +15,7 @@
     platform_sm_prefix: platform-
     approvals: {enabled: true}
     usage: {five_hour: 70, weekly: 85}
-    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b]}
+    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2}
   tasks:
     - name: Load the role defaults
       ansible.builtin.include_vars: ../roles/api/defaults/main.yml
@@ -39,6 +39,8 @@
             APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            MAX_AGENTS: "{{ api_max_agents }}"
+            MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
           replace: []
 
     - name: The API container gets the values
@@ -51,6 +53,8 @@
           - env.APPROVAL_DENY_ACCOUNTS == 'bot-a,bot-b'
           - env.USAGE_FIVE_HOUR == '70'
           - env.USAGE_WEEKLY == '85'
+          - env.MAX_AGENTS == '2'   # #27
+          - env.MAX_AGENTS_PER_USER == '0'
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder
@@ -71,3 +75,44 @@
             that:
               - ansible_failed_result.msg is search('no value for \$\{OIDC_ISSUER\}')
               - ansible_failed_result.msg is not search('render.j2 accepted')
+
+    # UI OIDC client and scopes (#323): defaults keep authentik as it is; an override reaches the UI and the API audience
+    - name: Render the UI with the role defaults
+      ansible.builtin.set_fact:
+        ui_default_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                             | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                             | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+      vars:
+        ui_render: &ui_render
+          src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+          values:
+            PLATFORM_NS: "{{ platform_ns }}"
+            UI_IMAGE: img
+            OIDC_ISSUER: "{{ api_oidc_issuer }}"
+            OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+            OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
+          replace: []
+
+    - name: The defaults are the authentik values
+      ansible.builtin.assert:
+        that:
+          - ui_default_env.OIDC_CLIENT_ID == 'agentdev'
+          - ui_default_env.OIDC_SCOPES == 'openid profile email forge'
+          - api_oidc_audience == 'agentdev'
+
+    - name: Render the UI with an override (Pocket ID shape)
+      ansible.builtin.set_fact:
+        ui_override_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                              | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                              | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+        override_audience: "{{ api_oidc_audience }}"
+      vars:
+        api: {oidc_issuer: "https://id.example.com", oidc_client_id: my-client, ui_oidc_scopes: "openid profile email groups forge"}
+        ui_render: *ui_render
+
+    - name: The override reaches the UI, and the API audience follows the client id
+      ansible.builtin.assert:
+        that:
+          - ui_override_env.OIDC_CLIENT_ID == 'my-client'
+          - ui_override_env.OIDC_SCOPES == 'openid profile email groups forge'
+          - override_audience == 'my-client'

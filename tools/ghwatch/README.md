@@ -15,6 +15,16 @@ fetch (github.go) -> Snapshot -> Reduce (reduce.go, pure) -> State + []Event -> 
 - **Safe on errors.** A failed fetch exits 1 and leaves the state unchanged; the next poll covers the gap (the cursor
   only moves on success, with a 2-minute overlap).
 
+## Gitea (#241)
+
+`-forge gitea` (or `GHWATCH_FORGE=gitea`) reads a Gitea or Forgejo repository with the token in `GITEA_TOKEN`.
+`-api` is the Gitea API base, for example `https://gitea.example/api/v1`. The fetcher (`gitea.go`) fills the same
+`Snapshot`, so `Reduce` and all events stay the same. Gitea values are mapped to the GitHub words: review
+`REQUEST_CHANGES` is `CHANGES_REQUESTED`, `mergeable` true is `clean` and false is `conflict`, commit status
+`warning` is `neutral`. Gitea has no repository-wide issue events: there are no `action` events. Inline review
+comments are read for each review of a fetched PR. Gitea Actions runs are read when the server has
+`/actions/runs` (Gitea 1.24 and later).
+
 ## What it tracks
 
 Everything a person can do on the project that the REST API shows to the bot. Each line with `*` in the text output

@@ -7,6 +7,9 @@ cluster_name: agentdev
 kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
 agents_ns: coding-agents
 platform_ns: agentdev-platform
+# Secret Manager prefix of the platform secrets; read by the roles platform, api and authentik. Here and not in a role's
+# defaults: include_role does not make one role's defaults visible to the next role (#333).
+platform_sm_prefix: platform-
 
 # Labels (#184), the same as Terraform's `labels`: on the agentdev namespaces and on agent and executor pods (GKE cost
 # allocation). Set environment (dev, stage or prod) in instance.yml; service defaults to agentdev.
@@ -43,6 +46,7 @@ forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
+max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
 wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
 # webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
@@ -107,6 +111,9 @@ approvals:                          # #67: agents ask a project member on the fo
                                     # deploy.yml checks it. kind keeps APPROVALS=false (config.env): no API by default
   timeout_minutes: 30               # no decision in this time: denied (expired)
   retention_days: 90                # Approval objects; decisions stay in the audit log
+rollout:                            # #174: upgrades while agents work (docs/admin.md, Upgrade an instance)
+  grace_seconds: 300                # on stop, time for the loop to save work in progress (30..3600)
+  drain_max_minutes: 60             # an outdated agent pod waits at most this long for its running jobs
 # deterministic executors (#69): namespace, poll and retention; the executors themselves come from the deployment
 exec_ns: agentdev-executors
 executor_poll_seconds: 60

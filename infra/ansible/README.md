@@ -10,12 +10,12 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 
 | Secret | Value |
 |---|---|
-| `claude-shared` | `KEY=VALUE` lines: `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
+| `claude-shared` | `KEY=VALUE` lines: `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. A bare token without the key name is refused (#212) |
 | `router-register-token` | random string (`openssl rand -hex 32`) |
 | `github-app-webhook-secret` | the GitHub App's webhook secret (#2) |
 | `github-app-private-key` | the GitHub App's private key (PEM, `.secrets/github-app/private-key.pem` from `scripts/github-app.sh convert`, #2) |
 | `agent-<name>-forge-token` | only with `forge_kind: gitea`: the agent's forge token. On GitHub the sidecar mints App installation tokens |
-| `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`) |
+| `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`, same format and check as `claude-shared`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
@@ -57,6 +57,16 @@ authentik issuer of the role `authentik`, #114; or any OIDC provider with a publ
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,
   table in `docs/admin.md`); restarts the API when one changes;
 - applies `manifests/api.yaml.tmpl` and waits for the rollout.
+- UI login (#323): `api.oidc_client_id` (default `agentdev`) is the public client of the UI. `api.oidc_audience`
+defaults to the same value. `api.ui_oidc_scopes` is the scope list that the UI requests:
+- authentik: keep the default `openid profile email forge` (the `profile` scope gives `groups`).
+- A provider that gives `groups` only when the scope is requested (for example Pocket ID): `openid profile email groups forge`.
+The UI reads both values from `/config.json` at runtime, so a change needs no new image.
+Claim contract (#322): the API verifies the access token (issuer, signature, `exp`, audience `api.oidc_audience`).
+It reads `groups` (with `agentdev-admins` for admins) and `forge_login_<kind>` or `forge_login` (the forge user)
+from the access token. When the token has none of these claims, the API calls the discovery `userinfo_endpoint`
+with the token and uses the claims from there. The userinfo `sub` must be the token's `sub`. A userinfo error or a
+different `sub` refuses the request (401). authentik puts the claims into the access token, so it makes no userinfo call.
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
 (`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
@@ -117,6 +127,11 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
+| 07 | `botboard` (optional) | `botboard` |
+| 08 | `mcp` | `platform` |
+| 10 | `api` | `api` (same role as GKE) |
+| 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
+| 12 | `operator` | `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -154,7 +169,30 @@ The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, 
 `gitea_forge_secrets_dir/<agent>.token` (mode 600), and the branch protection of `gitea_forge_branch`. The owner
 password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
 `no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
-changes nothing. An existing token file is kept; delete it to mint a new token. GKE uses GitHub (#2), not this role.
+changes nothing. An existing token file is kept when it still logs in as its agent; a file from an older cluster
+(HTTP 401) is replaced by a new token, then run `--tags agents` (step 06) so the agent gets it. Delete a file to mint
+a new token. GKE uses GitHub (#2), not this role.
+
+```bash
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags api    # API, database grants, agentdev-api
+```
+The role `api` does the old step 10 on kind with `api_secret_source: files`. The database password is the file
+`.secrets/platform/pg-agentdev-api` (made once, mode 600). SIEM values come from `.secrets/platform/siem-webhook`
+(optional). With `forge_kind: github` the App comes from `.secrets/github-app`. On Gitea, the role makes the account
+`agentdev-api` (admin of the agent repositories, token `read:repository,read:user`). It keeps a token that works and
+deletes the other `agentdev-api*` tokens. A local `agentdev-api:*` tag is built and loaded into kind. A new image or a
+changed Secret restarts the API. The web UI is step 11 (`api_ui: false` here).
+`kind.yml --tags ui` runs only `roles/api/tasks/ui.yml` (old step 11): it builds or pulls `api_ui_image`, loads it
+into kind, applies `manifests/ui.yaml.tmpl` and restarts the UI only after a new image.
+
+```bash
+ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
+```
+The role `operator` does the old step 12: the namespaces with `operator_cost_labels` (#184), the operator image (a
+local `agentdev-operator:*` tag is built and loaded into kind), the six `agentdev.dev` CRDs, `manifests/operator.yaml.tmpl`
+and the executor egress manifests, through `templates/render.j2`. The scoped secrets store is on only when the External
+Secrets Operator CRD exists (step 13). The operator restarts only after a new image or a manifest change. GKE keeps
+the operator tasks in `deploy.yml`.
 
 ## Not here
 GitHub API support in the worker comes with #2; the cutover is phase 4 of #11. DNS records are not managed here.

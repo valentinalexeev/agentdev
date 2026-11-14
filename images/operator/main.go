@@ -87,7 +87,9 @@ func main() {
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
 		ExecNS:           execNS,
-	}}
+		GraceSeconds:     env("AGENT_GRACE_SECONDS", "300"),
+		DrainMaxMinutes:  env("DRAIN_MAX_MINUTES", "60"),
+	}, Drains: &DrainSignals{}, ns: ns}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)
@@ -107,6 +109,7 @@ func main() {
 		os.Exit(1)
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
+		Drains: r.Drains, Requeue: r.requeueAgent,
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
 		C: SecurityConfig{
 			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),
@@ -120,6 +123,15 @@ func main() {
 	if err := mgr.Add(col); err != nil {
 		log.Error(err, "security collector")
 		os.Exit(1)
+	}
+	// external forwarder watch (#213): off unless FORWARDER_NS and FORWARDER_SELECTOR are set (ingress.forwarder)
+	if fns, sel := os.Getenv("FORWARDER_NS"), parseSelector(os.Getenv("FORWARDER_SELECTOR")); fns != "" && sel != nil {
+		fw := &ForwarderWatch{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), NS: fns, Selector: sel, EventsNS: ns,
+			After: time.Duration(envInt("FORWARDER_NOT_READY_MINUTES", 10)) * time.Minute, Every: 30 * time.Second, Now: time.Now}
+		if err := mgr.Add(fw); err != nil {
+			log.Error(err, "forwarder watch")
+			os.Exit(1)
+		}
 	}
 	if execNS != "" {
 		if execNS == ns {

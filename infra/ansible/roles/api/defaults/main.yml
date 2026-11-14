@@ -9,17 +9,37 @@ api_oidc_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer | defaul
 api_oidc_discovery_url: >-
   {{ api.oidc_discovery_url | default(api.oidc_issuer if api.oidc_issuer is defined
      else (authentik_default_discovery_url | default('') or api_oidc_issuer)) }}
-api_oidc_audience: "{{ api.oidc_audience | default('agentdev') }}"
+# how long the playbook waits for an external issuer's discovery document before the API rollout (#334)
+api_oidc_wait_seconds: "{{ api.oidc_wait_seconds | default(300) }}"
+# public OIDC client of the UI (#323); the API audience follows it unless api.oidc_audience is set
+api_oidc_client_id: "{{ api.oidc_client_id | default('agentdev') }}"
+api_oidc_audience: "{{ api.oidc_audience | default(api_oidc_client_id) }}"
+# scopes the UI asks for (#323). authentik: the default. Providers that issue `groups` only on request (Pocket ID):
+# 'openid profile email groups forge'
+api_ui_oidc_scopes: "{{ api.ui_oidc_scopes | default('openid profile email forge') }}"
 # forge for the live permission check of writes; the API speaks the Gitea API only (images/api/forge.go)
 api_forge_url: "{{ api.forge_url | default(forge_url) }}"
 # security_events / api_audit retention in Postgres (SECURITY_DB_RETENTION_DAYS on kind)
 # forge logins that never decide an approval (service accounts, executor accounts: docs/security.md R83);
 # APPROVAL_DENY_ACCOUNTS on kind. The API's own token user is excluded automatically.
 api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
+# agent caps (#27) for POST /api/agents (MAX_AGENTS, MAX_AGENTS_PER_USER on kind); 0 = no cap. Checked in tasks/main.yml.
+api_max_agents: "{{ api.max_agents | default(0) }}"
+api_max_agents_per_user: "{{ api.max_agents_per_user | default(0) }}"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
-# Where secrets come from. Only `gcp` (Secret Manager) exists now; a `local` source (.secrets/ on kind) can be
-# added as tasks/secrets_local.yml when run.sh moves to Ansible (#106).
+# Where secrets come from: gcp (Secret Manager, deploy.yml) or files (kind.yml, #106: api_secrets_dir).
 api_secret_source: gcp
+# kind only (#106, was 10-api.sh): the cluster to load the image into (empty on GKE), the secret files, the
+# GitHub App files (forge_kind github), and the in-cluster Gitea for the agentdev-api account (tasks/forge_gitea.yml)
+api_kind_cluster: ""
+api_container_engine: docker
+api_secrets_dir: "{{ repo_root }}/.secrets/platform"
+api_github_app_dir: "{{ repo_root }}/.secrets/github-app"
+api_forge_ns: forge
+api_forge_host_url: http://localhost:3000          # Gitea as Ansible reaches it (the 05 port-forward)
+api_forge_admin_user: owner                        # password from the environment FORGE_ADMIN_PASSWORD
+api_forge_user: agentdev-api
+api_forge_repo: owner/playground
 # Secret Manager names. The DB password uses the platform prefix and the kind file name (.secrets/platform/pg-agentdev-api).
 api_sm_db_password: "{{ platform_sm_prefix }}pg-agentdev-api"
 api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner (README.md)

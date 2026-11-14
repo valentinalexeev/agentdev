@@ -18,7 +18,7 @@ NOTE: This guide is for GKE. The local evaluation on kind
 | Google Workspace sign-in | not available | the authentik Workspace source |
 
 The deployment repository contains all the values of the instance. agentdev itself stays generic. The deployment
-repository uses one agentdev release: the Terraform `ref=vX.Y.Z` and the Ansible `image_tag: "X.Y.Z"`.
+repository uses one agentdev release: the Terraform `ref=vX.Y.Z` and the Ansible `agentdev_ref: vX.Y.Z` (the git tag the CI clones) and `image_tag: "X.Y.Z"`.
 
 ## Prepare
 
@@ -42,8 +42,8 @@ repository uses one agentdev release: the Terraform `ref=vX.Y.Z` and the Ansible
 2. Copy `examples/deployment/gcp-gke/` of the agentdev release into the repository.
 3. Remove `.example` from the file names `terraform/instance.tfvars.example` and `ansible/instance.yml.example`.
 4. Write your values into the two files: project, region, zone, billing account, repository name, reviewer, agents.
-5. Set the same release in two places: `ref=vX.Y.Z` in `terraform/main.tf` and `image_tag: "X.Y.Z"` in
-   `ansible/instance.yml`. The image tag has no `v`.
+5. Set the same release in three places: `ref=vX.Y.Z` in `terraform/main.tf`, and `agentdev_ref: vX.Y.Z` and
+   `image_tag: "X.Y.Z"` in `ansible/instance.yml`. The image tag has no `v`.
 
 WARNING: Do not put secret values in the deployment repository, in issues or in logs. Put them only in Secret Manager.
 
@@ -132,7 +132,7 @@ WARNING: Do not show a secret value on the screen or in a shell history. Read it
 
    | Secret | Value |
    |---|---|
-   | `claude-shared` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
+   | `claude-shared` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` (with the key name, not only the token) |
    | `router-register-token` | a random string (step 2) |
    | `github-app-webhook-secret` | the webhook secret from `.secrets/github-app/` |
    | `github-app-private-key` | the private key from `.secrets/github-app/private-key.pem` |
@@ -266,7 +266,7 @@ After `1.0.0`, only a MAJOR version can have changes that are not compatible.
 
 1. Read `CHANGELOG.md` from your version to the new version. Find all **BREAKING** entries.
 2. Make a backup (see "Make a backup").
-3. In one pull request, change `ref=vX.Y.Z` in `terraform/main.tf` and `image_tag: "X.Y.Z"` in `ansible/instance.yml`.
+3. In one pull request, change `ref=vX.Y.Z` in `terraform/main.tf` and `agentdev_ref: vX.Y.Z` and `image_tag: "X.Y.Z"` in `ansible/instance.yml`.
 4. Add the input changes of the **BREAKING** entries to the same pull request.
 5. Examine the Terraform plan and the Ansible dry run in the CI.
 6. Merge the pull request.

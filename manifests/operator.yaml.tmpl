@@ -16,6 +16,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [events], verbs: [create, patch]}
 # security events (#70): read agent pod logs, write SecurityEvents, pause an agent, keep log positions
 - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+# drain before replace (#174): mark an outdated agent pod (agentdev/drain) and delete it once its jobs ended
+- {apiGroups: [""], resources: [pods], verbs: [patch, delete]}
 - {apiGroups: [""], resources: [pods/log], verbs: [get]}
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
@@ -117,6 +119,8 @@ spec:
         - {name: APPROVALS, value: "${APPROVALS}"}                                # #67, see config.env
         - {name: APPROVALS_URL, value: "http://agentdev-api-internal.${PLATFORM_NS}.svc.cluster.local:8081"}
         - {name: APPROVAL_TIMEOUT_MINUTES, value: "${APPROVAL_TIMEOUT_MINUTES}"}
+        - {name: AGENT_GRACE_SECONDS, value: "${AGENT_GRACE_SECONDS}"}   # #174: time to save work in progress on stop
+        - {name: DRAIN_MAX_MINUTES, value: "${DRAIN_MAX_MINUTES}"}       # #174: longest wait for running jobs on upgrade
         - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
         # deterministic executors (#69); OPERATOR_IMAGE is also the plan hash/verify helper in executor Jobs
         - {name: EXEC_NS, value: "${EXEC_NS}"}
@@ -129,6 +133,10 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
+        - {name: FORWARDER_NS, value: "${FORWARDER_NS}"}
+        - {name: FORWARDER_SELECTOR, value: "${FORWARDER_SELECTOR}"}   # k=v,k2=v2 (ingress.forwarder.pod_selector)
+        - {name: FORWARDER_NOT_READY_MINUTES, value: "${FORWARDER_NOT_READY_MINUTES}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

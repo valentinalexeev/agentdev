@@ -1,7 +1,7 @@
 # Example instance vars. Keep the real file in your deployment repo and pass it with -e @instance.yml.
 gcp_project: my-agentdev
 gcp_zone: europe-west4-a
-image_tag: "0.1.0"                # image tag of a release: the git tag without the v (images.yml, #28)
+image_tag: "1.0.1"                # image tag of a release: the git tag without the v (images.yml, #28)
 reviewer: my-github-login         # whose Approve lets an agent PR merge
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
@@ -12,6 +12,8 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #   oidc_audience: agentdev
 #   db_retention_days: 365
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
+#   max_agents: 0                         # #27: cap on all agents for UI/API creates; 0 = no cap
+#   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate
@@ -24,6 +26,7 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #     namespace: tailscale                  #   the reverse proxy's namespace
 #     pod_selector: {app: ts-ingress}       #   optional, in that namespace
 #     cidrs: [100.64.0.0/10]                #   or its source addresses
+#   forwarder_not_ready_minutes: 10         # #213: SecurityEvent when no forwarder pod is Ready this long (needs pod_selector)
 #   smoke: true                             # post-deploy smoke test of the public hosts (#213); false: off
 #   smoke_timeout: 300                      #   seconds per check
 # authentik trusts X-Forwarded-* only from these ranges (#160): add your reverse proxy's range, keep the defaults

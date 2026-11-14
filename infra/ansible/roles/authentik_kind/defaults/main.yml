@@ -1,0 +1,11 @@
+---
+# kind-only parts of the old 09-authentik.sh (#106): the membership check of agentdev-admins (#100) and the local
+# company SSO stand-in with its sign-in check (#122). GKE uses the roles authentik and authentik_sso only.
+authentik_kind_secrets_dir: "{{ repo_root }}/.secrets/platform"
+authentik_kind_sso_standin: true           # config.env SSO_STANDIN=1
+authentik_kind_sso_check: true             # config.env SSO_CHECK=1: browser sign-ins through scripts/sso-check.py
+authentik_kind_sso_admin_group: agentdev-admins@example.com
+authentik_kind_sso_allowed_domains: example.com          # comma-separated
+authentik_kind_sso_forge_attr: forgeLogin
+authentik_kind_sso_forge_attr_github: githubLogin
+authentik_kind_sso_forge_attr_gitea: giteaLogin
