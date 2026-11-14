@@ -16,9 +16,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -42,6 +44,9 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// drain before replace (#174): grace period of an agent pod in seconds (default 300) and the longest wait for
+	// running jobs before an outdated pod is replaced anyway, in minutes (default 60)
+	GraceSeconds, DrainMaxMinutes string
 }
 
 type AgentReconciler struct {
@@ -49,6 +54,11 @@ type AgentReconciler struct {
 	// Direct reads PVCs uncached (the cache holds PVCs of EXEC_NS only); nil: the client
 	Direct client.Reader
 	D      Defaults
+	// Drains: pods whose forge sidecar reported that their jobs ended (#174); nil: replace only on the timeout
+	Drains *DrainSignals
+	Now    func() time.Time
+	wake   chan event.GenericEvent
+	ns     string // agents namespace, for requeueAgent
 }
 
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
@@ -56,6 +66,7 @@ type AgentReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
 
 // Reconcile makes the agent's Service and StatefulSet match its spec. Children carry an owner reference, so deleting
 // the Agent removes them (Kubernetes garbage collection); the state volume is kept (StatefulSet PVC retention) so a
@@ -142,13 +153,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("statefulset "+string(op), "agent", a.Name)
 	}
 
-	if err := r.updateStatus(ctx, &a, sts); err != nil {
+	// drain before replace (#174): an outdated pod is replaced by the operator once its jobs ended (OnDelete)
+	after, updated, err := r.rollout(ctx, &a, sts)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("rollout: %w", err)
+	}
+	if err := r.updateStatus(ctx, &a, sts, updated); err != nil {
 		return ctrl.Result{}, err
 	}
-	if guideRetry {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	if guideRetry && (after == 0 || after > 30*time.Second) {
+		after = 30 * time.Second
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: after}, nil
 }
 
 // relayout moves an agent to the current volume layout (#173). volumeClaimTemplates are immutable, so a StatefulSet
@@ -194,12 +210,17 @@ func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool,
 	return pvc.DeletionTimestamp != nil, nil
 }
 
-func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet) error {
+func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, extra ...metav1.Condition) error {
 	want := int32(0)
 	if sts.Spec.Replicas != nil {
 		want = *sts.Spec.Replicas
 	}
-	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation, Conditions: a.Status.Conditions}
+	// a copy: equalStatus compares against a.Status, so the new conditions must not be written into it first
+	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation,
+		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...)}
+	for _, c := range extra {
+		meta.SetStatusCondition(&s.Conditions, c)
+	}
 	switch {
 	case sts.Annotations["agentdev/blocked"] == "true":
 		s.Phase = "blocked"
@@ -242,8 +263,21 @@ func equalStatus(x, y v1.AgentStatus) bool {
 	return true
 }
 
+// requeueAgent asks the controller to reconcile one agent now (the collector saw its drain report, #174).
+func (r *AgentReconciler) requeueAgent(agent string) {
+	if r.wake == nil {
+		return
+	}
+	select {
+	case r.wake <- event.GenericEvent{Object: &v1.Agent{ObjectMeta: metav1.ObjectMeta{Name: agent, Namespace: r.ns}}}:
+	default: // full: the periodic requeue of a draining agent picks it up
+	}
+}
+
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{})
+	r.wake = make(chan event.GenericEvent, 64)
+	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
+		WatchesRawSource(source.Channel(r.wake, &handler.EnqueueRequestForObject{}))
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
 		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))

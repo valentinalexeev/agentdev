@@ -125,6 +125,16 @@ labeler_ok() {
 }
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
 MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
+# label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
+# is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
+# branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
+# missing label: the deployment creates agent:<name> (Ansible role gitea_forge, lib-forge.sh). Best effort: the
+# router also routes by the PR author (Gitea) or looks the PR up (GitHub) when the label is missing.
+label_own_pr() {
+  api POST "/repos/${REPO}/issues/$1/labels" "$(jq -cn --arg l "agent:${FORGE_USER}" '{labels:[$l]}')" >/dev/null \
+    || log "could not label PR #$1 agent:${FORGE_USER}"
+}
+
 pr_url() { if [[ "${FORGE_KIND}" == github ]]; then web_url "pull/$1"; else web_url "pulls/$1"; fi; }
 
 # botboard (#26): a live dashboard of what agents work on. One card per item, upserted by id; best effort:
@@ -274,7 +284,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -662,6 +672,7 @@ issue_job() {
   local from="origin/${base}"
   lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${branch}" >/dev/null 2>&1 && from="origin/${branch}"
   dir=$(worktree "${branch}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
+  [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"   # #174: the SIGTERM handler saves work in progress here
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
   exitf="${STATE}/jobs/claude-exit-issue-${n}"; rm -f "${exitf}"
   result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
@@ -712,12 +723,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
-    # GitHub (#227): every agent is the same App bot, so the router finds the agent of a PR comment by this label
-    # (a comment webhook has no head branch). Best effort: the router also looks the PR up when the label is missing.
-    if [[ "${FORGE_KIND}" == github ]]; then
-      api POST "/repos/${REPO}/issues/${pr}/labels" "$(jq -cn --arg l "agent:${FORGE_USER}" '{labels:[$l]}')" >/dev/null \
-        || log "could not label PR #${pr} agent:${FORGE_USER}"
-    fi
+    label_own_pr "${pr}"
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
     [[ -n "${stopped}" ]] && comment "${n}" "🤖 I opened PR #${pr}, but: ${stopped}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
@@ -1036,6 +1042,7 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
   fi
   sync_repo || return 1
   dir=$(worktree "${branch}" "origin/${branch}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
+  [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
@@ -1155,6 +1162,15 @@ max_concurrent=${MAX_CONCURRENT}"
 # stop it. The router refuses if it forwarded a wake since idle_since, so new work never races a shutdown.
 IDLE_SECONDS="${IDLE_SECONDS:-900}"
 idle_since=$(date +%s)
+# idle_wait: wait for the pod to be removed. No exec: an exec'd sleep as PID 1 has no TERM handler and ignores
+# SIGTERM, so every idle stop would wait AGENT_GRACE_SECONDS. No job runs here, so SIGTERM simply exits 0.
+idle_wait() {
+  local s
+  sleep infinity & s=$!
+  trap 'kill "${s}" 2>/dev/null; exit 0' TERM
+  wait "${s}"
+  exit 0
+}
 maybe_stop() {
   [[ "${SCALE_TO_ZERO:-false}" == true && -n "${ROUTER_URL:-}" ]] || return
   if (( $(running_jobs) > 0 )); then idle_since=$(date +%s); return; fi
@@ -1165,13 +1181,63 @@ maybe_stop() {
     || { log "idle: router unreachable or refused"; idle_since=$(date +%s); return; }
   if [[ "$(jq -r .stopped <<<"${r}")" == true ]]; then
     # the pod is being removed: take no new work (a job started now would be killed); the router restarts us on the next event
-    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; exec sleep infinity
+    log "idle for ${IDLE_SECONDS}s: router is stopping this agent"; idle_wait
   else log "idle: router keeps this agent ($(jq -r .reason <<<"${r}"))"; idle_since=$(date +%s); fi
 }
-usage_note=0
+# ---------- drain and graceful stop (#174) ----------
+# Drain: before it replaces this pod with a new template (an upgrade), the operator sets the pod annotation
+# agentdev/drain. The loop sees it in the downward API file and starts no new job; when no job runs, it tells the
+# forge sidecar (POST /drained), which prints the line the operator acts on. Only the operator or an admin can set the
+# annotation (the pod has no service account token).
+POD_ANNOTATIONS="${POD_ANNOTATIONS:-/etc/agentdev/pod/annotations}"
+draining() { [[ -r "${POD_ANNOTATIONS}" ]] && grep -q '^agentdev/drain=' "${POD_ANNOTATIONS}"; }
+# Graceful stop: on SIGTERM (pod deleted, node drained, Spot preemption) start nothing new, stop Claude, and save the
+# work in progress of each running job as a local commit on its job branch (never pushed here). The job state of #175
+# stays, so the job continues on the next pod: it resumes the Claude session and pushes the saved commit with its work.
+save_work() {
+  local f key dir n=0
+  for f in "${JOBS}"/*.lock; do
+    [[ -e "${f}" ]] || continue
+    key=${f##*/}; key=${key%.lock}
+    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -r "${JOBS}/${key}.dir" ]] || continue
+    read -r dir < "${JOBS}/${key}.dir"
+    [[ "${dir}" == "${STATE}/work/"* && -d "${dir}" ]] || continue
+    ( flock -w 10 9 && scrub_git_config ) 9>"${STATE}/git.lock"
+    pin_worktree "${dir}" || continue
+    rm -f "${dir}/.git/index.lock" "$(lgit -C "${dir}" rev-parse --git-dir 2>/dev/null)/index.lock" 2>/dev/null
+    lgit -C "${dir}" add -A >/dev/null 2>&1
+    if ! lgit -C "${dir}" diff --cached --quiet 2>/dev/null; then
+      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key})" >/dev/null 2>&1 && n=$((n+1))
+    fi
+  done
+  log "shutdown: saved work in progress of ${n} job(s); interrupted jobs continue on the next start"
+}
+# kill_tree <pid>: the process and all its descendants (children first stopped, so none is re-parented and missed)
+kill_tree() {
+  local c; kill -STOP "$1" 2>/dev/null
+  for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${c}"; done
+  kill -KILL "$1" 2>/dev/null
+}
+on_term() {
+  trap '' TERM
+  log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
+  # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
+  # Claude. The job state (#175) stays: the next pod continues each job.
+  local p; for p in $(jobs -p); do kill_tree "${p}"; done
+  pkill -KILL -x claude 2>/dev/null
+  save_work
+  exit 0
+}
+trap on_term TERM
+
+usage_note=0 drain_note=0
 while true; do
+  if draining; then
+    # #174: start no new job; report once no job runs (the sidecar rate-limits the report)
+    (( drain_note )) || log "drain requested: no new jobs; running jobs finish"; drain_note=1
+    (( $(running_jobs) == 0 )) && { sidecar /drained -X POST >/dev/null 2>&1 || log "drain: the forge sidecar did not take the report"; }
   # subscription usage (#93): while paused, start no new job; running jobs finish. Resumes by itself at the reset.
-  if usage_paused; then
+  elif usage_paused; then
     (( usage_note )) || log "subscription usage limit: new runs paused"; usage_note=1
   else
     (( usage_note )) && log "subscription usage pause ended: resuming"; usage_note=0

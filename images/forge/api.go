@@ -212,6 +212,7 @@ func (s *server) routes() http.Handler {
 		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
 	}
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("POST /drained", s.drained) // drain before replace (#174, drain.go)
 	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }

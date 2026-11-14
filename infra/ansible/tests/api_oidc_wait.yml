@@ -1,0 +1,62 @@
+# OIDC issuer wait (#334): the api role waits, bounded, for an external issuer's discovery document before the API
+# rollout, and stops with a message that names the URL when it never answers. A cluster-local URL is not waited for.
+# Run: ansible-playbook infra/ansible/tests/api_oidc_wait.yml
+- name: The api role waits for a late OIDC issuer (#334)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    issuer_port: 18734
+    root: "{{ lookup('ansible.builtin.env', 'TMPDIR') | default('/tmp', true) }}/agentdev-oidc-wait"
+  tasks:
+    - name: Make the issuer directory
+      ansible.builtin.file:
+        path: "{{ root }}/.well-known"
+        state: directory
+        mode: "0755"
+
+    - name: Make a discovery document
+      ansible.builtin.copy:
+        dest: "{{ root }}/.well-known/openid-configuration"
+        content: '{"issuer": "http://127.0.0.1:{{ issuer_port }}"}'
+        mode: "0644"
+
+    - name: Start the issuer 15 s late
+      ansible.builtin.shell: >-
+        nohup sh -c 'sleep 15; exec python3 -m http.server {{ issuer_port }} --bind 127.0.0.1 --directory {{ root }}'
+        >/dev/null 2>&1 & echo $!
+      register: issuer
+      changed_when: true
+
+    - name: A late issuer is waited for
+      ansible.builtin.include_tasks: ../roles/api/tasks/oidc_wait.yml
+      vars:
+        api_oidc_discovery_url: "http://127.0.0.1:{{ issuer_port }}/"
+        api_oidc_wait_seconds: 60
+
+    - name: Stop the issuer
+      ansible.builtin.command: pkill -f "http.server {{ issuer_port }}"
+      changed_when: true
+      failed_when: false
+
+    - name: An issuer that never answers stops the play with its URL
+      block:
+        - name: Wait for an issuer that is down
+          ansible.builtin.include_tasks: ../roles/api/tasks/oidc_wait.yml
+          vars:
+            api_oidc_discovery_url: "http://127.0.0.1:{{ issuer_port }}"
+            api_oidc_wait_seconds: 10
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: the wait did not stop on a missing issuer
+      rescue:
+        - name: The message names the discovery URL
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('http://127.0.0.1:' ~ issuer_port ~ '/.well-known/openid-configuration')
+              - ansible_failed_result.msg is search('does not answer')
+
+    - name: A cluster-local discovery URL is not waited for
+      ansible.builtin.include_tasks: ../roles/api/tasks/oidc_wait.yml
+      vars:
+        api_oidc_discovery_url: http://authentik-server.agentdev-platform.svc.cluster.local/application/o/agentdev/
+        api_oidc_wait_seconds: 10
