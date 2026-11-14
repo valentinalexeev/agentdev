@@ -61,6 +61,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
   namespace. Re-run: `deploy.yml` (operator and role `ingress`); kind is not changed.
+- Template drift check (#317): `scripts/template-drift.sh <deployment repo dir>` compares a deployment repository
+  with `examples/deployment/gcp-gke` of its pinned `ref=`: `deploy.yml` (diff), `main.tf` blocks and module
+  arguments, `instance.yml` keys. Exit 0 with warnings, 1 with `--strict`. The template `deploy.yml` has a new
+  `template-drift` PR job that writes the warning to the job summary. Re-run: copy the template `deploy.yml` once.
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of
