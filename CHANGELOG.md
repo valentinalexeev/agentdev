@@ -6,6 +6,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-14
+
 ### Upgrade
 1. **Deployment template clone ref (#332).** Copy `examples/deployment/gcp-gke/.github/workflows/deploy.yml` again and
    add `agentdev_ref: vX.Y.Z` (the git tag, with the `v`) to `ansible/instance.yml`, next to `image_tag: "X.Y.Z"`.
