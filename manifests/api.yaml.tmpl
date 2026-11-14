@@ -22,6 +22,7 @@ rules:
 # console chat sessions (#346): the API starts and ends chat-* Jobs and reads their pods' addresses. The Job shape is
 # held by the ValidatingAdmissionPolicy agentdev-api-chat-jobs below (no Secrets other than the chat clone token and
 # the agent's proxy key, gVisor, no service account token). Created even with chat off, so turning it on needs no RBAC change.
+# delete cannot be narrowed by label in RBAC: the ValidatingAdmissionPolicy agentdev-api-chat-jobs-delete allows only chat-* console Jobs
 - {apiGroups: [batch], resources: [jobs], verbs: [get, list, create, delete]}
 - {apiGroups: [""], resources: [pods], verbs: [get]}
 ---
@@ -206,10 +207,36 @@ spec:
     message: "chat pods read only the agent's proxy key, and the clone step only agentdev-chat-clone"
   - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"
     message: "no privileged chat containers"
+  - expression: "variables.all.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
+    message: "chat containers add no capabilities"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata: {name: agentdev-api-chat-jobs}
 spec:
   policyName: agentdev-api-chat-jobs
+  validationActions: [Deny]
+---
+# RBAC cannot narrow delete by label: this policy lets the API's service account delete only console chat Jobs
+# (not the CLI chat Jobs of scripts/agent-chat.sh or any other Job in ${AGENTS_NS}).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [batch], apiVersions: ["*"], operations: [DELETE], resources: [jobs]}
+  matchConditions:
+  - {name: api-only, expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-api'"}
+  validations:
+  - expression: "oldObject != null && oldObject.metadata.name.startsWith('chat-') && has(oldObject.metadata.labels) && 'agentdev/console' in oldObject.metadata.labels && oldObject.metadata.labels['agentdev/console'] == 'true' && oldObject.metadata.labels['app'] == 'agent-chat'"
+    message: "the API deletes only console chat Jobs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  policyName: agentdev-api-chat-jobs-delete
   validationActions: [Deny]
