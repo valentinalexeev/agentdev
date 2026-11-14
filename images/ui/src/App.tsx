@@ -167,7 +167,7 @@ function Overview({ token, onExpired }: { token: string; onExpired: () => void }
         : (
           <table>
             <thead>
-              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Security (7 days)</th><th>Claude tokens (24 h)</th><th>Settings</th><th>Actions</th></tr>
+              <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th>Security (7 days)</th><th>Claude units (24 h)</th><th>Settings</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {agents.map((a) => (

@@ -242,11 +242,11 @@ traces and sessions. None of them can enforce our budget, so all are visualize-o
 
 ## Consequences
 
-- **Breaking (0.x, MINOR):** the budget quantity changes from tokens to units. `CLAUDE_BUDGET_TOKENS` is replaced
-  by `CLAUDE_BUDGET_UNITS` (Ansible `claude_budget_units`), and the per-agent files in `claude-proxy-budgets` are
-  read as units. Existing values are about 2 to 10 times too high as units (cache reads now count 0.1). The
-  CHANGELOG entry lists the steps to re-run (`./run.sh 06` and `12`, Ansible `deploy.yml` proxy and operator
-  tasks) and the conversion rule.
+- **Deprecation (MINOR 1.2.0, owner decision on #196, option 2):** the budget quantity changes from tokens to units.
+  `CLAUDE_BUDGET_UNITS` (Ansible `claude_budget_units`) is the new variable. `CLAUDE_BUDGET_TOKENS` /
+  `claude_budget_tokens` stay accepted with a warning (1 token = 1 unit, the new variable wins) and are removed in
+  2.0.0. The per-agent files in `claude-proxy-budgets` are read as units, so a set budget allows more traffic than
+  before (cache reads now count 0.1). The CHANGELOG lists the migration.
 - New public interface: `CLAUDE_BUDGET_UNITS`, `CLAUDE_JOB_BUDGET_UNITS`, `claude-proxy-prices`, `TELEMETRY_*`,
   `JOB_TIMEOUT`, `MAX_BUDGET_USD`, `CLAUDE_CODE_TELEMETRY`, metric names, the `/status` job fields.
 - New port and NetworkPolicy rule on the proxy and the operator; reviewed under `docs/security.md` (new risk line

@@ -80,6 +80,31 @@
           (docs/admin.md, Turn on approvals).
         quiet: true
 
+    # #196 (ADR 0002 D2): the budget is in cost units. claude_budget_tokens is deprecated (1.2.0, removed in 2.0.0):
+    # alone it counts as units 1:1; claude_budget_units wins when both are set. Prices reach the ConfigMap as strings.
+    - name: "Claude budget in cost units (claude_budget_tokens deprecated, #196)"
+      ansible.builtin.include_tasks: tasks/claude_budget.yml
+
+    - name: Claude budget in cost units and valid prices (#196)
+      ansible.builtin.assert:
+        that:
+          - (claude_budget_units_effective | string) is match('^[0-9]+$')
+          - claude_prices is mapping
+          - (telemetry.instance | default('agentdev')) is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+          - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
+          - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) is mapping"
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) | length > 0"
+          - >-
+            claude_prices.keys()
+            | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$')
+            | list | length == 0
+          - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
+        fail_msg: >-
+          claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer;
+          claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$.
+        quiet: true
+
     - name: Scale to zero has a wake source (#181)
       ansible.builtin.include_tasks: tasks/wake_source.yml
 
@@ -401,6 +426,10 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+            TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
             # external forwarder watch (#213): on only with ingress.forwarder namespace and pod_selector
             FORWARDER_NS: >-
               {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
@@ -658,7 +687,13 @@
             PLATFORM_NS: "{{ platform_ns }}"
             CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
-            CLAUDE_BUDGET_TOKENS: "{{ claude_budget_tokens | int }}"
+            CLAUDE_BUDGET_UNITS: "{{ claude_budget_units_effective | int }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+            TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
+            # values as strings; the proxy checks each key and value again (#196)
+            CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
             CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
           replace: []

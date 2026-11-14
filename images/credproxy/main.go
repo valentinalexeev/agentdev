@@ -1,7 +1,7 @@
 // Command credproxy is the agentdev Claude credential proxy (#66, security model phase 3, fixes R11, closes R47).
 //
 // Agent containers call it as ANTHROPIC_BASE_URL with a per-agent key (keys.go). It checks the key, enforces the
-// agent's token budget (budget.go), replaces the key with the real Claude credential of that agent and forwards the
+// agent's budget in cost units (prices.go) (budget.go), replaces the key with the real Claude credential of that agent and forwards the
 // request to the Anthropic API. It reads the rate-limit headers and token counts of every response itself (usage.go)
 // and prints them as AGENTDEV_USAGE lines for the operator, so usage no longer comes from inside the agent pod.
 package main
@@ -67,20 +67,25 @@ type ctxKey struct{}
 
 type reqInfo struct {
 	agent string
+	job   string // X-Agentdev-Job, checked (jobs.go); "" = none
 	cred  credential
+	start time.Time
 }
 
 type server struct {
 	signing  []byte
 	creds    credStore
 	budget   *budget
+	prices   *prices
+	jobs     *jobs
+	tel      *telemetry // nil = no metrics (tests)
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
 	now      func() time.Time
 }
 
 func newServer(signing []byte, creds credStore, b *budget, upstream *url.URL, transport http.RoundTripper) *server {
-	s := &server{signing: signing, creds: creds, budget: b, upstream: upstream, now: time.Now}
+	s := &server{signing: signing, creds: creds, budget: b, prices: newPrices(""), jobs: newJobs(), upstream: upstream, now: time.Now}
 	s.proxy = &httputil.ReverseProxy{
 		Rewrite:        s.rewrite,
 		ModifyResponse: s.observe,
@@ -104,6 +109,7 @@ func (s *server) rewrite(pr *httputil.ProxyRequest) {
 	h.Del("X-Api-Key")
 	h.Del("Cookie")
 	h.Del("Proxy-Authorization")
+	h.Del(jobHeader) // attribution only (#196 D3): never sent upstream
 	// review #119: a client-chosen encoding (gzip) would reach the meter compressed and count 0 tokens. Without the
 	// header the transport asks for gzip itself and decompresses before the meter sees the body.
 	h.Del("Accept-Encoding")
@@ -121,8 +127,13 @@ func (s *server) rewrite(pr *httputil.ProxyRequest) {
 func (s *server) observe(resp *http.Response) error {
 	info := resp.Request.Context().Value(ctxKey{}).(reqInfo)
 	now := s.now()
-	u := usageLine{Agent: info.agent, Secret: info.cred.secret}
+	u := usageLine{Agent: info.agent, Secret: info.cred.secret, Job: info.job}
 	fromHeaders(&u, resp.StatusCode, resp.Header, now)
+	s.tel.window(info.cred.secret, "5h", u.FiveHour)
+	s.tel.window(info.cred.secret, "7d", u.Weekly)
+	if u.RateLimited {
+		s.tel.refuse(info.agent, "rate_limited")
+	}
 	if resp.Request.URL.Path != "/v1/messages" { // count_tokens: no spend, but the headers still count
 		if u.FiveHour != nil || u.Weekly != nil || u.RateLimited {
 			emitLine(usagePrefix, u)
@@ -130,9 +141,16 @@ func (s *server) observe(resp *http.Response) error {
 		return nil
 	}
 	m := &tokenMeter{sse: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")}
-	resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(in, out int64) {
-		u.InputTokens, u.OutputTokens = in, out
-		s.budget.add(info.agent, in+out)
+	resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(t tokenCounts, model string) {
+		p := s.prices.get()
+		units := p.units(model, t)
+		usd, hasUSD := p.usdOf(units)
+		s.tel.record(resp.Request.Context(), info.agent, info.job, p.modelLabel(model), t, units, usd, hasUSD, info.start, s.now(), resp.StatusCode)
+		u.Model, u.Units, u.Tokens, u.Multiplier = model, units, t.byName(), p.multiplier(model)
+		u.InputTokens, u.OutputTokens = t.input(), t[tokOut]
+		u.CacheRead, u.CacheWrite = t[tokCacheRead], t[tokCacheWrite5m]+t[tokCacheWrite1h]
+		s.budget.add(info.agent, units)
+		s.jobs.add(info.agent, info.job, units, t)
 		emitLine(usagePrefix, u)
 	}}
 	return nil
@@ -156,11 +174,19 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"budgets": s.budget.snapshot()})
+		p := s.prices.get()
+		bs := s.budget.snapshot()
+		for i := range bs {
+			if usd, ok := p.usdOf(bs[i].Used); ok {
+				bs[i].UsedUSD = &usd
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p)})
 		return
 	}
 	agent := verifyKey(s.signing, callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))
 	if agent == "" {
+		s.tel.refuse("", "bad_key")
 		emitEvent("", "proxy-key-invalid", "medium", r.Method+" "+clip(r.URL.Path, 100)+": missing or wrong agent key")
 		apiError(w, http.StatusUnauthorized, "authentication_error", "claude-proxy: missing or wrong agent key")
 		return
@@ -171,11 +197,12 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok, used, limit := s.budget.allow(agent); !ok {
+		s.tel.refuse(agent, "budget")
 		if s.budget.firstRefusal(agent) {
-			emitEvent(agent, "budget-exhausted", "low", "token budget of the agent used: "+strconv.FormatInt(used, 10)+" of "+strconv.FormatInt(limit, 10)+" in 24 h")
+			emitEvent(agent, "budget-exhausted", "low", "budget of the agent used: "+strconv.FormatInt(used, 10)+" of "+strconv.FormatInt(limit, 10)+" units in 24 h")
 		}
 		w.Header().Set("Retry-After", "3600")
-		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: the token budget of agent "+agent+" for 24 h is used")
+		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: the budget of agent "+agent+" for 24 h is used")
 		return
 	}
 	cred, ok := s.creds.lookup(agent)
@@ -183,7 +210,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusServiceUnavailable, "api_error", "claude-proxy: no Claude credential for agent "+agent)
 		return
 	}
-	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cred})))
+	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred, s.now()})))
 }
 
 func clip(s string, n int) string {
@@ -211,22 +238,34 @@ func main() {
 	if err != nil || up.Host == "" || (up.Scheme != "https" && !(up.Scheme == "http" && os.Getenv("ALLOW_HTTP_UPSTREAM") == "true")) {
 		log.Fatal("UPSTREAM must be an https URL")
 	}
-	def, err := strconv.ParseInt(envOr("CLAUDE_BUDGET_TOKENS", "0"), 10, 64)
-	if err != nil || def < 0 {
-		log.Fatal("CLAUDE_BUDGET_TOKENS must be a non-negative integer")
+	def, warn, err := budgetFromEnv(os.Getenv) // #196: CLAUDE_BUDGET_TOKENS deprecated, removed in 2.0.0
+	if warn != "" {
+		log.Print("WARNING: " + warn)
+	}
+	if err != nil {
+		log.Fatal(err)
 	}
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
+	s.prices = newPrices(os.Getenv("PRICES_DIR"))
+	tel, err := newTelemetry(os.Getenv("TELEMETRY_OTLP_URL"), b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.tel = tel
 	srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	if addr := envOr("METRICS_LISTEN", ":9464"); addr != "off" { // #196 D4: separate port, scraper only (NetworkPolicy)
+		go tel.serveMetrics(ctx, addr)
+	}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(c)
 	}()
-	log.Printf("claude-proxy listening on %s, upstream %s, default budget %d", srv.Addr, up.Host, def)
+	log.Printf("claude-proxy listening on %s, upstream %s, default budget %d units", srv.Addr, up.Host, def)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

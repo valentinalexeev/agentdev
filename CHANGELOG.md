@@ -41,6 +41,22 @@ While the version is `0.x`, breaking changes bump MINOR.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Changed
+- Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
+  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
+  Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
+  Each `AGENTDEV_USAGE` line has `tokens` by type and `multiplier`, and `GET /status` has `weights`, so a check can
+  calculate the units again exactly.
+  The budget variables are `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (the old token variables are deprecated,
+  see Deprecated). Weights, model multipliers and an
+  optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
+  pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
+  stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
+  `model`, `job`, `units` and cache token counts. Defaults do not change (0 = no limit). A budget that was set keeps
+  its number but now counts units, so the same number allows more traffic (units are usually less than raw tokens);
+  per-agent values in ConfigMap `claude-proxy-budgets` are read as units too. Re-run `./run.sh 06` on kind, or the
+  playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
+  tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
+  (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
@@ -57,6 +73,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
+  9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
+  `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,
+  `agentdev.requests.refused`, `agentdev.usage.paused`. NetworkPolicy: only the scraper namespace
+  (`TELEMETRY_SCRAPER_NS`, Ansible `telemetry.scraper_ns`), and in it only the scraper pods (`TELEMETRY_SCRAPER_SELECTOR`,
+  `telemetry.scraper_selector`), reach the port. Unknown models are labelled `unknown`. Optional OTLP export of metrics and
+  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Every series has the label `agentdev_instance`
+  (`TELEMETRY_INSTANCE` / `telemetry.instance`, default `agentdev`), so one external Prometheus and Grafana can show
+  many instances. Re-run: `./run.sh 06` and `12`, or the playbook.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
@@ -164,6 +189,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 
 ### Deprecated
+- `CLAUDE_BUDGET_TOKENS` (env, `config.env`) and `claude_budget_tokens` (Ansible instance var) are deprecated and will
+  be removed in 2.0.0 (#196, owner decision on #196). Replacement: `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (cost
+  units). Until 2.0.0 both are accepted: when only the old one is set, its value is used as units (1 token = 1 unit);
+  when both are set, the new one wins. `claude-proxy`, `./run.sh 06` and the playbook log one warning that names the
+  replacement. Migration: rename the variable in `config.env` or `instance.yml`. Optional: lower the value, since a
+  units budget allows more traffic than the same number of tokens (rule of thumb: divide by 4 for typical Claude Code
+  traffic, or start with 0 and set the limit after a day of `GET /status`).
 - Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
   `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
   the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with

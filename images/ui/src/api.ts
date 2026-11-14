@@ -11,8 +11,8 @@ export interface Agent {
   scaleToZero?: boolean
   paused?: boolean
   securityEvents?: number // last 7 days (#70)
-  budgetUsed?: number // Claude tokens in the last 24 h, counted by the credential proxy (#66)
-  budgetLimit?: number // tokens per 24 h; 0 = no limit
+  budgetUsed?: number // Claude cost units in the last 24 h, counted by the credential proxy (#66, #196)
+  budgetLimit?: number // units per 24 h; 0 = no limit
 }
 
 // "12.3k / 100k" or "12.3k" when there is no limit; "" when the proxy reports nothing (#66)

@@ -133,6 +133,8 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        - {name: TELEMETRY_INSTANCE, value: "${TELEMETRY_INSTANCE}"}   # #278: label agentdev_instance on every metric
+        - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
         - {name: FORWARDER_NS, value: "${FORWARDER_NS}"}
         - {name: FORWARDER_SELECTOR, value: "${FORWARDER_SELECTOR}"}   # k=v,k2=v2 (ingress.forwarder.pod_selector)
@@ -140,18 +142,25 @@ spec:
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: health, containerPort: 8081}]
+        ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 64Mi}
           limits: {memory: 256Mi}
 ---
-# no inbound traffic (it only calls the Kubernetes API)
+# no inbound traffic except the metrics scraper (it only calls the Kubernetes API)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
 spec:
   podSelector: {matchLabels: {app: agentdev-operator}}
   policyTypes: [Ingress]
-  ingress: []
+  ingress:
+  # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper pods (TELEMETRY_SCRAPER_SELECTOR) in its
+  # namespace (kind: Prometheus in monitoring, GKE Managed Prometheus: the collector in gmp-system); not from other
+  # pods of that namespace (Grafana, the OTLP collector), and never from agent pods
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${TELEMETRY_SCRAPER_NS}}}
+      podSelector: {matchLabels: ${TELEMETRY_SCRAPER_SELECTOR}}
+    ports: [{port: 9464}]

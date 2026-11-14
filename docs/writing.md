@@ -102,6 +102,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
 | config.env | the file with the local default settings |
 | ContextForge | the MCP gateway in the platform namespace |
+| cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
@@ -147,7 +148,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
 | billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
 | quota project | the Google Cloud project that a Google API charges for a request |
-| token budget | the number of Claude tokens that one agent can use in 24 hours |
+| token budget | old name of the budget, before 1.2.0 it counted raw tokens; now the budget counts cost units |
 | specification (spec) | the project file, for example `my-project.yaml` |
 | sync | one run of `scripts/mcp-sync.sh` |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |

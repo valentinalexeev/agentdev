@@ -197,8 +197,12 @@ cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decision
   `AGENTDEV_USAGE` line per response on the proxy's stdout, with the schema of #93 plus `agent` (from the verified
   key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47: the operator
   reads them, see below).
-- **Budget:** tokens per agent in a rolling 24 h window (hourly buckets), `CLAUDE_BUDGET_TOKENS` for all agents (0 =
-  none), a per-agent value in ConfigMap `claude-proxy-budgets`. Checked before a request is forwarded, so a response
+- **Budget:** cost units per agent (#196, ADR 0002 D2: tokens weighted by type and by the model named in the
+  upstream response, never the request; unknown model = highest multiplier) in a rolling 24 h window (hourly
+  buckets), `CLAUDE_BUDGET_UNITS` for all agents (0 = none), a per-agent value in ConfigMap `claude-proxy-budgets`.
+  Weights in ConfigMap `claude-proxy-prices`, each value pattern-checked (bad value: default kept, event
+  `proxy-price-invalid`). The job header `X-Agentdev-Job` comes from the agent: pattern-checked, stripped before the
+  upstream, used for the per-job report on `GET /status` only. Checked before a request is forwarded, so a response
   in flight can go over by itself. When used up: HTTP 429 `rate_limit_error` (Claude Code stops the run cleanly) and
   one `budget-exhausted` event per exhaustion. Spend is kept on an emptyDir: a new proxy pod starts at zero (a
   restart can grant at most one more budget). `GET /status` lists spend and limits (no secrets); the API adds them to
