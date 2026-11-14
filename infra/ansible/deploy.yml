@@ -82,7 +82,7 @@
 
     # #196 (ADR 0002 D2): the budget is in cost units. claude_budget_tokens is deprecated (1.2.0, removed in 2.0.0):
     # alone it counts as units 1:1; claude_budget_units wins when both are set. Prices reach the ConfigMap as strings.
-    - name: Claude budget in cost units (claude_budget_tokens deprecated, #196)
+    - name: "Claude budget in cost units (claude_budget_tokens deprecated, #196)"
       ansible.builtin.include_tasks: tasks/claude_budget.yml
 
     - name: Claude budget in cost units and valid prices (#196)
@@ -105,8 +105,8 @@
             | list | length == 0
           - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
         fail_msg: >-
-          claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer; claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or
-          model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$.
+          claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer;
+          claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$.
         quiet: true
 
     - name: Scale to zero has a wake source (#181)
