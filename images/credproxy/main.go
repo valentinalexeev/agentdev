@@ -238,12 +238,12 @@ func main() {
 	if err != nil || up.Host == "" || (up.Scheme != "https" && !(up.Scheme == "http" && os.Getenv("ALLOW_HTTP_UPSTREAM") == "true")) {
 		log.Fatal("UPSTREAM must be an https URL")
 	}
-	if os.Getenv("CLAUDE_BUDGET_TOKENS") != "" { // #196: replaced, the old values meant raw tokens
-		log.Fatal("CLAUDE_BUDGET_TOKENS was replaced by CLAUDE_BUDGET_UNITS (cost units, #196); see the CHANGELOG for the conversion")
+	def, warn, err := budgetFromEnv(os.Getenv) // #196: CLAUDE_BUDGET_TOKENS deprecated, removed in 2.0.0
+	if warn != "" {
+		log.Print("WARNING: " + warn)
 	}
-	def, err := strconv.ParseInt(envOr("CLAUDE_BUDGET_UNITS", "0"), 10, 64)
-	if err != nil || def < 0 {
-		log.Fatal("CLAUDE_BUDGET_UNITS must be a non-negative integer")
+	if err != nil {
+		log.Fatal(err)
 	}
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)

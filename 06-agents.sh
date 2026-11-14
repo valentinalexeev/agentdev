@@ -90,7 +90,16 @@ PROXY_SIGNING=$(secret_file "${SPIKE_DIR}/.secrets/claude-proxy-signing.key")
 printf '%s' "${PROXY_SIGNING}" | k -n "${AGENTS_NS}" create secret generic claude-proxy-signing --from-file=key=/dev/stdin \
   --dry-run=client -o yaml | k apply -f - >/dev/null
 proxy_key() { printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "${PROXY_SIGNING}" -r | cut -d' ' -f1; }
-[[ -z "${CLAUDE_BUDGET_TOKENS:-}" ]] || die "CLAUDE_BUDGET_TOKENS was replaced by CLAUDE_BUDGET_UNITS (cost units, #196): see CHANGELOG"
+# #196: CLAUDE_BUDGET_TOKENS is deprecated (removed in 2.0.0); alone it counts as units 1:1, CLAUDE_BUDGET_UNITS wins
+if [[ -n "${CLAUDE_BUDGET_TOKENS:-}" ]]; then
+  if [[ -z "${CLAUDE_BUDGET_UNITS:-}" ]]; then
+    warn "CLAUDE_BUDGET_TOKENS is deprecated (removed in 2.0.0): use CLAUDE_BUDGET_UNITS; its value is used as units (1:1)"
+    CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_TOKENS}"
+  else
+    warn "CLAUDE_BUDGET_TOKENS is deprecated (removed in 2.0.0) and ignored because CLAUDE_BUDGET_UNITS is set: remove it"
+  fi
+fi
+CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS:-0}"
 [[ -z "${TELEMETRY_OTLP_URL:-}" || "${TELEMETRY_OTLP_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] \
   || die "TELEMETRY_OTLP_URL must be an https URL"
 [[ "${TELEMETRY_INSTANCE:-agentdev}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "TELEMETRY_INSTANCE must be a DNS label"

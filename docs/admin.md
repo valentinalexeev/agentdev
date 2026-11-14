@@ -198,8 +198,11 @@ The budget is the number of cost units that one agent can use in 24 hours.
 
 NOTE: The value 0 means no limit. This is the default.
 
-NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` were removed in 1.2.0. The deploy stops when they are set.
-See the CHANGELOG for the conversion.
+NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` are deprecated since 1.2.0 and will be removed in 2.0.0.
+Until then they still work: when only the old variable is set, its value is used as cost units (1 token = 1 unit).
+When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy, `./run.sh 06` and the playbook
+show a warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
+tokens, so you can lower the value (see the CHANGELOG, 1.2.0 Deprecated).
 
 ### Set the budget of one agent
 

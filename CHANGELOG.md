@@ -36,21 +36,20 @@ While the version is `0.x`, breaking changes bump MINOR.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Changed
-- **BREAKING** Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
+- Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
   cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
   Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
   Each `AGENTDEV_USAGE` line has `tokens` by type and `multiplier`, and `GET /status` has `weights`, so a check can
   calculate the units again exactly.
-  `CLAUDE_BUDGET_TOKENS` / `claude_budget_tokens` are replaced by `CLAUDE_BUDGET_UNITS` / `claude_budget_units`;
-  `./run.sh 06`, the playbook and the proxy stop when the old variable is set. Weights, model multipliers and an
+  The budget variables are `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (the old token variables are deprecated,
+  see Deprecated). Weights, model multipliers and an
   optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
   pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
   stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
-  `model`, `job`, `units` and cache token counts. Migration: (1) rename the variable; as a rule of thumb divide the
-  old token value by 4 for typical Claude Code traffic (old values are 2 to 10 times too high as units), or start
-  with 0 and set the limit after a day of `GET /status`; (2) convert per-agent values in ConfigMap
-  `claude-proxy-budgets` the same way (`kubectl -n coding-agents edit configmap claude-proxy-budgets`); (3) re-run
-  `./run.sh 06` on kind, or the playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
+  `model`, `job`, `units` and cache token counts. Defaults do not change (0 = no limit). A budget that was set keeps
+  its number but now counts units, so the same number allows more traffic (units are usually less than raw tokens);
+  per-agent values in ConfigMap `claude-proxy-budgets` are read as units too. Re-run `./run.sh 06` on kind, or the
+  playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
   tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
   (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
@@ -165,6 +164,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 
 ### Deprecated
+- `CLAUDE_BUDGET_TOKENS` (env, `config.env`) and `claude_budget_tokens` (Ansible instance var) are deprecated and will
+  be removed in 2.0.0 (#196, owner decision on #196). Replacement: `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (cost
+  units). Until 2.0.0 both are accepted: when only the old one is set, its value is used as units (1 token = 1 unit);
+  when both are set, the new one wins. `claude-proxy`, `./run.sh 06` and the playbook log one warning that names the
+  replacement. Migration: rename the variable in `config.env` or `instance.yml`. Optional: lower the value, since a
+  units budget allows more traffic than the same number of tokens (rule of thumb: divide by 4 for typical Claude Code
+  traffic, or start with 0 and set the limit after a day of `GET /status`).
 - Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
   `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
   the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with

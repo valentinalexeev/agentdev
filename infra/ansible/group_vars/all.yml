@@ -24,7 +24,9 @@ credproxy_image: "{{ image_registry }}/agentdev-credproxy:{{ image_tag }}"   # C
 # Claude credential proxy (#66): the only holder of the Claude credentials; agent pods get a per-agent key.
 claude_proxy: true                  # false: credential in the agent pod (deprecated rollback, docs/security.md R11)
 claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the proxy on GKE (FQDNNetworkPolicy)
-claude_budget_units: 0              # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); 0 = no limit
+claude_budget_units: null           # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); null/0 = no limit
+# claude_budget_tokens: deprecated in 1.2.0, removed in 2.0.0. Used as units (1:1) only when claude_budget_units is null.
+# The effective value is claude_budget_units_effective (tasks below).
 claude_prices: {}                   # #196: ConfigMap claude-proxy-prices (w_in, w_cw5, w_cw1h, w_cr, w_out, model.<prefix>,
                                     # usd_per_million_units); {} = built-in weights, no USD estimate
 # Telemetry (#196, ADR 0002 D4/D5): claude-proxy and the operator serve metrics on 9464, reachable only from the
