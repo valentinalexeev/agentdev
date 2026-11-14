@@ -47,6 +47,30 @@
         quiet: true
       no_log: true
 
+# A published image is pulled for one platform and re-tagged through a one-line build (#378): with the containerd
+# image store a pulled image keeps the multi-arch index, and `kind load` fails on the missing platforms.
+- name: Container engine architecture
+  ansible.builtin.shell: >-
+    {{ kind_agents_container_engine }} info -f '{{ '{{' }}.Architecture{{ '}}' }}' 2>/dev/null ||
+    {{ kind_agents_container_engine }} info -f '{{ '{{' }}.Host.Arch{{ '}}' }}'
+  register: kind_agents_engine_arch
+  changed_when: false
+  when: kind_agents_build | bool
+
+- name: Platform of pulled images
+  ansible.builtin.set_fact:
+    kind_agents_pull_platform: >-
+      linux/{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(kind_agents_engine_arch.stdout | trim,
+                                                              kind_agents_engine_arch.stdout | trim) }}
+  when: kind_agents_build | bool
+
+- name: Known container engine architecture
+  ansible.builtin.assert:
+    that: kind_agents_pull_platform in ['linux/amd64', 'linux/arm64']
+    fail_msg: "unknown container engine architecture: {{ kind_agents_engine_arch.stdout | trim }}"
+    quiet: true
+  when: kind_agents_build | bool
+
 - name: Local images (worker, forge sidecar, router, Claude proxy)
   ansible.builtin.include_tasks: image.yml
   loop:
@@ -265,10 +289,11 @@
   loop: "{{ kind_agents_agents }}"
   loop_control: {loop_var: kind_agents_agent}
 
-- name: Agents are rolled out (blocked agents stay at 0)
+# agent StatefulSets use updateStrategy OnDelete (#174): `rollout status` does not work; wait for the pod instead
+- name: Agents are ready (blocked agents stay at 0)
   ansible.builtin.command: >-
-    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout status statefulset/agent-{{ item }}
-    --timeout={{ kind_agents_timeout }}s
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} wait
+    --for=jsonpath={.status.readyReplicas}=1 statefulset/agent-{{ item }} --timeout={{ kind_agents_timeout }}s
   loop: "{{ kind_agents_agents | difference(kind_agents_blocked | default([])) }}"
   changed_when: false
 

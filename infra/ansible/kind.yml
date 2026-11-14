@@ -13,10 +13,11 @@
 #   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
 #   ansible-playbook kind.yml --tags authentik         # was ./run.sh 09 (after mcp)
 #   ansible-playbook kind.yml --tags api               # was ./run.sh 10
+#   ansible-playbook kind.yml --tags ui                # was ./run.sh 11
 #   ansible-playbook kind.yml --tags operator          # was ./run.sh 12
 #
 # Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06, botboard:
-# 07, mcp: 08, authentik: 09, api: 10, operator: 12.
+# 07, mcp: 08, authentik: 09, api: 10, ui: 11, operator: 12.
 # The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
@@ -136,6 +137,18 @@
         api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
         api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
       tags: [api]
+
+    # Only the web UI tasks of the role api (tasks/ui.yml); GKE runs them in the same role after the API. After 10.
+    - name: Web UI (was 11-ui.sh)
+      ansible.builtin.include_role:
+        name: api
+        tasks_from: ui
+        apply: {tags: [ui]}
+      vars:
+        api_kind_cluster: "{{ kind_cluster_name }}"
+        api_ui_image: agentdev-ui:dev
+        api_oidc_issuer: https://localhost:9443/application/o/agentdev/
+      tags: [ui]
     # Agent CRD and controller (#47); 06-agents.sh runs it when the operator is missing (#57). Needs nothing else.
     - name: Operator, CRDs and executor egress (was 12-operator.sh)
       ansible.builtin.include_role:

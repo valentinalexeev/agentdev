@@ -135,10 +135,12 @@
   delay: 2
   when: kind_agents_agent not in (kind_agents_blocked | default([])) and not ansible_check_mode
 
-# pick up a rebuilt image or a changed Secret (the operator owns the spec; a restart only replaces the pod)
-- name: Restart after a new local image or Secret of {{ kind_agents_agent }}
+# pick up a rebuilt image or a changed Secret. OnDelete (#174): a restart annotation alone does not replace the pod,
+# so delete it; the StatefulSet makes a new one (the job resumes, #175).
+- name: Replace the pod after a new local image or Secret of {{ kind_agents_agent }}
   ansible.builtin.command: >-
-    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} rollout restart statefulset/agent-{{ kind_agents_agent }}
+    kubectl --context {{ kind_agents_context }} -n {{ kind_agents_ns }} delete pod agent-{{ kind_agents_agent }}-0
+    --ignore-not-found --wait=false
   when: >-
     kind_agents_agent not in (kind_agents_blocked | default([])) and
     ((kind_agents_image_changed | default({})).worker | default(false) or

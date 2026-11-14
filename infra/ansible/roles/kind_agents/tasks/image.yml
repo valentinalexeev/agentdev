@@ -9,14 +9,24 @@
   failed_when: false
 
 # local tags (agentdev/...) are built from this checkout; a published image (the compatibility e2e, #178, runs the
-# previous release's worker and forge) is pulled as it is. The router and the Claude proxy are always built.
+# previous release's worker and forge) is pulled for one platform (#378). The router and the Claude proxy are always built.
 - name: Build or pull the image {{ kind_agents_img.tag }}
   ansible.builtin.command:
     argv: "{{ [kind_agents_container_engine, 'build', '-q', '-t', kind_agents_img.tag,
                kind_agents_repo_root ~ '/images/' ~ kind_agents_img.dir]
               if (kind_agents_img.tag is match('agentdev/') or not (kind_agents_img.pull | default(false)))
-              else [kind_agents_container_engine, 'pull', '-q', kind_agents_img.tag] }}"
+              else [kind_agents_container_engine, 'pull', '-q', '--platform', kind_agents_pull_platform,
+                    kind_agents_img.tag] }}"
   register: kind_agents_img_run
+  changed_when: false
+
+# re-tag the pulled image through a one-line build, so the local image has one manifest and `kind load` works
+- name: One-platform image of the pulled {{ kind_agents_img.tag }}
+  ansible.builtin.command:
+    argv: ["{{ kind_agents_container_engine }}", build, -q, --platform, "{{ kind_agents_pull_platform }}",
+           -t, "{{ kind_agents_img.tag }}", "-"]
+    stdin: "FROM {{ kind_agents_img.tag }}"
+  when: not (kind_agents_img.tag is match('agentdev/') or not (kind_agents_img.pull | default(false)))
   changed_when: false
 
 # `pull -q` prints the reference, not the id: compare the image ids before and after
