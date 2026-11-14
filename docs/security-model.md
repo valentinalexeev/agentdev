@@ -89,6 +89,7 @@ AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medi
 | loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |
 | loop | `git-hook-present` | high | a hook file in the shared clone (removed) |
 | loop | `git-config-key`, `git-config-worktree` | medium | a git config key outside the plain list, or a `config.worktree` (removed) |
+| ingress | `forwarder-not-ready` | medium | operator: no pod of `ingress.forwarder` Ready for `forwarder_not_ready_minutes` (#213); agent `ingress-forwarder`, never pauses an agent |
 
 `job` comes from the loop; in sidecar events it is the loop's `X-Agentdev-Job` header, which Claude could forge, so
 treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT`.

@@ -124,6 +124,15 @@ func main() {
 		log.Error(err, "security collector")
 		os.Exit(1)
 	}
+	// external forwarder watch (#213): off unless FORWARDER_NS and FORWARDER_SELECTOR are set (ingress.forwarder)
+	if fns, sel := os.Getenv("FORWARDER_NS"), parseSelector(os.Getenv("FORWARDER_SELECTOR")); fns != "" && sel != nil {
+		fw := &ForwarderWatch{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), NS: fns, Selector: sel, EventsNS: ns,
+			After: time.Duration(envInt("FORWARDER_NOT_READY_MINUTES", 10)) * time.Minute, Every: 30 * time.Second, Now: time.Now}
+		if err := mgr.Add(fw); err != nil {
+			log.Error(err, "forwarder watch")
+			os.Exit(1)
+		}
+	}
 	if execNS != "" {
 		if execNS == ns {
 			log.Error(nil, "EXEC_NS must not be the agents namespace: write credentials never live next to agents")

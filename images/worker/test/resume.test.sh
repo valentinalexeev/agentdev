@@ -48,7 +48,8 @@ security_threads() { :; }; failed_checks() { :; }; feedback_background() { :; }
 # shellcheck disable=SC1090
 source <(grep -E '^(comment|web_url|pr_url)\(\)' "${loop}")
 API_LOG="${tmp}/api"; : > "${API_LOG}"; OPEN_PRS='[]'
-api() { echo "$1 $2" >> "${API_LOG}"; case "$1 ${2%%\?*}" in
+BODY_LOG="${tmp}/bodies"; : > "${BODY_LOG}"
+api() { echo "$1 $2" >> "${API_LOG}"; [[ -n "${3:-}" ]] && printf '%s %s\n%s\n' "$1" "$2" "$3" >> "${BODY_LOG}"; case "$1 ${2%%\?*}" in
   "GET /repos/o/r/issues/5") echo '{"number":5,"title":"T","body":"B"}';;
   "GET /repos/o/r/pulls") echo "${OPEN_PRS}";;
   "POST /repos/o/r/pulls") echo '{"number":42}';;
@@ -66,6 +67,8 @@ case "${MODE}" in
         echo uncommitted > wip.txt; kill -9 "${JOBPID}"; exit 1;;
   noresume) if [[ " $* " == *" --resume "* ]]; then echo "No conversation found" >&2; exit 1; fi
         echo '{"type":"result","result":"fresh\nSTATUS: done"}';;
+  maxturns) echo turn > turn.txt; echo 'SECRET-TRANSCRIPT' >&2
+        echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"SECRET-TRANSCRIPT"}'; exit 1;;
   *)    echo more > more.txt; echo '{"type":"result","result":"did it\nSTATUS: done"}';;
 esac
 EOF
@@ -136,5 +139,25 @@ check "feedback after reply: resume state removed" "[[ ! -e '${JOBS}/pr-42.activ
 # a normal feedback run replies once and marks it
 : > "${API_LOG}"; start_job pr-42 feedback_job 42 agent/alice/issue-5 T 2026-11-07T10:00:00Z; wait
 check "feedback: a normal run replies once" "[[ \$(grep -c 'POST /repos/o/r/issues/42/comments' '${API_LOG}') == 1 ]]"
+
+# ---- 6. #336 on main's structure (claude_step, run contract): Claude stops at the turn limit. The PR body and the
+# issue get the fixed note (exit code, class, max_turns hint); never the result text or a `claude exited` log line.
+rm -f "${JOBS}"/issue-7.* "${STATE}/seen/issue-7.done"; : > "${API_LOG}"; : > "${BODY_LOG}"; MODE=maxturns
+api_orig=$(declare -f api); eval "$(sed 's#"GET /repos/o/r/issues/5")#"GET /repos/o/r/issues/5"|"GET /repos/o/r/issues/7")#' <<<"${api_orig}")"
+start_job issue-7 issue_job 7 main; wait
+note='exit code 1, class `max-turns`'
+sed -n '/^POST \/repos\/o\/r\/pulls$/,/^}/p' "${BODY_LOG}" > "${tmp}/pr-body"
+sed -n '/^POST \/repos\/o\/r\/issues\/7\/comments$/,/^}/p' "${BODY_LOG}" > "${tmp}/issue-comments"
+check "#336: Claude stopped early, the PR is still opened with the work" "grep -q 'POST /repos/o/r/pulls' '${API_LOG}' && git -C '${ORIGIN}' show agent/alice/issue-7:turn.txt >/dev/null 2>&1"
+check "#336: the PR body has the fixed note with code, class and the max_turns hint" \
+  "grep -qF \"\${note}\" '${tmp}/pr-body' && grep -qF '(\`max_turns\`)' '${tmp}/pr-body'"
+check "#336: no PR body or comment carries the result text or the exit log line" \
+  "! grep -q -e SECRET-TRANSCRIPT -e 'claude exited' '${BODY_LOG}'"
+check "#336: the issue gets the fixed note too" "grep -qF \"\${note}\" '${tmp}/issue-comments'"
+# feedback run at the turn limit: the reply is the fixed note, not the transcript
+: > "${BODY_LOG}"; rm -f "${JOBS}"/pr-42.*
+start_job pr-42 feedback_job 42 agent/alice/issue-5 T 2026-11-07T10:00:00Z; wait
+check "#336: a feedback run at the turn limit replies with the fixed note" \
+  "grep -qF \"\${note}\" '${BODY_LOG}' && ! grep -q -e SECRET-TRANSCRIPT -e 'claude exited' '${BODY_LOG}'"
 
 exit ${fail}

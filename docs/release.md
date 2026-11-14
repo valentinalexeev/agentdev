@@ -81,6 +81,13 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    Check that every lower line is merged in: `scripts/release-lines.sh check --strict release/X.Y origin/release/X.Y`.
    Then branch `chore/release-X.Y.Z` from `release/X.Y`.
 2. In `CHANGELOG.md`, move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]`.
+   Give the section an `### Upgrade` part with numbered steps for an operator: what to do, whether it breaks, and
+   whether images and manifests must move together (#315). A pre-release tag (`X.Y.Z-rc.N`) gets its own section with
+   the same parts, so that the deployment repository can quote the steps from one place.
+   `scripts/upgrade-notes.sh <from> <to>` prints only these `### Upgrade` parts for the versions in (from, to]. It
+   reads `CHANGELOG.md` at tag `v<to>` of the agentdev repository that holds the script. It works from a
+   deployment repository too. `--repo <path or URL>` selects another agentdev clone. Before the tag exists, set `CHANGELOG_REF=chore/release-X.Y.Z`. Use its
+   output in the GitHub release and in the upgrade PR of the deployment repository.
 3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
    point in `examples/deployment/gcp-gke/terraform/main.tf` (`public_hosts`, `cloud_armor` and `output "ingress"`),
    so the template matches `private-deployment.md`, which needs `public_hosts` and `terraform output ingress`.
@@ -88,7 +95,10 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    review. The `Release lines` workflow fails the PR if a lower line is not merged in.
 5. After the owner merges, the owner (or the bot on explicit permission) pushes the tag on that merge commit:
    `git tag vX.Y.Z <merge commit on release/X.Y> && git push origin vX.Y.Z`.
-   For a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`.
+   An owner `APPROVED` review on the current head of the release PR is that permission for this one tag
+   (`CLAUDE.md` §7a step 5); the bot then also merges the PR and does steps 6 to 9.
+   For a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`. Close the released milestone.
 6. Check that `images.yml` publishes the images at `X.Y.Z`, then make the GitHub release with the CHANGELOG section.
 7. Upgrade the reference private deployment by its normal PR flow.
 8. Merge the line forward, one PR per hop up to the highest line: `scripts/release-lines.sh forward release/X.Y`.
+9. Report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.

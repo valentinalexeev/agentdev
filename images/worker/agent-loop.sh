@@ -384,6 +384,15 @@ new_session_id() {
   local u; u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null) || return 1
   u=${u,,}; [[ "${u}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && echo "${u}"
 }
+
+# stopped_note <rc> <class>: fixed text for a run where Claude exited non-zero (#336). Only the exit code and the fixed
+# class (error, max-turns, rate-limit); never the result text or stderr.
+stopped_note() {
+  local hint=""
+  [[ "$2" == max-turns ]] && hint=" The run used all ${MAX_TURNS} turns (\`max_turns\`). A larger value in \`instance.yml\` can help."
+  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`).${hint} Review the diff with care."
+}
+
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
   local dir=$1 prompt=$2 sess=() sf="" sid=""
   if [[ -n "${JOB:-}" ]]; then
@@ -430,9 +439,16 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   fi
   # stderr is never logged (review #102: with --verbose it can carry transcript or tool output); only the exit code and
   # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
+  # The class goes to stderr: stdout of run_claude is the result text that becomes a PR body or comment (#336).
+  # The caller gets "<rc> <class>" in ${CLAUDE_EXIT_FILE}, because result=$(run_claude ...) runs in a subshell.
   if [[ ${rc} -ne 0 ]]; then
-    local why=error; grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
-    log "claude exited ${rc} (${why}; stderr not logged)"
+    local why=error
+    grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
+    # max turns: read only the subtype field of the result event, never its text (#336)
+    [[ "$(jq -rs '[.[] | objects | select(.type == "result")] | last | .subtype // empty | strings' <<<"${out}" 2>/dev/null)" \
+       == error_max_turns ]] && why="max-turns"
+    log "claude exited ${rc} (${why}; stderr not logged)" >&2
+    [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s\n' "${rc}" "${why}" > "${CLAUDE_EXIT_FILE}"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"
@@ -634,7 +650,7 @@ ${RUN_CONTRACT}"
 
 # one issue -> one PR, in its own worktree (runs as a background job)
 issue_job() {
-  local n=$1 base=$2 issue title body branch dir result claude_rc=0
+  local n=$1 base=$2 issue title body branch dir result claude_rc=0 stopped="" exitf
   issue=$(api GET "/repos/${REPO}/issues/${n}") || return
   title=$(jq -r .title <<<"${issue}"); body=$(jq -r '.body // ""' <<<"${issue}")
   branch="agent/${FORGE_USER}/issue-${n}"
@@ -648,11 +664,18 @@ issue_job() {
   dir=$(worktree "${branch}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"   # #174: the SIGTERM handler saves work in progress here
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
-  result=$(claude_step "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
+  exitf="${STATE}/jobs/claude-exit-issue-${n}"; rm -f "${exitf}"
+  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(issue_prompt "${n}" "${title}" "${body}" "$(issue_discussion "${n}")")") || claude_rc=$?
   # rate limit (#93): keep the work, retry after the pause; no "could not produce a change" comment
   if [[ ${claude_rc:-0} == 75 ]]; then
     board_card "issue-${n}" "#${n} ${title}" blocked "Claude usage limit reached, will resume" "$(web_url "issues/${n}")"; return 1
   fi
+  # Claude failed or stopped early (#336): the fixed note replaces the summary. The work tree may still have a change.
+  if [[ ${claude_rc:-0} != 0 ]]; then
+    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
+    stopped=$(stopped_note "${erc}" "${ewhy}"); result=""
+  fi
+  rm -f "${exitf}"
   local status summary
   status=$(run_status "${result}"); summary=$(run_summary "${result}")
   # #234: a question or a blocker is answered on the issue and nothing is pushed, even if the tree has changes
@@ -681,7 +704,9 @@ ${summary}"
     [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
           --arg d "Closes #${n}
 
-${summary}
+${stopped:+> ${stopped}
+
+}${summary}
 $([[ "${status}" == partial ]] && printf '\n**Partial:** the agent reports that part of the issue is still open (see above).\n')
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
@@ -695,6 +720,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
         || log "could not label PR #${pr} agent:${FORGE_USER}"
     fi
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
+    [[ -n "${stopped}" ]] && comment "${n}" "🤖 I opened PR #${pr}, but: ${stopped}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
     echo "${n} ${title}" > "${STATE}/seen/pr-${pr}.board"   # issue number and title for later card updates
     # anything already on the PR at this point is ours; start the feedback cursor after it
@@ -704,7 +730,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     board_card "issue-${n}" "#${n} ${title}" blocked "could not produce a change (see the issue)" "$(web_url "issues/${n}")"
     comment "${n}" "🤖 I could not produce a change for this.
 
-${summary}"
+${stopped:-${summary}}"
     # done for now: without this the dispatcher would restart it at once (hot loop, repeated comments).
     # To retry, open a new issue (re-pickup of an issue is not supported yet).
     touch "${STATE}/seen/issue-${n}.done"
@@ -988,7 +1014,7 @@ board_finish() {
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg
+  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg exitf
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # #175: an interrupted job keeps its first cursor time, and does not reply twice
   if [[ "${RESUMING:-0}" == 1 && -r "$(jobf now)" ]]; then read -r now < "$(jobf now)"; [[ "${now}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || now=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
@@ -1016,9 +1042,17 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
-  result=$(claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
+  exitf="${STATE}/jobs/claude-exit-pr-${pr}"; rm -f "${exitf}"
+  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
-  local status; status=$(run_status "${result}"); result=$(run_summary "${result}")
+  local status="done"
+  if [[ ${claude_rc:-0} != 0 ]]; then   # failed or stopped early (#336): a fixed note, never a log line
+    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
+    result=$(stopped_note "${erc}" "${ewhy}")
+  else
+    status=$(run_status "${result}"); result=$(run_summary "${result}")
+  fi
+  rm -f "${exitf}"
   if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
     # #234: reply only; the working tree is not pushed. The reviewers' next comment starts a new run.
     reply_threads "${pr}" "${threads}" "${result}" "" ""
