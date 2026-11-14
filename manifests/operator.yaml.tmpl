@@ -131,6 +131,10 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
+        - {name: FORWARDER_NS, value: "${FORWARDER_NS}"}
+        - {name: FORWARDER_SELECTOR, value: "${FORWARDER_SELECTOR}"}   # k=v,k2=v2 (ingress.forwarder.pod_selector)
+        - {name: FORWARDER_NOT_READY_MINUTES, value: "${FORWARDER_NOT_READY_MINUTES}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
