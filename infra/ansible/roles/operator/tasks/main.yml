@@ -95,6 +95,8 @@
         APPROVAL_RETENTION_DAYS: "{{ operator_approvals.retention_days }}"
         APPROVALS: "{{ operator_approvals.enabled | string | lower }}"
         APPROVAL_TIMEOUT_MINUTES: "{{ operator_approvals.timeout_minutes }}"
+        AGENT_GRACE_SECONDS: "{{ operator_rollout.grace_seconds }}"
+        DRAIN_MAX_MINUTES: "{{ operator_rollout.drain_max_minutes }}"
         EXEC_NS: "{{ operator_exec_ns }}"
         EXECUTOR_POLL_SECONDS: "{{ operator_executor.poll_seconds }}"
         EXECUTOR_RETENTION_DAYS: "{{ operator_executor.retention_days }}"

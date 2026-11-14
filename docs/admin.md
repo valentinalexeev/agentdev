@@ -946,6 +946,23 @@ WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Man
 
 NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 
+### External OIDC provider
+
+The API reads the issuer's discovery document when it starts and exits when it cannot (#334). With a provider that
+the playbook does not deploy (for example Pocket ID behind a reverse proxy), use this order:
+
+1. Deploy the provider first. If the deployment repository has its own manifests for it, apply them before the
+   playbook, or in an earlier CI step.
+2. Make sure that `<api.oidc_discovery_url>/.well-known/openid-configuration` answers from the cluster and from the
+   machine that runs the playbook.
+3. Run the playbook. Before the API rollout, the role `api` waits for that URL for `api.oidc_wait_seconds`
+   (default `300`). If the URL does not answer in that time, the playbook stops with a message that names it.
+   If the API rollout still fails (a pod in crash-loop back-off from an earlier run), the role restarts the API once
+   and waits again.
+
+A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on GKE) is not waited for: the role
+`authentik` waits for authentik.
+
 ### Reference: the API settings on GKE
 
 | `instance.yml` | Default | `kind` (`config.env`) |
@@ -953,6 +970,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
 | `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
 | `api.oidc_audience` | `agentdev` | `agentdev` |
+| `api.oidc_wait_seconds` | `300` | none |
 | `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
 | `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
@@ -2085,6 +2103,26 @@ permission. The agent examines this before each start. Else it does not do the w
 | Security findings | the agent replies in the thread of each `github-advanced-security[bot]` comment. It does not resolve the thread |
 | Not permitted | merge, labels, issue changes, GraphQL, `.github/workflows/` |
 
+### Reference: agents on Gitea
+
+| Item | Value |
+|---|---|
+| Account on Gitea | one account for each agent (the agent name) |
+| Work | open issues assigned to the agent by a person with write access |
+| Branches | `agent/<agent>/...` |
+| Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (`./run.sh 05`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
+| Router | finds the agent from the logins in the event and from the label `agent:<agent>` |
+| Not permitted | merge, other labels, issue changes |
+
+Differences from GitHub (#241):
+
+- **Code scanning:** Gitea has no code scanning API. The agent does not reply to security findings on Gitea.
+- **Inline review comments:** Gitea has no reply endpoint for a review comment. The agent answers all review
+  comments in one PR comment. Gitea shows that comment in the conversation of the PR.
+- **Session monitor:** `tools/ghwatch -forge gitea` reads a Gitea repository (token in `GITEA_TOKEN`). Gitea has no
+  repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
+  label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
+
 ## Limits and blocked agents
 
 ### Set a quota for the agents
@@ -2200,6 +2238,33 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
    If the dry run shows `no value for ${...}`, the new
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
+5. Look for the `template-drift` warning in the job summary of the pull request (#317). If there is a warning,
+   copy the changed parts of `examples/deployment/gcp-gke` at the new release into your repository.
+   An upgrade does not change your copy of `.github/workflows/deploy.yml`. You must copy it.
+
+You can also run the check on your computer:
+`<agentdev checkout>/scripts/template-drift.sh <deployment repo dir>`. The script reads `ref=` from
+`terraform/main.tf`. It shows the diff of `deploy.yml`, the blocks and module arguments of `main.tf`, and the keys
+of `ansible/instance.yml`. Instance values are not compared. With `--strict`, the script exits 1 on drift.
+
+### What happens to running jobs during an upgrade
+
+The operator replaces an agent pod only when the agent has no running job (#174). An idle or stopped agent changes at
+once. A busy agent finishes its jobs first, for at most `rollout.drain_max_minutes` (default 60). After that time, the
+operator replaces the pod. The agent saves its work in progress, and the job continues on the new pod.
+
+1. Look at the state of the agents:
+   `kubectl -n coding-agents get agents -o custom-columns='NAME:.metadata.name,UPDATED:.status.conditions[?(@.type=="Updated")].reason'`
+2. Wait until all agents show `Current`.
+
+### Drain an agent by hand
+
+Do this task before maintenance of a node, for example.
+
+1. Set the annotation: `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain=$(date +%s)`
+2. Look for the line `drain requested: no new jobs` in `kubectl -n coding-agents logs agent-<name>-0 -c agent`.
+3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
+   `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
 
 ### Upgrade the local installation
 
@@ -2247,7 +2312,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
-| Web UI | 11 | role `api` (`api.ui`) |
+| Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of

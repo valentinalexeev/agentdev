@@ -27,13 +27,15 @@ vars=$(jq -nc --argjson lb "${labels}" --argjson eh "$(json_list "${EGRESS_HOSTS
   --arg u5 "${USAGE_FIVE_HOUR:-80}" --arg uw "${USAGE_WEEKLY:-90}" \
   --arg to "${TELEMETRY_OTLP_URL:-}" --arg ti "${TELEMETRY_INSTANCE:-agentdev}" --arg tn "${TELEMETRY_SCRAPER_NS:-monitoring}" \
   --argjson ts "${TELEMETRY_SCRAPER_SELECTOR}" \
+  --arg gs "${AGENT_GRACE_SECONDS:-300}" --arg dm "${DRAIN_MAX_MINUTES:-60}" \
   '{operator_cost_labels: $lb, operator_egress_hosts: $eh, operator_egress_extra_hosts: $ex,
     operator_executor_egress_hosts: $xh, operator_claude_proxy: ($cp == "true"), operator_secrets_store_enabled: ($ss == "true"),
     operator_security: {pause_after: $pa, retention_days: $rd, max_per_agent: $mx, rate_per_min: $rp, rate_burst: $rb},
     operator_approvals: {enabled: ($ap == "true"), timeout_minutes: $at, retention_days: $ar},
     operator_executor: {poll_seconds: $xp, retention_days: $xr, apply_start_minutes: $xa},
     operator_usage: {five_hour: $u5, weekly: $uw},
-    operator_telemetry: {otlp_url: $to, instance: $ti, scraper_ns: $tn, scraper_selector: $ts}}')
+    operator_telemetry: {otlp_url: $to, instance: $ti, scraper_ns: $tn, scraper_selector: $ts},
+    operator_rollout: {grace_seconds: $gs, drain_max_minutes: $dm}}')
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags operator \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \
   -e "operator_image=${OPERATOR_IMAGE}" -e "operator_container_engine=${CONTAINER_ENGINE}" \
