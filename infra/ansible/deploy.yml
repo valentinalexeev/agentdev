@@ -105,6 +105,12 @@
         forge_webhook_secret: "{{ platform_secrets.results[2].stdout }}"
       no_log: true
 
+    - name: Refuse a claude-shared without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
+      vars:
+        claude_cred_text: "{{ claude_shared_env }}"
+        claude_cred_name: "{{ sm_claude_shared }}"
+
     - name: Namespace
       kubernetes.core.k8s:
         <<: *k8s
@@ -275,6 +281,16 @@
       register: agent_secrets
       changed_when: false
       no_log: true
+
+    # An agent-<name>-claude that exists but has no recognised key would silently fall back to claude-shared (#212).
+    - name: Refuse an agent-<name>-claude without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
+      vars:
+        claude_cred_text: "{{ agent_secrets.results[idx].stdout_lines[2:] | join('\n') }}"
+        claude_cred_name: "agent-{{ item.name }}-claude"
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      when: agent_secrets.results[idx].stdout_lines[2:] | map('trim') | select | list | length > 0
 
     - name: GitHub App private key (#2), only for the agents' forge sidecars
       ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_github_app_private_key }} --project {{ gcp_project }}
@@ -682,6 +698,7 @@
             forge: "{{ forge_kind }}"
             claudeSecret: "{{ ('claude-' + item.name) if (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list) else 'claude-shared' }}"
             maxConcurrent: "{{ (item.max_concurrent | default(max_concurrent)) | int }}"
+            maxTurns: "{{ (item.max_turns | default(max_turns)) | int }}"
             scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}

@@ -17,7 +17,7 @@ server {
     include /etc/nginx/snippets/security.conf;
     default_type application/json;
     add_header Cache-Control no-store;
-    return 200 '{"oidcIssuer":${OIDC_ISSUER_JSON},"oidcClientId":${OIDC_CLIENT_ID_JSON}}';
+    return 200 '{"oidcIssuer":${OIDC_ISSUER_JSON},"oidcClientId":${OIDC_CLIENT_ID_JSON},"oidcScopes":${OIDC_SCOPES_JSON}}';
   }
 
   # same-origin API: the browser never needs CORS. Resolved per request (variable + resolver), so the UI starts
