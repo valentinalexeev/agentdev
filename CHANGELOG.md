@@ -12,6 +12,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
   `deploy.yml` with the new API image; no `./run.sh` step.
 ### Fixed
+- kind step 09 (#304): the SSO stand-in check no longer fails on a new cluster. The step restarts authentik just
+  before the check, and the source `agentdev-sso` is not usable for a short time. `scripts/sso-check.py` now tries
+  the first redirect again for up to 60 seconds. Re-run: `./run.sh 09`. GKE does not change.
 - `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
   `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
 - Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
