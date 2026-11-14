@@ -14,7 +14,8 @@ k -n "${PLATFORM_NS}" get deploy agentdev-api >/dev/null 2>&1 || die "agentdev A
 t0=$(ms_now)
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags ui \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "api_ui_image=${UI_IMAGE}" \
-  -e "api_container_engine=${CONTAINER_ENGINE}" -e "api_oidc_issuer=${API_OIDC_ISSUER}"
+  -e "api_container_engine=${CONTAINER_ENGINE}" -e "api_oidc_issuer=${API_OIDC_ISSUER}" \
+  -e "api_oidc_client_id=${UI_OIDC_CLIENT_ID:-agentdev}" -e "api_ui_oidc_scopes=${UI_OIDC_SCOPES:-openid profile email forge}"
 record "agentdev UI up in ${PLATFORM_NS} (Ansible, $(( ($(ms_now)-t0)/1000 ))s)"
 echo "  UI:   ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/agentdev-ui 8091:8080  ->  http://localhost:8091/"
 echo "  also: ${KUBECTL} -n ${PLATFORM_NS} port-forward svc/authentik-server 9443:443   (login)"

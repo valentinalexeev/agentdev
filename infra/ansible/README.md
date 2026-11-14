@@ -10,12 +10,12 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 
 | Secret | Value |
 |---|---|
-| `claude-shared` | `KEY=VALUE` lines: `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` |
+| `claude-shared` | `KEY=VALUE` lines: `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. A bare token without the key name is refused (#212) |
 | `router-register-token` | random string (`openssl rand -hex 32`) |
 | `github-app-webhook-secret` | the GitHub App's webhook secret (#2) |
 | `github-app-private-key` | the GitHub App's private key (PEM, `.secrets/github-app/private-key.pem` from `scripts/github-app.sh convert`, #2) |
 | `agent-<name>-forge-token` | only with `forge_kind: gitea`: the agent's forge token. On GitHub the sidecar mints App installation tokens |
-| `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`) |
+| `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`, same format and check as `claude-shared`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
@@ -57,6 +57,16 @@ authentik issuer of the role `authentik`, #114; or any OIDC provider with a publ
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,
   table in `docs/admin.md`); restarts the API when one changes;
 - applies `manifests/api.yaml.tmpl` and waits for the rollout.
+- UI login (#323): `api.oidc_client_id` (default `agentdev`) is the public client of the UI. `api.oidc_audience`
+defaults to the same value. `api.ui_oidc_scopes` is the scope list that the UI requests:
+- authentik: keep the default `openid profile email forge` (the `profile` scope gives `groups`).
+- A provider that gives `groups` only when the scope is requested (for example Pocket ID): `openid profile email groups forge`.
+The UI reads both values from `/config.json` at runtime, so a change needs no new image.
+Claim contract (#322): the API verifies the access token (issuer, signature, `exp`, audience `api.oidc_audience`).
+It reads `groups` (with `agentdev-admins` for admins) and `forge_login_<kind>` or `forge_login` (the forge user)
+from the access token. When the token has none of these claims, the API calls the discovery `userinfo_endpoint`
+with the token and uses the claims from there. The userinfo `sub` must be the token's `sub`. A userinfo error or a
+different `sub` refuses the request (401). authentik puts the claims into the access token, so it makes no userinfo call.
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
 (`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
 source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
