@@ -55,4 +55,9 @@ out=$(failed_checks "{\"head\":{\"sha\":\"${sha}\"}}")
 check "failing and erroring statuses listed" "[[ \"\${out}\" == \$'- check ci/test: failure (2 tests failed)\n- check build: error' ]]"
 check "no check-runs call on Gitea" "! grep -q check-runs \"\${tmp}/calls\""
 check "bad sha: nothing asked" "[[ -z \$(failed_checks '{\"head\":{\"sha\":\"main\"}}') ]]"
+
+# #241 P5: the agent labels its own PR agent:<name> on Gitea too (body: label names)
+api() { echo "$1 $2 ${3:-}" >> "${tmp}/calls"; echo '[]'; }
+: > "${tmp}/calls"; label_own_pr 7
+check "own PR labelled agent:alice" "grep -qxF 'POST /repos/o/r/issues/7/labels {\"labels\":[\"agent:alice\"]}' \"\${tmp}/calls\""
 exit "${fail}"
