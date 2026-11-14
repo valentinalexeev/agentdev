@@ -207,3 +207,37 @@ func fakeGiteaPerms(t *testing.T, perms map[string]string) string {
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
+
+// #380: GET /api/agents lists only the agents the caller may see, with and without ?repo= (R35).
+func TestAgentListVisibility(t *testing.T) {
+	h, _ := detailEnv(t)
+	names := func(path, token string) string {
+		w := do(t, h, path, token)
+		if w.Code != 200 {
+			t.Fatalf("%s %s: %d %s", token, path, w.Code, w.Body)
+		}
+		var b struct {
+			Agents []agent `json:"agents"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &b)
+		var n []string
+		for _, a := range b.Agents {
+			n = append(n, a.Name)
+		}
+		return strings.Join(n, ",")
+	}
+	for _, c := range []struct{ path, token, want string }{
+		{"/api/agents", "writer", "alice"},         // project A only
+		{"/api/agents?repo=owner/y", "writer", ""}, // project B: nothing
+		{"/api/agents?repo=owner/x", "writer", "alice"},
+		{"/api/agents", "reader", "bob"}, // read on owner/x is not enough
+		{"/api/agents?repo=owner/x", "reader", ""},
+		{"/api/agents", "nobody", ""},
+		{"/api/agents", "group", "alice,bob"}, // admin
+		{"/api/agents?repo=owner/y", "group", "bob"},
+	} {
+		if got := names(c.path, c.token); got != c.want {
+			t.Errorf("%s %s: %q, want %q", c.token, c.path, got, c.want)
+		}
+	}
+}

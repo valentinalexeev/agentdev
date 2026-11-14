@@ -373,6 +373,35 @@ func (w *writer) visibleAgents(ctx context.Context, id *identity) []string {
 	return out
 }
 
+// filterVisible keeps the agents of list that the caller may see (R35, #380): all for an admin, else the agents with
+// at least one repository where the caller has forge write access. A forge error hides that repository (fail closed).
+func (w *writer) filterVisible(ctx context.Context, id *identity, list []agent) []agent {
+	if id != nil && w.isAdmin(id) {
+		return list
+	}
+	out := []agent{}
+	if id == nil {
+		return out
+	}
+	cache := map[string]bool{}
+	for _, a := range list {
+		for _, repo := range a.Repos {
+			key := a.Forge + "\x00" + repo
+			ok, seen := cache[key]
+			if !seen {
+				p, err := w.repoPerm(ctx, id, a.Forge, repo)
+				ok = err == nil && p >= permWrite
+				cache[key] = ok
+			}
+			if ok {
+				out = append(out, a)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // narrowAgents keeps the names of visible (nil = all) that have a repository passing sc.
 func narrowAgents(ctx context.Context, wr *writer, visible []string, sc scope) []string {
 	out := []string{}

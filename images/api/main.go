@@ -232,6 +232,12 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cannot read agents"})
 			return
 		}
+		// R35 (#380): an admin sees every agent, other users only agents with a repository where they have forge
+		// write access (as security events and agent detail); filtered before counts, scope and paging
+		if wr != nil {
+			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+			list = wr.filterVisible(r.Context(), id, list)
+		}
 		// counter badge on the overview (#70): events of the last 7 days per agent
 		if events != nil {
 			counts, err := events.Counts(r.Context(), time.Now().Add(-7*24*time.Hour))
