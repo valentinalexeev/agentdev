@@ -16,6 +16,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Platform updates safe while agents work (#177). The operator uses leader election (Lease `agentdev-operator` in the
+  operator namespace, new Role `agentdev-operator-leader`) and updates new-pod-first; `LEADER_ELECT=false` turns it off
+  for a local run. The loop waits for the Claude proxy before a run (`CLAUDE_PROXY_WAIT`, default 60 s) and resumes a
+  run that lost the proxy once, decided by its own health probe. API schema changes are expand-only, enforced by
+  `TestSchemaIsExpandOnly` against `images/api/testdata/schema-baseline.txt`. Re-run: `./run.sh 12` (kind) or the
+  playbook (GKE).
 - Rolling agent rollout with canary and health gate (#176). The agent template has a version (hash of the operator
   settings, pod annotation `agentdev/version`); on a change the canary moves first (`ROLLOUT_CANARY`, default the
   first agent by name) and must stay ready without a container restart for `ROLLOUT_GATE_SECONDS` (120); then the

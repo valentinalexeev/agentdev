@@ -2086,6 +2086,17 @@ operator replaces the pod. The agent saves its work in progress, and the job con
    `kubectl -n coding-agents get agents -o custom-columns='NAME:.metadata.name,UPDATED:.status.conditions[?(@.type=="Updated")].reason'`
 2. Wait until all agents show `Current`.
 
+### Update the platform while agents work
+
+The operator, router, API and egress proxies start the new pod before they stop the old one. The Claude proxy stops
+and starts again. Agent jobs wait for it (#177).
+
+1. Make sure that the system node pool can add one node. On GKE the pool has at most 2 nodes. The update can use the
+   second node for a short time.
+2. Look at the Lease holder of the operator:
+   `kubectl -n <platform namespace> get lease agentdev-operator -o jsonpath='{.spec.holderIdentity}'`
+   Only this pod changes agents.
+
 ### Watch the rollout and roll back
 
 An upgrade moves the canary agent first, then the other agents one at a time (#176). If the canary or an agent fails

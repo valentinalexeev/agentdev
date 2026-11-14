@@ -251,6 +251,22 @@ runner can start any program. So the security boundary is the pod, not the list 
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
 
+## Platform updates while agents work
+
+A platform update (#177) replaces the router, the operator, the Claude proxy, the API and the egress proxies while agent
+jobs run:
+
+- **Operator:** the update starts the new pod first. Only the holder of the Lease `agentdev-operator` (in the operator
+  namespace) reconciles; the old pod releases it when it stops, and the new pod takes over.
+- **Claude proxy:** one pod, replaced with `Recreate`, because it counts the token budget. Before each run the loop
+  waits until the proxy answers (`CLAUDE_PROXY_WAIT`, default 60 s). When a run fails and the loop's own check finds
+  the proxy down, the loop waits for it and resumes the same Claude session once (#175).
+- **API and database:** the schema only expands in a release (new tables, new columns with a default or nullable, new
+  indexes). The old API pod keeps working during the update. A unit test (`TestSchemaIsExpandOnly`) refuses a drop,
+  a rename, a type change and a new `NOT NULL` column without a default, and checks the columns of the previous release.
+- **System node pool:** new-pod-first needs room for one more pod. On GKE the system pool may add its second node during
+  an update (autoscaling, at most 2 nodes).
+
 ## Project secrets
 
 A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can
