@@ -160,9 +160,9 @@ for a in ${AGENTS}; do
     | k apply -f - >/dev/null
   # the agent itself (#47, #57): the operator renders its Service and StatefulSet; an existing one is adopted in place
   jq -n --arg n "${a}" --arg ns "${AGENTS_NS}" --arg repo "${REPO}" --arg claude "${secret}" --arg forge "${FORGE_KIND}" \
-      --arg maxc "${MAX_CONCURRENT}" --arg s2z "${SCALE_TO_ZERO}" \
+      --arg maxc "${MAX_CONCURRENT}" --arg maxt "${MAX_TURNS}" --arg s2z "${SCALE_TO_ZERO}" \
       '{apiVersion:"agentdev.dev/v1alpha1", kind:"Agent", metadata:{name:$n, namespace:$ns},
-        spec:{repo:$repo, forge:$forge, claudeSecret:$claude, maxConcurrent:($maxc|tonumber),
+        spec:{repo:$repo, forge:$forge, claudeSecret:$claude, maxConcurrent:($maxc|tonumber), maxTurns:($maxt|tonumber),
               scaleToZero:($s2z|ascii_downcase|IN("true","1","yes"))}}' \
     | k apply --server-side --force-conflicts --field-manager=agentdev -f - >/dev/null
   if [[ "${blocked}" == true ]]; then
