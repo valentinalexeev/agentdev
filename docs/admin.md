@@ -2227,6 +2227,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
+| Scoped secrets store (External Secrets Operator, policies, store) | 13 (`kind.yml --tags secrets`, role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |

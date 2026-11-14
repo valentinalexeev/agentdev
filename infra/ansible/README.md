@@ -132,6 +132,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 10 | `api` | `api` (same role as GKE) |
 | 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
+| 13 | `secrets` | `secrets_store`, then `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
