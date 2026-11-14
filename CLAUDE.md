@@ -14,6 +14,7 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 4. Open GitHub Issues of `valentinalexeev/agentdev`, **only those assigned to `valentinalexeev-bot`**, in this order:
    open `incident` issues, then `in-progress`, then the rest by priority (lowest number first).
 5. Work the issue, check it against its acceptance criterion, update the issue.
+6. On every monitor check (default each 5 minutes), also do the milestone and release follow-up of §7a.
 
 ## 1. What this project is
 
@@ -110,7 +111,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
     pending hop and fails a release PR whose lower lines are not merged in.
   - A forward-merge PR with no conflict resolution and green CI may be merged by the bot **without** a fresh owner
     approval (owner, ADR 0004). This is the only exception to the approval rule below. A hop with a resolved
-    conflict needs the normal approval.
+    conflict needs the normal approval. The `Release lines` check classifies each `merge/` PR in its job summary:
+    **mechanical** (the bot may merge) or **resolved** (owner approval and review needed). Both pass, because the
+    check is required and must not block an approved resolved hop. The bot merges without approval only when the
+    summary says mechanical for the current head.
   - Support window: the latest minor and the one before it. Older lines get security fixes only, on request.
 - **Commit messages follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):**
   `<type>[(scope)][!]: <description>`, imperative, lower-case, no trailing period, then an optional body and footers.
@@ -254,6 +258,60 @@ required inputs.
 - Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
 - Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
   `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
-  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward.
+  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward. An owner
+  approval of the release PR on its current head is that permission for its one tag (§7a step 5).
 - `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
   of lower lines in version order.
+
+### 7a. Milestone and release follow-up (regular, on every monitor check)
+
+The agent does this on each check of §0 (every `WATCH_POLL_SECONDS`, default 5 minutes), after the owner events.
+Owner request: #354.
+
+1. **Track the open milestones.** For each supported line (§4 support window), the **patch** milestone is its rolling
+   `X.Y.x`. The **feature** milestone is the lowest open `X.Y.0` whose line is `main`. The **major** milestone is the
+   open `X.0.0` of `next/X.0`. Keep them in **one** status comment on the `roadmap` issue: edit that comment when
+   the set changes, do not add a new comment on each check.
+2. **Set the milestone of approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4)
+   and **no milestone**, set it by these rules, in this order:
+   1. `merge/` forward merges and `chore(release)` PRs: no milestone.
+   2. A stacked PR (base is not a line branch) takes the milestone of the PR at the bottom of its stack. This rule
+      wins over the type of its title.
+   3. A PR that closes or refers to an issue with a milestone takes that milestone.
+   4. `fix`, `perf`: the milestone of the line the PR targets. That is the patch milestone `X.Y.x` for
+      `release/X.Y` (the lowest supported line with the defect, §4), the feature milestone for `main` (`bugfix/`,
+      code not released yet), the major milestone for `next/X.0`.
+   5. `feat`, `refactor` into `main`: the feature milestone.
+   6. Any type with `!` or a `BREAKING CHANGE` footer: the major milestone. If there is no open major milestone or no
+      `next/X.0` line, comment and ask.
+   7. `docs`, `test`, `ci`, `build`, `chore`, `style`, `revert`: the milestone of the line the PR targets.
+   A PR that has a milestone keeps it: on a mismatch with these rules, comment and ask, do not change it. Any case
+   the rules do not cover (for example a `feat` into `release/X.Y`) gets a comment, not a guess.
+3. **Merge** approved PRs by §4 (head pinned, green CI, review line), then go on.
+4. **Open the release PR** when all of these are true for a milestone:
+   - it has at least one closed issue or merged PR, and no open issue or PR except its tracking issue;
+   - the `## [Unreleased]` section of its line is not empty;
+   - its line branch exists. For a new minor `X.Y.0`, the scope freeze and the cut of `release/X.Y` are owner
+     decisions: ask on the tracking issue, do not cut the line alone.
+   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
+   `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested, an independent review
+   (§4). For a patch, the version is the next free `X.Y.Z` on the line. Never open a second release PR for one
+   milestone.
+5. **Run the full release after the owner approves the release PR.** Owner decision (#354, PR #355): an owner
+   `APPROVED` review on the current head of a `chore/release-X.Y.Z` PR is the explicit permission (§3) for the tag
+   `vX.Y.Z` and the other steps of that one release. It is not permission for any other tag. Before the merge, CI
+   must be green (`Release lines` included) and the independent review line must name the head. Then, without a new
+   question, follow `docs/release.md` §6 steps 5 to 9:
+   1. merge the PR (§4, head pinned);
+   2. tag the merge commit and push the tag;
+   3. for a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`; close the released milestone;
+   4. wait for `images.yml` to publish every image at `X.Y.Z`, at most 6 checks (30 minutes); then create the GitHub
+      release from the CHANGELOG section. If the images are not there after 6 checks, comment and stop;
+   5. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review. If
+      the bot has no write access there, post the diff on the tracking issue and ask (§3);
+   6. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
+      without conflict resolution and with green CI merges without a new approval (§4);
+   7. report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
+   A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else
+   comment on the release PR and ask the owner.
+6. Never move or delete a tag, and never release from a PR that is not approved on its current head.
