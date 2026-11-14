@@ -25,12 +25,14 @@ vars=$(jq -nc --argjson lb "${labels}" --argjson eh "$(json_list "${EGRESS_HOSTS
   --arg ap "${APPROVALS:-false}" --arg at "${APPROVAL_TIMEOUT_MINUTES:-30}" --arg ar "${APPROVAL_RETENTION_DAYS:-90}" \
   --arg xp "${EXECUTOR_POLL_SECONDS}" --arg xr "${EXECUTOR_RETENTION_DAYS}" --arg xa "${EXECUTOR_APPLY_START_MINUTES}" \
   --arg u5 "${USAGE_FIVE_HOUR:-80}" --arg uw "${USAGE_WEEKLY:-90}" \
+  --arg gs "${AGENT_GRACE_SECONDS:-300}" --arg dm "${DRAIN_MAX_MINUTES:-60}" \
   '{operator_cost_labels: $lb, operator_egress_hosts: $eh, operator_egress_extra_hosts: $ex,
     operator_executor_egress_hosts: $xh, operator_claude_proxy: ($cp == "true"), operator_secrets_store_enabled: ($ss == "true"),
     operator_security: {pause_after: $pa, retention_days: $rd, max_per_agent: $mx, rate_per_min: $rp, rate_burst: $rb},
     operator_approvals: {enabled: ($ap == "true"), timeout_minutes: $at, retention_days: $ar},
     operator_executor: {poll_seconds: $xp, retention_days: $xr, apply_start_minutes: $xa},
-    operator_usage: {five_hour: $u5, weekly: $uw}}')
+    operator_usage: {five_hour: $u5, weekly: $uw},
+    operator_rollout: {grace_seconds: $gs, drain_max_minutes: $dm}}')
 # 13-secrets.sh calls this script with KIND_TAGS=secrets and its own -e values as arguments (one list of operator settings)
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags "${KIND_TAGS:-operator}" "$@" \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \

@@ -65,6 +65,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   wall, phase matrix, Projects page), the Chat page for interactive sessions (thread, tool steps, permission cards,
   issue drafts the person creates), needed API and phases. `console-prototype.html` shows every screen with a small
   and a large example.
+- Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
+  operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
+  when no job runs, and the operator then replaces the pod (at once when the pod does not run; after
+  `DRAIN_MAX_MINUTES`, default 60, in any case). On SIGTERM the loop saves the work in progress of running jobs as a
+  local commit and the job continues on the next pod (#175); `terminationGracePeriodSeconds` is `AGENT_GRACE_SECONDS`
+  (default 300). Agent condition `Updated` shows the state. New settings: `config.env` `AGENT_GRACE_SECONDS`,
+  `DRAIN_MAX_MINUTES`; Ansible `rollout.grace_seconds`, `rollout.drain_max_minutes`. The operator Role gets `patch` and
+  `delete` on pods. Re-run: `./run.sh 06 12` (kind) or the playbook (GKE). The upgrade to this release itself still
+  replaces agent pods at once (the old StatefulSets use `RollingUpdate`); later upgrades drain.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
@@ -275,6 +284,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
   `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
   `ANTHROPIC_API_KEY=...`; the message names the format, never the value. Test: `infra/ansible/tests/claude_credential.yml`.
+- `images/worker/test/jobs.test.sh` failed the case "after the backoff it runs again" on Alpine (`bash:5`) (#281).
+  BusyBox `sed` has no `-u`, so every stub job failed. The worker image uses GNU `sed` and is not affected. The test
+  now checks its prerequisites (GNU `sed -u`, `flock`) first and names the missing package.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account

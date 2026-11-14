@@ -2119,6 +2119,25 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
 
+### What happens to running jobs during an upgrade
+
+The operator replaces an agent pod only when the agent has no running job (#174). An idle or stopped agent changes at
+once. A busy agent finishes its jobs first, for at most `rollout.drain_max_minutes` (default 60). After that time, the
+operator replaces the pod. The agent saves its work in progress, and the job continues on the new pod.
+
+1. Look at the state of the agents:
+   `kubectl -n coding-agents get agents -o custom-columns='NAME:.metadata.name,UPDATED:.status.conditions[?(@.type=="Updated")].reason'`
+2. Wait until all agents show `Current`.
+
+### Drain an agent by hand
+
+Do this task before maintenance of a node, for example.
+
+1. Set the annotation: `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain=$(date +%s)`
+2. Look for the line `drain requested: no new jobs` in `kubectl -n coding-agents logs agent-<name>-0 -c agent`.
+3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
+   `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.
