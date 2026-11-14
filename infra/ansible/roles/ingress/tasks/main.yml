@@ -30,3 +30,23 @@
   loop_control: {label: "{{ item.name }}"}
   vars:
     ingress_forwarder_objects: "{{ lookup('ansible.builtin.template', 'forwarder.yaml.j2') | from_yaml_all | list }}"
+
+# forwarder watch (#213): the operator reads the forwarder pods (get, list) to record a SecurityEvent when none is Ready.
+# Only with ingress.forwarder namespace and pod_selector; otherwise the Role and RoleBinding are removed.
+- name: Role for the operator's forwarder watch
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: "{{ 'present' if ingress_forwarder_watch | bool else 'absent' }}"
+    definition:
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata: {name: agentdev-operator-forwarder-watch, namespace: "{{ ingress_forwarder_watch_ns }}",
+                   labels: {app.kubernetes.io/part-of: agentdev}}
+        rules: [{apiGroups: [""], resources: [pods], verbs: [get, list]}]
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata: {name: agentdev-operator-forwarder-watch, namespace: "{{ ingress_forwarder_watch_ns }}",
+                   labels: {app.kubernetes.io/part-of: agentdev}}
+        roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator-forwarder-watch}
+        subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: "{{ platform_ns }}"}]
+  when: ingress_forwarder_watch_ns | length > 0
