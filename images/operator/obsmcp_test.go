@@ -228,6 +228,12 @@ func TestObsCloudLoggingAddOn(t *testing.T) {
 	if gotAuth != "Bearer wi-token" || !strings.Contains(gotBody, "projects/my-project-1") || !strings.Contains(gotBody, "2026-11-07T11:00:00Z") {
 		t.Fatalf("auth %q body %q", gotAuth, gotBody)
 	}
+	// #250: an unbalanced filter is refused before the API call (it could also drop the time bound)
+	gotBody = ""
+	out, isErr = callText(t, cs, "cloud_logging_query", map[string]any{"filter": `x) OR (y`})
+	if !isErr || !strings.HasPrefix(out, "filter:") || gotBody != "" {
+		t.Fatalf("unbalanced filter: %v %q (backend saw %q)", isErr, out, gotBody)
+	}
 }
 
 func TestObsConfigFromEnv(t *testing.T) {
@@ -248,6 +254,20 @@ func TestObsConfigFromEnv(t *testing.T) {
 		}
 		if _, err := obsConfigFromEnv(); (err == nil) != tc.ok {
 			t.Errorf("%v: err=%v", tc.env, err)
+		}
+	}
+}
+
+// #250: filters the API would reject are refused before the call, and none can close the wrapper's parenthesis
+func TestCheckLoggingFilter(t *testing.T) {
+	for _, f := range []string{`severity>=ERROR`, `(a="x" OR b="y") AND c`, `textPayload:"a ) b ("`, `jsonPayload.m="say \"(\" now"`} {
+		if err := checkLoggingFilter(f); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	for _, f := range []string{`(severity>=ERROR`, `severity>=ERROR)`, `a) OR (b`, `textPayload:"open`, `x) OR timestamp>="2000-01-01" OR (y`} {
+		if checkLoggingFilter(f) == nil {
+			t.Errorf("%s: accepted", f)
 		}
 	}
 }

@@ -12,6 +12,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   the agents.
 
 ### Security
+- obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses or an unterminated string before the API
+  call (#250); such a filter could also close the tool's `(<filter>) AND timestamp>=...` wrapper and drop the time
+  bound.
 - R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
   Other users see only the events of agents with a repository where they have write access on the forge. Before,
   each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
