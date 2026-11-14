@@ -19,6 +19,12 @@ rules:
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
+# console chat sessions (#346): the API starts and ends chat-* Jobs and reads their pods' addresses. The Job shape is
+# held by the ValidatingAdmissionPolicy agentdev-api-chat-jobs below (no Secrets other than the chat clone token and
+# the agent's proxy key, gVisor, no service account token). Created even with chat off, so turning it on needs no RBAC change.
+# delete cannot be narrowed by label in RBAC: the ValidatingAdmissionPolicy agentdev-api-chat-jobs-delete allows only chat-* console Jobs
+- {apiGroups: [batch], resources: [jobs], verbs: [get, list, create, delete]}
+- {apiGroups: [""], resources: [pods], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -57,6 +63,23 @@ spec:
         # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
         - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
         - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
+        # console chat sessions (#346, images/api/chat.go): Jobs in ${AGENTS_NS} that run the worker image's session
+        # server. CHAT_TOKEN_KEY (Secret agentdev-api-chat) derives the per-session token for the session servers;
+        # CHAT_ISSUE_TOKEN (same Secret, Gitea only) creates issues from drafts as the person (Sudo).
+        - {name: CHAT_SESSIONS, value: "${CHAT_SESSIONS}"}
+        - {name: CHAT_WORKER_IMAGE, value: "${CHAT_WORKER_IMAGE}"}
+        - {name: CHAT_IMAGE_PULL_POLICY, value: "${CHAT_IMAGE_PULL_POLICY}"}
+        - {name: CHAT_FORGE_URL, value: "${CHAT_FORGE_URL}"}
+        - {name: CHAT_CLAUDE_PROXY_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"}
+        - {name: CHAT_EGRESS_PROXY, value: "http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"}
+        - {name: CHAT_IDLE_SECONDS, value: "${CHAT_IDLE_SECONDS}"}
+        - {name: CHAT_RETENTION_DAYS, value: "${CHAT_RETENTION_DAYS}"}
+        - {name: CHAT_MAX_SESSIONS, value: "${CHAT_MAX_SESSIONS}"}
+        - {name: CHAT_MAX_SESSIONS_PER_USER, value: "${CHAT_MAX_SESSIONS_PER_USER}"}
+        - name: CHAT_TOKEN_KEY
+          valueFrom: {secretKeyRef: {name: agentdev-api-chat, key: CHAT_TOKEN_KEY, optional: true}}
+        - name: CHAT_ISSUE_TOKEN
+          valueFrom: {secretKeyRef: {name: agentdev-api-chat, key: CHAT_ISSUE_TOKEN, optional: true}}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
@@ -139,3 +162,81 @@ spec:
   ingress:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: coding-agent}}}]
     ports: [{port: 8081}]
+---
+# console chat sessions (#346): the session server in a chat pod accepts only the API. The pod also checks a
+# per-session token and refuses requests from its own addresses (images/worker/chat-session-server.js).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: chat-session-server, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: agent-chat, agentdev/console: "true"}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}]
+    ports: [{port: 7681}]
+---
+# The API may create Jobs (#346). This policy holds every Job the API's service account writes to the chat session
+# shape, so the Role cannot be used to run another image or to mount another Secret.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-api-chat-jobs}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [batch], apiVersions: ["*"], operations: [CREATE, UPDATE], resources: [jobs]}
+  matchConditions:
+  - {name: api-only, expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-api'"}
+  variables:
+  - {name: pod, expression: "object.spec.template.spec"}
+  - {name: agent, expression: "has(object.metadata.labels) && 'agentdev/chat-agent' in object.metadata.labels ? object.metadata.labels['agentdev/chat-agent'] : ''"}
+  - {name: all, expression: "variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"}
+  validations:
+  - expression: "object.metadata.name.startsWith('chat-') && object.metadata.labels['app'] == 'agent-chat' && object.metadata.labels['agentdev/console'] == 'true' && variables.agent.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
+    message: "the API creates only console chat Jobs (chat-*, app=agent-chat, agentdev/console=true)"
+  - expression: "object.spec.template.metadata.labels['app'] == 'agent-chat' && object.spec.template.metadata.labels['agentdev/console'] == 'true'"
+    message: "chat pods keep the labels the egress and ingress policies select"
+  - expression: "variables.all.all(c, c.image == '${CHAT_WORKER_IMAGE}')"
+    message: "chat Jobs run only the worker image"
+  - expression: "variables.pod.runtimeClassName == 'gvisor' && variables.pod.automountServiceAccountToken == false && (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == 'default') && (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC)"
+    message: "chat pods run under gVisor without a service account token or host namespaces"
+  - expression: "variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.configMap) && v.configMap.name == 'agentdev-guides'))"
+    message: "chat pods mount only emptyDir and the guide ConfigMap"
+  - expression: "variables.all.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && (e.valueFrom.secretKeyRef.name == 'agent-' + variables.agent + '-proxy' || (c.name == 'clone' && e.valueFrom.secretKeyRef.name == 'agentdev-chat-clone'))))))"
+    message: "chat pods read only the agent's proxy key, and the clone step only agentdev-chat-clone"
+  - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"
+    message: "no privileged chat containers"
+  - expression: "variables.all.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
+    message: "chat containers add no capabilities"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-api-chat-jobs}
+spec:
+  policyName: agentdev-api-chat-jobs
+  validationActions: [Deny]
+---
+# RBAC cannot narrow delete by label: this policy lets the API's service account delete only console chat Jobs
+# (not the CLI chat Jobs of scripts/agent-chat.sh or any other Job in ${AGENTS_NS}).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [batch], apiVersions: ["*"], operations: [DELETE], resources: [jobs]}
+  matchConditions:
+  - {name: api-only, expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-api'"}
+  validations:
+  - expression: "oldObject != null && oldObject.metadata.name.startsWith('chat-') && has(oldObject.metadata.labels) && 'agentdev/console' in oldObject.metadata.labels && oldObject.metadata.labels['agentdev/console'] == 'true' && oldObject.metadata.labels['app'] == 'agent-chat'"
+    message: "the API deletes only console chat Jobs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  policyName: agentdev-api-chat-jobs-delete
+  validationActions: [Deny]

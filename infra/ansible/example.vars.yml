@@ -14,6 +14,12 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
 #   max_agents: 0                         # #27: cap on all agents for UI/API creates; 0 = no cap
 #   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
+#   chat:                                 # console chat sessions (#346, docs/admin.md "Chat sessions")
+#     enabled: false
+#     idle_minutes: 30                    #   a session ends this long after the last viewer left
+#     retention_days: 30                  #   transcripts, readable with read access to the repository
+#     max_sessions: 0                     #   running sessions on the instance; 0 = no cap
+#     max_sessions_per_user: 0
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate

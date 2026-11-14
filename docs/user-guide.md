@@ -124,6 +124,35 @@ You can connect from this computer or from a different computer that has access 
 NOTE: A session stops automatically after 30 minutes with no person connected. The `IDLE_SECONDS` setting changes
 this time.
 
+### Discuss the project in the console Chat page
+
+You can also use a session in the web console. The console and the terminal show the same session.
+
+1. Open **Chat** and select **New session**. Select the agent of the project.
+   You must have write access to the repository of the agent.
+2. Write your message and push **Send**.
+3. When Claude asks for a permission, select **Allow once** or **Deny**.
+4. When Claude writes an issue draft, examine it. Select **Create issue** to make the issue on the forge.
+   Claude cannot make the issue. Only you can.
+5. To stop the session, select **End**.
+
+To see the same session in a terminal (you need `kubectl` access to the cluster):
+
+1. Find the pod of the session: `kubectl -n coding-agents get pods -l app=agent-chat,agentdev/console=true,session=<session id>`.
+2. Run `kubectl -n coding-agents exec -it <pod> -c chat -- tmux attach -t chat`.
+3. To leave, push `Ctrl-b` and then `d`.
+
+NOTE: The terminal view only shows the session. You cannot send messages, answer permissions or create issues from it.
+Use the console for these. The terminal view keeps the session open for at most 2 hours after the last person
+leaves the console.
+
+NOTE: A person with read access can see the session and its transcript, but cannot send messages.
+A person with no access to the repository does not see the session.
+
+NOTE: The session stops 30 minutes after the last person closes it in the console or in the terminal (a terminal
+view counts for at most 2 hours after the last console viewer).
+The console keeps the transcript for 30 days.
+
 ## See the work of all agents
 
 If your instance has botboard, open botboard. Botboard shows one card for each issue. Each card shows:

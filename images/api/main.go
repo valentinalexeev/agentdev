@@ -113,6 +113,9 @@ func main() {
 			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 		go func() { log.Fatal(isrv.ListenAndServe()) }()
 	}
+	if os.Getenv("CHAT_SESSIONS") == "true" { // console chat sessions (#346, chat.go)
+		chatSvc = chatFromEnv(ctx, wr, agents, store, gh)
+	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
 	log.Printf("agentdev-api on %s, issuer %s, namespace %s", cfg.Addr, cfg.Issuer, cfg.Namespace)
@@ -262,7 +265,40 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
 	}
+	if chatSvc != nil && wr != nil {
+		chatSvc.routes(mux, verify)
+	}
 	return mux
+}
+
+// chatSvc serves /api/sessions (#346); nil when CHAT_SESSIONS is not true.
+var chatSvc *chatAPI
+
+// chatFromEnv builds the chat service. A missing CHAT_TOKEN_KEY or worker image stops the API (fail closed).
+func chatFromEnv(ctx context.Context, wr *writer, agents *kubeAgents, events eventStore, gh *githubForge) *chatAPI {
+	key := os.Getenv("CHAT_TOKEN_KEY")
+	if len(key) < 32 {
+		log.Fatal("CHAT_SESSIONS=true needs CHAT_TOKEN_KEY (Secret agentdev-api-chat, 32 characters or more)")
+	}
+	jc := chatJobConfig{Namespace: agents.ns, WorkerImage: os.Getenv("CHAT_WORKER_IMAGE"), PullPolicy: env("CHAT_IMAGE_PULL_POLICY", "IfNotPresent"),
+		ForgeURL: os.Getenv("CHAT_FORGE_URL"), ClaudeProxyURL: os.Getenv("CHAT_CLAUDE_PROXY_URL"), EgressProxy: os.Getenv("CHAT_EGRESS_PROXY"),
+		IdleSeconds: envInt("CHAT_IDLE_SECONDS", 1800), MaxSeconds: int64(envInt("CHAT_MAX_SECONDS", 28800))}
+	if jc.WorkerImage == "" || jc.ForgeURL == "" || jc.ClaudeProxyURL == "" || jc.EgressProxy == "" {
+		log.Fatal("CHAT_SESSIONS=true needs CHAT_WORKER_IMAGE, CHAT_FORGE_URL, CHAT_CLAUDE_PROXY_URL and CHAT_EGRESS_PROXY")
+	}
+	days := envInt("CHAT_RETENTION_DAYS", 30)
+	chatRetentionDays = days
+	var store chatStore = newMemChat()
+	if pg, ok := events.(*pgStore); ok {
+		store = pg
+	}
+	c := newChatAPI(ctx, wr, agents, store, &kubeChat{c: agents.c, cfg: jc},
+		newForgeIssues(os.Getenv("FORGE_URL"), os.Getenv("CHAT_ISSUE_TOKEN"), gh),
+		chatConfig{TokenKey: []byte(key), MaxTotal: envCount("CHAT_MAX_SESSIONS"), MaxPerUser: envCount("CHAT_MAX_SESSIONS_PER_USER"),
+			Retention: time.Duration(days) * 24 * time.Hour})
+	c.resume()
+	log.Printf("chat sessions on (idle end %ds, transcripts %d days)", jc.IdleSeconds, days)
+	return c
 }
 
 type ctxIdentity struct{}

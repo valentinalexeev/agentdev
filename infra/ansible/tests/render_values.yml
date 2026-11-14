@@ -15,7 +15,7 @@
     platform_sm_prefix: platform-
     approvals: {enabled: true}
     usage: {five_hour: 70, weekly: 85}
-    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2}
+    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2, chat: {enabled: true}}
   tasks:
     - name: Load the role defaults
       ansible.builtin.include_vars: ../roles/api/defaults/main.yml
@@ -41,6 +41,14 @@
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             MAX_AGENTS: "{{ api_max_agents }}"
             MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+            CHAT_SESSIONS: "{{ api_chat | string | lower }}"
+            CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"
+            CHAT_IMAGE_PULL_POLICY: "{{ api_chat_image_pull_policy }}"
+            CHAT_FORGE_URL: "{{ api_chat_forge_url }}"
+            CHAT_IDLE_SECONDS: "{{ api_chat_idle_seconds }}"
+            CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
+            CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
+            CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
           replace: []
 
     - name: The API container gets the values
@@ -55,6 +63,14 @@
           - env.USAGE_WEEKLY == '85'
           - env.MAX_AGENTS == '2'   # #27
           - env.MAX_AGENTS_PER_USER == '0'
+          - env.CHAT_SESSIONS == 'true'   # #346
+          - env.CHAT_IDLE_SECONDS == '1800'
+          - env.CHAT_RETENTION_DAYS == '30'
+          - env.CHAT_WORKER_IMAGE == 'ghcr.io/example/agentdev-worker:v0.0.0'
+          - >-
+            (api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
+            | to_json is search('ghcr.io/example/agentdev-worker:v0.0.0')
+          - (api_docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'chat-session-server') | list | length) == 1
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder

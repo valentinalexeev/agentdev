@@ -63,6 +63,7 @@ issue in agentdev. A `FAIL` blocks the release, unless the owner records an acce
 | `executors` | own namespace; the agent cannot read or make Secrets, Executors, runs, Jobs or pods there; executor egress (#135): from an executor pod a direct connection fails, a host off its list is refused through the proxy and gives an `egress-host` event of the executor, a host on its list works. MANUAL: approval binding | R80 to R83, R97 |
 | `https` | HTTP to HTTPS; HSTS; TLS 1.1 refused; `/status`, `/healthz` and `/internal` not public; `/hook` refuses an unsigned body | R66 to R68 |
 | `api` | no token or a forged token gives 401; a decision without a person's token gives 401; a reader gets 403 for a change and for the audit | R42, R90 |
+| `chat` | NetworkPolicy `chat-session-server` lets only `agentdev-api` reach port 7681; a live probe from the agent pod to a running console chat pod is refused (GKE; kind does not enforce NetworkPolicy); server dry runs as `system:serviceaccount:<platform>:agentdev-api`: a chat Job of the right shape is allowed, a Job with another image, another Secret or added capabilities is denied by `agentdev-api-chat-jobs`, and deleting a non-console Job is denied by `agentdev-api-chat-jobs-delete`. The kind e2e (`scripts/e2e-compat.sh` with `COMPAT_API=1`) runs this section | R101 |
 | `sso` | the SSO source is configured. MANUAL: a user outside the Workspace domain or the admin group is refused (#134) | |
 | `github` | the agent takes the labelled issue, opens a pull request with you as reviewer, and replies to your review (#2) | |
 

@@ -51,3 +51,20 @@ api_db_pod: platform-db-0
 # web UI (#48) next to the API; the role ingress makes it public on https://<ingress.host>/ (#120)
 api_ui: "{{ api.ui | default(true) }}"
 api_ui_image: "{{ image_registry }}/agentdev-ui:{{ image_tag }}"
+# console chat sessions (#346, images/api/chat.go): API-started session Jobs in agents_ns. api.chat.enabled turns them
+# on. CHAT_TOKEN_KEY is generated once (Secret Manager api_sm_chat_key on GKE, .secrets/platform/chat-token-key on
+# kind). The clone token (read only) is agentdev-api's token on kind, the optional Secret Manager secret
+# api_sm_chat_clone_token on GKE. The issue token (Gitea site admin, write:issue, used with Sudo) is the optional
+# secret api_sm_chat_issue_token on GKE.
+api_chat: "{{ (api.chat | default({})).enabled | default(false) | bool }}"
+api_chat_idle_seconds: "{{ (api.chat | default({})).idle_minutes | default(30) | int * 60 }}"
+api_chat_retention_days: "{{ (api.chat | default({})).retention_days | default(30) }}"
+api_chat_max_sessions: "{{ (api.chat | default({})).max_sessions | default(0) }}"
+api_chat_max_sessions_per_user: "{{ (api.chat | default({})).max_sessions_per_user | default(0) }}"
+api_chat_worker_image: "{{ worker_image | default(image_registry ~ '/agentdev-worker:' ~ image_tag) }}"
+api_chat_image_pull_policy: IfNotPresent
+# the forge as the session pod reaches it: GitHub, or the in-cluster Gitea
+api_chat_forge_url: "{{ api_github_url if api_github else api_forge_url }}"
+api_sm_chat_key: agentdev-api-chat-token-key        # generated once
+api_sm_chat_clone_token: agentdev-chat-clone-token  # optional, read-only forge token for the clone
+api_sm_chat_issue_token: agentdev-chat-issue-token  # optional, Gitea only
