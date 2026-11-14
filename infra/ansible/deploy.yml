@@ -410,6 +410,7 @@
             # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
             SECRETS_STORE: ""
             SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
+            CREDENTIAL_BROKER_URL: ""   # #202 part 4 deploys the broker on GKE
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 

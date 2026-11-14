@@ -42,6 +42,10 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// scoped secrets (#202): ProjectSecrets apply to agents (SECRETS_STORE set); BrokerURL is the credential broker
+	// agents call (AGENTDEV_BROKER_URL), empty = no broker
+	Secrets   bool
+	BrokerURL string
 }
 
 type AgentReconciler struct {
@@ -92,13 +96,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	guideRetry := false
 	execs, err := r.executorsFor(ctx, &a)
 	if err == nil {
-		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs))
+		err = r.writeGuide(ctx, a.Namespace, a.Name, r.guideText(&a, execs)+r.secretsGuide(ctx, &a))
 	}
 	if err != nil {
 		l.Error(err, "harness guide not written, will retry", "agent", a.Name)
 		guideRetry = true
 	}
 
+	psecs, err := r.secretsFor(ctx, &a)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if wait, err := r.relayout(ctx, &a); err != nil || wait {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
@@ -109,7 +117,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
 		wasPaused := sts.Annotations["agentdev/paused"] == "true"
-		r.render(&a, sts)
+		r.render(&a, sts, psecs...)
 		if a.Spec.Paused {
 			sts.Annotations["agentdev/paused"] = "true"
 		} else {
@@ -131,6 +139,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if op != controllerutil.OperationResultNone {
 		l.Info("statefulset "+string(op), "agent", a.Name)
+	}
+
+	for i := range sts.Spec.Template.Spec.Containers {
+		if c := &sts.Spec.Template.Spec.Containers[i]; c.Name == "agent" && len(psecs) > 0 {
+			r.reportShadowed(ctx, &a, psecs, c)
+		}
 	}
 
 	if err := r.updateStatus(ctx, &a, sts); err != nil {
@@ -238,6 +252,10 @@ func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
 		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))
+	}
+	if r.D.Secrets {
+		// a ProjectSecret in mode env changes the pod of the agents it applies to (#202)
+		b = b.Watches(&v1.ProjectSecret{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfSecret))
 	}
 	return b.Named("agent").Complete(r)
 }

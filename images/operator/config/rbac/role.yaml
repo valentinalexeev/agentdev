@@ -47,6 +47,15 @@ rules:
   - get
 - apiGroups:
   - ""
+  resourceNames:
+  - credential-broker-routes
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
   resources:
   - persistentvolumeclaims
   verbs:
@@ -146,6 +155,16 @@ rules:
   resources:
   - executors/status
   - projectsecrets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resourceNames:
+  - credential-broker
+  resources:
+  - deployments
   verbs:
   - get
   - patch

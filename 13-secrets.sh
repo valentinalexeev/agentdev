@@ -34,4 +34,27 @@ done
   || die "SecretStore agentdev-secrets not ready: k -n ${AGENTS_NS} describe secretstore agentdev-secrets"
 ok "SecretStore agentdev-secrets ready"
 
+# the API writes values (write-only RBAC) and serves /api/secrets once it knows the values namespace
+SECRETS_VALUES_NS="${SECRETS_VALUES_NS}" PLATFORM_NS="${PLATFORM_NS}" \
+  envsubst '${SECRETS_VALUES_NS} ${PLATFORM_NS}' < "${SPIKE_DIR}/manifests/secrets-api.yaml.tmpl" | k apply -f - >/dev/null
+if k -n "${PLATFORM_NS}" get deploy agentdev-api >/dev/null 2>&1; then
+  k -n "${PLATFORM_NS}" set env deploy/agentdev-api SECRETS_VALUES_NS="${SECRETS_VALUES_NS}" >/dev/null
+  k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=180s >/dev/null || die "agentdev-api did not become ready"
+  ok "agentdev-api serves /api/secrets (values in ${SECRETS_VALUES_NS}, write-only)"
+fi
+
+# credential broker (#202, mode broker): the credproxy image (built and loaded by 06) with MODE=broker. It verifies the
+# agents' proxy keys with claude-proxy-signing, so it needs the credential proxy (06, CLAUDE_PROXY=true).
+if [[ "${CLAUDE_PROXY:-true}" == true ]] && k -n "${AGENTS_NS}" get secret claude-proxy-signing >/dev/null 2>&1; then
+  log "Credential broker"
+  broker_url="http://credential-broker.${AGENTS_NS}.svc.cluster.local:8080"
+  AGENTS_NS="${AGENTS_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never CREDENTIAL_BROKER_URL="${broker_url}" \
+    envsubst '${AGENTS_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CREDENTIAL_BROKER_URL}' \
+    < "${SPIKE_DIR}/manifests/credential-broker.yaml.tmpl" | k apply -f - >/dev/null
+  k -n "${AGENTS_NS}" rollout status deploy/credential-broker --timeout=120s >/dev/null || die "credential-broker did not become ready"
+  ok "credential-broker up: http://credential-broker.${AGENTS_NS}.svc.cluster.local:8080"
+else
+  warn "credential broker skipped: needs the credential proxy (run ./run.sh 6 with CLAUDE_PROXY=true first)"
+fi
+
 bash "${SPIKE_DIR}/12-operator.sh"

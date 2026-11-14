@@ -206,6 +206,13 @@ func main() {
 		os.Stdout.WriteString(agentKey(signing, os.Args[2]))
 		return
 	}
+	if os.Getenv("MODE") == "broker" { // credential broker for project secrets (#202, broker.go)
+		eventSource = "credential-broker"
+		bk := newBroker(signing, envOr("ROUTES_FILE", "/etc/credential-broker/routes/routes.json"),
+			envOr("VALUES_DIR", "/etc/credential-broker/values"), os.Getenv("SELF_URL"), brokerTransport())
+		serve(&http.Server{Addr: envOr("LISTEN", ":8080"), Handler: bk, ReadHeaderTimeout: 10 * time.Second}, "credential-broker")
+		return
+	}
 	up, err := url.Parse(envOr("UPSTREAM", "https://api.anthropic.com"))
 	// https only (review #119); plain http only for a local test with ALLOW_HTTP_UPSTREAM=true
 	if err != nil || up.Host == "" || (up.Scheme != "https" && !(up.Scheme == "http" && os.Getenv("ALLOW_HTTP_UPSTREAM") == "true")) {
@@ -217,7 +224,11 @@ func main() {
 	}
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
-	srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second}
+	log.Printf("claude-proxy upstream %s, default budget %d", up.Host, def)
+	serve(&http.Server{Addr: envOr("LISTEN", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second}, "claude-proxy")
+}
+
+func serve(srv *http.Server, name string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	go func() {
@@ -226,7 +237,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(c)
 	}()
-	log.Printf("claude-proxy listening on %s, upstream %s, default budget %d", srv.Addr, up.Host, def)
+	log.Printf("%s listening on %s", name, srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

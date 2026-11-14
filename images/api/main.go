@@ -95,6 +95,10 @@ func main() {
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
 	}
+	if vns := os.Getenv("SECRETS_VALUES_NS"); vns != "" { // #202: kind backend (Kubernetes Secrets); GKE: part 4
+		wr.secrets = &secretsAPI{w: wr, ps: agents, values: &kubeValues{k: agents, ns: vns}, agents: agents}
+		log.Printf("project secrets on, values in namespace %s", vns)
+	}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		dc := newDecider(agents, agents, gp, perms)
 		dc.github = gh
@@ -261,6 +265,13 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
+	}
+	if wr != nil && wr.secrets != nil { // project secrets (#202), write-only, see secrets.go
+		s := wr.secrets
+		mux.Handle("GET /api/secrets", auth(verify, http.HandlerFunc(s.list)))
+		mux.Handle("POST /api/secrets", auditAuth("secret-create", auth(verify, http.HandlerFunc(s.create))))
+		mux.Handle("PUT /api/secrets/{name}/value", auditAuth("secret-rotate", auth(verify, http.HandlerFunc(s.rotate))))
+		mux.Handle("DELETE /api/secrets/{name}", auditAuth("secret-delete", auth(verify, http.HandlerFunc(s.remove))))
 	}
 	return mux
 }

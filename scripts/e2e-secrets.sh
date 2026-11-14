@@ -95,6 +95,72 @@ spec: {provider: {kubernetes: {remoteNamespace: kube-system, server: {url: "http
 EOF
 ) && { no "operator wrote a SecretStore"; k -n "$ns" delete secretstore evil >/dev/null; } || ok "agentdev service accounts cannot write a SecretStore"
 
+# credential broker (#202 part 2): needs ./run.sh 13 with the credential proxy on
+if k -n "$ns" get deploy credential-broker >/dev/null 2>&1; then
+  k -n "$ns" apply -f - >/dev/null <<EOF
+apiVersion: agentdev.dev/v1alpha1
+kind: Agent
+metadata: {name: e2e-brk}
+spec: {repo: owner/repo, claudeSecret: claude-shared, paused: true}
+---
+apiVersion: agentdev.dev/v1alpha1
+kind: ProjectSecret
+metadata: {name: e2e-web}
+spec: {scope: agent, agent: e2e-brk, project: owner/repo, mode: broker, broker: {upstream: "https://example.com"}}
+EOF
+  printf '%s' "$val1" | k -n "$vns" create secret generic agentdev-ps-e2e-web --from-file=value=/dev/stdin >/dev/null 2>&1
+  signing=$(k -n "$ns" get secret claude-proxy-signing -o jsonpath='{.data.key}' | base64 -d)
+  key_of() { printf '%s.%s' "$1" "$(printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "$signing" -r | cut -d' ' -f1)"; }
+  good=$(key_of e2e-brk) other=$(key_of e2e-other)
+  for _ in $(seq 60); do
+    k -n "$ns" get configmap credential-broker-routes -o jsonpath='{.data.routes\.json}' 2>/dev/null | grep -q '"e2e-web".*"e2e-brk"' \
+      && [[ "$(k -n "$ns" get projectsecret e2e-web -o jsonpath='{.status.phase}')" == ready ]] && break
+    sleep 2
+  done
+  k -n "$ns" rollout status deploy/credential-broker --timeout=120s >/dev/null
+  sleep 5   # the projected volume follows the new Secret
+  burl="http://credential-broker.$ns.svc.cluster.local:8080/s/e2e-web/"
+  codes=$(k -n "$ns" run e2e-brk-curl --rm -i --restart=Never --quiet --image=curlimages/curl:8.11.1 \
+    --labels=app=coding-agent,agent=e2e-brk --env="G=$good" --env="O=$other" --command -- sh -c \
+    "for a in \"Bearer \$G\" \"Bearer \$O\" 'Bearer e2e-brk.00'; do curl -s -o /dev/null -w '%{http_code} ' -H \"Authorization: \$a\" $burl; done" 2>/dev/null)
+  read -r c_good c_other c_bad <<<"$codes"
+  [[ "$c_good" == 200 ]] && ok "broker forwards with the agent's key (via https://example.com)" || no "broker forward: $c_good"
+  [[ "$c_other" == 403 ]] && ok "broker refuses an agent outside the secret's scope" || no "out-of-scope agent: $c_other"
+  [[ "$c_bad" == 401 ]] && ok "broker refuses a wrong key" || no "wrong key: $c_bad"
+  for _ in $(seq 30); do
+    k -n "$ns" get securityevents -o jsonpath='{range .items[*]}{.spec.source}/{.spec.rule} {end}' | grep -q 'credential-broker/broker-secret-denied' && break
+    sleep 2
+  done
+  evs=$(k -n "$ns" get securityevents -o jsonpath='{range .items[*]}{.spec.source}/{.spec.rule} {end}')
+  [[ "$evs" == *credential-broker/broker-use* && "$evs" == *credential-broker/broker-secret-denied* ]] \
+    && ok "broker use and refusal recorded as SecurityEvents" || no "broker events missing: $evs"
+  k -n "$ns" logs deploy/credential-broker 2>/dev/null | grep -qF "$val1" && no "value in the broker log" || ok "value not in the broker log"
+  # acceptance of #202: a broker secret is not in any agent container (env, /proc/*/environ, files); needs running
+  # agents (./run.sh 06), skipped otherwise. The value is passed on stdin, so it is not in the exec's own argv/env.
+  agent_pods=$(k -n "$ns" get pods -l app=coding-agent --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}')
+  if [[ -n "$agent_pods" ]]; then
+    for p in $agent_pods; do
+      hit=$(printf '%s' "$val1" | k -n "$ns" exec -i "$p" -c agent -- sh -c 'v=$(cat); { env; cat /proc/[0-9]*/environ; } 2>/dev/null | tr "\0" "\n" | grep -cF -- "$v"; grep -rIlF -- "$v" / --exclude-dir=proc --exclude-dir=sys 2>/dev/null | head -3' 2>/dev/null)
+      [[ "$(head -1 <<<"$hit")" == 0 && -z "$(tail -n +2 <<<"$hit")" ]] && ok "broker secret not in agent container $p" || no "broker secret found in $p: $hit"
+    done
+  else
+    echo "  SKIP no running agent pod for the container check"
+  fi
+  k -n "$ns" delete projectsecret e2e-web --ignore-not-found >/dev/null; k -n "$ns" delete agent e2e-brk --ignore-not-found >/dev/null
+  k -n "$vns" delete secret agentdev-ps-e2e-web --ignore-not-found >/dev/null
+  unset signing good other
+else
+  echo "  SKIP credential broker not deployed"
+fi
+
+# API RBAC (#202 part 3): the API writes values, never reads them
+api="system:serviceaccount:${PLATFORM_NS}:agentdev-api"
+[[ "$(k -n "$vns" auth can-i create secrets --as="$api")" == yes && "$(k -n "$vns" auth can-i update secrets --as="$api")" == yes ]] \
+  && ok "API can write values" || no "API cannot write values"
+[[ "$(k -n "$vns" auth can-i get secrets --as="$api")" == no && "$(k -n "$vns" auth can-i list secrets --as="$api")" == no ]] \
+  && ok "API cannot read values" || no "API can read values"
+[[ "$(k -n "$ns" auth can-i get secrets --as="$api")" == no ]] && ok "API cannot read ps-* Secrets" || no "API reads agent-namespace Secrets"
+
 # deletion
 k -n "$ns" delete projectsecret "$name" >/dev/null
 for _ in $(seq 30); do k -n "$ns" get secret "ps-$name" >/dev/null 2>&1 || break; sleep 2; done

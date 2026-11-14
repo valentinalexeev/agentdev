@@ -45,6 +45,14 @@
     name: externalsecrets.external-secrets.io
   register: operator_eso_crd
 
+- name: Credential broker Deployment (#202, step 13)
+  kubernetes.core.k8s_info:
+    context: "{{ operator_context }}"
+    kind: Deployment
+    namespace: "{{ operator_agents_ns }}"
+    name: credential-broker
+  register: operator_broker
+
 - name: Botboard Service (step 07)
   kubernetes.core.k8s_info:
     context: "{{ operator_context }}"
@@ -109,6 +117,10 @@
         SECRETS_STORE: "{{ operator_store }}"
         # the kind store's value Secrets have one key, value
         SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
+        # #202: the broker URL once step 13 deployed it, and only with the store; empty = no broker
+        CREDENTIAL_BROKER_URL: >-
+          {{ ('http://credential-broker.' ~ operator_agents_ns ~ '.svc.cluster.local:8080')
+             if operator_store | length > 0 and operator_broker.resources | default([]) | length > 0 else '' }}
         CLAUDE_PROXY_URL: >-
           {{ ('http://claude-proxy.' ~ operator_agents_ns ~ '.svc.cluster.local:8080') if operator_claude_proxy | bool else '' }}
       replace: []

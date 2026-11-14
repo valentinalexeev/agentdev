@@ -36,6 +36,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Changed
+- `scripts/check-tracked-artifacts.sh` also fails on tracked compiled executables (ELF, Mach-O, PE), for example a
+  Go binary in `images/<name>/`. `.gitignore` ignores `images/credproxy/credproxy` (#272 review).
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
@@ -91,6 +93,22 @@ While the version is `0.x`, breaking changes bump MINOR.
   part 4). A repository is the pair `spec.forge` and `spec.project`; scope `agent` also records the agent's
   repository, so a recreated agent of the same name does not inherit the secret. ESO's ServiceAccount name is one
   variable (`ESO_SA`) for the chart and the policy.
+- Scoped secrets store, part 2 (#202): credential broker. The credproxy image with `MODE=broker` (Deployment
+  `credential-broker`, started by `./run.sh 13`) adds a project secret to requests for its https upstream,
+  base-URL style (`$AGENTDEV_BROKER_URL/s/<secret>/`, agent key in `$AGENTDEV_BROKER_KEY`). Scope checked per
+  request; uses and refusals become SecurityEvents (source `credential-broker`). Mode `env` secrets now reach the
+  agent container. The harness guide lists the agent's broker secrets. A mode `env` secret never overrides a
+  variable agentdev sets (the operator drops it and records `secret-env-reserved`), and the reserved names now cover
+  every rendered variable (`JOB_TIMEOUT`, `REPO`, `NO_PROXY`, ...) and loader and trust hooks. Scope matching uses
+  the forge. The broker redacts the value from binary bodies, refuses unrequested encodings and dials public
+  addresses only.
+- Scoped secrets store, part 3 (#202): write-only API (`GET/POST /api/secrets`, `PUT /api/secrets/<name>/value`,
+  `DELETE /api/secrets/<name>`; repository admins or `agentdev-admins`, audit-logged without the value) and a
+  **Secrets** page in the web UI. The forge sidecar removes mode `env` values from approval text. The API can create, update and delete value Secrets but never read them. Re-run:
+  `./run.sh 13` (sets `SECRETS_VALUES_NS` on the API). The API writes the forge into `spec.forge` and, for scope
+  `agent`, the agent's repository into `spec.project`, and authorizes rotate and delete against the stored
+  repository. Mode `env` values shorter than 8 bytes are refused (they would not be redacted). The reserved
+  variable names are one expression shared by the API and the CRD (`TestReservedEnvMatchesCRD`).
 - Read-only observability MCP tools (#205): the operator image serves `obs-mcp` with `prometheus_query`,
   `loki_query` and an optional `cloud_logging_query` (GKE, Workload Identity, off by default). Register it in a
   project spec like any MCP server; the backend token stays in the `obs-mcp` pod, never in an agent pod. Input is

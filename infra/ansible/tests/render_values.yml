@@ -41,6 +41,7 @@
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             MAX_AGENTS: "{{ api_max_agents }}"
             MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+            SECRETS_VALUES_NS: ""
           replace: []
 
     - name: The API container gets the values

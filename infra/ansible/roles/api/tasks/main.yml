@@ -33,6 +33,14 @@
 - name: Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem
   ansible.builtin.include_tasks: secrets_k8s.yml
 
+- name: Value namespace of the project secrets (#202, kind store from step 13)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Namespace
+    name: "{{ api_secrets_values_ns }}"
+  register: api_values_ns
+  when: api_secrets_values_ns | length > 0
+
 - name: API Deployment, Service, RBAC and NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
@@ -56,6 +64,9 @@
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
         MAX_AGENTS: "{{ api_max_agents }}"
         MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+        # project secrets (#202): the kind store's value namespace, only when step 13 made it; GKE: part 4 (empty = off)
+        SECRETS_VALUES_NS: >-
+          {{ api_secrets_values_ns if api_secrets_values_ns | length > 0 and api_values_ns.resources | default([]) | length > 0 else '' }}
       replace: []
   register: api_applied
 

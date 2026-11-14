@@ -31,6 +31,8 @@ api_secret_source: gcp
 # GitHub App files (forge_kind github), and the in-cluster Gitea for the agentdev-api account (tasks/forge_gitea.yml)
 api_kind_cluster: ""
 api_container_engine: docker
+# project secrets (#202): namespace of the kind store's value Secrets (config.env SECRETS_VALUES_NS); empty = off (GKE: part 4)
+api_secrets_values_ns: ""
 api_secrets_dir: "{{ repo_root }}/.secrets/platform"
 api_github_app_dir: "{{ repo_root }}/.secrets/github-app"
 api_forge_ns: forge

@@ -21,7 +21,7 @@ func (d Defaults) approvals() string {
 
 // render fills the StatefulSet from the Agent. It is the only definition of an agent's pod (the shell template it
 // replaced is gone since #57); changes here reach every agent on the next reconcile.
-func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
+func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1.ProjectSecret) {
 	n, ns := a.Name, a.Namespace
 	forgeSecret := a.Spec.ForgeSecret
 	if forgeSecret == "" {
@@ -110,6 +110,13 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			secretKey("GITHUB_INSTALLATION_ID", forgeSecret, true)}
 	}
 	forgeMounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}}
+	// #202: mode-env secret values, for the sidecar's redaction of approval text only (never the agent container)
+	if src := redactSources(a, psecs); len(src) > 0 {
+		p.Volumes = append(p.Volumes, corev1.Volume{Name: "redact", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			DefaultMode: ptr.To[int32](0o440), Sources: src}}})
+		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "redact", MountPath: redactDir, ReadOnly: true})
+		forgeCreds = append(forgeCreds, env("REDACT_DIR", redactDir))
+	}
 	if forge == "github" {
 		p.Volumes = append(p.Volumes, corev1.Volume{Name: "github-app", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName: forgeSecret, DefaultMode: ptr.To[int32](0o400),
@@ -130,6 +137,17 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
 	}}
+	agentEnv := append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
+		env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
+		env("ROUTER_URL", routerURL(ns)),
+		env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
+		env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
+		corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
+	), append(r.claudeProxyEnv(n), r.brokerEnv(n)...)...)
+	// project secrets last, and never under a name rendered above: with duplicate names the kubelet uses the last
+	// entry, so a secret named like a platform variable (JOB_TIMEOUT, NO_PROXY) would override it (review of #272)
+	agentEnv = append(agentEnv, secretEnv(a, psecs, envNames(agentEnv))...)
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -137,14 +155,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
-			env("ROUTER_URL", routerURL(ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
-			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
-			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
+		Env:     agentEnv,
 		EnvFrom: r.claudeEnvFrom(a),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},

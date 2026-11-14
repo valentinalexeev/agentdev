@@ -35,6 +35,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -121,12 +123,42 @@ func (a *approvals) redact(s string) string {
 	if t := a.s.c.Token; len(t) >= 8 {
 		s = strings.ReplaceAll(s, t, "[redacted]")
 	}
+	for _, v := range redactValues(a.s.c.RedactDir) {
+		s = strings.ReplaceAll(s, v, "[redacted]")
+	}
 	return secretRe.ReplaceAllStringFunc(s, func(m string) string {
 		if sm := secretRe.FindStringSubmatch(m); sm[2] != "" {
 			return sm[2] + "[redacted]"
 		}
 		return "[redacted]"
 	})
+}
+
+// redactValues reads the project secret values to redact (#202): every regular file in dir, trimmed, at least 8
+// bytes (shorter values would redact ordinary words), at most 64 files of 8 KiB. Kubernetes projects files as
+// symlinks into a ..data directory; hidden entries are skipped.
+func redactValues(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".") || len(out) >= 64 {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil || len(b) > 8192 {
+			continue
+		}
+		if v := strings.TrimSpace(string(b)); len(v) >= 8 {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func clipInput(s string) string {

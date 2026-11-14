@@ -190,3 +190,71 @@ export async function setProjectLimits(token: string, repo: string, t: { fiveHou
 export function pctError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 100 ? '' : 'limit: 1 to 100 %'
 }
+
+// Project secrets (#202): write-only. The API never returns a value; the UI only sends one.
+export interface ProjectSecret {
+  name: string
+  scope: 'project' | 'agent'
+  project?: string
+  agent?: string
+  forge: string
+  mode: 'broker' | 'env'
+  upstream?: string
+  header?: string
+  scheme?: 'bearer' | 'basic' | 'raw'
+  envName?: string
+  description?: string
+  phase: 'pending' | 'ready' | 'error'
+  message?: string
+  syncedAt?: string
+}
+
+export interface NewSecret {
+  name: string
+  scope: 'project' | 'agent'
+  project?: string
+  agent?: string
+  forge?: 'gitea' | 'github'
+  mode: 'broker' | 'env'
+  broker?: { upstream: string; header?: string; scheme?: string }
+  env?: { name: string; riskAccepted: boolean }
+  description?: string
+  value: string
+}
+
+export async function listSecrets(token: string): Promise<ProjectSecret[]> {
+  return (await (await call(token, 'GET', '/api/secrets')).json()).secrets
+}
+
+export async function createSecret(token: string, s: NewSecret): Promise<void> {
+  await call(token, 'POST', '/api/secrets', s)
+}
+
+export async function rotateSecret(token: string, name: string, value: string): Promise<void> {
+  await call(token, 'PUT', `/api/secrets/${encodeURIComponent(name)}/value`, { value })
+}
+
+export async function deleteSecret(token: string, name: string): Promise<void> {
+  await call(token, 'DELETE', `/api/secrets/${encodeURIComponent(name)}`)
+}
+
+// same patterns as images/api/secrets.go; the API checks again
+const secretNameRe = /^[a-z0-9]([-a-z0-9]{0,48}[a-z0-9])?$/
+const upstreamRe = /^https:\/\/[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?(\/[A-Za-z0-9._~/-]*)?$/
+const envNameRe = /^[A-Z][A-Z0-9_]{0,63}$/
+const envReservedRe = /^(AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES)_/
+const envReserved = ['PATH', 'HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'BASH_ENV', 'ENV']
+
+export function secretNameError(s: string): string {
+  return secretNameRe.test(s) ? '' : 'name: lowercase letters, digits and -, max. 50 characters'
+}
+
+export function upstreamError(s: string): string {
+  return upstreamRe.test(s) && s.length <= 300 ? '' : 'upstream: an https URL such as https://npm.pkg.github.com'
+}
+
+export function envNameError(s: string): string {
+  if (!envNameRe.test(s)) return 'variable: upper-case letters, digits and _'
+  if (envReservedRe.test(s) || envReserved.includes(s)) return `variable: ${s} is used by agentdev`
+  return ''
+}

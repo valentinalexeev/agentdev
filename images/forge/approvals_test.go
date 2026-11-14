@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -371,5 +373,26 @@ func TestApprovalVoidRetry(t *testing.T) {
 	s.appr.void(&approvalRequest{ID: "a2", fp: "fp2", state: "pending", secret: "s"}, "test")
 	if len(calls) != 1 {
 		t.Fatalf("409 retried: %v", calls)
+	}
+}
+
+// #202: values of mode-env project secrets mounted for the sidecar are redacted, and a rotated value counts at once.
+func TestRedactProjectSecrets(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	dir := t.TempDir()
+	s.c.RedactDir = dir
+	os.WriteFile(filepath.Join(dir, "db"), []byte("pw-Value-0001\n"), 0o400)
+	os.WriteFile(filepath.Join(dir, "short"), []byte("abc"), 0o400)
+	if out := s.appr.redact("psql -W pw-Value-0001 abc"); strings.Contains(out, "pw-Value-0001") || !strings.Contains(out, "abc") {
+		t.Fatalf("redact %q", out)
+	}
+	os.Remove(filepath.Join(dir, "db"))
+	os.WriteFile(filepath.Join(dir, "db"), []byte("pw-Rotated-0002"), 0o400)
+	if out := s.appr.redact("x pw-Rotated-0002"); strings.Contains(out, "pw-Rotated-0002") {
+		t.Fatalf("rotated value leaked: %q", out)
+	}
+	s.c.RedactDir = filepath.Join(dir, "missing")
+	if out := s.appr.redact("plain text"); out != "plain text" {
+		t.Fatalf("missing dir changed text: %q", out)
 	}
 }
