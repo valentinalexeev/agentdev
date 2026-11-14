@@ -12,6 +12,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   the agents.
 
 ### Security
+- R106 fixed (#380): `GET /api/agents` (Agents page, Today counts) lists for an `agentdev-admins` member every
+  agent, for other users only the agents with a repository where they have write access on the forge (R35 rule).
+  Before, each signed-in user saw every agent and its repositories. Re-run: Ansible `deploy.yml` with the new API
+  image; no `./run.sh` step.
 - R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
   Other users see only the events of agents with a repository where they have write access on the forge. Before,
   each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
