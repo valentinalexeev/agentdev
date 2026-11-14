@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listSecurityEvents, Unauthorized, type EventFilter, type SecurityEvent } from './api'
 import { AgentTag, Empty, PageHead, SevTag } from './ui'
+import { useData } from './useData'
 
 const SINCE: [string, string][] = [['24h', '24 h'], ['168h', '7 days'], ['720h', '30 days'], ['', 'all']]
 const SEV: [EventFilter['severity'], string][] = [['', 'all'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']]
@@ -19,7 +20,8 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
       .catch(fail)
   }, [token, filter, fail])
 
-  const events = result && result.for === filter ? result.events : null
+  const d = useData()
+  const events = result && result.for === filter ? result.events.filter((e) => d.inScopeAgent(e.agent)) : null
   const next = result && result.for === filter ? result.next : undefined
   const more = () => {
     if (!next) return
@@ -47,7 +49,7 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
       {events && events.length === 0 && <Empty title="No security events for this filter">When a guardrail refuses an action, it shows here.</Empty>}
       {events && events.length > 0 && (
         <div className="ad-table-wrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-2l">
             <thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th>Source / rule</th><th>Job</th><th>Action</th></tr></thead>
             <tbody>
               {events.map((e) => (

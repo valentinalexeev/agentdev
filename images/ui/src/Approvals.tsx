@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { decideApproval, listApprovals, Unauthorized, type Approval, type Decision } from './api'
 import { jobLink } from './format'
 import { REFRESH_MS } from './pending'
+import { useData } from './useData'
 import { AgentTag, Drawer, Empty, Icon, PageHead, PersonTag, Untrusted } from './ui'
 
 const LABEL: Record<Decision, string> = { approve: 'Approve once', 'approve-job': 'Approve for the job', deny: 'Deny' }
@@ -35,7 +36,10 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
     return () => { alive = false; clearInterval(t) }
   }, [token, tab, fail, reload])
 
-  const items = list && list.tab === tab ? list.items : null
+  const d = useData()
+  const all = list && list.tab === tab ? list.items : null
+  const items = all && all.filter((a) => d.inScopeRepo(a.repo))
+  const hidden = all && items ? all.length - items.length : 0
   const pendingSorted = items && tab === 'pending' ? [...items].sort((a, b) => a.expires.localeCompare(b.expires)) : items
   return (
     <>
@@ -50,6 +54,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
           <button type="button" aria-pressed={tab === 'decided'} onClick={() => setTab('decided')}>History</button>
         </div>
       </div>
+      {hidden > 0 && <p className="ad-muted" style={{ fontSize: 13 }}>{hidden} more {hidden === 1 ? 'request is' : 'requests are'} in projects that are not shown.</p>}
       {error && <p className="ad-error" role="alert">{error}</p>}
       {!items && !error && <p className="ad-muted">Loading…</p>}
       {items && items.length === 0 && (tab === 'pending'
@@ -57,7 +62,7 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
         : <Empty title="No decided requests" />)}
       {pendingSorted && pendingSorted.length > 0 && (
         <div className="ad-table-wrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-2l">
             <thead><tr>
               <th>Request</th><th>Agent</th><th>Issue / PR</th><th>Created</th>
               <th>{tab === 'pending' ? 'Agent waits until' : 'Outcome'}</th>
@@ -85,14 +90,14 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
         </div>
       )}
       {open && <ApprovalDrawer token={token} a={open} onExpired={onExpired} onClose={() => setOpen(null)}
-        onDecided={() => { setOpen(null); setReload((n) => n + 1) }} />}
+        onDecided={() => { setOpen(null); setReload((n) => n + 1); d.reload() }} />}
     </>
   )
 }
 
 // The approval drawer: trusted facts from the platform first, then the agent's text in the untrusted block, then only
 // the decisions this request type allows. A decision needs a confirm step that states its effect.
-function ApprovalDrawer({ token, a, onClose, onDecided, onExpired }: {
+export function ApprovalDrawer({ token, a, onClose, onDecided, onExpired }: {
   token: string; a: Approval; onClose: () => void; onDecided: () => void; onExpired: () => void
 }) {
   const [confirm, setConfirm] = useState<Decision | null>(null)

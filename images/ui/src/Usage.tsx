@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getUsage, setGlobalLimits, setProjectLimits, pctError, Unauthorized, type Usage, type UsageWindow } from './api'
 import { AgentTag, Empty, Meter, PageHead } from './ui'
+import { useData } from './useData'
 
 export function UsagePage({ token, onExpired }: { token: string; onExpired: () => void }) {
+  const d = useData()
   const [u, setU] = useState<Usage | null>(null)
   const [loadedAt, setLoadedAt] = useState(0) // windows past their reset are shown as -
   const [error, setError] = useState('')
@@ -42,7 +44,7 @@ export function UsagePage({ token, onExpired }: { token: string; onExpired: () =
           <div className="ad-table-wrap">
             <table className="ad-table">
               <thead><tr><th>Agent</th><th>Reason</th><th>Until</th></tr></thead>
-              <tbody>{Object.entries(u.pauses).map(([a, p]) => (
+              <tbody>{Object.entries(u.pauses).filter(([a]) => d.inScopeAgent(a)).map(([a, p]) => (
                 <tr key={a}><td><AgentTag name={a} /></td><td>{p.reason}</td><td className="ad-data">{at(p.until)}</td></tr>))}</tbody>
             </table>
           </div>)}
@@ -52,7 +54,7 @@ export function UsagePage({ token, onExpired }: { token: string; onExpired: () =
         <div className="ad-table-wrap">
           <LimitsRow key={`g${u.global.fiveHour}/${u.global.weekly}`} label="Global" note="agentdev-admins" busy={busy} five={u.global.fiveHour} week={u.global.weekly}
             onSave={(f, w) => save(setGlobalLimits(token, { fiveHour: f, weekly: w }))} />
-          {Object.keys(u.effective).sort().map((repo) => (
+          {Object.keys(u.effective).filter(d.inScopeRepo).sort().map((repo) => (
             <LimitsRow key={`${repo}${JSON.stringify(u.projects?.[repo] ?? {})}${u.global.fiveHour}/${u.global.weekly}`} label={repo} busy={busy} clearable
               five={u.projects?.[repo]?.fiveHour ?? u.effective[repo].fiveHour}
               week={u.projects?.[repo]?.weekly ?? u.effective[repo].weekly}

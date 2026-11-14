@@ -1,44 +1,31 @@
 // Agents page (#46, #57): the fleet table. The buttons are always on: the API decides who can change what and the
 // UI shows its answer.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
-  listAgents, patchAgent, createAgent, deleteAgent, getUsage, Unauthorized, nameError, repoError, maxConcurrentError,
-  formatBudget, type Agent, type NewAgent, type UsagePause,
+  patchAgent, createAgent, deleteAgent, Unauthorized, nameError, repoError, maxConcurrentError, formatBudget, type Agent, type NewAgent,
 } from './api'
-import { AgentTag, Banner, Drawer, Empty, Icon, Lamp, PageHead } from './ui'
+import { ATTN_LABEL, ATTN_RANK, type AgentView } from './model'
+import { useData } from './useData'
+import { GROUP_AT, short } from './format'
+import { AgentTag, Attention, Banner, Dots, Drawer, Empty, Icon, Lamp, PageHead } from './ui'
 
 export function AgentsPage({ token, onExpired }: { token: string; onExpired: () => void }) {
-  const [agents, setAgents] = useState<Agent[] | null>(null)
-  const [error, setError] = useState('')
+  const d = useData()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<Agent | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  // usage pauses (#93): shown as a banner and as a state in the agent rows; a failed read only hides them
-  const [pauses, setPauses] = useState<{ list: Record<string, UsagePause>; at: number }>({ list: {}, at: 0 })
+  const [filter, setFilter] = useState<'all' | 'attn' | 'working'>('all')
+  const [fold, setFold] = useState<Record<string, boolean>>({})
 
-  const load = useCallback(() => {
-    listAgents(token)
-      .then((a) => { setAgents(a); setError('') })
-      .catch((e) => (e instanceof Unauthorized ? onExpired() : setError(e.message)))
-    getUsage(token).then((u) => setPauses({ list: u.pauses ?? {}, at: Date.now() })).catch(() => setPauses({ list: {}, at: 0 }))
-  }, [token, onExpired])
-  const usagePaused = Object.entries(pauses.list).filter(([, p]) => p.until * 1000 > pauses.at)
-
-  useEffect(() => {
-    load()
-    const t = setInterval(load, 15000) // a light poll is enough until the API has events
-    return () => clearInterval(t)
-  }, [load])
-
-  // run one change, then read the list again; returns true on success
+  // run one change, then read the data again; returns true on success
   const act = useCallback(async (what: string, f: () => Promise<void>): Promise<boolean> => {
     setBusy(true)
     setNotice('')
     try {
       await f()
-      load()
+      d.reload()
       return true
     } catch (e) {
       if (e instanceof Unauthorized) onExpired()
@@ -47,15 +34,75 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
     } finally {
       setBusy(false)
     }
-  }, [load, onExpired])
+  }, [d, onExpired])
 
   const head = (
-    <PageHead title="Agents" sub="An idle agent has zero pods and wakes on new work. This is normal."
+    <PageHead title="Agents" sub="Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work. This is normal."
       actions={<button className="ad-btn ad-btn-primary" type="button" onClick={() => { setNotice(''); setCreating(true) }}><Icon name="plus" />Add agent</button>} />
   )
-  if (error) return <>{head}<p className="ad-error" role="alert">{error}</p></>
-  if (!agents) return <>{head}<p className="ad-muted">Loading agents…</p></>
+  if (!d.ready) return <>{head}<p className="ad-muted">Loading agents…</p></>
+  const usagePaused = d.agents.filter((a) => a.life === 'usage-paused')
+  const nAttn = d.agents.filter((a) => a.attn !== 'ok').length
+  const nWork = d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length
+  const shown = d.agents.filter((a) => filter === 'all' || (filter === 'attn' ? a.attn !== 'ok' : a.life === 'running' || a.life === 'starting'))
+    .sort((x, y) => (ATTN_RANK[x.attn] - ATTN_RANK[y.attn]) || x.name.localeCompare(y.name))
   const modal = deleting || creating || editing
+  const row = (a: AgentView) => (
+    <tr key={a.name}>
+      <td><AgentTag name={a.name} /></td>
+      <td className="ad-nowrap"><Lamp phase={a.life} /></td>
+      <td><Attention attn={a.attn} label={ATTN_LABEL[a.attn]} />{a.why && <div className="ad-muted" style={{ fontSize: 12, lineHeight: '16px', marginTop: 2 }}>{a.why}</div>}</td>
+      <td className="ad-code ad-nowrap ad-hide-phone">{(a.repos ?? []).join(', ')}</td>
+      <td className="ad-num ad-hide-phone">
+        {a.securityEvents
+          ? <a className="ad-link" href={`#security?agent=${encodeURIComponent(a.name)}`} aria-label={`${a.securityEvents} security events of ${a.name}`}>{a.securityEvents}</a>
+          : <span className="ad-muted">0</span>}
+      </td>
+      <td className="ad-num ad-hide-phone" style={a.budgetLimit && (a.budgetUsed ?? 0) >= a.budgetLimit ? { color: 'var(--danger)' } : undefined}>
+        {formatBudget(a) || <span className="ad-muted">–</span>}
+      </td>
+      <td className="ad-muted ad-hide-phone ad-hide-narrow">
+        {a.managed === false ? 'no Agent object' : <>max. {a.maxConcurrent ?? 2}{a.scaleToZero ? ', scale to zero' : ''}</>}
+      </td>
+      <td>
+        {a.managed !== false && (
+          <div className="ad-row-actions" style={{ flexWrap: 'nowrap' }}>
+            {a.paused
+              ? <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Resume agent ${a.name}`}
+                onClick={() => act(`Resume ${a.name}`, () => patchAgent(token, a.name, { paused: false }))}><Icon name="play" />Resume</button>
+              : <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Pause agent ${a.name}`}
+                onClick={() => act(`Pause ${a.name}`, () => patchAgent(token, a.name, { paused: true }))}><Icon name="pause" />Pause</button>}
+            <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
+              onClick={() => { setNotice(''); setEditing(a) }}>Edit</button>
+            <button className="ad-btn ad-btn-sm ad-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
+              onClick={() => { setNotice(''); setDeleting(a.name) }}>Delete</button>
+          </div>
+        )}
+      </td>
+    </tr>
+  )
+  // above 10 agents: one group per project; groups where every agent is ok are folded, attention is never hidden
+  let body: React.ReactNode
+  if (shown.length <= GROUP_AT) body = shown.map(row)
+  else {
+    const byP = new Map<string, AgentView[]>()
+    for (const a of shown) { const k = a.repo || '(no repository)'; if (!byP.has(k)) byP.set(k, []); byP.get(k)!.push(a) }
+    body = [...byP.entries()]
+      .sort(([pa, a], [pb, b]) => (Math.min(...a.map((x) => ATTN_RANK[x.attn])) - Math.min(...b.map((x) => ATTN_RANK[x.attn]))) || pa.localeCompare(pb))
+      .map(([p, ag]) => {
+        const bad = ag.filter((a) => a.attn !== 'ok').length
+        const open = fold[p] ?? bad > 0
+        const working = ag.filter((a) => a.life === 'running' || a.life === 'starting').length
+        return [
+          <tr key={`g${p}`} className="ad-group-row"><td colSpan={8}>
+            <button className="ad-group-btn" type="button" aria-expanded={open} onClick={() => setFold({ ...fold, [p]: !open })}>
+              <Icon name="down" /><strong className="ad-code">{short(p)}</strong><Dots agents={ag} />
+              <span className="ad-muted">{ag.length} {ag.length === 1 ? 'agent' : 'agents'} · {working} working{bad ? ` · ${bad} ${bad === 1 ? 'needs' : 'need'} attention` : ' · all ok'}</span>
+            </button></td></tr>,
+          ...(open ? ag.map(row) : ag.filter((a) => a.attn !== 'ok').map(row)),
+        ]
+      })
+  }
   return (
     <>
       {head}
@@ -63,58 +110,27 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
       {usagePaused.length > 0 && (
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <Banner kind="paused" icon="pause" action={<a className="ad-btn" href="#usage">Usage</a>}>
-            Subscription usage limit: {usagePaused.map(([a, p]) =>
-              `${a} (${p.reason}, until ${new Date(p.until * 1000).toLocaleString()})`).join(', ')} start no new runs.
+            Usage limit: {usagePaused.map((a) => `${a.name} (${a.why})`).join(', ')} {usagePaused.length === 1 ? 'starts' : 'start'} no new runs.
           </Banner>
         </div>
       )}
-      {agents.length === 0
-        ? <Empty title="No agents yet">Add one, or connect a project with <code className="ad-code">scripts/bootstrap-project.sh</code>.</Empty>
+      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <button className="ad-chip" type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All <span className="ad-data">{d.agents.length}</span></button>
+        <button className="ad-chip" type="button" aria-pressed={filter === 'attn'} onClick={() => setFilter('attn')}>Needs attention <span className="ad-data">{nAttn}</span></button>
+        <button className="ad-chip" type="button" aria-pressed={filter === 'working'} onClick={() => setFilter('working')}>Working <span className="ad-data">{nWork}</span></button>
+      </div>
+      {shown.length === 0
+        ? (d.agents.length === 0
+          ? <Empty title="No agents yet">Add one, or connect a project with <code className="ad-code">scripts/bootstrap-project.sh</code>.</Empty>
+          : <Empty title="No agent matches this filter" />)
         : (
           <div className="ad-table-wrap">
-            <table className="ad-table">
+            <table className="ad-table ad-table-2l">
               <thead>
-                <tr><th>Agent</th><th>Phase</th><th>Repositories</th><th>Forge</th><th className="ad-num">Events 7 d</th>
-                  <th className="ad-num">Tokens 24 h</th><th>Settings</th><th><span className="ad-sr">Actions</span></th></tr>
+                <tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th className="ad-hide-phone">Repositories</th><th className="ad-num ad-hide-phone">Events 7 d</th>
+                  <th className="ad-num ad-hide-phone">Tokens 24 h</th><th className="ad-hide-phone ad-hide-narrow">Settings</th><th><span className="ad-sr">Actions</span></th></tr>
               </thead>
-              <tbody>
-                {agents.map((a) => (
-                  <tr key={a.name}>
-                    <td><AgentTag name={a.name} /></td>
-                    <td className="ad-nowrap">
-                      {usagePaused.some(([n]) => n === a.name) ? <Lamp phase="usage-paused" /> : <Lamp phase={a.phase} />}
-                    </td>
-                    <td className="ad-code ad-nowrap">{(a.repos ?? []).join(', ')}</td>
-                    <td className="ad-code">{a.forge ?? ''}</td>
-                    <td className="ad-num">
-                      {a.securityEvents
-                        ? <a className="ad-link" href={`#security?agent=${encodeURIComponent(a.name)}`} aria-label={`${a.securityEvents} security events of ${a.name}`}>{a.securityEvents}</a>
-                        : <span className="ad-muted">0</span>}
-                    </td>
-                    <td className="ad-num" style={a.budgetLimit && (a.budgetUsed ?? 0) >= a.budgetLimit ? { color: 'var(--danger)' } : undefined}>
-                      {formatBudget(a) || <span className="ad-muted">–</span>}
-                    </td>
-                    <td className="ad-muted">
-                      {a.managed === false ? 'no Agent object' : <>max. {a.maxConcurrent ?? 2}{a.scaleToZero ? ', scale to zero' : ''}</>}
-                    </td>
-                    <td>
-                      {a.managed !== false && (
-                        <div className="ad-row-actions" style={{ flexWrap: 'nowrap' }}>
-                          {a.paused
-                            ? <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Resume agent ${a.name}`}
-                              onClick={() => act(`Resume ${a.name}`, () => patchAgent(token, a.name, { paused: false }))}><Icon name="play" />Resume</button>
-                            : <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Pause agent ${a.name}`}
-                              onClick={() => act(`Pause ${a.name}`, () => patchAgent(token, a.name, { paused: true }))}><Icon name="pause" />Pause</button>}
-                          <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
-                            onClick={() => { setNotice(''); setEditing(a) }}>Edit</button>
-                          <button className="ad-btn ad-btn-sm ad-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
-                            onClick={() => { setNotice(''); setDeleting(a.name) }}>Delete</button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              <tbody>{body}</tbody>
             </table>
           </div>
         )}
