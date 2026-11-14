@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
+  engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
+  the agents.
+
 ### Security
 - R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
   Other users see only the events of agents with a repository where they have write access on the forge. Before,
