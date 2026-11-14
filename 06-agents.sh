@@ -177,12 +177,16 @@ for a in ${AGENTS}; do
   # pick up a rebuilt image / changed secret (the operator owns the spec; a restart only replaces the pod)
   k -n "${AGENTS_NS}" wait --for=jsonpath='{.status.observedGeneration}'="$(k -n "${AGENTS_NS}" get agent "${a}" -o jsonpath='{.metadata.generation}')" \
     agent "${a}" --timeout=60s >/dev/null || die "operator did not reconcile agent ${a} (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-operator)"
-  k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
+  # OnDelete (#174): a restart annotation alone does not replace the pod. On kind this step starts a fresh pod with the
+  # rebuilt image or the changed secret, so delete it; the StatefulSet makes a new one (the job resumes, #175).
+  k -n "${AGENTS_NS}" delete pod "agent-${a}-0" --ignore-not-found --wait=false >/dev/null
   ok "${a} deployed (${cred})"
 done
 for a in ${AGENTS}; do
   [[ "$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)" == true ]] && continue
-  k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
+  # agent StatefulSets use updateStrategy OnDelete (#174): `rollout status` does not work; wait for the pod instead
+  k -n "${AGENTS_NS}" wait --for=jsonpath='{.status.readyReplicas}'=1 statefulset "agent-${a}" --timeout=300s >/dev/null \
+    || die "agent-${a} did not become ready (kubectl -n ${AGENTS_NS} describe pod agent-${a}-0)"
 done
 
 if [[ "${FORGE_KIND}" == github ]]; then
