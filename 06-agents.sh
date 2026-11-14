@@ -37,7 +37,7 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "kind_agents_egress_proxy_image=${EGRESS_PROXY_IMAGE}" -e "kind_agents_forge_kind=${FORGE_KIND}" \
   -e "kind_agents_repo=${REPO}" -e "kind_agents_github_installation_id=${GITHUB_INSTALLATION_ID}" \
   -e "kind_agents_forge_url=${FORGE_HOST_URL}" -e "kind_agents_forge_admin_user=${FORGE_ADMIN_USER}" \
-  -e "kind_agents_max_concurrent=${MAX_CONCURRENT}" -e "kind_agents_wake_poll_seconds=${WAKE_POLL_SECONDS}" \
+  -e "kind_agents_max_concurrent=${MAX_CONCURRENT}" -e "kind_agents_max_turns=${MAX_TURNS}" -e "kind_agents_wake_poll_seconds=${WAKE_POLL_SECONDS}" \
   -e "kind_agents_claude_budget_tokens=${CLAUDE_BUDGET_TOKENS}" -e "${vars}"
 s=$(( ($(ms_now)-t0)/1000 ))
 if [[ "${FORGE_KIND}" == github ]]; then

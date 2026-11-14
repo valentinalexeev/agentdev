@@ -103,6 +103,7 @@
         forge: "{{ kind_agents_forge_kind }}"
         claudeSecret: "{{ ('claude-' ~ kind_agents_agent) if kind_agents_own_claude | length > 0 else 'claude-shared' }}"
         maxConcurrent: "{{ kind_agents_max_concurrent | int }}"
+        maxTurns: "{{ kind_agents_max_turns | int }}"
         scaleToZero: "{{ kind_agents_scale_to_zero | bool }}"
   register: kind_agents_agent_obj
 

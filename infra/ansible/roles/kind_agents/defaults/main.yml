@@ -29,6 +29,7 @@ kind_agents_forge_admin_user: owner
 # from the environment (never from -e, so it is not in the process list)
 kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
 kind_agents_max_concurrent: 2
+kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; MAX_TURNS in config.env)
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true
