@@ -8,27 +8,33 @@
 # it never pauses an agent: the only writes are
 #   - one refused egress request per container (a SecurityEvent, source egress, which never pauses: security-model.md),
 #   - at most one refused POST /usage (a medium event; skipped when the pod is close to SECURITY_PAUSE_AFTER),
-#   - with --github: a test issue, the agent's PR and one review comment; all closed and the branch deleted at the end.
+#   - with --github or --gitea: a test issue, the agent's PR and one change-request review; all closed and the branch
+#     deleted at the end.
 # Secret values are never printed: env checks compare names only.
 #
 # Usage:
 #   scripts/e2e-gke-security.sh [--kind] [--context CTX] [--agent NAME] [--host UI_HOST] [--webhook-host HOST]
 #                               [--auth-host HOST] [--ingress gateway|external]
-#                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]] [--only LIST]
+#                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]]
+#                               [--gitea OWNER/REPO --owner LOGIN [--gitea-url URL]] [--only LIST]
 #   --ingress     gateway (default): the GKE Gateway of the role ingress. external (#160): your own reverse proxy
 #                 publishes the hosts (ingress.mode external); the Gateway-only checks (redirect, SSL policy) are MANUAL
 #   --auth-host   the authentik login host (ingress.auth_host): the sso section checks the issuer it publishes
-#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github
+#   --gitea-url   the Gitea base URL reachable from here (default FORGE_HOST_URL or http://localhost:3000; on kind run
+#                 `kubectl -n forge port-forward svc/gitea 3000:3000` first). --github-timeout also sets the Gitea wait
+#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github,gitea
 # Environment (optional):
 #   E2E_READER_TOKEN  OIDC access token of a person WITHOUT write access to the agent's repo (API permission check)
 #   AGENTS_NS, PLATFORM_NS, EXEC_NS  namespaces (defaults as in config.env)
+#   E2E_GITEA_TOKEN   API token of the --owner account on Gitea (scopes write:issue, write:repository); without it
+#                     FORGE_ADMIN_USER / FORGE_ADMIN_PASSWORD (basic auth, the kind default owner account)
 #
 # shellcheck disable=SC2319,SC2181,SC2016
 #   SC2319/SC2181: `[ cond ]; check $? ...` is the intended pattern (check reads the condition's status).
 #   SC2016: single-quoted snippets expand inside the container, not here.
 set -uo pipefail
 
-KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GH_TIMEOUT=30 ONLY="" AUTH_HOST="" INGRESS=gateway
+KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GT_REPO="" GT_URL="${FORGE_HOST_URL:-http://localhost:3000}" GH_TIMEOUT=30 ONLY="" AUTH_HOST="" INGRESS=gateway
 AGENTS_NS="${AGENTS_NS:-coding-agents}" PLATFORM_NS="${PLATFORM_NS:-agentdev-platform}" EXEC_NS="${EXEC_NS:-agentdev-executors}"
 PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}"
 
@@ -45,6 +51,8 @@ while [ $# -gt 0 ]; do
     --github) GH_REPO="$2"; shift ;;
     --owner) GH_OWNER="$2"; shift ;;
     --github-timeout) GH_TIMEOUT="$2"; shift ;;
+    --gitea) GT_REPO="$2"; shift ;;
+    --gitea-url) GT_URL="${2%/}"; shift ;;
     --only) ONLY="$2"; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
@@ -64,6 +72,11 @@ fail()   { FAILN=$((FAILN+1)); printf 'FAIL    %s\n' "$*"; }
 skip()   { SKIPN=$((SKIPN+1)); printf 'SKIP    %s\n' "$*"; }
 manual() { MANN=$((MANN+1));   printf 'MANUAL  %s\n' "$*"; }
 check()  { if [ "$1" = 0 ]; then pass "$2"; else fail "$2${3:+ ($3)}"; fi; }   # check <rc> <title> [detail]
+# cleanups of the forge sections run on exit, in order (each section adds its own)
+CLEANUPS=(); on_exit() { local c; for c in ${CLEANUPS[@]+"${CLEANUPS[@]}"}; do "$c"; done; }; trap on_exit EXIT
+# wait_until <minutes> <command...>: run the command every 20 s until it prints something; prints that output
+wait_until() { local end=$(( $(date +%s) + $1*60 )) out=""; shift
+  while [ -z "$out" ] && [ "$(date +%s)" -lt $end ]; do sleep 20; out=$("$@" 2>/dev/null); done; printf '%s' "$out"; }
 section() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 k() { kubectl --context "$CTX" "$@"; }
 kexec() { local c="$1"; shift; k -n "$AGENTS_NS" exec "agent-$AGENT-0" -c "$c" -- "$@"; }
@@ -386,7 +399,7 @@ if section github; then
       [ -n "${pr:-}" ] && gh pr close -R "$GH_REPO" "$pr" --delete-branch --comment "e2e done, closed by the script" >/dev/null 2>&1
       gh issue close -R "$GH_REPO" "$issue" --comment "e2e done, closed by the script" >/dev/null 2>&1
     }
-    trap cleanup_gh EXIT
+    CLEANUPS+=(cleanup_gh)
     echo "        issue #$issue created; waiting up to $GH_TIMEOUT min for the PR"
     pr="" end=$(( $(date +%s) + GH_TIMEOUT*60 ))
     while [ -z "$pr" ] && [ "$(date +%s)" -lt $end ]; do
@@ -399,7 +412,8 @@ if section github; then
       pass "agent picked the labelled issue #$issue and opened PR #$pr"
       revs=$(gh pr view -R "$GH_REPO" "$pr" --json reviewRequests -q '[.reviewRequests[].login]|join(" ")')
       [[ " $revs " == *" $GH_OWNER "* ]]; check $? "PR #$pr asks $GH_OWNER for review" "reviewers: $revs"
-      gh pr review -R "$GH_REPO" "$pr" --comment --body "Please also add a second line \`reviewed\` to E2E.md." >/dev/null
+      head0=$(gh pr view -R "$GH_REPO" "$pr" --json headRefOid -q .headRefOid)
+      gh pr review -R "$GH_REPO" "$pr" --request-changes --body "Please also add a second line \`reviewed\` to E2E.md." >/dev/null
       t0=$(date -u +%FT%TZ) reply="" end=$(( $(date +%s) + GH_TIMEOUT*60 ))
       while [ -z "$reply" ] && [ "$(date +%s)" -lt $end ]; do
         sleep 20
@@ -408,6 +422,63 @@ if section github; then
         [ "${reply:-0}" -gt 0 ] || reply=""
       done
       [ -n "$reply" ]; check $? "agent replied to the review on PR #$pr (comment or new commit)"
+      gh_head() { local h; h=$(gh pr view -R "$GH_REPO" "$pr" --json headRefOid -q .headRefOid) && [ "$h" != "$head0" ] && echo "$h"; }
+      head1=$(wait_until "$GH_TIMEOUT" gh_head)
+      [ -n "$head1" ]; check $? "agent pushed a new commit to PR #$pr after the change request (#216)" "head still ${head0:0:7}"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------- Gitea acceptance (#216): the same flow as github
+if section gitea; then
+  gt() {  # gt METHOD PATH [json]: the Gitea API as --owner
+    local auth=(-u "${FORGE_ADMIN_USER:-owner}:${FORGE_ADMIN_PASSWORD:-}")
+    [ -n "${E2E_GITEA_TOKEN:-}" ] && auth=(-H "Authorization: token ${E2E_GITEA_TOKEN}")
+    curl -fsS -m 30 "${auth[@]}" -X "$1" -H 'Content-Type: application/json' "${GT_URL}/api/v1$2" ${3:+-d "$3"}
+  }
+  if [ -z "$GT_REPO" ] || [ -z "$GH_OWNER" ]; then skip "Gitea acceptance (#216): use --gitea OWNER/REPO --owner LOGIN"
+  elif [ -z "${E2E_GITEA_TOKEN:-}" ] && [ -z "${FORGE_ADMIN_PASSWORD:-}" ]; then fail "Gitea acceptance: set E2E_GITEA_TOKEN (or FORGE_ADMIN_PASSWORD)"
+  elif [ "$(gt GET /user | jq -r .login 2>/dev/null)" != "$GH_OWNER" ]; then fail "Gitea acceptance: the credential is not --owner $GH_OWNER at $GT_URL"
+  else
+    title="agentdev e2e $(date -u +%Y%m%d%H%M%S): add a line to E2E.md"
+    gissue=$(gt POST "/repos/$GT_REPO/issues" "$(jq -cn --arg t "$title" --arg a "$AGENT" \
+      '{title:$t, assignees:[$a], body:"e2e check (#216). Add the line `e2e ok` to E2E.md and open a pull request. This issue is closed by the script."}')" | jq -r .number)
+    cleanup_gt() {
+      if [ -n "${gpr:-}" ]; then
+        gt POST "/repos/$GT_REPO/issues/$gpr/comments" '{"body":"e2e done, closed by the script"}' >/dev/null 2>&1
+        gt PATCH "/repos/$GT_REPO/pulls/$gpr" '{"state":"closed"}' >/dev/null 2>&1
+        [ -n "${gbranch:-}" ] && gt DELETE "/repos/$GT_REPO/branches/$(jq -rn --arg b "$gbranch" '$b|@uri')" >/dev/null 2>&1
+      fi
+      [[ "${gissue:-}" =~ ^[0-9]+$ ]] && gt PATCH "/repos/$GT_REPO/issues/$gissue" '{"state":"closed"}' >/dev/null 2>&1
+    }
+    CLEANUPS+=(cleanup_gt)
+    if ! [[ "$gissue" =~ ^[0-9]+$ ]]; then fail "Gitea: could not create the test issue in $GT_REPO"
+    else
+      echo "        issue #$gissue assigned to $AGENT; waiting up to $GH_TIMEOUT min for the PR"
+      gt_pr() { gt GET "/repos/$GT_REPO/pulls?state=open&limit=50" | jq -r --arg a "$AGENT" --arg i "#$gissue" \
+        '[.[]|select(.head.ref|startswith("agent/"+$a+"/"))|select((.body // "")|test($i+"\\b"))][0]|select(.)|"\(.number) \(.head.ref) \(.head.sha)"'; }
+      read -r gpr gbranch head0 <<<"$(wait_until "$GH_TIMEOUT" gt_pr)"
+      if [ -z "${gpr:-}" ]; then fail "Gitea: agent did not open a PR for issue #$gissue in $GH_TIMEOUT min"
+      else
+        pass "Gitea: agent picked the assigned issue #$gissue and opened PR #$gpr"
+        pull=$(gt GET "/repos/$GT_REPO/pulls/$gpr")
+        revs=$(jq -r '[.requested_reviewers[]?.login]|join(" ")' <<<"$pull")
+        [[ " $revs " == *" $GH_OWNER "* ]]; check $? "Gitea: PR #$gpr asks $GH_OWNER for review" "reviewers: $revs"
+        labels=$(jq -r '[.labels[]?.name]|join(" ")' <<<"$pull")
+        [[ " $labels " == *" agent:$AGENT "* ]]; check $? "Gitea: PR #$gpr has the label agent:$AGENT (#241)" "labels: $labels"
+        # comment ids only go up: a reply is a comment by someone else with a higher id than any before the review
+        c0=$(gt GET "/repos/$GT_REPO/issues/$gpr/comments" | jq '[.[].id]|max // 0')
+        gt_reply() { gt GET "/repos/$GT_REPO/issues/$gpr/comments" | jq -r --arg o "$GH_OWNER" --argjson c "${c0:-0}" \
+          '[.[]|select(.user.login!=$o and .id>$c)]|length|select(.>0)'; }
+        gt POST "/repos/$GT_REPO/pulls/$gpr/reviews" \
+          '{"event":"REQUEST_CHANGES","body":"Please also add a second line `reviewed` to E2E.md."}' >/dev/null \
+          || fail "Gitea: could not submit the change-request review"
+        reply=$(wait_until "$GH_TIMEOUT" gt_reply)
+        [ -n "$reply" ]; check $? "Gitea: agent replied to the review on PR #$gpr"
+        gt_head() { local h; h=$(gt GET "/repos/$GT_REPO/pulls/$gpr" | jq -r .head.sha) && [ "$h" != "$head0" ] && echo "$h"; }
+        head1=$(wait_until "$GH_TIMEOUT" gt_head)
+        [ -n "$head1" ]; check $? "Gitea: agent pushed a new commit to PR #$gpr after the change request" "head still ${head0:0:7}"
+      fi
     fi
   fi
 fi

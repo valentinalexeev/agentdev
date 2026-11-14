@@ -51,6 +51,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   wall, phase matrix, Projects page), the Chat page for interactive sessions (thread, tool steps, permission cards,
   issue drafts the person creates), needed API and phases. `console-prototype.html` shows every screen with a small
   and a large example.
+- `scripts/e2e-gke-security.sh` has a `gitea` section (#216). It does the steps of the `github` section on a Gitea
+  repository: an issue assigned to the agent, the PR with the owner as reviewer and the label `agent:<name>`, a
+  change-request review, the agent's reply and a new commit. The `github` section now also sends a change request
+  and waits for a new commit, not only a comment. Use `--gitea OWNER/REPO --owner LOGIN [--gitea-url URL]` with
+  `E2E_GITEA_TOKEN` or `FORGE_ADMIN_USER`/`FORGE_ADMIN_PASSWORD` (`docs/e2e-security.md`). No step to re-run.
 - Agent caps (#27): the API refuses `POST /api/agents` above `MAX_AGENTS` (every Agent object, everyone) or
   `MAX_AGENTS_PER_USER` (the agents one person made through the UI or API; `agentdev-admins` exempt) with 403 and an
   audited `denied`. Default `0` = no cap, so nothing changes until an admin sets them. New annotation
