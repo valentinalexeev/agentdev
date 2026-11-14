@@ -864,6 +864,23 @@ WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Man
 
 NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 
+### External OIDC provider
+
+The API reads the issuer's discovery document when it starts and exits when it cannot (#334). With a provider that
+the playbook does not deploy (for example Pocket ID behind a reverse proxy), use this order:
+
+1. Deploy the provider first. If the deployment repository has its own manifests for it, apply them before the
+   playbook, or in an earlier CI step.
+2. Make sure that `<api.oidc_discovery_url>/.well-known/openid-configuration` answers from the cluster and from the
+   machine that runs the playbook.
+3. Run the playbook. Before the API rollout, the role `api` waits for that URL for `api.oidc_wait_seconds`
+   (default `300`). If the URL does not answer in that time, the playbook stops with a message that names it.
+   If the API rollout still fails (a pod in crash-loop back-off from an earlier run), the role restarts the API once
+   and waits again.
+
+A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on GKE) is not waited for: the role
+`authentik` waits for authentik.
+
 ### Reference: the API settings on GKE
 
 | `instance.yml` | Default | `kind` (`config.env`) |
@@ -871,6 +888,7 @@ NOTE: Without `api.oidc_issuer`, the playbook does not deploy the API.
 | `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
 | `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
 | `api.oidc_audience` | `agentdev` | `agentdev` |
+| `api.oidc_wait_seconds` | `300` | none |
 | `api.forge_url` | `forge_url` | the Gitea Service in the cluster |
 | `api.db_retention_days` | `365` | `SECURITY_DB_RETENTION_DAYS` |
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
