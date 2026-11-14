@@ -3,6 +3,10 @@
 # wake on job completion. Runs the real start_job/running_jobs/is_running from agent-loop.sh with stub work.
 #   bash images/worker/test/jobs.test.sh      (Linux, bash >= 4, flock: e.g. inside the worker image)
 set -uo pipefail
+# start_job pipes the job output through `sed -u` (GNU sed, as in the worker image). BusyBox sed (Alpine,
+# bash:5 image) has no -u: every job then fails and the backoff case fails for that reason only (#281).
+sed -u q </dev/null >/dev/null 2>&1 || { echo "FAIL - prerequisite: GNU sed with -u (Alpine: apk add sed)"; exit 1; }
+command -v flock >/dev/null || { echo "FAIL - prerequisite: flock (Alpine: apk add util-linux)"; exit 1; }
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 STATE="${tmp}/state"; mkdir -p "${STATE}"; WAKE_FILE="${tmp}/wake"; : > "${WAKE_FILE}"
