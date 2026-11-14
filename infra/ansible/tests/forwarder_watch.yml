@@ -1,0 +1,61 @@
+# Forwarder watch (#213 part 2): the operator Role in the forwarder namespace and the FORWARDER_* operator values are
+# on only with ingress.forwarder namespace and pod_selector. The expressions are the ones of deploy.yml (operator task).
+# Run: ansible-playbook infra/ansible/tests/forwarder_watch.yml
+- name: Forwarder watch values (#213)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    fwd_ns: >-
+      {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
+         if (((ingress | default({})).forwarder | default({})).pod_selector | default({})) | length > 0 else '' }}
+    fwd_sel: >-
+      {{ (((ingress | default({})).forwarder | default({})).pod_selector | default({})).items()
+         | map('join', '=') | join(',') }}
+  tasks:
+    - name: Load the ingress defaults
+      ansible.builtin.include_vars: ../roles/ingress/defaults/main.yml
+
+    - name: Namespace and pod_selector turn the watch on
+      ansible.builtin.assert:
+        that:
+          - ingress_forwarder_watch | bool
+          - ingress_forwarder_watch_ns == 'tailscale'
+          - fwd_ns == 'tailscale'
+          - fwd_sel == 'app=ts-ingress,tier=edge'
+        quiet: true
+      vars:
+        ingress: {mode: external, host: a.example.com, forwarder: {namespace: tailscale, pod_selector: {app: ts-ingress, tier: edge}}}
+
+    - name: Namespace only (no pod_selector) leaves the watch off and removes the Role
+      ansible.builtin.assert:
+        that:
+          - not (ingress_forwarder_watch | bool)
+          - ingress_forwarder_watch_ns == 'tailscale'
+          - fwd_ns == ''
+        quiet: true
+      vars:
+        ingress: {mode: external, host: a.example.com, forwarder: {namespace: tailscale}}
+
+    - name: CIDRs only or no forwarder leave the watch off
+      ansible.builtin.assert:
+        that:
+          - not (ingress_forwarder_watch | bool)
+          - ingress_forwarder_watch_ns == ''
+          - fwd_ns == '' and fwd_sel == ''
+        quiet: true
+      loop:
+        - {mode: external, host: a.example.com, forwarder: {cidrs: [100.64.0.0/10]}}
+        - {host: a.example.com}
+      loop_control: {label: "{{ item.forwarder | default('none') }}"}
+      vars:
+        ingress: "{{ item }}"
+
+    - name: The operator template has the FORWARDER_* values deploy.yml sets
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.file', '../../../manifests/operator.yaml.tmpl') is search('\$\{FORWARDER_' ~ item ~ '\}')
+          - lookup('ansible.builtin.file', '../deploy.yml') is search('FORWARDER_' ~ item ~ ':')
+        quiet: true
+      loop: [NS, SELECTOR, NOT_READY_MINUTES]
