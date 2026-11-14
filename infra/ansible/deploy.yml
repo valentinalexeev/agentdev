@@ -61,9 +61,14 @@
           - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
           - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
           - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+          - >-
+            not (item.ssh | default(false) | bool)
+            or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
+          - item.snapshot is not defined or ((item.ssh | default(false) | bool) and item.snapshot is sequence and item.snapshot is not string)
         fail_msg: >-
           executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
-          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
+          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names, ssh needs a pr_plan
+          argv list, snapshot needs ssh)
         quiet: true
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name | default('?') }}"}
@@ -299,7 +304,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, SSHTarget and ProjectSecret CRDs (#47, #70, #67, #69, #204, #202)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -308,7 +313,8 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_sshtargets.yaml,
+             agentdev.dev_projectsecrets.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
@@ -433,6 +439,19 @@
             EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
           replace: []
 
+    - name: SSH certificate authority (#204) - step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_step_ca) | from_yaml_all | list }}"
+      vars:
+        vars_step_ca:
+          src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+          values:
+            EXEC_NS: "{{ exec_ns }}"
+            PLATFORM_NS: "{{ platform_ns }}"
+            STEP_CA_IMAGE: "{{ step_ca_image }}"
+          replace: []
+
     # GKE: the executor proxy itself may reach only the hosts of all executors (same mapping as the agents' proxy)
     - name: Executor egress hosts as FQDNNetworkPolicy matches
       ansible.builtin.set_fact:
@@ -537,6 +556,10 @@
             approvalHours: "{{ item.approval_hours | default(24) | int }}"
             allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
             egressHosts: "{{ item.egress_hosts | default([]) }}"
+            # #204: server access with SSH certificates (SSHTargets are written by admins, not by this playbook)
+            ssh: "{{ item.ssh | default(false) | bool }}"
+            prPlan: "{{ {'command': item.pr_plan} if item.pr_plan is defined else omit }}"
+            snapshot: "{{ {'command': item.snapshot, 'intervalHours': item.snapshot_hours | default(24) | int} if item.snapshot is defined else omit }}"
       loop: "{{ executors }}"
       loop_control: {label: "{{ item.name }}"}
       when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)

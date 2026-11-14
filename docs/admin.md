@@ -1723,6 +1723,10 @@ The next `./run.sh 12` or playbook run makes it again.
    The output shows the stage (`pr`, `merge` or `apply`), the pull request, the commit and the phase.
 2. To read the output of a run, run `kubectl -n agentdev-executors logs job/<run name> -c tool`.
 
+NOTE: The runs of stage `merge`, `apply` and `snapshot` of one executor run one at a time. A run with an empty PHASE
+waits for the active run. An approved apply starts first. Then the merge plans start in the order of the merges.
+Runs of stage `pr` do not wait.
+
 ### Stop an executor
 
 1. Run `kubectl -n agentdev-executors patch executor tf-prod --type merge -p '{"spec":{"paused":true}}'`.
@@ -1760,6 +1764,198 @@ The next `./run.sh 12` or playbook run makes it again.
   [Add a host for an executor](#add-a-host-for-an-executor).
 - Design: [security model, phase 5](security-model.md#phase-5-deterministic-executors-69).
 
+## SSH access for executors
+
+An executor can connect to a server with SSH (#204). It uses an SSH certificate that is valid for some minutes. The
+certificate authority (step-ca) runs in the namespace `agentdev-executors`. Only the operator can get certificates
+from it. No agent and no AI process gets SSH access. Design: [ADR 0007](adr/0007-ssh-certificate-authority.md).
+
+Each server is an `SSHTarget` object. Only cluster admins can write `SSHTarget` objects. The server has two local
+users:
+
+| User | Principals | sudo | Used by |
+|---|---|---|---|
+| `agentdev` | `agentdev-<executor>-apply` | yes | the apply after an approval |
+| `agentdev-check` | `agentdev-<executor>-check`, `agentdev-probe` | no | the merge plan (`--check`) and the probe |
+
+The executor plans of pull request heads never get SSH access (owner decision on #204).
+
+### Set up the SSH certificate authority
+
+Do this task one time for each instance.
+
+WARNING: The CA keys let a person log in to all enrolled servers. Do not copy the Secrets `step-ca` and
+`step-ca-provisioner` out of the cluster.
+
+1. Make sure that `kubectl` uses the cluster of the instance and that Docker operates.
+2. Run `scripts/ssh-ca-init.sh`.
+   The script makes the CA keys in a temporary directory, makes the Secrets `step-ca` and `step-ca-provisioner`, and
+   deletes the directory. It shows the public keys of the user CA and of the host CA.
+3. Run `./run.sh 12` (`kind`) or the playbook (GKE).
+4. Make sure that the CA runs: `kubectl -n agentdev-executors rollout status deploy/step-ca`
+
+NOTE: The script never replaces a Secret. If the Secrets exist, the script stops.
+
+NOTE: To keep the X.509 root key of the CA, add `--keep-root <directory>`. Move the key to offline storage. The
+cluster does not need it.
+
+### Enrol a server
+
+Before you do this task, make sure that you have root access to the server, and that the server runs OpenSSH 8.2
+or a later version.
+
+1. On the server, read the fingerprint of the host key: `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+   The output starts with `SHA256:`.
+2. Apply the `SSHTarget` object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: SSHTarget
+   metadata: {name: web1}
+   spec:
+     host: web1.example.com
+     executor: ansible-prod
+     hostKeyFingerprint: "SHA256:<fingerprint from step 1>"
+   EOF
+   ```
+
+3. Wait one minute. Then run `kubectl -n agentdev-executors get sshtarget web1`.
+   The column PHASE shows `Enrolling`. If it shows `HostKeyMismatch`, the server sent another host key. Do not
+   continue. Do the step 1 again on the correct server.
+4. Run `scripts/ssh-enrol.sh web1 > enrol-web1.sh`.
+   For an Ansible playbook, add `--format ansible`. For cloud-init, add `--format cloud-init`.
+5. Read the file. Then run it on the server as root, with your own access.
+   The script makes the two users, the principals files and the sshd settings, and installs the host certificate.
+6. Wait some minutes. Then run `kubectl -n agentdev-executors get sshtarget web1`.
+   The column PHASE shows `Ready`.
+
+NOTE: The operator signs the host key only if it has the fingerprint from step 1. The executors accept the server
+only with that host certificate. They do not trust a host key on first use.
+
+NOTE: The operator probes each server every `SSH_PROBE_MINUTES` (10). If a probe fails, the phase changes to
+`NotReady`.
+
+### Remove a server
+
+1. Run `kubectl -n agentdev-executors delete sshtarget web1`.
+   The executors cannot connect to the server after the next poll.
+2. On the server, delete `/etc/ssh/auth_principals/agentdev` and `/etc/ssh/auth_principals/agentdev-check`.
+3. On the server, delete `/etc/ssh/sshd_config.d/50-agentdev.conf` and `/etc/sudoers.d/agentdev`, then reload sshd.
+
+NOTE: Certificates are valid for some minutes only. You do not have to revoke them.
+
+### Rotate the CA key
+
+Do this task when you replace the CA, or immediately when a CA key is possibly known to other persons.
+
+WARNING: If a CA key is possibly known to other persons, first stop the old key on each server. Write the old user CA
+key to the KRL: `ssh-keygen -k -f /etc/ssh/agentdev_revoked_keys -s <old user CA public key file>` (this command
+replaces the file; add `-u` to add to it). Then reload sshd.
+
+1. Make the new CA in a local directory: `scripts/ssh-ca-init.sh --out <directory>`.
+   The script shows the new user CA key. It makes no Secret.
+2. On each server, add the new user CA key to `/etc/ssh/agentdev_user_ca.pub`. Keep the old key. Then reload sshd.
+   sshd accepts certificates of the two keys.
+3. Replace the two Secrets: run `kubectl -n agentdev-executors delete secret step-ca step-ca-provisioner`, then
+   `scripts/ssh-ca-init.sh --from <directory>`.
+4. Delete the directory.
+5. Run `kubectl -n agentdev-executors rollout restart deploy/step-ca`.
+   At the next poll, the operator signs new host certificates, because the host CA changed. The phase of each
+   server changes to `NotReady` until step 6 is done.
+6. Run `scripts/ssh-enrol.sh <target>` again for each server and apply it.
+   The file has the new host certificate and the new user CA key.
+
+### Set up an Ansible executor
+
+Do this task after you enrolled the servers of the executor (see [Enrol a server](#enrol-a-server)). In each
+`SSHTarget`, `spec.executor` is the name of the executor.
+
+The executor runs three stages:
+
+| Stage | Command | Server access |
+|---|---|---|
+| Pull request head | `spec.prPlan` (for example `--syntax-check`, `ansible-lint`) | none |
+| Merge commit | `spec.plan` (`--check --diff`) | user `agentdev-check`, no sudo |
+| Apply, after `/approve` | `spec.apply` | user `agentdev`, sudo |
+
+WARNING: Do not give the plan of a pull request head access to a server. A task with `check_mode: false` runs also
+in check mode. agentdev does not let you set it: an executor with `ssh: true` must have `prPlan`.
+
+1. Apply the Executor object:
+
+   ```bash
+   kubectl -n agentdev-executors apply -f - <<'EOF'
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Executor
+   metadata: {name: ansible-prod}
+   spec:
+     environment: prod-servers
+     repo: owner/servers
+     path: ansible
+     image: alpine/ansible@sha256:<digest>
+     ssh: true
+     prPlan: {command: [sh, -c, 'ansible-playbook --syntax-check site.yml > $(PLAN_FILE)']}
+     plan: {command: [sh, -c, 'ansible-playbook -i $(AGENTDEV_SSH_INVENTORY) site.yml --check --diff > $(PLAN_FILE)']}
+     apply: {command: [ansible-playbook, -i, $(AGENTDEV_SSH_INVENTORY), site.yml]}
+     forgeSecret: exec-ansible-prod-forge
+   EOF
+   ```
+
+2. Do the steps 3 and 4 of [Set up an executor](#set-up-an-executor) (branch protection, deny list).
+
+The merge and apply Jobs get these values:
+
+| Name | Value |
+|---|---|
+| `AGENTDEV_SSH_INVENTORY` | an inventory with one line for each `Ready` server of the executor |
+| `AGENTDEV_SSH_CONFIG` | the ssh configuration: certificate, `known_hosts` of the host CA, the proxy |
+| `ANSIBLE_SSH_ARGS` | `-F $(AGENTDEV_SSH_CONFIG)` |
+| `ANSIBLE_SSH_USETTY` | `False` (the certificates permit no PTY) |
+
+NOTE: The operator makes a new key and a certificate for each merge plan and each apply. The certificate is valid
+for 15 minutes. The key ID in the sshd log is `executor/<run>/<commit>`.
+
+NOTE: The check output is the plan file. The person approves that file, but Ansible does not prove that the apply
+does what the check showed. Terraform has this proof, Ansible does not.
+
+NOTE: The executor egress proxy opens port 22 only to the `Ready` servers of the executor, and only for the merge
+and apply Jobs. If a server uses another port, add a NetworkPolicy for the proxy to that port.
+
+### Publish server snapshots
+
+An executor can collect facts from its servers at fixed times (#205). The agents read the result. The snapshot uses
+the user `agentdev-check` and no checkout. No code from the repository runs.
+
+1. Add `spec.snapshot` to the Executor:
+
+   ```bash
+   kubectl -n agentdev-executors patch executor ansible-prod --type=merge -p \
+     '{"spec":{"snapshot":{"command":["ansible","all","-i","$(AGENTDEV_SSH_INVENTORY)","-m","ansible.builtin.setup"],"intervalHours":24}}}'
+   ```
+
+2. After the next poll, read the result: `kubectl -n coding-agents get configmap agentdev-snapshots -o yaml`
+   The key is the name of the executor.
+
+NOTE: The operator removes values that look like passwords, tokens and private keys, and keeps at most 64 KiB for
+each executor. The text can still contain data from the servers. The agents treat it as data, not as instructions.
+
+### Reference: SSH access
+
+| Setting | Default | Where |
+|---|---|---|
+| `STEP_CA_IMAGE` (image of the CA, by digest) | `smallstep/step-ca:0.28.4@sha256:...` | `config.env`; Ansible `step_ca_image` |
+| `SSH_ENROL_POLL_SECONDS` (time between two passes over the SSHTargets) | 60 | operator env |
+| `SSH_PROBE_MINUTES` (time between two probes of a `Ready` server) | 10 | operator env |
+| User certificate lifetime | 15 minutes maximum | step-ca provisioner `agentdev-operator` |
+| Host certificate lifetime | 90 days; the operator signs a new one 30 days before the end | step-ca provisioner |
+
+- The certificates have no extensions: no PTY, no port forwarding, no agent forwarding, no X11 forwarding.
+- The key ID of each certificate is in the sshd log: `executor/<run>/<commit>`, `probe/<target>` or
+  `host/<target>`.
+- Only the operator can connect to step-ca (NetworkPolicy `step-ca`).
+- Static SSH keys in `exec-<name>-apply` still operate. They are deprecated: use an `SSHTarget` instead.
+- Troubleshooting: [SSH access](troubleshooting.md#ssh-access-for-executors).
 ## Project secrets
 
 A project secret is a credential that the agents of one project, or one agent, can use (#202, ADR 0003). An

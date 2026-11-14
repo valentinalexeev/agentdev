@@ -13,6 +13,8 @@ operator_image: agentdev-operator:dev    # agentdev-operator:* is built from ima
 operator_worker_image: agentdev/worker:mvp
 operator_forge_image: agentdev/forge:mvp
 operator_image_pull_policy: Never        # kind: step 06 loads the worker and forge images
+# SSH certificate authority (#204): step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+operator_step_ca_image: smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3
 operator_egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
 operator_forge_public_url: http://localhost:3000
 operator_forge_admin_user: owner
@@ -35,5 +37,6 @@ operator_usage: {five_hour: 80, weekly: 90}
 # cache never syncs
 operator_secrets_store_enabled: true
 operator_crds: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_sshtargets.yaml,
+                agentdev.dev_projectsecrets.yaml]
 operator_timeout: 120

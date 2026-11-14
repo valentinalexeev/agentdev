@@ -21,6 +21,9 @@
         - src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
           values: {EXEC_NS: x}
           replace: []
+        - src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+          values: {EXEC_NS: x, PLATFORM_NS: p, STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
+          replace: []
       register: t_render
 
     - name: The operator manifest gets every value from the role
@@ -37,7 +40,8 @@
       ansible.builtin.assert:
         that:
           - t_op | selectattr('kind', 'equalto', 'Deployment') | list | length == 1
-          - t_render.results | length == 2
+          - t_render.results | length == 3
+          - "'agentdev.dev_sshtargets.yaml' in operator_crds"  # #204
         quiet: true
 
     - name: The agents' egress list without api.anthropic.com (Claude proxy on)

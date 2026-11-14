@@ -28,7 +28,7 @@
   changed_when: "'already present on all nodes' not in (operator_load.stdout ~ operator_load.stderr)"
   when: operator_kind_cluster | length > 0
 
-- name: "CRDs agents, securityevents, approvals, executors, executorruns, projectsecrets (agentdev.dev)"
+- name: "CRDs agents, securityevents, approvals, executors, executorruns, sshtargets, projectsecrets (agentdev.dev)"
   kubernetes.core.k8s:
     context: "{{ operator_context }}"
     src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -114,7 +114,7 @@
       replace: []
   register: operator_applied
 
-- name: Executor egress (#135) - proxy and executor NetworkPolicy, and 80/443 for the proxy on kind
+- name: Executor egress (#135) - proxy and executor NetworkPolicy, 80/443 for the proxy on kind, and the SSH CA (#204)
   kubernetes.core.k8s:
     context: "{{ operator_context }}"
     definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=item) | from_yaml_all | list }}"
@@ -124,6 +124,10 @@
       replace: []
     - src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
       values: {EXEC_NS: "{{ operator_exec_ns }}"}
+      replace: []
+    # SSH CA (#204): runs once scripts/ssh-ca-init.sh made Secret step-ca; until then the pod waits for the Secret
+    - src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+      values: {EXEC_NS: "{{ operator_exec_ns }}", PLATFORM_NS: "{{ operator_platform_ns }}", STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
       replace: []
   loop_control: {label: "{{ item.src | basename }}"}
 

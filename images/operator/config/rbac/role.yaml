@@ -31,6 +31,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - agentdev-snapshots
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - agentdev-usage
   resources:
   - configmaps
@@ -137,6 +146,7 @@ rules:
   resources:
   - executors
   - projectsecrets
+  - sshtargets
   verbs:
   - get
   - list
@@ -146,6 +156,7 @@ rules:
   resources:
   - executors/status
   - projectsecrets/status
+  - sshtargets/status
   verbs:
   - get
   - patch

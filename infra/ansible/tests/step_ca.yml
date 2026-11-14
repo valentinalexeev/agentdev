@@ -1,0 +1,36 @@
+# Render test of the SSH CA (#204): ansible-playbook infra/ansible/tests/step_ca.yml (no cluster). The playbook sets
+# every value of manifests/step-ca.yaml.tmpl, the image is pinned by digest, and only the operator may reach the CA.
+- name: SSH CA render (#204)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+  vars_files: ["{{ playbook_dir }}/../group_vars/all.yml"]
+  tasks:
+    - name: Render the step-ca manifest with the playbook's values
+      ansible.builtin.set_fact:
+        docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=r) | from_yaml_all | list }}"
+        raw: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=r) }}"
+      vars:
+        r:
+          src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+          values: {EXEC_NS: agentdev-executors, PLATFORM_NS: agentdev-platform, STEP_CA_IMAGE: "{{ step_ca_image }}"}
+          replace: []
+    - name: Check the manifest
+      vars:
+        dep: "{{ docs | selectattr('kind', 'equalto', 'Deployment') | first }}"
+        pol: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | first }}"
+        ctr: "{{ dep.spec.template.spec.containers[0] }}"
+      ansible.builtin.assert:
+        that:
+          - "'${' not in raw"
+          - step_ca_image is match('^[^@]+@sha256:[0-9a-f]{64}$')
+          - ctr.image == step_ca_image
+          - ctr.securityContext.capabilities.drop == ['ALL']
+          - ctr.securityContext.capabilities.add == ['NET_BIND_SERVICE']
+          - ctr.securityContext.readOnlyRootFilesystem
+          - dep.spec.template.spec.automountServiceAccountToken == false
+          - pol.spec.ingress | length == 1
+          - pol.spec.ingress[0].from[0].podSelector.matchLabels.app == 'agentdev-operator'
+          - pol.spec.ingress[0].from[0].namespaceSelector.matchLabels['kubernetes.io/metadata.name'] == 'agentdev-platform'
+          - pol.spec.egress == []

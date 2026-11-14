@@ -36,7 +36,7 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "operator_image=${OPERATOR_IMAGE}" -e "operator_container_engine=${CONTAINER_ENGINE}" \
   -e "operator_exec_ns=${EXEC_NS}" -e "operator_forge_ns=${FORGE_NS}" -e "operator_botboard_ns=${BOTBOARD_NS}" \
   -e "operator_botboard_url=${BOTBOARD_URL:-}" -e "operator_worker_image=${WORKER_IMAGE}" -e "operator_forge_image=${FORGE_IMAGE}" \
-  -e "operator_egress_proxy_image=${EGRESS_PROXY_IMAGE}" -e "operator_forge_public_url=${FORGE_HOST_URL}" \
+  -e "operator_egress_proxy_image=${EGRESS_PROXY_IMAGE}" -e "operator_step_ca_image=${STEP_CA_IMAGE}" -e "operator_forge_public_url=${FORGE_HOST_URL}" \
   -e "operator_forge_admin_user=${FORGE_ADMIN_USER}" -e "operator_poll_seconds=${POLL_SECONDS}" \
   -e "operator_idle_seconds=${IDLE_SECONDS}" -e "operator_agent_storage_class=${AGENT_STORAGE_CLASS:-}" \
   -e "operator_agent_state_storage=${AGENT_STATE_STORAGE:-10Gi}" -e "${vars}"

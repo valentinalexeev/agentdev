@@ -228,6 +228,14 @@ runner can start any program. So the security boundary is the pod, not the list 
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
 
+## Server access for executors
+
+Executors can change servers over SSH (#204, [ADR 0007](adr/0007-ssh-certificate-authority.md)). No agent and no AI
+process gets SSH access. The operator is the only client of an SSH certificate authority (step-ca in the executors
+namespace) and asks it for a fresh certificate for each run, valid for minutes. Each server is an `SSHTarget`: an admin
+writes the fingerprint of its host key, the operator signs that host key, and the person who enrols the server applies
+a snippet that trusts the CA for two local users. Plans of unreviewed pull requests never get a certificate.
+
 ## Project secrets
 
 A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can

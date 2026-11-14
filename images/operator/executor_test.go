@@ -701,3 +701,35 @@ func (x *execEnv) applies(t *testing.T) int {
 	_ = x.c.List(context.Background(), &runs, client.MatchingLabels{"agentdev/stage": "apply"})
 	return len(runs.Items)
 }
+
+// #271: merge plans, applies and snapshots of one Executor run one at a time, in merge order; PR plans do not wait.
+func TestExecutorSerialRunsInMergeOrder(t *testing.T) {
+	x := newExecEnv(t, executor(nil))
+	m1, m2 := mergeSH, "3333333333333333333333333333333333333333"
+	// the forge lists the later merge first: the order must come from the merge time
+	x.f.merged = []pullRequest{{Number: 8, Merge: m2, Base: "main", MergedAt: x.now.Add(-time.Minute)},
+		{Number: 7, Merge: m1, Base: "main", MergedAt: x.now.Add(-time.Hour)}}
+	x.f.open = []pullRequest{{Number: 9, Head: headSHA, HeadRepo: "acme/platform", Base: "main"}}
+	x.f.files[7], x.f.files[8], x.f.files[9] = []string{"infra/a.tf"}, []string{"infra/b.tf"}, []string{"infra/c.tf"}
+	x.poll(t) // creates the runs
+	x.poll(t) // starts the first merge plan and the PR plan
+	r1, r2 := "tf-prod-merge-"+m1[:12], "tf-prod-merge-"+m2[:12]
+	if p := x.run(t, r1).Status.Phase; p != "Running" {
+		t.Fatalf("first merge %q", p)
+	}
+	if p := x.run(t, r2).Status.Phase; p != "" {
+		t.Fatalf("second merge must wait, got %q", p)
+	}
+	if p := x.run(t, "tf-prod-pr-"+headSHA[:12]).Status.Phase; p != "Running" {
+		t.Fatalf("PR plan must not wait, got %q", p)
+	}
+	x.poll(t)
+	if p := x.run(t, r2).Status.Phase; p != "" {
+		t.Fatalf("second merge started while the first runs: %q", p)
+	}
+	x.finishJob(t, r1, true)
+	x.poll(t) // collects the first; the second starts in the same poll
+	if p := x.run(t, r2).Status.Phase; p != "Running" {
+		t.Fatalf("second merge after the first: %q", p)
+	}
+}

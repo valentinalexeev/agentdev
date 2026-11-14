@@ -148,12 +148,17 @@ func main() {
 				EgressProxy:     os.Getenv("EXECUTOR_EGRESS_PROXY"),
 				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
 				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
-			EgressLogs: kubeSinceLogs(cs)}
+			EgressLogs: kubeSinceLogs(cs), SSHCA: sshCAFromSecret(mgr.GetAPIReader(), execNS)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)
 		}
 		log.Info("deterministic executors on", "namespace", execNS)
+		// SSH server enrolment (#204): SSHTargets in EXEC_NS; idle until scripts/ssh-ca-init.sh made the CA Secrets
+		if err := mgr.Add(newSSHEnroller(mgr.GetClient(), mgr.GetAPIReader(), execNS)); err != nil {
+			log.Error(err, "ssh enroller")
+			os.Exit(1)
+		}
 	}
 	// scoped secrets store (#202): ProjectSecret -> ExternalSecret ps-<name>; off without SECRETS_STORE
 	if store := os.Getenv("SECRETS_STORE"); store != "" {
