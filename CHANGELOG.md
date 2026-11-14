@@ -33,6 +33,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Claude cost in the web UI (#196, ADR 0002 U5, now accepted): the agent list shows units (and estimated USD when
+  prices are set); the new page **Cost** shows the units of each agent with its budget and the cost of each job of
+  the last 7 days. agentdev administrators change an agent's budget there (`PUT /api/costs/budgets/{agent}`,
+  audited, `budget-changed` security event; RBAC: the API may patch only `claude-proxy-budgets`; only for an
+  existing agent). New `GET /api/costs`: only jobs of agents whose repository the caller can read (admins: all),
+  marked as agent-reported; the proxy status is cached for 15 s. Re-run: `./run.sh 10` and `11`, or the playbook (api role); new API and UI images.
 - Optional telemetry backends (#196, ADR 0002 D5): `TELEMETRY_STACK=true ./run.sh 14` installs an OpenTelemetry
   Collector and Prometheus (pinned charts) in `monitoring` on kind. Off by default (`./run.sh` does not run step 14).
   Grafana is optional and off by default (`TELEMETRY_GRAFANA=true` adds it). The dashboard

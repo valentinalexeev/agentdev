@@ -13,13 +13,16 @@ export interface Agent {
   securityEvents?: number // last 7 days (#70)
   budgetUsed?: number // Claude cost units in the last 24 h, counted by the credential proxy (#66, #196)
   budgetLimit?: number // units per 24 h; 0 = no limit
+  budgetUsd?: number // estimated USD of budgetUsed, only when the proxy has prices (#196, owner decision 2)
 }
 
-// "12.3k / 100k" or "12.3k" when there is no limit; "" when the proxy reports nothing (#66)
-export function formatBudget(a: Pick<Agent, 'budgetUsed' | 'budgetLimit'>): string {
+// "12.3k / 100k" or "12.3k" when there is no limit, plus "(~$1.23)" when prices are set; "" when the proxy reports
+// nothing (#66, #196). Units are cost units: input-token equivalents of the reference model.
+export function formatBudget(a: Pick<Agent, 'budgetUsed' | 'budgetLimit' | 'budgetUsd'>): string {
   if (a.budgetUsed === undefined) return ''
   const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`)
-  return a.budgetLimit ? `${k(a.budgetUsed)} / ${k(a.budgetLimit)}` : k(a.budgetUsed)
+  const usd = a.budgetUsd === undefined ? '' : ` (~$${a.budgetUsd.toFixed(2)})`
+  return (a.budgetLimit ? `${k(a.budgetUsed)} / ${k(a.budgetLimit)}` : k(a.budgetUsed)) + usd
 }
 
 export type Severity = 'low' | 'medium' | 'high'
@@ -189,4 +192,46 @@ export async function setProjectLimits(token: string, repo: string, t: { fiveHou
 
 export function pctError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 100 ? '' : 'limit: 1 to 100 %'
+}
+
+// Claude cost (#196, ADR 0002 U5): per-job cost from claude-proxy, and the admins' per-agent budget edit.
+export interface JobCost {
+  agent: string
+  job: string // issue-<n> or pr-<n>
+  units: number
+  usd?: number // only when prices are configured
+  tokens: Record<string, number>
+  requests: number
+  first: string
+  last: string
+  stopped?: boolean // refused by CLAUDE_JOB_BUDGET_UNITS
+}
+
+export async function getCosts(token: string): Promise<{ available: boolean; jobs: JobCost[] }> {
+  return (await call(token, 'GET', '/api/costs')).json()
+}
+
+// units: a non-negative integer (0 = no limit) or null (back to the default CLAUDE_BUDGET_UNITS)
+export async function setAgentBudget(token: string, agent: string, units: number | null): Promise<void> {
+  await call(token, 'PUT', `/api/costs/budgets/${encodeURIComponent(agent)}`, { units })
+}
+
+export function unitsError(s: string): string {
+  return s === '' || /^[0-9]{1,15}$/.test(s) ? '' : 'budget: a whole number of units (0 = no limit), empty = default'
+}
+
+export function formatUnits(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k`
+  return `${n}`
+}
+
+export function formatUSD(n: number | undefined): string {
+  return n === undefined ? '' : `$${n.toFixed(n < 10 ? 2 : 0)}`
+}
+
+// share of cache reads in the input tokens of a job, for the cost view
+export function cacheShare(t: Record<string, number>): number | undefined {
+  const input = (t.input ?? 0) + (t.cache_write_5m ?? 0) + (t.cache_write_1h ?? 0) + (t.cache_read ?? 0)
+  return input > 0 ? (t.cache_read ?? 0) / input : undefined
 }

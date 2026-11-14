@@ -1,6 +1,6 @@
 # ADR 0002: LLM telemetry and cost control
 
-- **Status:** proposed (owner decisions open in the issue, see "Open decisions")
+- **Status:** accepted (owner, [#196](https://github.com/valentinalexeev/agentdev/issues/196#issuecomment-6670957098), 2026-11-05: every proposed default)
 - **Issue:** #196 (milestone 1.2.0); related #66 (credential proxy and budget), #93 (subscription limits),
   #27 (resource control), #168 (idle cost)
 - **Date:** 2026-11-02
@@ -271,9 +271,22 @@ traces and sessions. None of them can enforce our budget, so all are visualize-o
 - **Model routing per job type (smaller model for triage and replies).** A real cost lever, but a separate
   behaviour change; it is listed as a follow-up in the issue, not decided here.
 
-## Open decisions (owner)
+## Decisions of the owner
 
-Asked in the issue with default proposals:
+Recorded on #196 (2026-11-05, "Accept proposed (a)", read as every proposed default):
+
+1. Budget migration: **replace** `CLAUDE_BUDGET_TOKENS` with `CLAUDE_BUDGET_UNITS` in one breaking MINOR (1.2.0).
+2. USD in the UI: **only when prices are configured** (`usd_per_million_units`).
+3. Default `JOB_TIMEOUT`: **3600 s**.
+4. Telemetry stack on kind: **off by default** (`TELEMETRY_STACK=false`, `./run.sh 14`).
+5. UIs: **U5** agentdev UI with budget editing (admins) plus **U1** Grafana; U4 and U2 documented.
+
+Implementation notes: per-agent budget editing in the UI writes only `claude-proxy-budgets`; the prices ConfigMap
+stays deploy-time configuration (Ansible `claude_prices`, `config.env` `CLAUDE_PRICES`), so the API's RBAC is one
+ConfigMap. The OTel Collector of the kind stack forwards only `claude_code.*` metrics (D7 data cannot overwrite the
+D4 series).
+
+The questions as they were asked:
 
 1. Budget migration: replace `CLAUDE_BUDGET_TOKENS` with `CLAUDE_BUDGET_UNITS` in one breaking MINOR (proposed),
    or keep reading the old variable as units for one release with a deprecation warning.

@@ -147,6 +147,8 @@ type writer struct {
 	perms      permChecker
 	adminGroup string
 	usage      usageStore // usage limits (#93); nil: the endpoints are not served
+	// events records a security event (#196: budget changes); nil in tests that do not need it
+	events func(ctx context.Context, e securityEvent)
 }
 
 func (w *writer) who(id *identity) auditWho {
