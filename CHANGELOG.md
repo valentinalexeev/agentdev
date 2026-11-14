@@ -476,6 +476,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 11 (#106): `11-ui.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags ui`: the web UI
+  tasks of the role `api` (moved to `roles/api/tasks/ui.yml`, same tasks on GKE), with the image built and loaded into
+  kind. Changed: the UI restarts only after a new image, so a second run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
