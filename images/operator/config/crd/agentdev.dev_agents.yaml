@@ -94,6 +94,14 @@ spec:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'
                 type: boolean
+              project:
+                description: |-
+                  Project (#54) this agent belongs to, a Project in the same namespace. spec.repo must be one of its repos and
+                  spec.forge its forge; otherwise the operator ignores the project (condition ProjectValid=False). The project's
+                  guideAppend is added to the agent's harness guide.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
               repo:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$

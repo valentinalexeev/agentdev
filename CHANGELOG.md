@@ -57,6 +57,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- Project object, part 1 (#54): new CRD `Project` (`agentdev.dev/v1alpha1`, short name `proj`) with `spec.forge`,
+  `spec.repos` (1 to 20 repositories of one owner) and `spec.guideAppend` (max. 8 KiB). New optional Agent field
+  `spec.project`. The operator appends the project text to the harness guide of each agent of the project, under its
+  own heading after the fixed agentdev part, with control characters removed. Condition `ProjectValid` on the Agent
+  shows a project that is missing, on another forge or without the agent's repository; the agent then runs without
+  the project section. The loop now reads up to 16000 bytes of the guide (was 8000). Re-run: the playbook or
+  `./run.sh 12` (new CRD and Role rule). One agent on several repositories and the UI editor follow in later parts.
+  admin.md "Add a project guide for the agents of a project".
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
