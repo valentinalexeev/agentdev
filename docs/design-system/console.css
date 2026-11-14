@@ -394,3 +394,83 @@ a.ad-kpi:hover { border-color: var(--line-strong); }
   .ad-thread-actions { margin-left: 0; }
   .ad-msg-person .ad-msg-text { max-width: 92%; }
 }
+
+/* ---- Promoted from the prototype for images/ui (#341) ---- */
+/* Attention chip: the second axis of agent state, beside the lifecycle lamp. Always a word. */
+.ad-attn { display: inline-flex; align-items: center; gap: 5px; padding: 1px var(--space-2); border-radius: var(--radius-sm); font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.ad-attn-ok { color: var(--ink-muted); }
+.ad-attn-you { background: var(--gate-soft); color: var(--gate); }
+.ad-attn-blocked, .ad-attn-guardrail { background: var(--danger-soft); color: var(--danger); }
+.ad-attn-usage { background: var(--paused-soft); color: var(--paused); }
+/* Reason chip on an inbox item: why it waits for a person */
+.ad-reason { font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted); border: 1px solid var(--line); padding: 0 6px; border-radius: var(--radius-sm); }
+/* Icon-only button (theme, close). Always has an aria-label. */
+.ad-iconbtn { all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md); color: var(--ink-muted); flex: none; }
+.ad-iconbtn:hover { background: var(--sunken); color: var(--ink); }
+.ad-iconbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ad-iconbtn svg { width: 18px; height: 18px; }
+/* Signed-in user in the top bar */
+.ad-user { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; color: var(--ink); min-width: 0; }
+.ad-avatar { width: 26px; height: 26px; border-radius: var(--radius-lamp); background: var(--gate); color: var(--on-gate); display: grid; place-items: center; font: 600 12px/1 var(--font-sans); flex: none; text-transform: uppercase; }
+.ad-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; box-sizing: border-box; }
+.ad-btn svg { width: 16px; height: 16px; flex: none; }
+.ad-btn-sm { height: 30px; font-size: 14px; padding: 0 var(--space-3); }
+.ad-link { color: var(--link); }
+.ad-row-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.ad-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.ad-check { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; }
+.ad-check input { accent-color: var(--gate); width: 16px; height: 16px; margin: 0; }
+.ad-limit-row { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(90px, .6fr)) auto; gap: var(--space-3); align-items: end; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.ad-limit-row:first-child { border-top: 0; }
+.ad-limit-row .ad-input { width: 100%; }
+.ad-limit-row .ad-row-actions { justify-content: flex-start; }
+.ad-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
+.ad-sub { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ad-sub h3 { margin: 0; font: 600 15px/22px var(--font-sans); display: flex; justify-content: space-between; gap: var(--space-2); overflow-wrap: anywhere; }
+.ad-sub .ad-meter { min-width: 0; }
+.ad-skip { position: absolute; left: -999px; top: var(--space-2); z-index: 50; }
+.ad-skip:focus { left: var(--space-2); }
+@media (max-width: 760px) {
+  .ad-limit-row { grid-template-columns: 1fr 1fr; }
+  .ad-limit-row > :first-child, .ad-limit-row > .ad-row-actions { grid-column: 1 / -1; }
+  .ad-user > span:not(.ad-avatar) { display: none; }
+}
+/* The drawer as a native <dialog> (focus stays inside, Escape closes it): reset the dialog box, keep the scrim. */
+dialog.ad-drawer { margin: 0; inset: 0 0 0 auto; height: 100%; max-height: none; max-width: 100vw; border-top: 0; border-right: 0; border-bottom: 0; color: var(--ink); padding-left: 0; }
+dialog.ad-drawer::backdrop { background: rgba(20, 26, 22, .35); }
+dialog.ad-palette { margin: 0; padding: 0; color: var(--ink); max-height: none; }
+dialog.ad-palette::backdrop { background: rgba(20, 26, 22, .35); }
+.ad-palette li button { all: unset; flex: 1; display: flex; gap: var(--space-3); align-items: center; cursor: pointer; min-width: 0; }
+.ad-palette li button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Phone (#343): sheets, full-screen drawers, two-line table rows ---- */
+/* The More sheet: a bottom sheet over the bottom bar. It shows only below 760px (the bottom bar opens it). */
+dialog.ad-sheet { margin: 0; inset: auto 0 0 0; width: 100%; max-width: none; max-height: 80dvh; box-sizing: border-box; border: 0; border-top: 1px solid var(--line-strong); border-radius: var(--radius-md) var(--radius-md) 0 0; background: var(--panel); color: var(--ink); box-shadow: var(--shadow-dialog); overflow-y: auto; padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right, 0px)) calc(var(--space-3) + env(safe-area-inset-bottom, 0px)) max(var(--space-3), env(safe-area-inset-left, 0px)); }
+dialog.ad-sheet::backdrop { background: rgba(20, 26, 22, .35); }
+.ad-sheet-grip { display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 0 auto var(--space-3); }
+.ad-sheet .ad-nav { min-height: 48px; font-size: 16px; }
+@media (max-width: 760px) {
+  /* Drawers are full-screen sheets; the decision buttons sit at the bottom, in reach of the thumb. */
+  dialog.ad-drawer { inset: 0; width: 100%; height: 100%; border-left: 0; padding-left: env(safe-area-inset-left, 0px); }
+  .ad-drawer-gate { border-left: 0; border-top: 3px solid var(--gate); }
+  .ad-drawer-head, .ad-drawer-body, .ad-drawer-foot { padding-left: var(--space-4); padding-right: var(--space-4); }
+  .ad-drawer-foot { padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px)); }
+  .ad-drawer-foot .ad-btn { flex: 1 1 140px; justify-content: center; min-height: 44px; }
+  dialog.ad-palette { top: calc(var(--space-3) + env(safe-area-inset-top, 0px)); }
+  /* Tables: two lines for each row. Line 1 is the first cell, line 2 the other visible cells. */
+  .ad-table-2l thead { display: none; }
+  .ad-table-2l, .ad-table-2l tbody { display: block; }
+  .ad-table-2l tr { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding: var(--space-3); border-top: 1px solid var(--line); }
+  .ad-table-2l tr:first-child { border-top: 0; }
+  .ad-table-2l td { display: block; padding: 0; border: 0; }
+  .ad-table-2l td:first-child { flex: 1 0 100%; }
+  .ad-table-2l td.ad-hide-phone { display: none; }
+  .ad-table-2l td.ad-num { text-align: left; }
+  .ad-table-2l td:empty { display: none; }
+  .ad-table-2l .ad-row-actions { flex-wrap: wrap !important; }
+  .ad-table-2l tr.ad-group-row td { flex-basis: 100%; }
+}
+@media (max-width: 760px) {
+  /* theme and sign out move to the More sheet */
+  .ad-topbar .ad-hide-phone { display: none; }
+}

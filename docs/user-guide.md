@@ -133,6 +133,90 @@ If your instance has botboard, open botboard. Botboard shows one card for each i
 
 ## Control agents in the web UI
 
+The web UI has a left menu with the pages **Today**, **Projects**, **Agents**, **Approvals**, **Security** and
+**Usage**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
+requests that wait for a decision. The top bar shows the project scope, the connection state, your name, **Sign out**
+and the theme button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
+browser. If you do not select a theme, the web UI uses the theme of your system.
+
+### See what waits for you
+
+The page **Today** is the start page. The inbox shows the items that wait for you:
+
+- Approval requests. The request that expires first is at the top.
+- Agents that a guardrail paused, and blocked agents.
+- Agents that the usage limit paused.
+
+Items without an expiry time come after the approval requests, the oldest first. When the inbox has more than 10
+items, it puts them in groups. Click **By type** or **By project** to change the groups. Each group shows 4 items.
+Click **Show N more** to see all items of the group.
+
+1. Open the web UI. The page **Today** opens.
+2. In the row of an approval request, click **Review**.
+   The approval panel opens. Continue with "Answer an approval request from an agent".
+
+### Show the work of some projects only
+
+The project scope in the top bar filters every page and every number in the web UI:
+
+- **My projects**: the repositories where you have write access. This is the default. The web UI shows this option
+  only when the API gives your repositories. If not, the web UI shows all projects.
+- **All projects**: all repositories with agents.
+- One project.
+
+1. Click the project scope in the top bar, or push the key `P`.
+2. Type a part of the project name to find it.
+3. Click the scope.
+
+When items wait in projects outside the scope, the page **Today** shows their number and the link
+**show all projects**.
+
+The page **Projects** shows one row for each repository. The projects that need you are at the top. Click a project
+name to set the scope to that project.
+
+### Know the connection state
+
+The top bar shows the connection state. When the web UI cannot get new data, it keeps the last data on the page and
+shows a banner with the cause:
+
+| State | Meaning | What to do |
+|---|---|---|
+| Live | The data is current. | Nothing. |
+| Updated N min ago | The last updates failed. The data is from that time. | Wait. The web UI tries again each 15 seconds. |
+| Starting | The platform scaled to zero and starts. This can take 1 to 2 minutes. | Wait. The banner goes away when the API answers. |
+| Unavailable | The API did not answer for 5 minutes. Actions can fail. | Click **Try again**. If the banner stays, tell an administrator. |
+| Offline | Your device has no network. | Connect to the network. |
+| Signed out | Your sign-in expired. | Click **Sign in**. The web UI opens the same page again. |
+
+### Use the web UI on a phone
+
+On a screen that is narrower than 760 px, the left menu changes to a bottom bar. The bottom bar has **Today**,
+**Projects**, **Agents**, **Approvals** and **More**. **More** opens a sheet with **Security**, **Usage**, the theme
+and **Sign out**. The approval panel fills the screen. The decision buttons are at the bottom, in reach of your thumb.
+
+To install the web UI on the home screen:
+
+1. Open the web UI in Chrome on Android or in Safari on iOS.
+2. Sign in.
+3. Open the browser menu (Safari: the share button).
+4. Tap **Add to Home Screen**.
+   The web UI opens from the icon without the browser bar.
+
+### Know the state of an agent
+
+The web UI shows the state of an agent on two axes. The **lifecycle** tells what the pods do. The **attention** tells
+if the agent needs a person: ok, needs you, blocked, guardrail or usage limit.
+
+The lifecycle of an agent shows as a lamp and a word:
+
+| Lamp | Word | Meaning |
+|---|---|---|
+| amber, lit | running | The agent works. |
+| amber, pulses | starting | The pod starts. |
+| empty ring | idle | The agent has zero pods. It starts again on new work. This is normal. |
+| two bars | paused, usage paused | A person or the usage limit paused the agent. |
+| red square | blocked, invalid | The agent cannot work. Read the reason on the Security page or ask an administrator. |
+
 The web UI shows all agents on the page **Agents**. The buttons are always available. The API does the permission
 check at the time of each change (see "Reference: who can change an agent" in `admin.md`). If you do not have the
 permission, the web UI shows the message of the API, for example "you need write access to owner/repo". If the API
@@ -149,6 +233,7 @@ To resume the agent, click **Resume** in the row of the agent.
 ### Change the settings of an agent
 
 1. In the row of the agent, click **Edit**.
+   A panel opens on the right side.
 2. In **Max. concurrent**, type a number from 1 to 8.
 3. Select or clear **Scale to zero**.
 4. Click **Save**.
@@ -195,13 +280,16 @@ prompt injection from the issue.
 To make the decision in the web UI:
 
 1. Open the web UI and click **Approvals**.
-2. On the **Pending** tab, click **Details** on the request.
-3. Read the request text.
-4. Click **Approve once**, **Approve for the job** or **Deny**.
-5. Read the confirmation and click the button again. To stop, click **Cancel**.
+2. On the **Pending** tab, click the request. The first request to expire is at the top.
+   A panel with a petrol edge opens on the right side.
+3. Read the facts at the top: agent, issue or pull request, tool and expiry time. The platform supplies these facts.
+4. Read the request text in the box with the hatched edge. The agent wrote this text. It can contain a prompt
+   injection. Make the decision on the facts, not on the text.
+5. Click **Approve once**, **Approve for the job** or **Deny**.
+6. Read the sentence that tells the effect, and click the button again. To stop, click **Back**.
    The request goes to the **History** tab with your name and "ui".
 
-NOTE: If the request changed after you opened it, the web UI shows an error. Close the dialog and do the steps
+NOTE: If the request changed after you opened it, the web UI shows an error. Close the panel and do the steps
 again.
 
 NOTE: The first decision is final. If a person made a decision before you, on the forge or in the web UI, your
