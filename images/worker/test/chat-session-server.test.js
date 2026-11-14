@@ -83,6 +83,20 @@ test('idle: ends 30 minutes after the last viewer, not before', () => {
   assert.strictEqual(s.tick(left + 30 * 60e3), true);
 });
 
+test('idle: a terminal client (which the model could fake) extends the session only for a bounded time', () => {
+  const { s } = newSession({ terminalMaxSeconds: 7200, tmuxClients: () => 1 });
+  const t0 = s.lastConsole;
+  assert.strictEqual(s.tick(t0 + 3600e3), false, 'terminal client inside the window keeps it alive');
+  assert.strictEqual(s.tick(t0 + 7199e3), false, 'still inside the window');
+  const last = s.lastViewer;
+  assert.strictEqual(s.tick(last + 29 * 60e3), false, 'window over, idle clock runs from the last counted terminal tick');
+  assert.strictEqual(s.tick(last + 30 * 60e3), true, 'ends 30 min later even with a terminal client attached');
+  // a console viewer renews the window
+  const { s: s2 } = newSession({ terminalMaxSeconds: 7200, tmuxClients: () => 1 });
+  s2.presence(['alice']); s2.presence([]);
+  assert.strictEqual(s2.tick(s2.lastConsole + 7000e3), false);
+});
+
 test('http: token required, requests from the pod itself refused', async () => {
   const { s } = newSession();
   const srv = http.createServer(handler(s, { tokenSha256: SHA, localAddresses: new Set(['10.9.9.9']) }));

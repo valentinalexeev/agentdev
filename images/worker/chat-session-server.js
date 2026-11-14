@@ -94,6 +94,10 @@ class Session {
     this.pending = new Map(); // permission id -> {request_id, input}
     this.viewers = [];
     this.lastViewer = Date.now();
+    // lastConsole: last time the API reported a console viewer. Only the API can write that. Terminal (tmux) clients
+    // run in the same container and UID as Claude, so the model could fake one; they extend the session for at most
+    // terminalMaxSeconds after the last console viewer (#389 review).
+    this.lastConsole = this.lastViewer;
     this.ended = null;
     this.tokens = { input: 0, output: 0 };
     this.drafts = 0;
@@ -123,7 +127,15 @@ class Session {
     };
   }
 
-  viewerCount() { return this.viewers.length + (this.opts.tmuxClients ? this.opts.tmuxClients() : 0); }
+  terminalMaxMs() { return (this.opts.terminalMaxSeconds ?? 7200) * 1000; }
+
+  // viewerCount counts console viewers (from the API) and terminal clients, the latter only while they are inside
+  // the bounded window after the last console viewer.
+  viewerCount(nowMs = Date.now()) {
+    if (this.viewers.length > 0) return this.viewers.length;
+    if (nowMs - this.lastConsole >= this.terminalMaxMs()) return 0;
+    return this.opts.tmuxClients ? this.opts.tmuxClients() : 0;
+  }
 
   // onClaude handles one stream-json line from Claude Code's stdout.
   onClaude(line) {
@@ -203,6 +215,7 @@ class Session {
     if (!Array.isArray(viewers) || viewers.length > 100 || !viewers.every((v) => NAME_RE.test(v))) throw httpError(400, 'viewers must be a list of names');
     const changed = JSON.stringify(viewers) !== JSON.stringify(this.viewers);
     this.viewers = [...viewers];
+    if (this.viewers.length > 0) this.lastConsole = Date.now();
     if (this.viewerCount() > 0) this.lastViewer = Date.now();
     if (changed) this.append('presence', { viewers: this.viewers });
   }
@@ -210,7 +223,8 @@ class Session {
   // tick checks the idle limit; returns true when the session should end.
   tick(nowMs) {
     if (this.ended) return false;
-    if (this.viewerCount() > 0) { this.lastViewer = nowMs; return false; }
+    if (this.viewers.length > 0) this.lastConsole = nowMs;
+    if (this.viewerCount(nowMs) > 0) { this.lastViewer = nowMs; return false; }
     return nowMs - this.lastViewer >= this.opts.idleSeconds * 1000;
   }
 
@@ -268,6 +282,9 @@ function handler(s, opts) {
 }
 
 // ---------- render: the tmux view ----------
+// The log file is written by this server, but Claude runs as the same UID and could append fake lines (for example a
+// fake "? permission" line). The terminal view is display only: it cannot answer permissions or send messages, and
+// the console reads events from this server's memory, not from the file. Treat the terminal text as untrusted.
 
 function render(file) {
   let pos = 0; let buf = '';
@@ -310,7 +327,8 @@ function main() {
   const tmuxClients = () => {
     try { return require('child_process').execFileSync('tmux', ['list-clients', '-t', 'chat'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n').filter(Boolean).length; } catch { return 0; }
   };
-  const s = new Session({ name: process.env.SESSION_NAME || os.hostname(), repo: process.env.REPO || '', agent: process.env.CHAT_AGENT || '', idleSeconds: idle, tmuxClients });
+  const terminalMax = /^[0-9]{1,6}$/.test(process.env.CHAT_TERMINAL_MAX_SECONDS || '') ? Number(process.env.CHAT_TERMINAL_MAX_SECONDS) : 7200;
+  const s = new Session({ name: process.env.SESSION_NAME || os.hostname(), repo: process.env.REPO || '', agent: process.env.CHAT_AGENT || '', idleSeconds: idle, terminalMaxSeconds: terminalMax, tmuxClients });
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--permission-prompt-tool', 'stdio', '--append-system-prompt', fs.readFileSync(promptFile, 'utf8')];
   const env = { ...process.env };
