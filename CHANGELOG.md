@@ -49,6 +49,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
   namespace. Re-run: `deploy.yml` (operator and role `ingress`); kind is not changed.
+- Read-only plan identity for deployment pull requests (#291). The module makes the service account
+  `agentdev-plan` (`roles/viewer`, `roles/iam.securityReviewer`, read on the state bucket, `roles/billing.viewer`
+  with `create_budget`) and a separate Workload Identity pool `github-pr`. Only `pull_request` runs of
+  `github_repository` can use it. `github_actions_auth` has two new keys: `plan_workload_identity_provider` and
+  `plan_service_account`. The example `deploy.yml` has a `plan` job: `terraform plan -lock=false` on a PR, posted
+  as one PR comment. The job is skipped until `GCP_PLAN_WIF_PROVIDER` is set. New inputs `create_plan_identity`
+  (default `true`) and `plan_state_bucket`. Terraform tests (`infra/terraform/tests/plan_identity.tftest.hcl`)
+  refuse write roles. Re-run: `terraform apply` (owner), then admin.md "Show the plan on deployment pull requests".
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of
