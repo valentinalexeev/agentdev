@@ -1,0 +1,39 @@
+---
+# One case for tests/preflight.yml: write the fake secrets, run preflight.yml, check the result and the message.
+- name: "Empty the fake secrets for {{ case.name }}"
+  ansible.builtin.file: {path: "{{ work }}/secrets", state: "{{ item }}", mode: "0700"}
+  loop: [absent, directory]
+
+- name: "Write the fake secrets for {{ case.name }}"
+  ansible.builtin.copy:
+    dest: "{{ work }}/secrets/{{ item.key }}"
+    content: "{{ item.value }}"
+    mode: "0600"
+  loop: >-
+    {{ {'claude-shared': case.shared}
+       | combine({'agent-alice-claude': case.alice} if case.alice is defined else {})
+       | combine({'agent-bob-claude': case.bob} if case.bob is defined else {}) | dict2items }}
+  loop_control: {label: "{{ item.key }}"}
+
+- name: "Run preflight for {{ case.name }}"
+  ansible.builtin.command:
+    argv: "{{ preflight_argv }}"
+    chdir: "{{ playbook_dir }}/.."
+  environment:
+    PATH: "{{ work }}/bin:{{ ansible_env_path }}"
+    FAKE_SECRETS_DIR: "{{ work }}/secrets"
+  register: preflight_out
+  changed_when: false
+  failed_when: false
+
+- name: "Check the result for {{ case.name }}"
+  ansible.builtin.assert:
+    that: >-
+      {{ [preflight_out.rc == 0, 'Preflight passed' in preflight_out.stdout] if case.ok else
+         [preflight_out.rc != 0,
+          ('Secret Manager secret ' ~ case.secret ~ ' has no recognised Claude credential') in preflight_out.stdout,
+          'CLAUDE_CODE_OAUTH_TOKEN=<token>' in preflight_out.stdout,
+          'baretoken' not in preflight_out.stdout,
+          'Preflight passed' not in preflight_out.stdout] }}
+    fail_msg: "{{ case.name }}: rc {{ preflight_out.rc }}\n{{ preflight_out.stdout | regex_replace('sk-ant-\\S+', '<redacted>') }}"
+    quiet: true

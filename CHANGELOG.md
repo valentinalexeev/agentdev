@@ -81,6 +81,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   wall, phase matrix, Projects page), the Chat page for interactive sessions (thread, tool steps, permission cards,
   issue drafts the person creates), needed API and phases. `console-prototype.html` shows every screen with a small
   and a large example.
+- Ansible preflight (#314): `infra/ansible/preflight.yml` only reads, and `deploy.yml` imports it first. A deploy
+  now stops before its first change when a Claude secret has the wrong format (the #212 message), when the playbook
+  checkout is on a release tag other than `v<image_tag>` (#218), when the cluster does not serve a CRD the instance
+  values need (Gateway API, FQDNNetworkPolicy), or when an image is not on ghcr.io at `image_tag`. Run it alone with
+  `bash scripts/upgrade-check.sh <instance.yml>` or `deploy.yml --tags preflight`. The deployment example workflow
+  runs it on `main` before `terraform apply`, and clones the playbook at `agentdev_ref`. To apply: copy the
+  new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment repository.
 - Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
   operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
   when no job runs, and the operator then replaces the pod (at once when the pod does not run; after
