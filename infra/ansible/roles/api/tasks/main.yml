@@ -33,6 +33,12 @@
 - name: Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem
   ansible.builtin.include_tasks: secrets_k8s.yml
 
+# kind.yml --tags api may run before steps 06 and 12 (#357)
+- name: Agents namespace with the cost labels
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ api_agents_ns_definition }}"
+
 - name: API Deployment, Service, RBAC and NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"

@@ -1,0 +1,44 @@
+# The role api creates the agents namespace (#357): `kind.yml --tags api` on a cluster without coding-agents. Checks
+# the Namespace definition and that the task comes before the manifest apply. No cluster.
+# Run: ansible-playbook infra/ansible/tests/api_namespace.yml
+- name: API agents namespace (#357)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    agents_ns: coding-agents
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/api/defaults/main.yml
+
+    - name: Read the role tasks
+      ansible.builtin.set_fact:
+        t_tasks: "{{ lookup('ansible.builtin.file', '../roles/api/tasks/main.yml') | from_yaml }}"
+
+    - name: Default labels (group_vars), namespace task before the apply
+      ansible.builtin.assert:
+        that:
+          - api_agents_ns_definition.kind == 'Namespace'
+          - api_agents_ns_definition.metadata.name == 'coding-agents'
+          - "api_agents_ns_definition.metadata.labels == {'service': 'agentdev'}"
+          - t_names.index('Agents namespace with the cost labels') < t_names.index('API Deployment, Service, RBAC and NetworkPolicies')
+        quiet: true
+      vars:
+        t_names: "{{ t_tasks | map(attribute='name') | list }}"
+
+    - name: GKE labels win
+      ansible.builtin.assert:
+        that: "api_agents_ns_definition.metadata.labels == {'service': 'agentdev', 'environment': 'prod', 'team': 'x'}"
+        quiet: true
+      vars:
+        agentdev_effective_labels: {service: agentdev, environment: prod, team: x}
+
+    - name: Kind labels (kind.yml = operator_cost_labels)
+      ansible.builtin.assert:
+        that:
+          - t_api.vars.api_ns_labels == t_op.operator_cost_labels
+        quiet: true
+      vars:
+        t_kind: "{{ lookup('ansible.builtin.file', '../kind.yml') | from_yaml }}"
+        t_api: "{{ t_kind | map(attribute='tasks') | select('defined') | flatten | selectattr('name', 'equalto', 'Management API (was 10-api.sh)') | first }}"
+        t_op: "{{ lookup('ansible.builtin.file', '../roles/operator/defaults/main.yml') | from_yaml }}"
