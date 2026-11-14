@@ -164,3 +164,40 @@ test('Gitea: a comment on an agent PR routes by the PR author (the agent login)'
   await settle();
   assert.strictEqual(r.body.routed, 1); assert.strictEqual(wakes.alice, 1);
 });
+
+// #241 P7: Gitea deliveries in the shape Gitea sends them (alice is registered for Gitea by the test above).
+// A PR comment has issue + comment + is_pull (X-Gitea-Event issue_comment, X-Gitea-Event-Type pull_request_comment);
+// a review has pull_request + review. Routing reads only the payload, never the event name.
+const gtPR = (user, labels = []) => ({ number: 3, user: { login: user }, labels, assignees: [], pull_request: { merged: false } });
+test('Gitea: pull_request_comment on the agent PR wakes the agent', async () => {
+  reset();
+  const r = await hook('gitea', 'pull_request_comment', { action: 'created', repository: gtRepo, sender: { login: 'owner' },
+    comment: { user: { login: 'owner' }, body: 'please fix' }, issue: gtPR('alice'), is_pull: true });
+  await settle();
+  assert.strictEqual(r.body.routed, 1); assert.strictEqual(wakes.alice, 1);
+});
+
+test('Gitea: a change-request review on the agent PR wakes the agent', async () => {
+  reset();
+  const r = await hook('gitea', 'pull_request_review_rejected', { action: 'reviewed', repository: gtRepo, sender: { login: 'owner' },
+    number: 3, pull_request: { number: 3, user: { login: 'alice' }, labels: [], head: { ref: 'agent/alice/issue-3' } },
+    review: { type: 'pull_request_review_rejected', content: 'no' } });
+  await settle();
+  assert.strictEqual(r.body.routed, 1); assert.strictEqual(wakes.alice, 1);
+});
+
+test('Gitea: the agent:<name> label routes a comment on a PR the agent did not open', async () => {
+  reset();
+  const r = await hook('gitea', 'pull_request_comment', { action: 'created', repository: gtRepo,
+    comment: { user: { login: 'owner' }, body: 'x' }, issue: gtPR('owner', [{ name: 'agent:alice' }]), is_pull: true });
+  await settle();
+  assert.strictEqual(r.body.routed, 1); assert.strictEqual(wakes.alice, 1);
+});
+
+test('Gitea: a comment on a person\'s PR, or a bad label, wakes nobody', async () => {
+  reset();
+  await hook('gitea', 'pull_request_comment', { action: 'created', repository: gtRepo,
+    comment: { user: { login: 'owner' }, body: 'x' }, issue: gtPR('owner', [{ name: 'agent:Alice;x' }]), is_pull: true });
+  await settle();
+  assert.strictEqual(wakes.alice, 0);
+});

@@ -1,0 +1,45 @@
+# Role defaults scope (#333): deploy.yml loads roles with include_role, so a role's defaults are not visible to the
+# roles that run after it. A variable that more than one role reads belongs in group_vars/all.yml.
+# 1. The api role renders its values with group_vars/all.yml and its own defaults only (no platform role defaults).
+# 2. No role reads a variable that only another role's defaults define.
+# Run: ansible-playbook infra/ansible/tests/role_defaults_scope.yml
+- name: Role defaults scope (#333)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    gcp_project: p
+    api: {oidc_issuer: "https://issuer.example.com/"}
+  tasks:
+    - name: Load group_vars/all.yml (as deploy.yml sees it)
+      ansible.builtin.include_vars: ../group_vars/all.yml
+
+    - name: Load the api role defaults only
+      ansible.builtin.include_vars: ../roles/api/defaults/main.yml
+
+    - name: The api role's Secret Manager name renders without the platform role
+      ansible.builtin.assert:
+        that: api_sm_db_password == 'platform-pg-agentdev-api'
+        fail_msg: "api_sm_db_password did not render without the platform role defaults: {{ api_sm_db_password }}"
+
+    - name: Find variables that one role reads from another role's defaults
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ scan }}", "{{ playbook_dir }}/../roles"]
+      vars:
+        scan: |
+          import glob, os, re, sys, yaml
+          roles = sys.argv[1]
+          defaults = {}
+          for f in glob.glob(roles + '/*/defaults/main.yml'):
+              defaults[f.split('/')[-3]] = set((yaml.safe_load(open(f)) or {}).keys())
+          bad = []
+          for r in sorted(os.listdir(roles)):
+              files = [p for p in glob.glob(roles + '/' + r + '/**/*', recursive=True) if os.path.isfile(p)]
+              text = ''.join(open(p, errors='ignore').read() for p in files)
+              own = defaults.get(r, set())
+              for o, keys in defaults.items():
+                  for k in sorted(keys - own) if o != r else []:
+                      if re.search(r'(?<![\w.])' + re.escape(k) + r'(?!\w)', text):
+                          bad.append(r + ' reads ' + k + ' from roles/' + o + '/defaults')
+          print('\n'.join(bad))
+          sys.exit(1 if bad else 0)
+      changed_when: false

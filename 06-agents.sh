@@ -11,9 +11,15 @@ need envsubst; need jq
 
 log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE}, ${ROUTER_IMAGE} and ${CLAUDE_PROXY_IMAGE}"
 # local tags (agentdev/...) are built from this checkout; a published image (the compatibility e2e, #178, runs the
-# previous release's worker and forge) is pulled and loaded as it is
-build_or_pull() { if [[ "$1" == agentdev/* ]]; then "${CONTAINER_ENGINE}" build -q -t "$1" "$2" >/dev/null
-                  else "${CONTAINER_ENGINE}" pull -q "$1" >/dev/null; fi; }
+# previous release's worker and forge) is pulled for one platform and then re-tagged through a one-line build, so the
+# local image has one manifest. With the containerd image store (Docker on GitHub runners), a pulled image keeps the
+# multi-arch index, and `kind load` (ctr import --all-platforms) fails on the missing platforms (#378).
+engine_arch=$("${CONTAINER_ENGINE}" info -f '{{.Architecture}}' 2>/dev/null || "${CONTAINER_ENGINE}" info -f '{{.Host.Arch}}')
+pull_platform="linux/$(sed 's/^x86_64$/amd64/; s/^aarch64$/arm64/' <<< "${engine_arch}")"
+[[ "${pull_platform}" =~ ^linux/(amd64|arm64)$ ]] || die "unknown container engine architecture: ${engine_arch}"
+build_or_pull() { if [[ "$1" == agentdev/* ]]; then "${CONTAINER_ENGINE}" build -q -t "$1" "$2" >/dev/null; return; fi
+                  "${CONTAINER_ENGINE}" pull -q --platform "${pull_platform}" "$1" >/dev/null
+                  printf 'FROM %s\n' "$1" | "${CONTAINER_ENGINE}" build -q --platform "${pull_platform}" -t "$1" - >/dev/null; }
 build_or_pull "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker"
 build_or_pull "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge"
 "${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
@@ -171,12 +177,16 @@ for a in ${AGENTS}; do
   # pick up a rebuilt image / changed secret (the operator owns the spec; a restart only replaces the pod)
   k -n "${AGENTS_NS}" wait --for=jsonpath='{.status.observedGeneration}'="$(k -n "${AGENTS_NS}" get agent "${a}" -o jsonpath='{.metadata.generation}')" \
     agent "${a}" --timeout=60s >/dev/null || die "operator did not reconcile agent ${a} (kubectl -n ${PLATFORM_NS} logs deploy/agentdev-operator)"
-  k -n "${AGENTS_NS}" rollout restart statefulset "agent-${a}" >/dev/null
+  # OnDelete (#174): a restart annotation alone does not replace the pod. On kind this step starts a fresh pod with the
+  # rebuilt image or the changed secret, so delete it; the StatefulSet makes a new one (the job resumes, #175).
+  k -n "${AGENTS_NS}" delete pod "agent-${a}-0" --ignore-not-found --wait=false >/dev/null
   ok "${a} deployed (${cred})"
 done
 for a in ${AGENTS}; do
   [[ "$(k -n "${AGENTS_NS}" get statefulset "agent-${a}" -o jsonpath='{.metadata.annotations.agentdev/blocked}' 2>/dev/null || true)" == true ]] && continue
-  k -n "${AGENTS_NS}" rollout status statefulset "agent-${a}" --timeout=300s >/dev/null
+  # agent StatefulSets use updateStrategy OnDelete (#174): `rollout status` does not work; wait for the pod instead
+  k -n "${AGENTS_NS}" wait --for=jsonpath='{.status.readyReplicas}'=1 statefulset "agent-${a}" --timeout=300s >/dev/null \
+    || die "agent-${a} did not become ready (kubectl -n ${AGENTS_NS} describe pod agent-${a}-0)"
 done
 
 if [[ "${FORGE_KIND}" == github ]]; then

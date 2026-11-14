@@ -9,7 +9,8 @@ operator_agents_ns: coding-agents
 operator_exec_ns: agentdev-executors
 operator_forge_ns: forge
 operator_botboard_ns: botboard
-operator_image: agentdev-operator:dev    # agentdev-operator:* is built from images/operator
+# operator_image is a play variable (kind.yml, group_vars/all.yml), not a default here: the role platform reads it too,
+# and include_role does not make one role's defaults visible to the next role (#333). agentdev-operator:* is built.
 operator_worker_image: agentdev/worker:mvp
 operator_forge_image: agentdev/forge:mvp
 operator_image_pull_policy: Never        # kind: step 06 loads the worker and forge images
@@ -31,6 +32,7 @@ operator_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, 
 operator_egress_extra_hosts: []
 operator_claude_proxy: true
 operator_usage: {five_hour: 80, weekly: 90}
+operator_rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174, AGENT_GRACE_SECONDS and DRAIN_MAX_MINUTES in config.env
 # scoped secrets store (#202): on only when External Secrets Operator is installed (step 13), else the operator's
 # cache never syncs
 operator_secrets_store_enabled: true
