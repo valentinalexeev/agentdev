@@ -27,7 +27,7 @@ func TestOneStateVolumePerAgent(t *testing.T) {
 	}
 	var claude *corev1.VolumeMount
 	for i, m := range s.Spec.Template.Spec.Containers[0].VolumeMounts {
-		if m.Name != "state" && m.Name != "usage" && m.Name != "guide" { // usage and guide (#206) are read-only ConfigMaps
+		if m.Name != "state" && m.Name != "usage" && m.Name != "guide" && m.Name != "podinfo" { // usage, guide (#206) and podinfo (#174) are read-only
 			t.Errorf("unexpected volume %q", m.Name)
 		}
 		if m.MountPath == "/home/node/.claude" {

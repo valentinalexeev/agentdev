@@ -16,6 +16,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [events], verbs: [create, patch]}
 # security events (#70): read agent pod logs, write SecurityEvents, pause an agent, keep log positions
 - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+# drain before replace (#174): mark an outdated agent pod (agentdev/drain) and delete it once its jobs ended
+- {apiGroups: [""], resources: [pods], verbs: [patch, delete]}
 - {apiGroups: [""], resources: [pods/log], verbs: [get]}
 - {apiGroups: [agentdev.dev], resources: [securityevents], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name
@@ -121,6 +123,8 @@ spec:
         - {name: APPROVALS, value: "${APPROVALS}"}                                # #67, see config.env
         - {name: APPROVALS_URL, value: "http://agentdev-api-internal.${PLATFORM_NS}.svc.cluster.local:8081"}
         - {name: APPROVAL_TIMEOUT_MINUTES, value: "${APPROVAL_TIMEOUT_MINUTES}"}
+        - {name: AGENT_GRACE_SECONDS, value: "${AGENT_GRACE_SECONDS}"}   # #174: time to save work in progress on stop
+        - {name: DRAIN_MAX_MINUTES, value: "${DRAIN_MAX_MINUTES}"}       # #174: longest wait for running jobs on upgrade
         - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
         # deterministic executors (#69); OPERATOR_IMAGE is also the plan hash/verify helper in executor Jobs
         - {name: EXEC_NS, value: "${EXEC_NS}"}

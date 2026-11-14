@@ -57,6 +57,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	s.Annotations["agentdev/forge"] = forge
 
 	s.Spec.ServiceName = "agent-" + n
+	// #174: the operator replaces outdated pods itself after draining them (drain.go), never the StatefulSet controller
+	s.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 	s.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"agent": n}}
 	// keep the agent's state volume when the Agent is deleted: re-adding the agent resumes its work
 	s.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
@@ -82,6 +84,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule},
 	}
 	p.AutomountServiceAccountToken = ptr.To(false)
+	// #174: time for the loop's SIGTERM handler to save the work in progress of running jobs
+	p.TerminationGracePeriodSeconds = ptr.To(r.D.graceSeconds())
 	// fsGroup 1000: both containers can write the shared /state (the sidecar appends the wake file there)
 	p.SecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true), FSGroup: ptr.To[int64](1000)}
 	// own process namespace per container (the default, set explicitly): the agent container cannot read the
@@ -96,7 +100,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// blocks the pod (the loop then runs with the security rules only)
 		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
-			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}}}
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}},
+		// drain (#174): the pod's own annotations, where the operator (or an admin) sets agentdev/drain
+		{Name: "podinfo", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0o444),
+			Items: []corev1.DownwardAPIVolumeFile{{Path: "annotations", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations"}}}}}}}
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -150,7 +157,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		EnvFrom: r.claudeEnvFrom(a),
 		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
-			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true}},
+			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),
 				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralRequest, defAgentEphemeralRequest)},
@@ -207,6 +215,14 @@ func (d Defaults) qty(v, def string) resource.Quantity {
 		return q
 	}
 	return resource.MustParse(def)
+}
+
+// graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.
+func (d Defaults) graceSeconds() int64 {
+	if n, err := strconv.ParseInt(d.GraceSeconds, 10, 64); err == nil && n >= 30 && n <= 3600 {
+		return n
+	}
+	return 300
 }
 
 // claimTemplates is the agent's volume layout (#173): one claim, state, on the agent StorageClass (empty: the cluster

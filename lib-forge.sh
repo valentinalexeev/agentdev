@@ -22,6 +22,7 @@ forge_agent_account() {
   forge_mkuser "${a}" "$(openssl rand -hex 12)Aa1!"   # agents never log in with it; they use the token
   # Agents are collaborators (write), not admins: they push branches and open PRs, the owner merges.
   ga PUT "/repos/${repo}/collaborators/${a}" '{"permission":"write"}' >/dev/null
+  forge_agent_label "${a}" "${repo}"
   if [[ ! -s "${tf}" ]]; then
     mkdir -p "$(dirname "${tf}")"
     gitea_cli admin user generate-access-token --username "${a}" --token-name "worker-$(date +%s)" \
@@ -41,6 +42,14 @@ forge_branch_protection() {
     enable_approvals_whitelist: true, approvals_whitelist_username: [$o],
     dismiss_stale_approvals: true, block_on_rejected_reviews: true, block_on_outdated_branch: false
   }')" >/dev/null
+}
+
+# forge_agent_label <agent> <repo>: the label agent:<agent>, which the agent puts on its own PRs (#241 P5). Gitea
+# does not create a missing label on use, so it must exist; an existing label is kept.
+forge_agent_label() {
+  local a=$1 repo=$2
+  ga GET "/repos/${repo}/labels?limit=100" | jq -e --arg n "agent:${a}" 'any(.[]; .name == $n)' >/dev/null && return 0
+  ga POST "/repos/${repo}/labels" "$(jq -cn --arg n "agent:${a}" '{name:$n, color:"#5319e7", description:"Work of this agent (issues and its own PRs)"}')" >/dev/null
 }
 
 # forge_labels <repo> <labels.json>: create missing labels ([{name,color,description}]); existing ones are kept

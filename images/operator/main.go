@@ -92,7 +92,9 @@ func main() {
 		AgentEphemeralLimit:   os.Getenv("AGENT_EPHEMERAL_LIMIT"),
 		ForgeMirrorLimit:      os.Getenv("FORGE_MIRROR_LIMIT"),
 		ForgeEphemeralLimit:   os.Getenv("FORGE_EPHEMERAL_LIMIT"),
-	}}
+		GraceSeconds:          env("AGENT_GRACE_SECONDS", "300"),
+		DrainMaxMinutes:       env("DRAIN_MAX_MINUTES", "60"),
+	}, Drains: &DrainSignals{}, ns: ns}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)
@@ -112,6 +114,7 @@ func main() {
 		os.Exit(1)
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
+		Drains: r.Drains, Requeue: r.requeueAgent,
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
 		C: SecurityConfig{
 			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),
