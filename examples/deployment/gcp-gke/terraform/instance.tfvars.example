@@ -17,6 +17,7 @@ cloud_armor        = false
 # agent_disk_type     = "pd-standard"
 labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
+# system_pool_min_nodes = 0  # agentdev #313: only while stopped with scripts/cluster-stop.sh (docs/admin.md)
 # Cluster add-ons (agentdev #208): lean by default (Managed Prometheus, Filestore CSI and the extra monitoring
 # components are off; the load balancer is on only with public_hosts). Set one back to keep an older cluster as it was.
 # enable_managed_prometheus = true

@@ -45,6 +45,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Stop and start a GKE instance (#313): `scripts/cluster-stop.sh` records the replicas and the system pool
+  autoscaling in the ConfigMap `kube-system/agentdev-stopped-state`, scales the operator and the router first, then
+  resizes the system pool to 0 with retries. `scripts/cluster-start.sh` restores exactly that state. New Terraform
+  variable `system_pool_min_nodes` (default 1, 0 allowed) keeps a stopped instance at 0 nodes. Procedure:
+  `docs/admin.md` "Stop and start an instance". Re-run: Terraform module only; no change with the default.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder

@@ -39,6 +39,8 @@ module "agentdev" {
   # labels = var.labels
   # Spot system pool (agentdev #171): uncomment with a ref= that contains #171
   # system_pool_spot = var.system_pool_spot
+  # system pool minimum (agentdev #313): uncomment with a ref= that contains #313; 0 for scripts/cluster-stop.sh
+  # system_pool_min_nodes = var.system_pool_min_nodes
   # cluster add-ons (agentdev #208): lean by default; uncomment with a ref= that contains #208
   # gateway_enabled           = var.gateway_enabled
   # enable_managed_prometheus = var.enable_managed_prometheus
@@ -131,6 +133,11 @@ variable "system_pool_spot" {
   description = "Spot VMs for the system pool (agentdev #171); platform down ~1 minute when a node is reclaimed."
   type        = bool
   default     = false
+}
+variable "system_pool_min_nodes" {
+  description = "Minimum nodes of the system pool (agentdev #313); 0 keeps a stopped instance (scripts/cluster-stop.sh) at 0."
+  type        = number
+  default     = 1
 }
 variable "gateway_enabled" {
   description = "GKE load balancer and Gateway API (agentdev #208). null: on when public_hosts is set. false with public_hosts is refused."

@@ -161,7 +161,7 @@ resource "google_container_node_pool" "system" {
   cluster  = google_container_cluster.this.id
   location = var.zone
   autoscaling {
-    min_node_count = 1
+    min_node_count = var.system_pool_min_nodes # #313: 0 for a stopped instance (scripts/cluster-stop.sh)
     max_node_count = 2
   }
   node_config {

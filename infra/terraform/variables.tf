@@ -66,6 +66,15 @@ variable "system_pool_spot" {
   type        = bool
   default     = false
 }
+variable "system_pool_min_nodes" {
+  description = "Minimum node count of the system pool autoscaler (#313). 0 lets scripts/cluster-stop.sh keep the pool at 0 nodes, and a later terraform apply does not start a node again. With platform pods, the autoscaler keeps at least one node."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.system_pool_min_nodes >= 0 && var.system_pool_min_nodes <= 2 && floor(var.system_pool_min_nodes) == var.system_pool_min_nodes
+    error_message = "system_pool_min_nodes must be a whole number from 0 to 2 (the maximum of the system pool)."
+  }
+}
 
 # Cluster add-ons (#208). Lean by default: the system pool is sized for the platform, so add-ons agentdev does not use
 # are off. Every add-on costs CPU and memory on the system pool nodes. Set an input back to keep an old cluster as it was.
