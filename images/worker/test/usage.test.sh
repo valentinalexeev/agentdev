@@ -95,4 +95,23 @@ printf '#!/bin/sh\necho "SECRET-STDERR tool output" >&2\nexit 3\n' > "${tmp}/bin
 # shellcheck disable=SC2034  # read by check (eval)
 logged=$( log() { printf '%s\n' "$*"; }; run_claude "${tmp}" "p" 2>&1 )
 check "run_claude: stderr of the CLI is never logged" "[[ \"\${logged}\" != *SECRET-STDERR* && \"\${logged}\" == *'claude exited 3'* ]]"
+
+# #336: the exit log line goes to stderr, so result=$(run_claude ...) stays empty and never becomes a PR body.
+# usage_post is silent here like the real one (it posts to the sidecar); the stub above prints for the usage checks.
+# shellcheck disable=SC2034  # read by check (eval)
+result=$( log() { printf '%s\n' "$*"; }; usage_post() { :; }; run_claude "${tmp}" "p" 2>/dev/null )
+check "#336: a failed run prints no log line on stdout" "[[ -z \"\${result}\" ]]"
+# #336: max turns -> fixed class from the result event's subtype only, written to CLAUDE_EXIT_FILE
+printf '#!/bin/sh\necho %s\nexit 1\n' "'{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true,\"result\":\"SECRET-TRANSCRIPT\"}'" > "${tmp}/bin/claude"
+exitf="${tmp}/exit"; rm -f "${exitf}"
+# shellcheck disable=SC2034  # read by check (eval)
+logged=$( log() { printf '%s\n' "$*"; }; CLAUDE_EXIT_FILE="${exitf}" run_claude "${tmp}" "p" 2>&1 >/dev/null )
+check "#336: max turns gives class max-turns" "[[ \"\$(cat \"\${exitf}\")\" == '1 max-turns' && \"\${logged}\" == *'(max-turns;'* ]]"
+check "#336: the class never carries the result text" "[[ \"\${logged}\" != *SECRET-TRANSCRIPT* && \"\$(cat \"\${exitf}\")\" != *SECRET* ]]"
+# shellcheck disable=SC1090
+source <(sed -n '/^stopped_note() {/,/^}/p' "${here}/../agent-loop.sh")
+# shellcheck disable=SC2034  # read by check (eval)
+note=$(MAX_TURNS=40 stopped_note 1 max-turns)
+check "#336: stopped_note is a fixed text with the code, the class and the max_turns hint" \
+  "[[ \"\${note}\" == *'exit code 1, class \`max-turns\`'* && \"\${note}\" == *'max_turns'* && \"\${note}\" != *SECRET* ]]"
 exit ${fail}
