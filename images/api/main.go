@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +90,11 @@ func main() {
 		perms.github = gh
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
-	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents}
+	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
+		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}} // #27, 0 = no cap
+	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
+		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
+	}
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		dc := newDecider(agents, agents, gp, perms)
 		dc.github = gh
@@ -121,6 +126,22 @@ func envPct(k string, def int) int {
 	}
 	return def
 }
+
+// envCount reads a cap (#27): digits only, 0 or empty = no cap. Any other value stops the API at start (fail closed:
+// a typo must not silently turn a limit off).
+func envCount(k string) int {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || !digitsRe.MatchString(v) {
+		log.Fatalf("%s must be a whole number 0 or more (0 = no limit), got %q", k, v)
+	}
+	return n
+}
+
+var digitsRe = regexp.MustCompile(`^[0-9]{1,6}$`)
 
 func envInt(k string, def int) int {
 	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
@@ -221,9 +242,8 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		addBudgets(r.Context(), list) // #66
 		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
 	})))
-	// Every authenticated user may read every event for now. Restricting the list to the projects the caller has
-	// write access to needs the forge permission check of #67 and per-project access from #57: see #57.
-	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events)))
+	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
+	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
@@ -237,7 +257,7 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		}
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
-		// every signed-in user, like the security events: same exposure as R35 (filter by write access: #57)
+		// every signed-in user, filtered by forge write access (review #102, R35 #308); Secret names for admins only
 		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))

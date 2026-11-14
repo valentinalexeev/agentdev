@@ -127,6 +127,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | router | the agentdev service that receives forge webhooks and wakes agents |
 | public port | the port of a service that a Gateway or a reverse proxy publishes (router: 8080, webhooks only) |
 | internal port | the port of a service that only callers in the cluster use (router: 8081, `/status`, `/healthz`, `/register`, `/idle`) |
+| health port | the port of a service that gives only its health status (router: 8082, `GET /healthz`), for the probes and the health check of the load balancer |
 | run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |

@@ -1,0 +1,15 @@
+---
+# kind only (#106, was 09-authentik.sh, after the role authentik): agentdev-admins membership check, then the company
+# SSO stand-in (#122). The same blueprints as GKE; no token or password is printed.
+- name: Akadmin in agentdev-admins, members kept after a blueprint re-apply
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, deploy/authentik-worker, --,
+           ak, shell]
+    stdin: "{{ lookup('ansible.builtin.file', 'membership_check.py') }}"
+  register: authentik_kind_members
+  changed_when: false
+  failed_when: "authentik_kind_members.rc != 0 or 'check: members kept' not in authentik_kind_members.stdout"
+
+- name: Company SSO stand-in (#122)
+  ansible.builtin.include_tasks: sso.yml
+  when: authentik_kind_sso_standin | bool

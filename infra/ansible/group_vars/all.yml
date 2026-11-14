@@ -52,6 +52,7 @@ forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
+max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
 wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
 # webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
