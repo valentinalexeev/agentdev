@@ -6,10 +6,11 @@ import type { Config } from './config'
 export function userManager(cfg: Config): UserManager {
   return new UserManager({
     authority: cfg.oidcIssuer,
-    client_id: cfg.oidcClientId,
+    client_id: cfg.oidcClientId || 'agentdev',
     redirect_uri: `${window.location.origin}/callback`,
     post_logout_redirect_uri: `${window.location.origin}/`,
-    scope: 'openid profile email forge', // forge: forge_login claim for the API (#88)
+    // forge: forge_login claim for the API (#88); providers that issue groups only on request add `groups` (#323)
+    scope: cfg.oidcScopes || 'openid profile email forge',
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: false,
   })

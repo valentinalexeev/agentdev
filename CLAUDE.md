@@ -111,7 +111,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
     pending hop and fails a release PR whose lower lines are not merged in.
   - A forward-merge PR with no conflict resolution and green CI may be merged by the bot **without** a fresh owner
     approval (owner, ADR 0004). This is the only exception to the approval rule below. A hop with a resolved
-    conflict needs the normal approval.
+    conflict needs the normal approval. The `Release lines` check classifies each `merge/` PR in its job summary:
+    **mechanical** (the bot may merge) or **resolved** (owner approval and review needed). Both pass, because the
+    check is required and must not block an approved resolved hop. The bot merges without approval only when the
+    summary says mechanical for the current head.
   - Support window: the latest minor and the one before it. Older lines get security fixes only, on request.
 - **Commit messages follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):**
   `<type>[(scope)][!]: <description>`, imperative, lower-case, no trailing period, then an optional body and footers.
