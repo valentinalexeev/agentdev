@@ -44,8 +44,23 @@ drop_stale_claude_login() {
     rm -f "${HOME}/.claude.json.tmp"
   fi
 }
+# Workload identity (#352): with the projected service account token mounted (audience claude-proxy, renewed by the
+# kubelet), Claude Code reads it through apiKeyHelper and sends it instead of the HMAC key. The helper is passed with
+# --settings on each call (not written to the claude volume, so nothing the model edits changes it). The TTL makes
+# Claude Code call the helper again each minute, so the rotated file is read. ANTHROPIC_AUTH_TOKEN would win over the
+# helper, so it is removed for the claude process. Without the file (older operator) the key stays as before.
+PROXY_TOKEN_FILE="${PROXY_TOKEN_FILE:-/var/run/secrets/agentdev/proxy/token}"
+CLAUDE_AUTH=()
+claude_proxy_auth() {
+  CLAUDE_AUTH=()
+  [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${PROXY_TOKEN_FILE}" ]] || return 0
+  CLAUDE_AUTH=(--settings "$(jq -cn --arg f "${PROXY_TOKEN_FILE}" '{apiKeyHelper: ("cat " + ($f | @sh))}')")
+  export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+  unset ANTHROPIC_AUTH_TOKEN
+}
 # ---------- end Claude credential proxy ----------
 drop_stale_claude_login
+claude_proxy_auth
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
 # security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
@@ -436,7 +451,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-          claude -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
+          claude "${CLAUDE_AUTH[@]}" -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
@@ -1129,7 +1144,7 @@ ready_check() {
   else lines+=("- ❌ forge: no push access to ${REPO}"); ok=0; fi
   if api GET "/repos/${REPO}/issues?state=open&$(per_page 1)" >/dev/null; then lines+=("- ✅ tracker: issues of ${REPO}")
   else lines+=("- ❌ tracker: cannot list issues of ${REPO}"); ok=0; fi
-  if claude_out=$(cd /tmp && timeout 120 claude -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
+  if claude_out=$(cd /tmp && timeout 120 claude "${CLAUDE_AUTH[@]}" -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
     lines+=("- ✅ claude: $(claude --version 2>/dev/null)")
   else
     log "readiness: claude check failed: ${claude_out}"   # full text only in the pod log, never on the issue

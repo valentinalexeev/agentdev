@@ -27,4 +27,20 @@ out=$(ANTHROPIC_BASE_URL=x bash -c "sidecar() { echo called >&3; }; log() { :; }
 check "usage_post posts nothing with the proxy" "[[ -z '${out}' ]]"
 out=$(env -u ANTHROPIC_BASE_URL bash -c "sidecar() { echo called >&3; }; log() { :; }; ${post}; usage_post '{}'" 3>&1)
 check "usage_post posts without the proxy" "[[ '${out}' == called ]]"
+
+# #352: with the projected token, claude gets an apiKeyHelper that prints the file and no ANTHROPIC_AUTH_TOKEN
+tokf="${work}/token"; echo 'aaa.bbb.ccc' > "${tokf}"
+auth_case() {  # auth_case <proxy url> <token file>: prints the claude arguments, the helper TTL and the key, one per line
+  env ANTHROPIC_BASE_URL="$1" PROXY_TOKEN_FILE="$2" ANTHROPIC_AUTH_TOKEN=alice.hmac bash -c "${fn%drop_stale_claude_login}"$'\n''claude_proxy_auth; for a in "${CLAUDE_AUTH[@]}"; do echo "$a"; done; echo "ttl=${CLAUDE_CODE_API_KEY_HELPER_TTL_MS:-}"; echo "key=${ANTHROPIC_AUTH_TOKEN:-}"'
+}
+out=$(auth_case http://claude-proxy:8080 "${tokf}")
+helper=$(sed -n 2p <<<"${out}" | jq -r .apiKeyHelper)
+check "token: --settings with apiKeyHelper" "[[ \$(sed -n 1p <<<\"\${out}\") == --settings ]]"
+check "token: helper prints the token file" "[[ $(bash -c "${helper}") == aaa.bbb.ccc ]]"
+check "token: helper TTL 60 s" "grep -qx ttl=60000 <<<\"\${out}\""
+check "token: HMAC key removed" "grep -qx key= <<<\"\${out}\""
+out=$(auth_case http://claude-proxy:8080 "${work}/missing")
+check "no token file: key kept, no helper" "[[ \$(head -1 <<<\"\${out}\") == ttl= ]] && grep -qx key=alice.hmac <<<\"\${out}\""
+out=$(auth_case "" "${tokf}")
+check "no proxy: no helper" "[[ \$(head -1 <<<\"\${out}\") == ttl= ]]"
 exit "${fail}"
