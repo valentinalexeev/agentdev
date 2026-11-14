@@ -2184,6 +2184,10 @@ Do this task before maintenance of a node, for example.
 3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
    `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
 
+NOTE: During an upgrade, agent pods of the old version run next to the new platform. agentdev supports this for
+one MINOR step ([ADR 0006](adr/0006-mixed-version-compatibility.md)). Upgrade one MINOR version at a time, for
+example 1.1 to 1.2, then 1.2 to 1.3.
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.

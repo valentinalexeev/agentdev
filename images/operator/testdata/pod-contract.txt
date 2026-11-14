@@ -1,0 +1,69 @@
+# Pod template contract (ADR 0006, #178): what the operator renders into an agent pod. Add a line when the
+# operator renders a new name. Remove a line only one MINOR release after its replacement shipped.
+container agent
+container forge
+env agent AGENT_NAME
+env agent ANTHROPIC_AUTH_TOKEN
+env agent ANTHROPIC_BASE_URL
+env agent APPROVALS
+env agent BOTBOARD_URL
+env agent CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+env agent FORGE_API
+env agent FORGE_PUBLIC_URL
+env agent FORGE_URL
+env agent FORGE_USER
+env agent HTTPS_PROXY
+env agent HTTP_PROXY
+env agent IDLE_SECONDS
+env agent MAX_CONCURRENT
+env agent NO_PROXY
+env agent POLL_SECONDS
+env agent READY_ISSUE
+env agent REPO
+env agent REVIEWER
+env agent ROUTER_URL
+env agent SCALE_TO_ZERO
+env agent WAKE_FILE
+env agent http_proxy
+env agent https_proxy
+env agent no_proxy
+env forge AGENT_NAME
+env forge APPROVALS
+env forge APPROVALS_URL
+env forge APPROVAL_TIMEOUT_MINUTES
+env forge CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+env forge EGRESS_FORGE_KEY
+env forge FORGE_API
+env forge FORGE_KIND
+env forge FORGE_TOKEN
+env forge FORGE_URL
+env forge FORGE_USER
+env forge GITHUB_APP_ID
+env forge GITHUB_APP_PRIVATE_KEY_FILE
+env forge GITHUB_INSTALLATION_ID
+env forge HTTPS_PROXY
+env forge HTTP_PROXY
+env forge MIRROR_DIR
+env forge NO_PROXY
+env forge REGISTER_TOKEN
+env forge REPO
+env forge ROUTER_URL
+env forge SELF_URL
+env forge USAGE_REPORTS
+env forge WAKE_FILE
+env forge WAKE_TOKEN
+env forge http_proxy
+env forge https_proxy
+env forge no_proxy
+init state-init
+mount agent /etc/agentdev/guide
+mount agent /etc/agentdev/usage
+mount agent /home/node/.claude
+mount agent /state
+mount forge /forge
+mount forge /state
+mount forge /var/run/agentdev/github-app
+volume forge
+volume github-app
+volume guide
+volume usage

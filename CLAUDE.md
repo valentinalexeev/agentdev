@@ -249,6 +249,10 @@ required inputs.
   patches take backwards-compatible fixes only.
 - **What counts as the public interface:** Terraform module variables and outputs, Ansible instance vars,
   manifest template variables, image entrypoints and environment variables, the router and listener HTTP API.
+- **Internal interface** (calls between the components of one instance: agent pod to router, Claude proxy,
+  egress proxies and API; the rendered pod template; CRD fields; the state volume; the Postgres schema) is not public,
+  but follows [ADR 0006](docs/adr/0006-mixed-version-compatibility.md): accept the previous MINOR, change additively,
+  and break only over two releases, so agents of the previous version keep working during a rollout.
 - **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
   alters behaviour). While the version is `0.x`, breaking changes bump **MINOR** instead.
 - **MINOR:** backwards-compatible features. **PATCH:** backwards-compatible fixes only.

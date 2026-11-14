@@ -57,6 +57,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- ADR 0006 (proposed, #178): compatibility rule for mixed versions during a rollout. The internal interface (agent
+  pod to platform calls, pod template, CRD fields, state volume, Postgres schema) accepts the previous MINOR release
+  and changes additively; a breaking internal change takes two releases. Operator unit test
+  `TestPodTemplateIsAdditive` fails when the rendered agent pod loses an environment variable, mount, volume or
+  container listed in `images/operator/testdata/pod-contract.txt`.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
