@@ -7,6 +7,9 @@ cluster_name: agentdev
 kube_context: "gke_{{ gcp_project }}_{{ gcp_zone }}_{{ cluster_name }}"
 agents_ns: coding-agents
 platform_ns: agentdev-platform
+# Secret Manager prefix of the platform secrets; read by the roles platform, api and authentik. Here and not in a role's
+# defaults: include_role does not make one role's defaults visible to the next role (#333).
+platform_sm_prefix: platform-
 
 # Labels (#184), the same as Terraform's `labels`: on the agentdev namespaces and on agent and executor pods (GKE cost
 # allocation). Set environment (dev, stage or prod) in instance.yml; service defaults to agentdev.
