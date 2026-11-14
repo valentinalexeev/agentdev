@@ -9,6 +9,8 @@ api_oidc_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer | defaul
 api_oidc_discovery_url: >-
   {{ api.oidc_discovery_url | default(api.oidc_issuer if api.oidc_issuer is defined
      else (authentik_default_discovery_url | default('') or api_oidc_issuer)) }}
+# how long the playbook waits for an external issuer's discovery document before the API rollout (#334)
+api_oidc_wait_seconds: "{{ api.oidc_wait_seconds | default(300) }}"
 # public OIDC client of the UI (#323); the API audience follows it unless api.oidc_audience is set
 api_oidc_client_id: "{{ api.oidc_client_id | default('agentdev') }}"
 api_oidc_audience: "{{ api.oidc_audience | default(api_oidc_client_id) }}"

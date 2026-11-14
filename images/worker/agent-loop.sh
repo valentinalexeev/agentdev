@@ -125,6 +125,16 @@ labeler_ok() {
 }
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
 MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
+# label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
+# is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
+# branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
+# missing label: the deployment creates agent:<name> (Ansible role gitea_forge, lib-forge.sh). Best effort: the
+# router also routes by the PR author (Gitea) or looks the PR up (GitHub) when the label is missing.
+label_own_pr() {
+  api POST "/repos/${REPO}/issues/$1/labels" "$(jq -cn --arg l "agent:${FORGE_USER}" '{labels:[$l]}')" >/dev/null \
+    || log "could not label PR #$1 agent:${FORGE_USER}"
+}
+
 pr_url() { if [[ "${FORGE_KIND}" == github ]]; then web_url "pull/$1"; else web_url "pulls/$1"; fi; }
 
 # botboard (#26): a live dashboard of what agents work on. One card per item, upserted by id; best effort:
@@ -713,12 +723,7 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
           '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
-    # GitHub (#227): every agent is the same App bot, so the router finds the agent of a PR comment by this label
-    # (a comment webhook has no head branch). Best effort: the router also looks the PR up when the label is missing.
-    if [[ "${FORGE_KIND}" == github ]]; then
-      api POST "/repos/${REPO}/issues/${pr}/labels" "$(jq -cn --arg l "agent:${FORGE_USER}" '{labels:[$l]}')" >/dev/null \
-        || log "could not label PR #${pr} agent:${FORGE_USER}"
-    fi
+    label_own_pr "${pr}"
     log "opened PR #${pr} for issue #${n}, review requested from ${REVIEWER}"
     [[ -n "${stopped}" ]] && comment "${n}" "🤖 I opened PR #${pr}, but: ${stopped}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"

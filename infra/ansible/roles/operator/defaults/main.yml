@@ -9,7 +9,8 @@ operator_agents_ns: coding-agents
 operator_exec_ns: agentdev-executors
 operator_forge_ns: forge
 operator_botboard_ns: botboard
-operator_image: agentdev-operator:dev    # agentdev-operator:* is built from images/operator
+# operator_image is a play variable (kind.yml, group_vars/all.yml), not a default here: the role platform reads it too,
+# and include_role does not make one role's defaults visible to the next role (#333). agentdev-operator:* is built.
 operator_worker_image: agentdev/worker:mvp
 operator_forge_image: agentdev/forge:mvp
 operator_image_pull_policy: Never        # kind: step 06 loads the worker and forge images

@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
+  engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
+  the agents.
+
 ### Security
 - R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
   Other users see only the events of agents with a repository where they have write access on the forge. Before,
@@ -45,10 +50,21 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Gitea parity, part 2 (#241, 1.4.0). P5: the agent labels its own PR `agent:<name>` on Gitea too (forge sidecar:
+  the same check as on GitHub, only that label, only on a PR from its own branch). Gitea does not make a missing
+  label, so the Ansible role `gitea_forge` and `lib-forge.sh` make `agent:<name>` for each agent. P7: on Gitea the
+  router also routes by the label `agent:<name>`; router tests with Gitea comment and review payloads. P8:
+  `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
+  replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
+  `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
   namespace. Re-run: `deploy.yml` (operator and role `ingress`); kind is not changed.
+- Template drift check (#317): `scripts/template-drift.sh <deployment repo dir>` compares a deployment repository
+  with `examples/deployment/gcp-gke` of its pinned `ref=`: `deploy.yml` (diff), `main.tf` blocks and module
+  arguments, `instance.yml` keys. Exit 0 with warnings, 1 with `--strict`. The template `deploy.yml` has a new
+  `template-drift` PR job that writes the warning to the job summary. Re-run: copy the template `deploy.yml` once.
 - Monthly dependency check. The workflow `repin.yml` runs `scripts/repin.sh` on the 1st of each month (or by hand
   from the Actions tab). It checks Helm charts (authentik, External Secrets, Coder), agent-sandbox, gVisor, image
   digests and tags, Dockerfile base images, GitHub Actions, Go modules and the UI's npm packages. When a pin is out of
@@ -171,7 +187,37 @@ While the version is `0.x`, breaking changes bump MINOR.
   old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
   run changes nothing. GKE does not change.
 
+## [1.0.1] - 2026-11-14
+
+### Upgrade
+1. **Deployment template clone ref (#332).** Copy `examples/deployment/gcp-gke/.github/workflows/deploy.yml` again and
+   add `agentdev_ref: vX.Y.Z` (the git tag, with the `v`) to `ansible/instance.yml`, next to `image_tag: "X.Y.Z"`.
+2. **`platform_sm_prefix` (#333).** The default (`platform-`) is now in `infra/ansible/group_vars/all.yml`. An instance
+   that set `platform_sm_prefix: platform-` in `instance.yml` as a workaround may remove it; keeping it changes nothing.
+
+### Fixed
+- Deployment template: the CI clones agentdev at `agentdev_ref` (the git tag `vX.Y.Z`), not at `image_tag`, which has
+  no `v` and is not a git tag (#332). `infra/ansible/tests/deployment_template.yml` checks the template.
+- Ansible: the roles `api` and `authentik` failed with `'platform_sm_prefix' is undefined`, because `include_role` does
+  not share the `platform` role's defaults with later roles. The variable moved to `group_vars/all.yml` (#333).
+  `infra/ansible/tests/role_defaults_scope.yml` renders the `api` role without the `platform` role and fails when a
+  role reads a variable that only another role's defaults define.
+- Ansible role `api`: before the API rollout, wait for an external OIDC issuer's discovery document (bounded by the
+  new optional `api.oidc_wait_seconds`, default 300) and stop with a message that names the URL; restart the API once
+  when the first rollout wait fails, to reset a crash-loop back-off (#334). docs/admin.md, "External OIDC provider".
+
 ## [1.0.0] - 2026-11-12
+
+### Known issues
+Found after the release. The fixes are in 1.0.1. Until then, use the workaround.
+- #332: the deployment workflow template clones agentdev at `image_tag` (`1.0.0`), but the git tag is `v1.0.0`, so
+  every CI run of a new deployment repository fails at the clone. Workaround: in your copy of
+  `.github/workflows/deploy.yml`, change both `--branch "$tag"` to `--branch "v$tag"`.
+- #333: with `api.oidc_issuer` set, the `api` role stops with `'platform_sm_prefix' is undefined`. Workaround: add
+  `platform_sm_prefix: platform-` to `ansible/instance.yml`.
+- #334: when the OIDC provider is outside the playbook (for example Pocket ID) and does not answer yet, the API exits
+  and the rollout wait times out after 180 s. Workaround: make sure that the issuer URL answers before the deploy; if
+  the wait times out, run the playbook again when the issuer answers.
 
 ### Upgrade
 Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
@@ -434,6 +480,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
+- Step 11 (#106): `11-ui.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags ui`: the web UI
+  tasks of the role `api` (moved to `roles/api/tasks/ui.yml`, same tasks on GKE), with the image built and loaded into
+  kind. Changed: the UI restarts only after a new image, so a second run changes nothing. GKE does not change.
 - Step 13 (#106): `13-secrets.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags secrets` (new
   role `secrets_store`: External Secrets Operator with the same Helm settings, the CEL policies and the Kubernetes
   SecretStore). The tag then runs the role `operator` again, as the old step ran step 12. GKE does not change.

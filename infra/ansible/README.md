@@ -130,6 +130,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 07 | `botboard` (optional) | `botboard` |
 | 08 | `mcp` | `platform` |
 | 10 | `api` | `api` (same role as GKE) |
+| 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
 | 13 | `secrets` | `secrets_store`, then `operator` |
 
@@ -182,6 +183,8 @@ The role `api` does the old step 10 on kind with `api_secret_source: files`. The
 `agentdev-api` (admin of the agent repositories, token `read:repository,read:user`). It keeps a token that works and
 deletes the other `agentdev-api*` tokens. A local `agentdev-api:*` tag is built and loaded into kind. A new image or a
 changed Secret restarts the API. The web UI is step 11 (`api_ui: false` here).
+`kind.yml --tags ui` runs only `roles/api/tasks/ui.yml` (old step 11): it builds or pulls `api_ui_image`, loads it
+into kind, applies `manifests/ui.yaml.tmpl` and restarts the UI only after a new image.
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
