@@ -51,11 +51,40 @@
   when: (api_secrets_changed | default(false)) and not ansible_check_mode
   changed_when: true
 
+# The API reads the OIDC discovery document at start and exits when it fails (#334). An external issuer (one that the
+# playbook does not deploy, for example Pocket ID behind a reverse proxy) may come up after the playbook starts: wait
+# for it, bounded by api_oidc_wait_seconds. A cluster-local discovery URL (authentik) is not reachable from here; the
+# authentik role waits for it.
+- name: Wait for the OIDC issuer
+  ansible.builtin.include_tasks: oidc_wait.yml
+
+# A first try may meet a pod in crash-loop back-off from before the issuer was up: restart once, then wait again.
 - name: Wait for the API
-  ansible.builtin.command: >-
-    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-api --timeout=180s
-  changed_when: false
   when: not ansible_check_mode
+  block:
+    - name: Wait for the API rollout
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-api --timeout=180s
+      changed_when: false
+  rescue:
+    - name: Restart the API (reset the crash-loop back-off)
+      ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
+      changed_when: true
+
+    - name: Wait for the API rollout again
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-api --timeout=180s
+      changed_when: false
+      register: api_rollout_retry
+      failed_when: false
+
+    - name: Stop when the API is not ready
+      ansible.builtin.fail:
+        msg: >-
+          The API is not ready after a restart. If its log shows "oidc: discover", the issuer
+          {{ api_oidc_discovery_url | trim }} is not reachable from the cluster (docs/admin.md, "External OIDC
+          provider"). Check: kubectl -n {{ platform_ns }} logs deploy/agentdev-api
+      when: api_rollout_retry.rc != 0
 
 # web UI (#48, #120): the same manifests/ui.yaml.tmpl as ./run.sh 11. Users reach it through the role ingress.
 - name: Web UI Deployment, Service and NetworkPolicies

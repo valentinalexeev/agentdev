@@ -19,6 +19,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   not share the `platform` role's defaults with later roles. The variable moved to `group_vars/all.yml` (#333).
   `infra/ansible/tests/role_defaults_scope.yml` renders the `api` role without the `platform` role and fails when a
   role reads a variable that only another role's defaults define.
+- Ansible role `api`: before the API rollout, wait for an external OIDC issuer's discovery document (bounded by the
+  new optional `api.oidc_wait_seconds`, default 300) and stop with a message that names the URL; restart the API once
+  when the first rollout wait fails, to reset a crash-loop back-off (#334). docs/admin.md, "External OIDC provider".
 
 ## [1.0.0] - 2026-11-12
 
