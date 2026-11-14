@@ -80,13 +80,15 @@
           (docs/admin.md, Turn on approvals).
         quiet: true
 
-    # #196 (ADR 0002 D2): the budget is in cost units; the old token variable is refused so that its values (raw
-    # tokens, about 2 to 10 times too high as units) are not reused silently. Prices reach the ConfigMap as strings.
+    # #196 (ADR 0002 D2): the budget is in cost units. claude_budget_tokens is deprecated (1.2.0, removed in 2.0.0):
+    # alone it counts as units 1:1; claude_budget_units wins when both are set. Prices reach the ConfigMap as strings.
+    - name: Claude budget in cost units (claude_budget_tokens deprecated, #196)
+      ansible.builtin.include_tasks: tasks/claude_budget.yml
+
     - name: Claude budget in cost units and valid prices (#196)
       ansible.builtin.assert:
         that:
-          - claude_budget_tokens is not defined
-          - (claude_budget_units | string) is match('^[0-9]+$')
+          - (claude_budget_units_effective | string) is match('^[0-9]+$')
           - claude_prices is mapping
           - (claude_job_budget_units | string) is match('^[0-9]+$')
           - (job_timeout | string) is match('^[0-9]{1,7}$')
@@ -103,8 +105,7 @@
             | list | length == 0
           - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
         fail_msg: >-
-          claude_budget_tokens was replaced by claude_budget_units (cost units, CHANGELOG 1.2.0); claude_budget_units is a
-          non-negative integer; claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or
+          claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer; claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or
           model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$.
         quiet: true
 
@@ -132,6 +133,12 @@
         register_token: "{{ platform_secrets.results[1].stdout }}"
         forge_webhook_secret: "{{ platform_secrets.results[2].stdout }}"
       no_log: true
+
+    - name: Refuse a claude-shared without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
+      vars:
+        claude_cred_text: "{{ claude_shared_env }}"
+        claude_cred_name: "{{ sm_claude_shared }}"
 
     - name: Namespace
       kubernetes.core.k8s:
@@ -304,6 +311,16 @@
       changed_when: false
       no_log: true
 
+    # An agent-<name>-claude that exists but has no recognised key would silently fall back to claude-shared (#212).
+    - name: Refuse an agent-<name>-claude without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
+      vars:
+        claude_cred_text: "{{ agent_secrets.results[idx].stdout_lines[2:] | join('\n') }}"
+        claude_cred_name: "agent-{{ item.name }}-claude"
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      when: agent_secrets.results[idx].stdout_lines[2:] | map('trim') | select | list | length > 0
+
     - name: GitHub App private key (#2), only for the agents' forge sidecars
       ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_github_app_private_key }} --project {{ gcp_project }}
       register: github_app_key
@@ -419,6 +436,14 @@
             MAX_BUDGET_USD: "{{ max_budget_usd | string }}"
             CLAUDE_CODE_TELEMETRY: "{{ claude_code_telemetry.enabled | default(false) | bool | string | lower }}"
             CLAUDE_CODE_OTLP_URL: "{{ claude_code_telemetry.otlp_url | default('') }}"
+            # external forwarder watch (#213): on only with ingress.forwarder namespace and pod_selector
+            FORWARDER_NS: >-
+              {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
+                 if (((ingress | default({})).forwarder | default({})).pod_selector | default({})) | length > 0 else '' }}
+            FORWARDER_SELECTOR: >-
+              {{ (((ingress | default({})).forwarder | default({})).pod_selector | default({})).items()
+                 | map('join', '=') | join(',') }}
+            FORWARDER_NOT_READY_MINUTES: "{{ (ingress | default({})).forwarder_not_ready_minutes | default(10) }}"
             # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
             SECRETS_STORE: ""
             SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
@@ -668,7 +693,7 @@
             PLATFORM_NS: "{{ platform_ns }}"
             CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
-            CLAUDE_BUDGET_UNITS: "{{ claude_budget_units | int }}"
+            CLAUDE_BUDGET_UNITS: "{{ claude_budget_units_effective | int }}"
             CLAUDE_JOB_BUDGET_UNITS: "{{ claude_job_budget_units | int }}"
             TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
             TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
@@ -756,6 +781,7 @@
             forge: "{{ forge_kind }}"
             claudeSecret: "{{ ('claude-' + item.name) if (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list) else 'claude-shared' }}"
             maxConcurrent: "{{ (item.max_concurrent | default(max_concurrent)) | int }}"
+            maxTurns: "{{ (item.max_turns | default(max_turns)) | int }}"
             scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}

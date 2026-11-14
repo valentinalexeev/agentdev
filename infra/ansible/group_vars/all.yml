@@ -24,7 +24,9 @@ credproxy_image: "{{ image_registry }}/agentdev-credproxy:{{ image_tag }}"   # C
 # Claude credential proxy (#66): the only holder of the Claude credentials; agent pods get a per-agent key.
 claude_proxy: true                  # false: credential in the agent pod (deprecated rollback, docs/security.md R11)
 claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the proxy on GKE (FQDNNetworkPolicy)
-claude_budget_units: 0              # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); 0 = no limit
+claude_budget_units: null           # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); null/0 = no limit
+# claude_budget_tokens: deprecated in 1.2.0, removed in 2.0.0. Used as units (1:1) only when claude_budget_units is null.
+# The effective value is claude_budget_units_effective (tasks below).
 claude_prices: {}                   # #196: ConfigMap claude-proxy-prices (w_in, w_cw5, w_cw1h, w_cr, w_out, model.<prefix>,
                                     # usd_per_million_units); {} = built-in weights, no USD estimate
 # Run guards (#196, ADR 0002 D6): seconds per Claude run (0 = off), --max-budget-usd per run ("" = off), and the
@@ -61,6 +63,7 @@ forge_kind: github
 forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
+max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
 wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
 # webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to

@@ -45,8 +45,9 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
 8. **Secret values** (the owner, or you with the owner's values; never echo them): fill the Secret Manager
    entries listed in `infra/ansible/README.md` (`claude-shared`, `router-register-token`,
    `github-app-webhook-secret`, `agent-<name>-forge-token`).
-9. **Install agentdev:** open a PR in the deployment repo; its CI runs `ansible-playbook --check`, and
-   after the owner approves and merges, the playbook runs for real. Manually, from the deployment repo:
+9. **Install agentdev:** open a PR in the deployment repo; its CI runs `terraform fmt`/`validate` and
+   `ansible-playbook --syntax-check` (no cloud credentials, no plan). After the owner approves and merges, plan,
+   apply and the playbook run for real. Before the merge, do the dry run manually from the deployment repo:
    ```bash
    ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff
    ```

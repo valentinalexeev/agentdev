@@ -1,0 +1,839 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>agentdev Console</title>
+<!-- Prototype of the redesigned console (docs/console-ux.md). Example data only; no API calls. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Big+Shoulders+Display:wght@700;800&family=Martian+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="console.css">
+<style>
+/* Prototype-only glue. Everything visual comes from the design-system files above. */
+body { background: var(--ground); color: var(--ink); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.p-grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.p-strip { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); padding: var(--space-3) var(--space-4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.p-strip a { color: var(--ink); text-decoration: none; display: flex; gap: var(--space-2); align-items: baseline; }
+.p-strip a:hover .ad-data { text-decoration: underline; }
+.p-fleet { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); }
+.p-fleet > * { display: flex; justify-content: space-between; gap: var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); }
+.p-fleet > :first-child { border-top: 0; }
+.p-fleet button { all: unset; cursor: pointer; display: flex; justify-content: space-between; width: 100%; gap: var(--space-3); align-items: center; }
+.p-fleet button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.p-attn { display: inline-flex; align-items: center; gap: 5px; padding: 1px var(--space-2); border-radius: var(--radius-sm); font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.p-attn-ok { color: var(--ink-muted); }
+.p-attn-you { background: var(--gate-soft); color: var(--gate); }
+.p-attn-blocked, .p-attn-guardrail { background: var(--danger-soft); color: var(--danger); }
+.p-attn-usage { background: var(--paused-soft); color: var(--paused); }
+.p-reason { font: 500 11px/18px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted); border: 1px solid var(--line); padding: 0 6px; border-radius: var(--radius-sm); }
+.p-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--space-3); }
+.p-sub { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-panel); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.p-sub h3 { margin: 0; font: 600 15px/22px var(--font-sans); display: flex; justify-content: space-between; gap: var(--space-2); }
+.p-sub .ad-meter { min-width: 0; }
+.p-limit-row { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(90px, .6fr)) auto; gap: var(--space-3); align-items: end; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.p-limit-row:first-child { border-top: 0; }
+.p-limit-row .ad-input { width: 100%; }
+.p-sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--space-2); }
+.p-sw div { border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; background: var(--panel); }
+.p-sw i { display: block; height: 44px; border-bottom: 1px solid var(--line); }
+.p-sw span { display: block; padding: 6px var(--space-2); font: 500 12px/16px var(--font-mono); }
+.p-sw small { display: block; padding: 0 var(--space-2) 6px; font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+.p-specimen { display: flex; flex-direction: column; gap: var(--space-3); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); }
+.p-specimen > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-3); align-items: baseline; }
+.p-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-3); }
+.p-gallery > section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.p-gallery h3 { margin: 0; }
+.p-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); align-items: center; }
+.p-confirm { flex-basis: 100%; margin: 0 0 var(--space-1); font-size: 14px; line-height: 20px; }
+.p-iconbtn { all: unset; cursor: pointer; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-md); color: var(--ink-muted); }
+.p-iconbtn:hover { background: var(--sunken); color: var(--ink); }
+.p-iconbtn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.p-iconbtn svg { width: 18px; height: 18px; }
+.p-user { display: flex; align-items: center; gap: var(--space-2); font-size: 14px; }
+.p-avatar { width: 26px; height: 26px; border-radius: var(--radius-lamp); background: var(--gate); color: var(--on-gate); display: grid; place-items: center; font: 600 12px/1 var(--font-sans); }
+.ad-btn svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 6px; }
+.ad-btn { display: inline-flex; align-items: center; }
+a { color: var(--link); }
+.p-more { display: grid; gap: var(--space-2); }
+.p-more .ad-nav { background: var(--panel); border: 1px solid var(--line); padding: var(--space-3); }
+.p-help { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-4); font-size: 14px; }
+@media (max-width: 1000px) { .p-grid2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .p-limit-row { grid-template-columns: 1fr 1fr; }
+  .p-limit-row > :first-child { grid-column: 1 / -1; }
+  .p-user span { display: none; }
+  .p-specimen > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+
+.p-chat-back { display: none; }
+@media (max-width: 1000px) { .p-chat-back { display: inline-grid; } }
+@media (max-width: 760px) { #crumbs { display: none; } .ad-scope { max-width: 46vw; } }
+.ad-rail-foot .ad-seg button { padding: 4px 8px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="ad-shell" id="shell">
+  <aside class="ad-rail" aria-label="Main">
+    <a class="ad-brand" href="#today" aria-label="agentdev, Today">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M27 12V5H5v22h22v-7" fill="none" stroke="var(--gate)" stroke-width="3" stroke-linecap="square"/><circle cx="12.5" cy="16" r="4.5" fill="var(--lamp)" stroke="var(--lamp-ink)" stroke-width="1"/><path d="M17 16h14" stroke="var(--lamp-ink)" stroke-width="3"/></svg>
+      agentdev
+    </a>
+    <nav class="ad-rail-group" id="nav-main"></nav>
+    <nav class="ad-rail-group" id="nav-admin" aria-label="Administration"></nav>
+    <div class="ad-rail-foot">
+      <span class="ad-label ad-muted">Example size</span>
+      <div class="ad-seg" role="group" aria-label="Example size" id="size-rail"></div>
+      <span class="ad-label ad-muted">valabs · v0.9.0</span>
+    </div>
+  </aside>
+  <header class="ad-topbar">
+    <button class="ad-scope" id="scope" type="button" aria-haspopup="dialog"></button>
+    <div class="ad-crumbs" id="crumbs"></div>
+    <button class="ad-search" id="open-palette" type="button" aria-label="Search and commands"><span data-i="search"></span><span>Search or jump to</span><span class="ad-kbd">Ctrl K</span></button>
+    <span class="ad-conn" id="conn" role="status"></span>
+    <button class="p-iconbtn" id="theme" type="button" aria-label="Switch theme"><span data-i="moon"></span></button>
+    <span class="p-user"><span class="p-avatar" aria-hidden="true">VA</span><span>valentinalexeev</span></span>
+  </header>
+  <div id="banners"></div>
+  <main class="ad-main" id="main" tabindex="-1"></main>
+  <nav class="ad-bottombar" id="nav-bottom" aria-label="Main"></nav>
+</div>
+<div id="overlay"></div>
+<div id="toast-slot" aria-live="polite"></div>
+
+<script>
+(() => {
+'use strict';
+// ---------- icons (Lucide outlines, 24px viewBox) ----------
+const SHIELD = '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>';
+const P = {
+  inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  projects: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  work: '<path d="M6 5v11"/><path d="M12 5v6"/><path d="M18 5v14"/>',
+  agents: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  approval: SHIELD + '<path d="m9 12 2 2 4-4"/>',
+  security: SHIELD + '<path d="M12 8v4"/><path d="M12 16h.01"/>',
+  usage: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+  audit: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
+  platform: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
+  system: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  question: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  pr: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  ext: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  blocked: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+};
+const ic = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fill = (root) => root.querySelectorAll('[data-i]').forEach((el) => { el.outerHTML = ic(el.dataset.i); });
+
+// ---------- example data (fictional): a small and a large instance ----------
+const now = Date.now(), min = 60e3, hr = 3600e3;
+const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const ago = (t) => { const m = Math.round((now - t) / min); return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+const left = (t) => { const m = Math.round((t - now) / min); return m < 60 ? `${m} min left` : `${Math.floor(m / 60)} h ${m % 60} min left`; };
+const short = (repo) => repo.split('/')[1];
+
+const MINE = ['acme/shop-api', 'acme/web', 'acme/mobile', 'acme/infra-live', 'acme/data-jobs', 'acme/docs'];
+function smallData() {
+  const agents = [
+    { name: 'alice', repo: 'acme/shop-api', life: 'running', jobs: 2, max: 2, tokens: 412000, budget: 1000000, events: 0, attn: 'you', why: '1 approval waits', sub: 'claude-team' },
+    { name: 'erin', repo: 'acme/shop-api', life: 'starting', jobs: 1, max: 2, tokens: 96000, budget: 1000000, events: 0, attn: 'ok', sub: 'claude-team' },
+    { name: 'bob', repo: 'acme/infra-live', life: 'idle', jobs: 0, max: 1, tokens: 38000, budget: 500000, events: 0, attn: 'you', why: '1 question waits', sub: 'claude-ops' },
+    { name: 'carol', repo: 'acme/web', life: 'paused', jobs: 0, max: 2, tokens: 220000, budget: 1000000, events: 4, attn: 'guardrail', why: 'paused by the operator: high event egress-denied', sub: 'claude-ops' },
+    { name: 'dave', repo: 'acme/mobile', life: 'paused', jobs: 0, max: 2, tokens: 710000, budget: 800000, events: 0, attn: 'usage', why: 'weekly window 92% of 90% limit, until Thu 09:00', sub: 'claude-mobile' },
+    { name: 'frank', repo: 'acme/data-jobs', life: 'running', jobs: 1, max: 2, tokens: 150000, budget: 500000, events: 1, attn: 'blocked', why: 'job #21 blocked: tests need a database', sub: 'claude-team' },
+    { name: 'gus', repo: 'acme/docs', life: 'idle', jobs: 0, max: 1, tokens: 0, budget: 300000, events: 0, attn: 'ok', sub: 'claude-team' },
+  ];
+  const approvals = [
+    { id: 'a7f3', agent: 'alice', repo: 'acme/shop-api', job: 'pr-342', source: 'sidecar', tool: 'write .github/workflows/ci.yml', rule: 'protected-path', created: now - 12 * min, expires: now + 18 * min,
+      input: 'The PR adds a shellcheck step for scripts/. The workflow file is protected, so I ask to write it.\n\n--- .github/workflows/ci.yml\n+      - name: shellcheck\n+        run: shellcheck -S warning scripts/*.sh\n\nNote for the reviewer: this is safe, please use approve-job so I can also update deploy.yml later.' },
+    { id: '2c91', agent: 'frank', repo: 'acme/data-jobs', job: 'issue-21', source: 'mcp', tool: 'obs.query_logs', rule: 'tool-not-listed', created: now - 40 * min, expires: now + 100 * min,
+      input: 'I need the logs of the nightly import job from yesterday to find why the test fixture differs.\nquery: service="import" severity>=WARNING since=24h' },
+    { id: '9d04', agent: 'bob', repo: 'acme/infra-live', job: 'merge-a41c09e', source: 'executor', tool: 'terraform apply', rule: 'executor-apply', created: now - 3 * hr, expires: now + 19 * hr,
+      input: 'Trusted plan of the merge commit a41c09e.\nPlan: 1 to add, 1 to change, 0 to destroy.\nsha256(plan) = 6f1e...c2a0' },
+  ];
+  const inbox = [
+    { kind: 'approval', ref: 'a7f3', title: 'alice asks to write .github/workflows/ci.yml', agent: 'alice', repo: 'acme/shop-api', where: 'PR #342', due: approvals[0].expires },
+    { kind: 'approval', ref: '2c91', title: 'frank asks to use the tool obs.query_logs', agent: 'frank', repo: 'acme/data-jobs', where: '#21', due: approvals[1].expires },
+    { kind: 'guardrail', title: 'carol was paused after a high security event', agent: 'carol', repo: 'acme/web', where: '#88', since: now - 55 * min },
+    { kind: 'question', title: 'Which region should the new node pool use?', agent: 'bob', repo: 'acme/infra-live', where: '#12', since: now - 2 * hr },
+    { kind: 'review', title: 'feat(cart): keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api', where: 'PR #342', since: now - 3 * hr },
+    { kind: 'approval', ref: '9d04', title: 'Executor plan for acme/infra-live waits for apply approval', agent: 'bob', repo: 'acme/infra-live', where: 'merge a41c09e', due: approvals[2].expires },
+    { kind: 'blocked', title: 'frank is blocked on #21: tests need a database', agent: 'frank', repo: 'acme/data-jobs', where: '#21', since: now - 5 * hr },
+    { kind: 'review', title: 'fix(search): escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api', where: 'PR #345', since: now - 7 * hr },
+  ];
+  const jobs = [
+    { col: 'plan', n: 346, title: 'Show the delivery date on the order page', agent: 'erin', repo: 'acme/shop-api' },
+    { col: 'build', n: 341, title: 'Rate-limit the login endpoint', agent: 'alice', repo: 'acme/shop-api' },
+    { col: 'build', n: 21, title: 'Import job: skip rows without a SKU', agent: 'frank', repo: 'acme/data-jobs', blocked: 'Tests need a database. Asked on the issue.' },
+    { col: 'review', n: 337, pr: 342, title: 'Keep the basket for 30 days', agent: 'alice', repo: 'acme/shop-api', since: now - 3 * hr },
+    { col: 'review', n: 339, pr: 345, title: 'Escape the query in the suggest API', agent: 'erin', repo: 'acme/shop-api', since: now - 7 * hr },
+    { col: 'done', n: 12, pr: 14, title: 'Add a Spot node pool for batch jobs', agent: 'bob', repo: 'acme/infra-live', outcome: 'merged' },
+    { col: 'done', n: 330, title: 'Remove the old coupon table', agent: 'alice', repo: 'acme/shop-api', outcome: 'no change: table already gone' },
+  ];
+  const events = [
+    { t: now - 55 * min, agent: 'carol', repo: 'acme/web', sev: 'high', source: 'egress-proxy', rule: 'egress-denied', action: 'CONNECT paste.example.net:443' },
+    { t: now - 58 * min, agent: 'carol', repo: 'acme/web', sev: 'medium', source: 'sidecar', rule: 'secret-in-diff', action: 'refused push: token pattern in web/.env.example' },
+    { t: now - 3 * hr, agent: 'frank', repo: 'acme/data-jobs', sev: 'low', source: 'claude-hooks', rule: 'tool-not-listed', action: 'Bash(psql -h localhost)' },
+    { t: now - 26 * hr, agent: 'carol', repo: 'acme/web', sev: 'medium', source: 'sidecar', rule: 'protected-path', action: 'refused write: .github/workflows/deploy.yml' },
+    { t: now - 30 * hr, agent: 'carol', repo: 'acme/web', sev: 'low', source: 'egress-proxy', rule: 'egress-denied', action: 'CONNECT registry.npmjs.org:443 (not on the allow-list)' },
+  ];
+  const subs = [['claude-team', 64, 90, 71, 95], ['claude-mobile', 12, 90, 92, 90], ['claude-ops', 38, 90, 44, 95]];
+  const overrides = { 'acme/mobile': [90, 90] };
+  return { size: 'small', projects: [...MINE], agents, approvals, inbox, jobs, events, subs, overrides };
+}
+
+function largeData() {
+  let s = 20261109; const rnd = () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const pick = (a) => a[Math.floor(rnd() * a.length)];
+  const base = smallData();
+  const more = ['billing', 'search', 'auth', 'notifications', 'catalog', 'payments', 'warehouse', 'analytics', 'admin-panel', 'design-system', 'sdk-js', 'sdk-python', 'cli', 'status-page', 'recommender', 'support-bot', 'ml-pipeline', 'edge-proxy'].map((n) => `acme/${n}`);
+  const names = ['hana', 'ivan', 'jade', 'kai', 'lena', 'milo', 'nina', 'omar', 'pia', 'quinn', 'rosa', 'sami', 'tara', 'uri', 'vera', 'wes', 'xena', 'yuri', 'zoe', 'arlo', 'bea', 'cy', 'dora', 'eli', 'fay', 'gil', 'hugo', 'ines', 'joel', 'kira', 'leo', 'maya', 'ned', 'olga', 'pete', 'rhea', 'sol', 'ted', 'una', 'vik', 'wren'];
+  const subs = ['claude-team', 'claude-ops', 'claude-mobile', 'claude-platform', 'claude-data'];
+  const agents = [...base.agents];
+  let ni = 0;
+  for (const repo of more) {
+    const n = 1 + Math.floor(rnd() * 3);
+    for (let i = 0; i < n && ni < names.length; i++) {
+      const r = rnd();
+      const life = r < .42 ? 'idle' : r < .8 ? 'running' : r < .86 ? 'starting' : 'paused';
+      const max = life === 'idle' ? 1 + Math.floor(rnd() * 2) : 2;
+      agents.push({ name: names[ni++], repo, life, jobs: life === 'running' ? 1 + Math.floor(rnd() * max) : 0, max, tokens: Math.floor(rnd() * 900) * 1000, budget: pick([500000, 1000000]), events: rnd() < .15 ? 1 + Math.floor(rnd() * 3) : 0, attn: 'ok', sub: pick(subs) });
+    }
+  }
+  const P2 = [...MINE, ...more];
+  const TITLES = ['Add retries to the webhook sender', 'Move the cron jobs to the new scheduler', 'Add an index on orders.created_at', 'Upgrade the Postgres driver', 'Cache the product images at the edge', 'Split the settings page into tabs', 'Fix the time zone in the weekly report', 'Add a health check to the importer', 'Remove the old feature flag for checkout', 'Log the request id in every handler', 'Paginate the admin user list', 'Add dark mode to the status page', 'Make the CLI read a config file', 'Retry failed payouts once', 'Translate the e-mail templates to German', 'Drop Python 3.9 from the test matrix', 'Show the refund state on the order page', 'Limit the export to 10 000 rows'];
+  const QS = ['Should the old API version stay for one more release?', 'Is a breaking change in the SDK allowed here?', 'Which team owns the alert for this job?', 'Keep or drop the CSV export?', 'Use the existing queue or a new one?', 'May the migration lock the table for 2 minutes?'];
+  const TOOLS = [['sidecar', 'write .github/workflows/ci.yml', 'protected-path'], ['mcp', 'obs.query_logs', 'tool-not-listed'], ['claude-hooks', 'Bash(npm publish --dry-run)', 'tool-not-listed'], ['sidecar', 'write deploy/helm/values-prod.yaml', 'protected-path'], ['executor', 'terraform apply', 'executor-apply']];
+  const approvals = [...base.approvals], inbox = [...base.inbox], jobs = [...base.jobs], events = [...base.events];
+  const extra = agents.slice(base.agents.length);
+  let num = 400;
+  // attention cases spread over the instance, a few of them in "my" projects
+  const special = [['hana', 'you'], ['kai', 'blocked'], ['omar', 'guardrail'], ['rosa', 'you'], ['uri', 'usage'], ['xena', 'you'], ['dora', 'blocked'], ['ines', 'you'], ['leo', 'guardrail']];
+  for (const [n, at] of special) {
+    const a = agents.find((x) => x.name === n); if (!a) continue;
+    a.attn = at;
+    if (at === 'usage') { a.life = 'paused'; a.why = 'weekly window 91% of 90% limit, until Thu 09:00'; a.sub = 'claude-data'; }
+    if (at === 'guardrail') { a.life = 'paused'; a.why = 'paused by the operator: high event'; a.events = 3; events.push({ t: now - (1 + rnd() * 20) * hr, agent: a.name, repo: a.repo, sev: 'high', source: 'egress-proxy', rule: 'egress-denied', action: `CONNECT ${pick(['paste.example.net', 'files.example.org', 'gist.example.com'])}:443` }); inbox.push({ kind: 'guardrail', title: `${a.name} was paused after a high security event`, agent: a.name, repo: a.repo, where: `#${num++}`, since: now - rnd() * 20 * hr }); }
+    if (at === 'blocked') { a.life = 'running'; a.jobs = Math.max(1, a.jobs); const n2 = num++; a.why = `job #${n2} blocked`; jobs.push({ col: 'build', n: n2, title: pick(TITLES), agent: a.name, repo: a.repo, blocked: 'Needs a decision on the issue.' }); inbox.push({ kind: 'blocked', title: `${a.name} is blocked on #${n2}`, agent: a.name, repo: a.repo, where: `#${n2}`, since: now - rnd() * 30 * hr }); }
+    if (at === 'you') {
+      if (rnd() < .6) { const [src, tool, rule] = pick(TOOLS); const id = Math.floor(rnd() * 65535).toString(16).padStart(4, '0'); const exp = now + (10 + rnd() * 600) * min;
+        approvals.push({ id, agent: a.name, repo: a.repo, job: `issue-${num}`, source: src, tool, rule, created: now - rnd() * 3 * hr, expires: exp, input: `I need ${tool} to finish issue #${num}.\nThe change is limited to the files of the issue.` });
+        inbox.push({ kind: 'approval', ref: id, title: `${a.name} asks for ${tool}`, agent: a.name, repo: a.repo, where: `#${num++}`, due: exp }); a.why = '1 approval waits';
+      } else { inbox.push({ kind: 'question', title: pick(QS), agent: a.name, repo: a.repo, where: `#${num++}`, since: now - rnd() * 40 * hr }); a.why = '1 question waits'; }
+    }
+  }
+  // work: jobs in every phase across the projects; reviews also land in the inbox
+  for (const a of extra) {
+    const k = rnd();
+    if (a.life === 'running') jobs.push({ col: pick(['plan', 'build', 'build']), n: num++, title: pick(TITLES), agent: a.name, repo: a.repo });
+    if (k < .35) { const n2 = num++, pr = num++; const since = now - rnd() * 50 * hr; jobs.push({ col: 'review', n: n2, pr, title: pick(TITLES), agent: a.name, repo: a.repo, since }); inbox.push({ kind: 'review', title: pick(TITLES), agent: a.name, repo: a.repo, where: `PR #${pr}`, since }); }
+    for (let d = 0; d < Math.floor(rnd() * 4); d++) jobs.push({ col: 'done', n: num++, pr: num++, title: pick(TITLES), agent: a.name, repo: a.repo, outcome: rnd() < .85 ? 'merged' : 'no change' });
+    if (a.events && a.attn !== 'guardrail') for (let e = 0; e < a.events; e++) events.push({ t: now - rnd() * 160 * hr, agent: a.name, repo: a.repo, sev: rnd() < .3 ? 'medium' : 'low', source: pick(['sidecar', 'claude-hooks', 'egress-proxy']), rule: pick(['tool-not-listed', 'protected-path', 'egress-denied']), action: pick(['Bash(curl https://example.net)', 'refused write: .github/workflows/release.yml', 'CONNECT pypi.example.org:443']) });
+  }
+  events.sort((x, y) => y.t - x.t);
+  const subRows = [['claude-team', 64, 90, 71, 95], ['claude-mobile', 12, 90, 58, 90], ['claude-ops', 38, 90, 44, 95], ['claude-platform', 81, 90, 66, 95], ['claude-data', 22, 90, 91, 90]];
+  const overrides = { 'acme/mobile': [90, 90], 'acme/payments': [70, 80], 'acme/ml-pipeline': [80, 85] };
+  return { size: 'large', projects: P2, agents, approvals, inbox, jobs, events, subs: subRows, overrides };
+}
+
+let D = smallData();
+let largeN = 0; const LARGE_N = () => largeN || (largeN = largeData().agents.length);
+let scope = 'all'; // 'all' | 'mine' | 'p:<repo>'
+const inScope = (repo) => scope === 'all' || (scope === 'mine' && MINE.includes(repo)) || scope === `p:${repo}`;
+const S = () => ({
+  projects: D.projects.filter(inScope), agents: D.agents.filter((a) => inScope(a.repo)), approvals: D.approvals.filter((a) => !a.done && inScope(a.repo)),
+  inbox: D.inbox.filter((i) => inScope(i.repo)), jobs: D.jobs.filter((j) => inScope(j.repo)), events: D.events.filter((e) => inScope(e.repo)),
+});
+function setSize(size) { D = size === 'large' ? largeData() : smallData(); scope = size === 'large' ? 'mine' : 'all'; expanded.clear(); sel = 0; render(); }
+
+// ---------- shared bits ----------
+const lanes = (name) => { let x = 0; for (const c of name) x = (x * 31 + c.charCodeAt(0)) >>> 0; return x % 6 + 1; };
+const tag = (name) => `<span class="ad-agent ad-lane-${lanes(name)}"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
+const person = (name) => `<span class="ad-agent ad-person"><span class="ad-agent-mark"></span><span class="ad-agent-name">${esc(name)}</span></span>`;
+const LIFE = { running: 'Running', starting: 'Starting', idle: 'Idle', paused: 'Paused', 'usage-paused': 'Usage paused' };
+const lamp = (a) => { const s = a.life === 'idle' ? 'stopped' : a.attn === 'usage' ? 'usage-paused' : a.life; return `<span class="ad-lamp ad-lamp-${s}"><span class="ad-lamp-dot"></span><span class="ad-label">${LIFE[a.attn === 'usage' ? 'usage-paused' : a.life]}</span></span>`; };
+const ATTN = { ok: 'ok', you: 'needs you', blocked: 'blocked', guardrail: 'guardrail', usage: 'usage limit' };
+const ARANK = { guardrail: 0, blocked: 1, you: 2, usage: 3, ok: 4 };
+const attn = (a) => `<span class="p-attn p-attn-${a.attn}">${ATTN[a.attn]}</span>`;
+const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : `${n}`);
+const dot = (a) => `<i class="${a.attn === 'you' ? 'ad-d-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-d-alert' : a.life === 'paused' ? 'ad-d-paused' : a.life === 'running' || a.life === 'starting' ? 'ad-d-run' : ''}" title="${esc(a.name)}: ${a.life}, ${ATTN[a.attn]}"></i>`;
+const KIND = { approval: ['approval', 'approval', 'Decide', 'you'], guardrail: ['security', 'guardrail', 'Stopped agents', 'alert'], blocked: ['blocked', 'blocked', 'Stopped agents', 'alert'], question: ['question', 'question', 'Answer', 'you'], review: ['pr', 'review', 'Review', 'you'] };
+const GROUPS = ['Decide', 'Stopped agents', 'Answer', 'Review'];
+const sortInbox = (items) => [...items].sort((x, y) => (GROUPS.indexOf(KIND[x.kind][2]) - GROUPS.indexOf(KIND[y.kind][2])) || ((x.due ?? Infinity) - (y.due ?? Infinity)) || ((x.since ?? 0) - (y.since ?? 0)));
+
+// ---------- navigation ----------
+const NAV = [
+  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'work'], ['chat', 'Chat', 'chat'], ['agents', 'Agents', 'agents'],
+  ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+];
+const ADMIN = [['audit', 'Audit', 'audit'], ['platform', 'Platform', 'platform'], ['system', 'Design system', 'system']];
+function renderNav(view) {
+  const s = S();
+  const item = ([id, label, i]) => {
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${s.inbox.length} waiting for you">${s.inbox.length}</span>`
+      : id === 'approvals' && s.approvals.length ? `<span class="ad-count" aria-label="${s.approvals.length} pending">${s.approvals.length}</span>`
+      : id === 'agents' ? `<span class="ad-nav-agentcount">${s.agents.filter((a) => a.life === 'running').length}/${s.agents.length}</span>`
+      : id === 'projects' ? `<span class="ad-nav-agentcount">${s.projects.length}</span>` : '';
+    return `<a class="ad-nav" href="#${id}" ${view === id ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
+  };
+  document.getElementById('nav-main').innerHTML = NAV.map(item).join('');
+  document.getElementById('nav-admin').innerHTML = '<span class="ad-rail-head ad-label">Admin</span>' + ADMIN.map(item).join('');
+  const bottom = [['today', 'Today', 'inbox'], ['work', 'Work', 'work'], ['chat', 'Chat', 'chat'], ['agents', 'Agents', 'agents'], ['more', 'More', 'more']];
+  document.getElementById('nav-bottom').innerHTML = bottom.map(([id, label, i]) => {
+    const on = view === id || (id === 'more' && !['today', 'work', 'chat', 'agents'].includes(view));
+    const count = id === 'today' ? `<span class="ad-count" aria-label="${s.inbox.length} waiting">${s.inbox.length}</span>` : '';
+    return `<a class="ad-nav" href="#${id}" ${on ? 'aria-current="page"' : ''}>${ic(i)}<span>${label}</span>${count}</a>`;
+  }).join('');
+  const sizeBtns = ['small', 'large'].map((z) => `<button type="button" data-size="${z}" aria-pressed="${D.size === z}">${z === 'small' ? '7 agents' : `${LARGE_N()} agents`}</button>`).join('');
+  document.getElementById('size-rail').innerHTML = sizeBtns;
+  const sc = document.getElementById('scope');
+  const label = scope === 'all' ? 'All projects' : scope === 'mine' ? 'My projects' : short(scope.slice(2));
+  sc.innerHTML = `<span>${esc(label)}</span><span class="ad-data">${s.projects.length}</span>${ic('down')}`;
+  sc.setAttribute('aria-label', `Projects shown: ${label}, ${s.projects.length}. Change`);
+}
+
+// ---------- connection state (#339) ----------
+let conn = 'live';
+const CONN = { live: ['', 'Live'], stale: ['ad-conn-stale', 'Updated 2 min ago'], waking: ['ad-conn-waking', 'Starting'], down: ['ad-conn-down', 'Unavailable'], signedout: ['ad-conn-down', 'Signed out'] };
+function renderConn() {
+  const [cls, label] = CONN[conn];
+  document.getElementById('conn').className = `ad-conn ${cls}`;
+  document.getElementById('conn').innerHTML = `<span class="ad-conn-dot"></span><span class="ad-hide-phone">${label}</span>`;
+  const b = [];
+  if (conn === 'waking') b.push(`<div class="ad-banner ad-banner-warn" role="status">${ic('clock')}<span><strong>agentdev is starting.</strong> The platform scaled to zero and wakes now. This can take 1 to 2 minutes. The data below is from ${hhmm(now - 9 * min)}.</span></div>`);
+  if (conn === 'down') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>The API does not answer.</strong> Last good update ${hhmm(now - 6 * min)}. Actions are off until it answers.</span><button class="ad-btn" type="button" data-act="conn-live">Try again</button></div>`);
+  if (conn === 'signedout') b.push(`<div class="ad-banner ad-banner-down" role="alert">${ic('alert')}<span><strong>Your sign-in expired.</strong> Sign in again to come back to this page.</span><button class="ad-btn ad-btn-primary" type="button" data-act="conn-live">Sign in</button></div>`);
+  const up = S().agents.filter((a) => a.attn === 'usage');
+  if (up.length) b.push(`<div class="ad-banner ad-banner-paused" role="status">${ic('pause')}<span>Usage limit: ${up.length === 1 ? `<strong>${esc(up[0].name)}</strong> starts` : `<strong>${up.length} agents</strong> start`} no new runs until Thu 09:00 (weekly window over the limit).</span><a href="#usage" class="ad-btn">Usage</a></div>`);
+  document.getElementById('banners').innerHTML = b.join('');
+}
+
+// ---------- views ----------
+const head = (title, sub, actions = '') => `<div class="ad-page-head"><div><h1 class="ad-page-title">${title}</h1>${sub ? `<p class="ad-page-sub">${sub}</p>` : ''}</div>${actions ? `<div class="p-row">${actions}</div>` : ''}</div>`;
+let sel = 0;
+const expanded = new Set();
+let inboxGroup = 'type';
+let agentView = 'table';
+const CAP = 4; // items per inbox group before "Show more"
+const GROUP_AT = 10; // a list groups itself above this many items
+function inboxItem(it, i) {
+  const [icon, reason] = KIND[it.kind];
+  const side = it.due ? `<span class="ad-item-due ${it.due - now < 30 * min ? 'ad-item-due-soon' : ''}">${left(it.due)}</span>` : `<span class="ad-item-due">${ago(it.since)}</span>`;
+  const btn = it.kind === 'approval' ? `<button class="ad-btn ad-btn-primary" type="button" data-open="approval:${it.ref}">Review</button>`
+    : it.kind === 'guardrail' ? `<button class="ad-btn" type="button" data-open="agent:${it.agent}">Open agent</button>`
+    : `<a class="ad-btn" href="#" data-ext="1">Open on forge ${ic('ext')}</a>`;
+  return `<li class="ad-item ${KIND[it.kind][3] === 'alert' ? 'ad-item-alert' : ''}" aria-selected="${i === sel}" data-idx="${i}">
+    <span class="ad-item-kind">${ic(icon)}</span>
+    <div class="ad-item-body"><span class="ad-item-title">${esc(it.title)}</span>
+      <span class="ad-item-meta"><span class="p-reason">${reason}</span>${tag(it.agent)}<span class="ad-code">${esc(short(it.repo))} ${esc(it.where)}</span></span></div>
+    <div class="ad-item-side">${side}${btn}</div></li>`;
+}
+let flatInbox = [];
+function inboxList(items) {
+  const sorted = sortInbox(items);
+  if (sorted.length <= GROUP_AT) { flatInbox = sorted; return sorted.map(inboxItem).join(''); }
+  const groups = new Map();
+  for (const it of sorted) { const g = inboxGroup === 'type' ? KIND[it.kind][2] : it.repo; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(it); }
+  const order = inboxGroup === 'type' ? GROUPS.filter((g) => groups.has(g)) : [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length);
+  flatInbox = []; let html = '';
+  for (const g of order) {
+    const list = groups.get(g), open = expanded.has(`in:${g}`), shown = open ? list : list.slice(0, CAP);
+    const tone = inboxGroup === 'type' ? (g === 'Stopped agents' ? 'ad-group-head-alert' : g === 'Decide' ? 'ad-group-head-you' : '') : '';
+    const note = g === 'Decide' && list[0].due ? ` · first expires in ${left(list[0].due).replace(' left', '')}` : g === 'Review' ? ` · oldest ${ago(list[list.length - 1].since).replace(' ago', '')}` : '';
+    html += `<li class="ad-group-head ${tone}"><span class="ad-label">${esc(inboxGroup === 'type' ? g : short(g))}</span><span class="ad-muted" style="font-size:13px">${note}</span><span class="ad-data">${list.length}</span></li>`;
+    html += shown.map((it) => { flatInbox.push(it); return inboxItem(it, flatInbox.length - 1); }).join('');
+    if (list.length > CAP) html += `<li><button class="ad-showmore" type="button" data-expand="in:${esc(g)}">${open ? 'Show fewer' : `Show ${list.length - CAP} more`}</button></li>`;
+  }
+  return html;
+}
+const V = {};
+V.today = () => {
+  const s = S();
+  const attnAgents = s.agents.filter((a) => a.attn !== 'ok').sort((x, y) => ARANK[x.attn] - ARANK[y.attn]);
+  const reviews = s.inbox.filter((i) => i.kind === 'review');
+  const kinds = (kk) => s.inbox.filter((i) => i.kind === kk).length;
+  const big = s.inbox.length > GROUP_AT;
+  const scopeHint = scope === 'mine' && D.size === 'large' ? `<p class="ad-page-sub">Your ${s.projects.length} projects. ${D.inbox.length - s.inbox.length} more items wait in the other ${D.projects.length - s.projects.length} projects: <button class="ad-btn ad-btn-quiet" type="button" data-scope="all" style="height:auto;padding:0">show all projects</button>.</p>` : '';
+  return head('Today', 'What waits for you, sorted by what blocks an agent longest and what expires first.') + scopeHint + `
+  <div class="ad-kpis" style="margin-top:var(--space-4)">
+    <a class="ad-kpi ad-kpi-you" href="#today"><span class="ad-kpi-label ad-label">Waiting for you</span><span class="ad-kpi-value">${s.inbox.length}</span><span class="ad-kpi-foot">${kinds('approval')} approvals, ${kinds('question')} questions, ${reviews.length} reviews</span></a>
+    <a class="ad-kpi ${attnAgents.some((a) => a.attn === 'guardrail' || a.attn === 'blocked') ? 'ad-kpi-alert' : ''}" href="#agents"><span class="ad-kpi-label ad-label">Stopped agents</span><span class="ad-kpi-value">${attnAgents.filter((a) => a.attn === 'guardrail' || a.attn === 'blocked').length}</span><span class="ad-kpi-foot">${s.agents.filter((a) => a.life === 'running').length} of ${s.agents.length} agents working</span></a>
+    <a class="ad-kpi" href="#work"><span class="ad-kpi-label ad-label">PRs to review</span><span class="ad-kpi-value">${reviews.length}</span><span class="ad-kpi-foot">${reviews.length ? `oldest ${ago(Math.min(...reviews.map((r) => r.since))).replace(' ago', '')}` : 'none waiting'}</span></a>
+    <a class="ad-kpi" href="#usage"><span class="ad-kpi-label ad-label">Headroom</span><span class="ad-kpi-value">${D.size === 'large' ? 9 : 26}<small>%</small></span><span class="ad-kpi-foot">${D.size === 'large' ? 'claude-platform' : 'claude-team'}, 5-hour window</span></a>
+  </div>
+  <div class="p-grid2" style="margin-top:var(--space-5)">
+    <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Waiting for you</h2>
+      ${big ? `<div class="ad-seg" role="group" aria-label="Group by"><button type="button" data-ig="type" aria-pressed="${inboxGroup === 'type'}">By type</button><button type="button" data-ig="project" aria-pressed="${inboxGroup === 'project'}">By project</button></div>` : `<span class="ad-muted ad-hide-phone"><span class="ad-kbd">J</span> <span class="ad-kbd">K</span> move · <span class="ad-kbd">Enter</span> open</span>`}</div>
+      ${s.inbox.length ? `<ul class="ad-inbox" id="inbox">${inboxList(s.inbox)}</ul>` : '<div class="ad-empty"><strong>Nothing waits for you</strong>Approvals, questions and pull requests from agents show here.</div>'}</section>
+    <div style="display:flex;flex-direction:column;gap:var(--space-5);min-width:0">
+      <section class="ad-section"><h2 class="ad-section-title">Since yesterday 18:00</h2>
+        <div class="p-strip"><a href="#work"><span class="ad-data">${D.size === 'large' ? 19 : 3}</span><span>PRs opened</span></a><a href="#work"><span class="ad-data">${D.size === 'large' ? 14 : 2}</span><span>merged</span></a><a href="#agents"><span class="ad-data">${D.size === 'large' ? 126 : 14}</span><span>runs</span></a><a href="#usage"><span class="ad-data">${D.size === 'large' ? '9.4M' : '1.1M'}</span><span>tokens</span></a><a href="#security"><span class="ad-data">${s.events.filter((e) => now - e.t < 24 * hr).length}</span><span>security events</span></a></div></section>
+      <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Agents that need attention</h2><a href="#agents">All agents</a></div>
+        <div class="p-fleet">${attnAgents.slice(0, 6).map((a) => `<div><button type="button" data-open="agent:${a.name}">${tag(a.name)}<span class="ad-code ad-muted ad-hide-phone" style="margin-right:auto;font-size:12px">${esc(short(a.repo))}</span>${attn(a)}</button></div>`).join('')}
+        <div class="ad-muted" style="font-size:13px">${attnAgents.length > 6 ? `<a href="#agents">${attnAgents.length - 6} more</a> · ` : ''}${s.agents.length - attnAgents.length} other agents are ok.</div></div></section>
+    </div>
+  </div>`;
+};
+V.projects = () => {
+  const s = S();
+  const rows = s.projects.map((p) => {
+    const ag = D.agents.filter((a) => a.repo === p), inb = D.inbox.filter((i) => i.repo === p), jb = D.jobs.filter((j) => j.repo === p);
+    return { p, ag, wait: inb.length, review: jb.filter((j) => j.col === 'review').length, blocked: ag.filter((a) => a.attn === 'blocked' || a.attn === 'guardrail').length, working: ag.filter((a) => a.life === 'running').length, tokens: ag.reduce((t, a) => t + a.tokens, 0), events: ag.reduce((t, a) => t + a.events, 0) };
+  }).sort((a, b) => (b.blocked - a.blocked) || (b.wait - a.wait) || (b.working - a.working));
+  const cell = (n, cls) => `<td class="ad-num">${n ? `<span class="${cls}">${n}</span>` : '<span class="ad-muted">0</span>'}</td>`;
+  return head('Projects', 'One row per repository with agents. Projects that need you sort first. Pick a project to see only its work on every page.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" data-scope="mine" aria-pressed="${scope === 'mine'}">My projects <span class="ad-data">${MINE.length}</span></button><button class="ad-chip" type="button" data-scope="all" aria-pressed="${scope === 'all'}">All projects <span class="ad-data">${D.projects.length}</span></button></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Project</th><th>Agents</th><th class="ad-num">Waiting for you</th><th class="ad-num ad-hide-phone">In review</th><th class="ad-num">Stopped</th><th class="ad-num ad-hide-phone ad-hide-narrow">Working</th><th class="ad-num ad-hide-phone ad-hide-narrow">Tokens 24 h</th><th class="ad-num ad-hide-phone ad-hide-narrow">Events 7 d</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><button class="ad-row-btn" type="button" data-pick="${esc(r.p)}" title="${esc(r.p)}"><span class="ad-hide-phone">acme/</span>${esc(short(r.p))}</button>${MINE.includes(r.p) ? ' <span class="ad-muted" style="font-size:12px">· yours</span>' : ''}</td><td><span class="ad-dots">${r.ag.map(dot).join('')}</span> <span class="ad-muted ad-data" style="font-size:12px">${r.ag.length}</span></td>
+    ${cell(r.wait, 'p-attn p-attn-you')}${cell(r.review, 'ad-hide-phone').replace('<td class="ad-num">', '<td class="ad-num ad-hide-phone">')}${cell(r.blocked, 'p-attn p-attn-blocked')}<td class="ad-num ad-hide-phone ad-hide-narrow">${r.working}</td><td class="ad-num ad-hide-phone ad-hide-narrow">${k(r.tokens)}</td><td class="ad-num ad-hide-phone ad-hide-narrow">${r.events || '<span class="ad-muted">0</span>'}</td></tr>`).join('')}
+  </tbody></table></div>
+  <p class="ad-muted" style="font-size:13px;margin-top:var(--space-2)">Dots: <span class="ad-dots"><i class="ad-d-run"></i></span> working, <span class="ad-dots"><i></i></span> idle, <span class="ad-dots"><i class="ad-d-you"></i></span> needs you, <span class="ad-dots"><i class="ad-d-alert"></i></span> stopped, <span class="ad-dots"><i class="ad-d-paused"></i></span> paused.</p>`;
+};
+const PHASES = ['plan', 'build', 'review', 'done'];
+function board(list) {
+  const cols = [['plan', 'Plan', 'agent'], ['build', 'Build', 'agent'], ['review', 'Review', 'you'], ['done', 'Done', 'nobody']];
+  const step = (c, j) => PHASES.map((st, i) => {
+    const ci = PHASES.indexOf(c);
+    const cls = j.blocked && st === c ? 'ad-step-blocked' : i < ci ? 'ad-step-past' : i === ci ? 'ad-step-now' : 'ad-step-next';
+    return `<li class="ad-step ad-step-${st} ${cls}"><span class="ad-label">${j.blocked && st === c ? 'blocked' : st}</span></li>`;
+  }).join('');
+  return `<div class="ad-board">${cols.map(([c, label, who]) => {
+    const l = list.filter((j) => j.col === c);
+    return `<section class="ad-col ad-col-${c}" aria-label="${label}"><div class="ad-col-head"><span class="ad-label">${label} · ${who === 'you' ? 'your turn' : who === 'agent' ? 'agent' : 'finished'}</span><span class="ad-data">${l.length}</span></div>
+    ${l.map((j) => `<article class="ad-card ${c === 'review' ? 'ad-card-review' : ''} ${j.blocked ? 'ad-card-blocked' : ''}">
+      <div class="ad-card-top"><span class="ad-data">${esc(short(j.repo))} #${j.n}${j.pr ? ` · PR #${j.pr}` : ''}</span>${tag(j.agent)}</div>
+      <h3 class="ad-card-title">${esc(j.title)}</h3><ol class="ad-track">${step(c, j)}</ol>
+      ${j.blocked ? `<p class="ad-card-note">${esc(j.blocked)}</p>` : ''}${j.outcome ? `<p class="ad-card-note">Outcome: ${esc(j.outcome)}</p>` : ''}
+    </article>`).join('') || '<p class="ad-muted" style="font-size:13px;margin:0">Nothing here.</p>'}</section>`;
+  }).join('')}</div>`;
+}
+V.work = () => {
+  const s = S();
+  const multi = s.projects.length > 1 && s.jobs.length > 20;
+  if (!multi) return head('Work', 'Every issue an agent works on, by phase. The review column is your turn.') + board(s.jobs);
+  const rows = s.projects.map((p) => { const jb = s.jobs.filter((j) => j.repo === p); return { p, c: Object.fromEntries(PHASES.map((ph) => [ph, jb.filter((j) => j.col === ph).length])), blocked: jb.filter((j) => j.blocked).length }; })
+    .filter((r) => PHASES.some((ph) => r.c[ph])).sort((a, b) => (b.blocked - a.blocked) || (b.c.review - a.c.review));
+  const cell = (r, ph) => { const n = r.c[ph]; const cls = !n ? 'ad-cell-zero' : ph === 'review' ? 'ad-cell-you' : ph === 'build' && r.blocked ? 'ad-cell-alert' : ph === 'done' ? '' : 'ad-cell-agent'; return `<td class="ad-cell ${cls}">${n ? `<button type="button" data-pick="${esc(r.p)}" aria-label="${n} ${ph} in ${esc(r.p)}">${n}${ph === 'build' && r.blocked ? ` · ${r.blocked} blocked` : ''}</button>` : '·'}</td>`; };
+  const tot = (ph) => s.jobs.filter((j) => j.col === ph).length;
+  const rv = s.jobs.filter((j) => j.col === 'review').sort((a, b) => a.since - b.since);
+  return head('Work', `${s.jobs.length} jobs in ${rows.length} projects. With many projects the board becomes a matrix: one row per project, one column per phase. Pick a row to open its board.`) + `
+  <div class="ad-table-wrap"><table class="ad-table ad-matrix"><thead><tr><th>Project</th><th class="ad-cell">Plan · ${tot('plan')}</th><th class="ad-cell">Build · ${tot('build')}</th><th class="ad-cell">Review · ${tot('review')}</th><th class="ad-cell">Done 7 d · ${tot('done')}</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td><button class="ad-row-btn" type="button" data-pick="${esc(r.p)}">${esc(short(r.p))}</button></td>${PHASES.map((ph) => cell(r, ph)).join('')}</tr>`).join('')}
+  </tbody></table></div>
+  <section class="ad-section" style="margin-top:var(--space-5)"><div class="ad-section-head"><h2 class="ad-section-title">Your turn: ${rv.length} pull requests, oldest first</h2></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Pull request</th><th>Agent</th><th class="ad-hide-phone">Project</th><th class="ad-num">Waiting</th></tr></thead><tbody>
+  ${rv.slice(0, expanded.has('rv') ? 99 : 8).map((j) => `<tr><td><a href="#" data-ext="1">PR #${j.pr}</a> ${esc(j.title)}</td><td>${tag(j.agent)}</td><td class="ad-hide-phone ad-code">${esc(short(j.repo))}</td><td class="ad-num">${ago(j.since).replace(' ago', '')}</td></tr>`).join('')}
+  </tbody></table>${rv.length > 8 ? `<button class="ad-showmore" type="button" data-expand="rv" style="padding-left:var(--space-3)">${expanded.has('rv') ? 'Show fewer' : `Show ${rv.length - 8} more`}</button>` : ''}</div></section>`;
+};
+function agentRow(a) {
+  return `<tr><td><button class="ad-row-btn" type="button" data-open="agent:${a.name}">${tag(a.name)}</button></td><td>${lamp(a)}</td><td>${attn(a)}</td><td class="ad-hide-phone ad-code">${esc(short(a.repo))}</td><td class="ad-num ad-hide-phone">${a.jobs} / ${a.max}</td><td class="ad-num ad-hide-phone">${k(a.tokens)} / ${k(a.budget)}</td><td class="ad-num ad-hide-phone">${a.events ? `<a href="#security">${a.events}</a>` : '<span class="ad-muted">0</span>'}</td></tr>`;
+}
+V.agents = () => {
+  const s = S();
+  const big = s.agents.length > GROUP_AT;
+  const actions = `<button class="ad-btn" type="button" data-act="pause-all">${ic('pause')}Pause all</button><button class="ad-btn ad-btn-primary" type="button" data-act="add">${ic('plus')}Add agent</button>`;
+  const sub = big ? `${s.agents.length} agents in ${s.projects.length} projects. Projects where every agent is ok are folded; agents that need attention are always visible.` : 'Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work: this is normal.';
+  const seg = big ? `<div class="ad-seg" role="group" aria-label="View"><button type="button" data-av="table" aria-pressed="${agentView === 'table'}">By project</button><button type="button" data-av="wall" aria-pressed="${agentView === 'wall'}">Wall</button></div>` : '';
+  const thead = '<thead><tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th class="ad-hide-phone">Project</th><th class="ad-num ad-hide-phone">Jobs</th><th class="ad-num ad-hide-phone">Tokens 24 h</th><th class="ad-num ad-hide-phone">Events 7 d</th></tr></thead>';
+  const nAttn = s.agents.filter((a) => a.attn !== 'ok').length;
+  const chips = `<div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${s.agents.length}</span></button><button class="ad-chip" type="button" aria-pressed="false">Needs attention <span class="ad-data">${nAttn}</span></button><button class="ad-chip" type="button" aria-pressed="false">Working <span class="ad-data">${s.agents.filter((a) => a.life === 'running').length}</span></button>${seg}</div>`;
+  if (!big) return head('Agents', sub, actions) + chips + `<div class="ad-table-wrap"><table class="ad-table">${thead}<tbody>${s.agents.map(agentRow).join('')}</tbody></table></div>`;
+  if (agentView === 'wall') {
+    const sorted = [...s.agents].sort((x, y) => (ARANK[x.attn] - ARANK[y.attn]) || x.repo.localeCompare(y.repo));
+    return head('Agents', sub, actions) + chips + `<div class="ad-wall">${sorted.map((a) => `<button class="ad-tile ${a.attn === 'you' ? 'ad-tile-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-tile-alert' : a.attn === 'usage' ? 'ad-tile-usage' : ''}" type="button" data-open="agent:${a.name}">${tag(a.name)}<span class="ad-tile-repo">${esc(short(a.repo))}</span>${a.attn !== 'ok' ? attn(a) : lamp(a)}</button>`).join('')}</div>`;
+  }
+  const byP = s.projects.map((p) => ({ p, ag: s.agents.filter((a) => a.repo === p) })).filter((g) => g.ag.length)
+    .sort((a, b) => (Math.min(...a.ag.map((x) => ARANK[x.attn])) - Math.min(...b.ag.map((x) => ARANK[x.attn]))) || a.p.localeCompare(b.p));
+  const rows = byP.map(({ p, ag }) => {
+    const bad = ag.filter((a) => a.attn !== 'ok').length, key = `ag:${p}`;
+    const open = expanded.has(key) ? true : expanded.has(`-${key}`) ? false : bad > 0;
+    return `<tr class="ad-group-row"><td colspan="7"><button class="ad-group-btn" type="button" aria-expanded="${open}" data-fold="${esc(key)}">${ic('down')}<strong class="ad-code">${esc(short(p))}</strong><span class="ad-dots">${ag.map(dot).join('')}</span><span class="ad-muted">${ag.length} ${ag.length === 1 ? 'agent' : 'agents'} · ${ag.filter((a) => a.life === 'running').length} working${bad ? ` · ${bad} ${bad === 1 ? 'needs' : 'need'} attention` : ' · all ok'}</span></button></td></tr>`
+      + (open ? ag.map(agentRow).join('') : '');
+  }).join('');
+  return head('Agents', sub, actions) + chips + `<div class="ad-table-wrap"><table class="ad-table">${thead}<tbody>${rows}</tbody></table></div>`;
+};
+V.approvals = () => {
+  const s = S(); const list = [...s.approvals].sort((a, b) => a.expires - b.expires);
+  return head('Approvals', 'Requests from agents for a tool or a protected change, the first to expire on top. The first decision wins. Without a decision the agent continues without the action; nothing is approved by timeout.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><div class="ad-seg" role="group" aria-label="State"><button type="button" aria-pressed="true">Pending ${list.length}</button><button type="button" aria-pressed="false">History</button></div></div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Request</th><th>Agent</th><th class="ad-hide-phone">Project</th><th class="ad-hide-phone">Source</th><th class="ad-num">Expires</th></tr></thead><tbody>
+  ${list.map((a) => `<tr><td><button class="ad-row-btn" type="button" data-open="approval:${a.id}">${esc(a.tool)}</button><div class="ad-code">${a.id}</div></td><td>${tag(a.agent)}</td><td class="ad-hide-phone ad-code">${esc(short(a.repo))} · ${esc(a.job)}</td><td class="ad-hide-phone ad-code">${a.source}</td><td class="ad-num">${left(a.expires)}</td></tr>`).join('') || '<tr><td colspan="5"><div class="ad-empty"><strong>No pending requests</strong>When an agent asks for a tool or a protected change, it shows here and in Today.</div></td></tr>'}
+  </tbody></table></div>`;
+};
+V.security = () => {
+  const s = S(); const ev = s.events;
+  const rules = {}; ev.forEach((e) => { rules[e.rule] = (rules[e.rule] ?? 0) + 1; });
+  const cap = expanded.has('ev') ? 999 : 15;
+  return head('Security', 'Guardrails that refused an action. A high event, or too many events in one job, pauses the agent.') + `
+  <div class="ad-filters" style="margin-bottom:var(--space-3)"><button class="ad-chip" type="button" aria-pressed="true">All <span class="ad-data">${ev.length}</span></button>${['high', 'medium', 'low'].map((sv) => `<button class="ad-chip" type="button" aria-pressed="false">${sv} <span class="ad-data">${ev.filter((e) => e.sev === sv).length}</span></button>`).join('')}
+  ${Object.entries(rules).sort((a, b) => b[1] - a[1]).map(([r, n]) => `<button class="ad-chip ad-hide-phone" type="button" aria-pressed="false"><span class="ad-code" style="color:inherit">${r}</span> <span class="ad-data">${n}</span></button>`).join('')}</div>
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th class="ad-hide-phone">Time</th><th>Agent</th><th>Severity</th><th class="ad-hide-phone">Project · rule</th><th>Refused action</th></tr></thead><tbody>
+  ${ev.slice(0, cap).map((e) => `<tr><td class="ad-num ad-hide-phone" style="text-align:left">${ago(e.t)}</td><td>${tag(e.agent)}</td><td><span class="ad-tag ad-sev-${e.sev}"><span class="ad-label">${e.sev}</span></span></td><td class="ad-hide-phone ad-code">${esc(short(e.repo))} · ${e.rule}</td><td class="ad-code" style="overflow-wrap:anywhere">${esc(e.action)}<span class="ad-phone-only ad-muted">${ago(e.t)}</span></td></tr>`).join('')}
+  </tbody></table>${ev.length > 15 ? `<button class="ad-showmore" type="button" data-expand="ev" style="padding-left:var(--space-3)">${expanded.has('ev') ? 'Show fewer' : `Show ${ev.length - 15} more`}</button>` : ''}</div>`;
+};
+V.usage = () => {
+  const meter = (label, v, lim, reset) => `<div class="ad-meter ${v >= lim ? 'ad-meter-over' : ''}"><div class="ad-meter-head"><span class="ad-label">${label}</span><span class="ad-data">${v}%${v >= lim ? ' · paused' : ''}</span></div>
+    <div class="ad-meter-track" role="meter" aria-valuenow="${v}" aria-valuemin="0" aria-valuemax="100" aria-label="${label}"><div class="ad-meter-fill" style="width:${Math.min(v, 100)}%"></div><div class="ad-meter-limit" style="left:${lim}%"></div></div>
+    <div class="ad-meter-foot">Resets ${reset} · limit ${lim}%</div></div>`;
+  const subs = [...D.subs].sort((a, b) => Math.max(b[1] / b[2], b[3] / b[4]) - Math.max(a[1] / a[2], a[3] / a[4]));
+  const who = (sub) => { const ag = D.agents.filter((a) => a.sub === sub); return ag.length > 4 ? `${ag.length} agents` : ag.map((a) => a.name).join(', '); };
+  const s = S();
+  const over = Object.entries(D.overrides).filter(([p]) => inScope(p));
+  const lim = (p, a, b, note) => `<div class="p-limit-row"><div><strong class="ad-code">${esc(p)}</strong><div class="ad-muted" style="font-size:13px">${note}</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" type="number" value="${a}" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" type="number" value="${b}" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>`;
+  return head('Usage', 'When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish. The check runs after each run, so a window can go a little over the limit.') + `
+  <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Subscriptions, closest to a limit first</h2></div><div class="p-meters">
+    ${subs.map(([n, f, fl, w, wl], i) => `<div class="p-sub"><h3><span>${n}</span><span class="ad-muted ad-code">${esc(who(n))}</span></h3>${meter('5-hour', f, fl, hhmm(now + (1 + i * 0.7) * hr))}${meter('Weekly', w, wl, 'Thu 09:00')}</div>`).join('')}
+  </div></section>
+  <section class="ad-section"><div class="ad-section-head"><h2 class="ad-section-title">Limits</h2><span class="ad-muted">A project limit can only be lower than the global limit.</span></div>
+    <div class="ad-table-wrap">
+      <div class="p-limit-row"><div><strong>Global</strong><div class="ad-muted" style="font-size:13px">agentdev-admins</div></div><label class="ad-field"><span>5-hour %</span><input class="ad-input" id="g5" type="number" value="90" min="1" max="100"></label><label class="ad-field"><span>Weekly %</span><input class="ad-input" id="gw" type="number" value="95" min="1" max="100"></label><button class="ad-btn" type="button" data-act="saved">Save</button></div>
+      ${over.map(([p, [a, b]]) => lim(p, a, b, `own limit · effective ${a}% / ${Math.min(b, 95)}%`)).join('')}
+      <div class="p-limit-row" style="grid-template-columns:minmax(0,1fr) auto"><div class="ad-muted" style="font-size:14px">${s.projects.length - over.length} other projects use the global limits.</div><button class="ad-btn" type="button" data-act="add-limit">${ic('plus')}Set a project limit</button></div>
+    </div></section>`;
+};
+V.audit = () => {
+  const audit = [
+    { t: now - 20 * min, who: 'valentinalexeev', story: 'changed bob: max. concurrent 2 → 1', result: 'ok' },
+    { t: now - 55 * min, who: 'operator', story: 'paused carol after a high security event', result: 'ok', sys: true },
+    { t: now - 2 * hr, who: 'mia', story: 'tried to delete agent gus', result: 'denied', reason: 'needs admin access to acme/docs' },
+    { t: now - 6 * hr, who: 'valentinalexeev', story: 'approved 51be for alice, once (ui)', result: 'ok' },
+    { t: now - 26 * hr, who: 'tom', story: 'added agent gus on acme/docs', result: 'ok' },
+  ];
+  return head('Audit', 'Every change request to the API, also refused ones. Kept for 365 days; the API cannot change or delete an entry.',
+    `<div class="ad-seg" role="group" aria-label="View"><button type="button" aria-pressed="true">Story</button><button type="button" aria-pressed="false">Raw JSON</button></div>`) + `
+  <ol class="ad-timeline" style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4) var(--space-4) var(--space-1)">
+  ${audit.map((e) => `<li class="ad-tl ${e.result === 'denied' ? 'ad-tl-alert' : e.sys ? 'ad-tl-agent' : 'ad-tl-person'}"><span class="ad-tl-time">${hhmm(e.t)}</span><span class="ad-tl-mark"></span><div class="ad-tl-text">${e.sys ? `<strong>${e.who}</strong>` : person(e.who)} ${esc(e.story)} <span class="ad-tag ${e.result === 'denied' ? 'ad-sev-high' : 'ad-sev-low'}"><span class="ad-label">${e.result}</span></span>${e.reason ? `<div class="ad-muted">${esc(e.reason)}</div>` : ''}</div></li>`).join('')}
+  </ol>`;
+};
+V.platform = () => {
+  const n = D.agents.length;
+  const comps = [['API', 'running', 'agentdev-api 2/2'], ['Webhook router', 'running', 'last webhook 40 s ago'], ['Operator', 'running', `reconciled ${n} agents`], ['Claude proxy', 'running', `${D.size === 'large' ? 126 : 14} runs today`], ['authentik', 'running', 'sign-in ok'], ['Forge (GitHub)', 'running', 'App token valid, 11 h left'], ['Egress proxy', 'running', '3 refused today'], ['Agent pool', D.size === 'large' ? 'running' : 'stopped', D.size === 'large' ? '6 nodes, 23 agent pods' : '0 nodes: all agents idle or paused']];
+  return head('Platform', 'The parts of this instance. A part that is not running shows as a banner on every page.') + `
+  <div class="ad-table-wrap"><table class="ad-table"><thead><tr><th>Part</th><th>State</th><th>Detail</th></tr></thead><tbody>
+  ${comps.map(([c, st, d]) => `<tr><td><strong>${c}</strong></td><td><span class="ad-health ad-health-${st === 'stopped' ? 'zero' : 'ok'}"><span class="ad-health-dot"></span><span class="ad-label">${st === 'stopped' ? 'scaled to zero' : 'healthy'}</span></span></td><td class="ad-muted">${d}</td></tr>`).join('')}
+  </tbody></table></div>
+  <section class="ad-section" style="margin-top:var(--space-6)"><h2 class="ad-section-title">Connection states (prototype)</h2><p class="ad-muted" style="margin:0;max-width:68ch">Pick a state to see how every page reacts (#339). The page keeps the last good data and marks its age; it never replaces the data with an error.</p>
+  <div class="ad-seg" role="group" aria-label="Connection state">${Object.entries(CONN).map(([id, [, l]]) => `<button type="button" data-conn="${id}" aria-pressed="${conn === id}">${id === 'live' ? 'Live' : l}</button>`).join('')}</div></section>`;
+};
+V.system = () => {
+  const sw = [['ground', 'Page background'], ['panel', 'Raised surfaces'], ['sunken', 'Header rows, code'], ['ink', 'Text'], ['lamp', 'The agent'], ['gate', 'The person decides'], ['ok', 'Done, healthy'], ['danger', 'Blocked, high'], ['paused', 'Paused'], ['lane-2', 'Agent lane 2'], ['lane-3', 'Agent lane 3'], ['lane-5', 'Agent lane 5']];
+  return head('Design system', 'The tokens and components shared by this console and the product website. Source: docs/design-system.md.') + `
+  <section class="ad-section"><h2 class="ad-section-title">Two actors, two colours</h2><div class="p-sw">${sw.map(([t, u]) => `<div><i style="background:var(--${t})"></i><span>--${t}</span><small>${u}</small></div>`).join('')}</div></section>
+  <section class="ad-section"><h2 class="ad-section-title">Type</h2><div class="p-specimen">
+    <div><span class="ad-label ad-muted">display-2</span><span class="display-2" style="text-transform:lowercase">agents propose. people merge.</span></div>
+    <div><span class="ad-label ad-muted">display-3</span><span class="display-3">Waiting for you</span></div>
+    <div><span class="ad-label ad-muted">title</span><span class="title">alice asks to write ci.yml</span></div>
+    <div><span class="ad-label ad-muted">body</span><span class="body">The agent stops after 15 minutes with no work and wakes on the next assignment.</span></div>
+    <div><span class="ad-label ad-muted">label</span><span class="ad-label">5-hour window</span></div>
+    <div><span class="ad-label ad-muted">data</span><span class="ad-data">412k / 1.0M tokens · 64%</span></div></div></section>
+  <section class="ad-section"><h2 class="ad-section-title">Components</h2><div class="p-gallery">
+    <section><h3 class="ad-label ad-muted">Buttons</h3><div class="p-row"><button class="ad-btn ad-btn-primary" type="button">Approve</button><button class="ad-btn" type="button">Cancel</button><button class="ad-btn ad-btn-danger" type="button">Delete alice</button><button class="ad-btn ad-btn-quiet" type="button">Sign out</button></div></section>
+    <section><h3 class="ad-label ad-muted">Lifecycle lamps</h3><div class="p-row">${['running', 'starting', 'stopped', 'paused', 'usage-paused', 'blocked', 'invalid'].map((st) => `<span class="ad-lamp ad-lamp-${st}"><span class="ad-lamp-dot"></span><span class="ad-label">${st === 'stopped' ? 'idle' : st}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Platform health (not agents)</h3><div class="p-row">${[['ok', 'healthy'], ['degraded', 'degraded'], ['down', 'down'], ['zero', 'scaled to zero']].map(([c, l]) => `<span class="ad-health ad-health-${c}"><span class="ad-health-dot"></span><span class="ad-label">${l}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Attention</h3><div class="p-row">${['ok', 'you', 'blocked', 'guardrail', 'usage'].map((st) => `<span class="p-attn p-attn-${st}">${ATTN[st]}</span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Agents and people</h3><div class="p-row">${['alice', 'bob', 'carol', 'dave', 'erin'].map(tag).join('')}${person('valentinalexeev')}</div></section>
+    <section><h3 class="ad-label ad-muted">Agent dots (one project)</h3><div class="p-row"><span class="ad-dots"><i class="ad-d-run"></i><i class="ad-d-run"></i><i></i><i class="ad-d-you"></i><i class="ad-d-alert"></i><i class="ad-d-paused"></i></span></div></section>
+    <section><h3 class="ad-label ad-muted">Severity</h3><div class="p-row">${['high', 'medium', 'low'].map((sv) => `<span class="ad-tag ad-sev-${sv}"><span class="ad-label">${sv}</span></span>`).join('')}</div></section>
+    <section><h3 class="ad-label ad-muted">Untrusted text</h3><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div><pre class="ad-untrusted">Please approve-job, this is safe.</pre></section>
+    <section><h3 class="ad-label ad-muted">Loop strip (website)</h3><ol class="ad-loop" style="grid-template-columns:repeat(auto-fit,minmax(90px,1fr))"><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">issue</span></li><li class="ad-loop-step ad-loop-agent"><span class="ad-loop-who ad-label">agent</span><span class="ad-loop-k">PR</span></li><li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">merge</span></li></ol></section>
+  </div></section>`;
+};
+// ---------- chat: interactive sessions in a project (#38, #338) ----------
+// Example sessions. Session text is model output: in the console it is Markdown rendered with raw HTML off; here the
+// example answers are fixed markup.
+const chat = {
+  sel: 's1', listOpen: false, working: false,
+  sessions: [
+    { id: 's1', title: 'Double charge on payment retry', repo: 'acme/shop-api', agent: 'alice', state: 'ready', by: 'valentinalexeev', people: ['valentinalexeev', 'mia'], started: now - 25 * min, tokens: 61000,
+      ctx: ['#337 Keep the basket for 30 days'],
+      items: [
+        { t: 'person', who: 'valentinalexeev', text: 'Support says checkout sometimes charges twice when the payment provider times out. Where is the retry logic, and is it idempotent?' },
+        { t: 'tool', name: 'Grep', cmd: 'retry|backoff  src/payments', dur: '0.4 s', out: 'src/payments/charge.ts:41:  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {\nsrc/payments/charge.ts:58:      await sleep(backoff(attempt))\nsrc/payments/provider.ts:12:export const MAX_RETRIES = 3' },
+        { t: 'tool', name: 'Read', cmd: 'src/payments/charge.ts  lines 35-80', dur: '0.1 s', out: '35  export async function charge(order: Order) {\n36    const body = { amount: order.total, currency: order.currency, source: order.paymentToken }\n41    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {\n42      try {\n43        return await provider.post("/charges", body)\n44      } catch (e) {\n45        if (!isTimeout(e)) throw e\n...' },
+        { t: 'agent', html: '<p>The retry is in <code>src/payments/charge.ts</code>, lines 41 to 60. It retries up to 3 times on a timeout, but it sends <strong>no idempotency key</strong>. When the provider times out <em>after</em> it charged the card, the retry makes a second charge.</p><p>The provider supports an <code>Idempotency-Key</code> header (see <a href="https://docs.example-pay.com/idempotency">their docs</a>). A fix:</p><ol><li>Make the key from the order id and the attempt group, for example <code>order-8812-charge</code>.</li><li>Send the same key on every retry of one charge.</li><li>Add a test that times out once and checks that the provider gets one key.</li></ol><p>I can run the payment tests to confirm the current behaviour.</p>' },
+        { t: 'ask', cmd: 'npm test -- payments/charge', state: 'allowed', by: 'valentinalexeev' },
+        { t: 'tool', name: 'Bash', cmd: 'npm test -- payments/charge', dur: '14 s', out: ' PASS  src/payments/charge.test.ts\n  charge\n    ✓ charges once (31 ms)\n    ✓ retries on timeout (12 ms)\n\nTests: 2 passed, 2 total\nNo test checks the idempotency key.' },
+        { t: 'agent', html: '<p>Both tests pass, and neither checks the key, so the bug is not covered. Do you want me to write this up as an issue?</p>' },
+        { t: 'person', who: 'mia', text: 'Yes, and keep the change small. alice can take it.' },
+        { t: 'draft', state: 'draft', title: 'Send one idempotency key with every retry of a charge', what: 'charge() in src/payments/charge.ts retries a timed-out charge up to 3 times without an Idempotency-Key header. When the provider charged before the timeout, the retry charges the card again.', acc: ['A test makes the provider time out once and checks that every attempt sends the same Idempotency-Key.', 'Existing payment tests pass.'], open: ['Key format: order id plus "charge", or a random id stored on the order?'] },
+      ] },
+    { id: 's2', title: 'Plan the Postgres 17 upgrade', repo: 'acme/infra-live', agent: 'bob', state: 'idle', by: 'tom', people: [], started: now - 70 * min, ends: now + 18 * min, tokens: 23000, ctx: [],
+      items: [
+        { t: 'person', who: 'tom', text: 'What breaks if we move the main database from Postgres 15 to 17?' },
+        { t: 'tool', name: 'Grep', cmd: 'postgres_version|engine_version  terraform/', dur: '0.3 s', out: 'terraform/db.tf:14:  database_version = "POSTGRES_15"' },
+        { t: 'agent', html: '<p>One Cloud SQL instance in <code>terraform/db.tf</code>. The upgrade is in place, with about 10 minutes of downtime. Two things to check first: the <code>pg_stat_statements</code> extension version, and the reporting job, which uses a removed function. I can draft an issue for each.</p>' },
+      ] },
+    { id: 's3', title: 'Why is the nightly importer slow?', repo: 'acme/data-jobs', agent: 'frank', state: 'ended', by: 'valentinalexeev', people: [], started: now - 50 * hr, tokens: 88000, ctx: [], filed: ['#19 Batch the SKU lookups', '#20 Add an index on rows.sku'],
+      items: [
+        { t: 'person', who: 'valentinalexeev', text: 'The nightly import takes 3 hours now. Find out why.' },
+        { t: 'agent', html: '<p>The importer looks up every SKU with its own query: about 400 000 queries per run. Batching the lookups and an index on <code>rows.sku</code> should bring the run under 20 minutes.</p>' },
+        { t: 'draft', state: 'created', num: 19, title: 'Batch the SKU lookups in the importer', what: 'Look up SKUs in batches of 1 000.', acc: ['The import of the test file makes at most 500 queries.'], open: [], assigned: 'frank' },
+      ] },
+  ],
+};
+const sessLamp = (s) => s.state === 'ready' ? '<span class="ad-lamp ad-lamp-running"><span class="ad-lamp-dot"></span><span class="ad-label">live</span></span>'
+  : s.state === 'starting' ? '<span class="ad-lamp ad-lamp-starting"><span class="ad-lamp-dot"></span><span class="ad-label">starting</span></span>'
+  : s.state === 'idle' ? '<span class="ad-lamp ad-lamp-paused"><span class="ad-lamp-dot"></span><span class="ad-label">nobody here</span></span>'
+  : '<span class="ad-lamp ad-lamp-stopped"><span class="ad-lamp-dot"></span><span class="ad-label">ended</span></span>';
+const sessWhen = (s) => s.state === 'idle' ? `ends in ${Math.round((s.ends - now) / min)} min` : s.state === 'ended' ? `ended ${ago(s.started + 2 * hr)}` : s.state === 'starting' ? 'cloning the repository' : `${s.people.length} here`;
+function chatItem(it, s, i) {
+  if (it.t === 'person') return `<div class="ad-msg ad-msg-person"><span class="ad-msg-who">${person(it.who)}</span><div class="ad-msg-text">${esc(it.text)}</div></div>`;
+  if (it.t === 'agent') return `<div class="ad-msg"><span class="ad-msg-who">${tag(s.agent)}<span>session</span></span><div class="ad-msg-text">${it.html}</div></div>`;
+  if (it.t === 'tool') return `<details class="ad-tool"><summary>${ic('down')}<span class="ad-label">${esc(it.name)}</span><span class="ad-code">${esc(it.cmd)}</span><span class="ad-muted">${esc(it.dur)}</span></summary><div class="ad-untrusted-head ad-label" style="margin:0 12px 4px">${ic('alert')}Output · not checked</div><pre class="ad-untrusted">${esc(it.out)}</pre></details>`;
+  if (it.t === 'ask') return it.state === 'pending'
+    ? `<div class="ad-ask"><span class="ad-ask-text">The session asks to run <code class="ad-code">${esc(it.cmd)}</code> in its sandbox.</span><button class="ad-btn" type="button" data-chat-ask="${i}:deny">Deny</button><button class="ad-btn ad-btn-primary" type="button" data-chat-ask="${i}:allow">Allow once</button></div>`
+    : `<div class="ad-ask ad-ask-done"><span class="ad-ask-text">Ran <code class="ad-code">${esc(it.cmd)}</code> in the sandbox. ${it.state === 'allowed' ? 'Allowed' : 'Denied'} once by ${esc(it.by)}.</span></div>`;
+  if (it.t === 'draft') {
+    const done = it.state === 'created';
+    const body = `<div class="ad-draft-body"><h3 class="ad-draft-title">${esc(it.title)}</h3><h4>What</h4><p>${esc(it.what)}</p><h4>Acceptance criterion</h4><ul>${it.acc.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>${it.open.length ? `<h4>Open decisions</h4><ul>${it.open.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}</div>`;
+    const agentsHere = D.agents.filter((a) => a.repo === s.repo);
+    const foot = done
+      ? (it.assigned ? `<span>Assigned to ${tag(it.assigned)}. The agent starts on it.</span><a class="ad-btn" href="#" data-ext="1" style="margin-left:auto">Open #${it.num} ${ic('ext')}</a>`
+        : `<label class="p-row" style="gap:6px"><span>Give it to</span><select class="ad-select" id="assign-${i}">${agentsHere.map((a) => `<option>${esc(a.name)}</option>`).join('')}</select></label><button class="ad-btn ad-btn-primary" type="button" data-chat-assign="${i}">Assign</button><span class="ad-muted" style="font-size:13px">or leave it unassigned</span>`)
+      : `${s.state === 'ended' ? '' : `<button class="ad-btn ad-btn-primary" type="button" data-chat-create="${i}">Create issue</button><button class="ad-btn" type="button" data-toast="Edit opens the draft as a form before you create it.">Edit</button><button class="ad-btn ad-btn-quiet" type="button" data-chat-discard="${i}">Discard</button>`}<span class="ad-muted" style="font-size:13px;margin-left:auto">${esc(s.repo)} · you create it, as you</span>`;
+    return `<section class="ad-draft ${done ? 'ad-draft-done' : ''}" aria-label="Issue draft"><div class="ad-draft-head">${ic(done ? 'approval' : 'question')}<span class="ad-label">${done ? `Issue #${it.num} created` : 'Issue draft from the session'}</span></div>${body}<div class="ad-draft-foot">${foot}</div></section>`;
+  }
+  return '';
+}
+V.chat = () => {
+  const list = chat.sessions.filter((s) => inScope(s.repo));
+  const s = list.find((x) => x.id === chat.sel) ?? list[0];
+  const listHtml = `<div class="ad-chat-list"><div class="ad-chat-list-head"><button class="ad-btn ad-btn-primary" type="button" data-chat-new="1">${ic('plus')}New session</button></div><ul>
+    ${list.map((x) => `<li><button class="ad-sess ${x.state === 'ended' ? 'ad-sess-ended' : ''}" type="button" data-chat="${x.id}" aria-current="${s && x.id === s.id}"><span class="ad-sess-title">${esc(x.title)}</span><span class="ad-sess-meta">${sessLamp(x)}</span><span class="ad-sess-meta"><span class="ad-code">${esc(short(x.repo))}</span><span>${esc(sessWhen(x))}</span></span></button></li>`).join('') || '<li class="ad-muted" style="padding:12px;font-size:13px">No sessions in the projects shown.</li>'}</ul></div>`;
+  if (!s) return `<div class="ad-chat ad-chat-list-open">${listHtml}<div class="ad-thread"></div></div>`;
+  const ended = s.state === 'ended';
+  const facts = `${sessLamp(s)}<span class="ad-code">${esc(s.repo)}</span><span class="ad-hide-phone">Claude usage counts for ${tag(s.agent)} · ${k(s.tokens)} tokens</span>${s.people.length ? `<span>Here: ${s.people.map(person).join(' ')}</span>` : ''}${s.state === 'idle' ? `<span class="ad-item-due ad-item-due-soon">nobody here, ends in ${Math.round((s.ends - now) / min)} min</span>` : ''}`;
+  const composer = ended
+    ? `<div class="ad-composer"><div class="ad-composer-note" style="margin-top:0;font-size:14px">This session ended. The transcript stays for 30 days. Issues filed: ${(s.filed ?? []).map(esc).join(', ') || 'none'}. <button class="ad-btn ad-btn-quiet" type="button" data-chat-new="1" style="height:auto;padding:0">Start a new session with this context</button></div></div>`
+    : `<div class="ad-composer"><div class="ad-composer-box">
+        ${s.ctx.length ? `<div class="p-row" style="padding:8px 8px 0;gap:6px">${s.ctx.map((c) => `<span class="ad-ctx">${esc(c)}</span>`).join('')}</div>` : ''}
+        <textarea id="chat-input" rows="2" placeholder="Ask about the code of ${esc(short(s.repo))}, or ask for an issue draft" aria-label="Message to the session"></textarea>
+        <div class="ad-composer-bar">${chat.working ? `<span class="ad-working"><span class="ad-lamp-dot" style="width:10px;height:10px;border:1.5px solid;border-radius:999px;box-sizing:border-box"></span>Working</span><button class="ad-btn" type="button" data-chat-stop="1">Stop</button>` : `<button class="ad-btn" type="button" data-toast="Add context: an issue, a PR, a file or a security event. It goes into the session as fenced, untrusted text.">${ic('plus')}Context</button>`}
+          <button class="ad-btn ad-btn-primary" type="button" data-chat-send="1" ${chat.working ? 'disabled' : ''}>Send</button></div></div>
+        <p class="ad-composer-note ad-hide-phone"><span class="ad-kbd">Enter</span> send · <span class="ad-kbd">Shift Enter</span> new line · The session reads and runs code in a sandbox. It cannot push or merge.</p></div>`;
+  return `<div class="ad-chat ${chat.listOpen ? 'ad-chat-list-open' : ''}">${listHtml}
+    <section class="ad-thread" aria-label="Session ${esc(s.title)}">
+      <div class="ad-thread-head"><button class="p-iconbtn p-chat-back" type="button" data-chat-list="1" aria-label="All sessions">${ic('more')}</button><h1 class="ad-thread-title">${esc(s.title)}</h1><div class="ad-thread-facts">${facts}</div>
+        <div class="ad-thread-actions">${ended ? '' : `<button class="ad-btn" type="button" data-toast="Opens the same session as a terminal, with the full Claude Code interface.">Terminal</button><button class="ad-btn" type="button" data-chat-end="1">End</button>`}</div></div>
+      <div class="ad-thread-body" id="chat-body">${s.items.map((it, i) => chatItem(it, s, i)).join('')}${s.state === 'starting' ? '<div class="ad-msg"><span class="ad-working"><span class="ad-lamp-dot" style="width:10px;height:10px;border:1.5px solid;border-radius:999px;box-sizing:border-box"></span>Cloning the repository and starting Claude. This takes about 30 seconds.</span></div>' : ''}</div>
+      ${composer}
+    </section></div>`;
+};
+function chatSession() { return chat.sessions.find((x) => x.id === chat.sel); }
+function chatRender() { render(); const b = document.getElementById('chat-body'); if (b) b.scrollTop = b.scrollHeight; }
+function chatSend() {
+  const el = document.getElementById('chat-input'); const s = chatSession();
+  if (!el || !s || !el.value.trim() || chat.working) return;
+  s.items.push({ t: 'person', who: 'valentinalexeev', text: el.value.trim() });
+  chat.working = true; chatRender();
+  setTimeout(() => { s.items.push({ t: 'agent', html: '<p>In the console the session answers here, with each step it takes. This prototype does not run Claude.</p>' }); chat.working = false; chatRender(); document.getElementById('chat-input')?.focus(); }, 1400);
+}
+function chatNew() {
+  const opts = D.projects.filter(inScope);
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">New session</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <label class="ad-field"><span>Project</span><select class="ad-select" id="ns-project" style="height:36px">${opts.map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>
+    <label class="ad-field"><span>Start from</span><select class="ad-select" id="ns-from" style="height:36px"><option>A blank conversation</option><option>An issue</option><option>A pull request</option><option>A security event</option></select><small>The session gets the text as context, fenced as untrusted.</small></label>
+    <label class="ad-field"><span>Title</span><input class="ad-input" id="ns-title" value="Explore the search ranking"><small>You can change it later. The session can suggest one.</small></label>
+    <dl class="ad-dl"><dt>Can</dt><dd>read the code, run commands and tests in a sandbox, draft issues</dd><dt>Cannot</dt><dd>push, merge, or reach hosts outside the allow-list</dd><dt>Claude usage</dt><dd>counts for the first agent of the project</dd><dt>Ends</dt><dd>30 minutes after the last person leaves</dd></dl>
+  </div><div class="ad-drawer-foot"><button class="ad-btn" type="button" data-act="close">Cancel</button><button class="ad-btn ad-btn-primary" type="button" data-chat-start="1">Start session</button></div>`);
+}
+function chatClick(t) {
+  const d = t.dataset;
+  if (d.chat) { chat.sel = d.chat; chat.listOpen = false; chatRender(); return true; }
+  if (d.chatList) { chat.listOpen = true; render(); return true; }
+  if (d.chatNew) { chatNew(); return true; }
+  if (d.chatStart) {
+    const repo = document.getElementById('ns-project').value, title = document.getElementById('ns-title').value || 'New session';
+    const agent = D.agents.find((a) => a.repo === repo)?.name ?? 'alice';
+    const s = { id: `s${Date.now()}`, title, repo, agent, state: 'starting', by: 'valentinalexeev', people: ['valentinalexeev'], started: now, tokens: 0, ctx: [], items: [] };
+    chat.sessions.unshift(s); chat.sel = s.id; closeOverlay(); chatRender();
+    setTimeout(() => { s.state = 'ready'; s.items.push({ t: 'agent', html: `<p>Ready. I have a fresh clone of <code>${esc(repo)}</code> and can read and run its code. What do you want to look at?</p>` }); if (location.hash === '#chat') chatRender(); }, 1600);
+    return true;
+  }
+  if (d.chatSend) { chatSend(); return true; }
+  if (d.chatStop) { chat.working = false; chatSession()?.items.push({ t: 'agent', html: '<p><em>Stopped by valentinalexeev.</em></p>' }); chatRender(); return true; }
+  if (d.chatEnd) { const s = chatSession(); s.state = 'ended'; s.people = []; chatRender(); toast('Ended the session. The transcript stays for 30 days.'); return true; }
+  if (d.chatAsk) { const [i, v] = d.chatAsk.split(':'); const it = chatSession().items[+i]; it.state = v === 'allow' ? 'allowed' : 'denied'; it.by = 'valentinalexeev'; chatRender(); return true; }
+  if (d.chatCreate) { const it = chatSession().items[+d.chatCreate]; it.state = 'created'; it.num = 352; chatRender(); toast(`Created ${chatSession().repo}#352 as valentinalexeev.`); return true; }
+  if (d.chatDiscard) { chatSession().items.splice(+d.chatDiscard, 1); chatRender(); return true; }
+  if (d.chatAssign) { const i = +d.chatAssign; const it = chatSession().items[i]; it.assigned = document.getElementById(`assign-${i}`).value; chatRender(); toast(`Assigned #352 to ${it.assigned}.`); return true; }
+  return false;
+}
+document.addEventListener('keydown', (e) => {
+  if (e.target.id === 'chat-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
+});
+
+V.more = () => head('More', '') + `<div class="p-more">${[...NAV, ...ADMIN].filter(([id]) => !['today', 'work', 'chat', 'agents'].includes(id)).map(([id, l, i]) => `<a class="ad-nav" href="#${id}">${ic(i)}<span>${l}</span></a>`).join('')}</div>
+  <section class="ad-section" style="margin-top:var(--space-5)"><h2 class="ad-section-title">Example size</h2><div class="ad-seg" role="group" aria-label="Example size">${['small', 'large'].map((z) => `<button type="button" data-size="${z}" aria-pressed="${D.size === z}">${z === 'small' ? '7 agents' : 'Large instance'}</button>`).join('')}</div></section>`;
+
+// ---------- drawers ----------
+let lastFocus = null;
+function closeOverlay() { const had = document.getElementById('overlay').innerHTML; document.getElementById('overlay').innerHTML = ''; if (had) lastFocus?.focus?.(); }
+function drawer(html, gate) {
+  lastFocus = document.activeElement;
+  const o = document.getElementById('overlay');
+  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><aside class="ad-drawer ${gate ? 'ad-drawer-gate' : ''}" role="dialog" aria-modal="true" aria-labelledby="dr-title">${html}</aside>`;
+  o.querySelector('.ad-drawer button, .ad-drawer a')?.focus();
+}
+const DEC = { deny: ['Deny', 'cannot do this action'], approve: ['Approve once', 'can do this action one time'], 'approve-job': ['Approve for the job', 'can do this same action again until the job ends'] };
+function openApproval(id, confirm) {
+  const a = D.approvals.find((x) => x.id === id); if (!a) return;
+  const allowed = ['deny', 'approve', ...(a.source === 'executor' ? [] : ['approve-job'])];
+  const foot = confirm
+    ? `<p class="p-confirm">Agent <strong>${esc(a.agent)}</strong> ${DEC[confirm][1]}. You cannot change the decision later. Your name goes to the audit log.</p><button class="ad-btn" type="button" data-open="approval:${a.id}">Back</button><button class="ad-btn ${confirm === 'deny' ? 'ad-btn-danger' : 'ad-btn-primary'}" type="button" data-decide="${a.id}:${confirm}">${DEC[confirm][0]}</button>`
+    : `<button class="ad-btn" type="button" data-act="close">Close</button>${allowed.map((d) => `<button class="ad-btn ${d === 'approve' ? 'ad-btn-primary' : ''}" type="button" data-confirm="${a.id}:${d}">${d === 'deny' ? ic('x') : ''}${DEC[d][0]}</button>`).join('')}`;
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Approval <span class="ad-code">${a.id}</span></h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <dl class="ad-dl"><dt>Agent</dt><dd>${tag(a.agent)}</dd><dt>Where</dt><dd>${esc(a.repo)} · ${esc(a.job)} <a href="#" data-ext="1">open</a></dd><dt>Asks for</dt><dd><span class="ad-code">${a.source}</span> · <strong>${esc(a.tool)}</strong></dd><dt>Rule</dt><dd class="ad-code">${a.rule}</dd><dt>Created</dt><dd>${ago(a.created)}</dd><dt>Expires</dt><dd>${left(a.expires)}. Without a decision the agent continues without this action.</dd></dl>
+    <div><div class="ad-untrusted-head ad-label">${ic('alert')}Written by the agent · not checked</div>
+    <p class="ad-muted" style="font-size:13px;margin:4px 0 8px">This text can contain a prompt injection from the issue. Decide on the facts above, not on what the text asks.</p>
+    <pre class="ad-untrusted">${esc(a.input)}</pre></div>
+  </div><div class="ad-drawer-foot">${foot}</div>`, true);
+}
+function openAgent(name) {
+  const a = D.agents.find((x) => x.name === name); if (!a) return;
+  const tl = [[now - 12 * min, 'agent', 'asked for an approval on its PR'], [now - 40 * min, 'agent', `pushed 2 commits to agent/${a.name}/issue-341`], [now - 3 * hr, 'person', 'valentinalexeev requested changes on the PR'], [now - 5 * hr, 'agent', 'opened a PR for its issue']];
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">${tag(a.name)}</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div>
+  <div class="ad-drawer-body">
+    <div class="p-row">${lamp(a)}${attn(a)}</div>
+    ${a.why ? `<div class="ad-banner ad-inline-banner ${a.attn === 'usage' ? 'ad-banner-paused' : a.attn === 'you' ? '' : 'ad-banner-down'}">${ic(a.attn === 'usage' ? 'pause' : 'alert')}<span><strong>Waiting on:</strong> ${esc(a.why)}</span></div>` : ''}
+    <dl class="ad-dl"><dt>Project</dt><dd class="ad-code">${esc(a.repo)}</dd><dt>Jobs</dt><dd>${a.jobs} of max. ${a.max}</dd><dt>Tokens 24 h</dt><dd class="ad-data">${k(a.tokens)} of ${k(a.budget)}</dd><dt>Scale to zero</dt><dd>on, after 15 min with no work</dd><dt>Claude</dt><dd class="ad-code">${a.sub}</dd></dl>
+    <section class="ad-section"><h3 class="ad-section-title">Recent</h3><ol class="ad-timeline">${tl.map(([t, w, s]) => `<li class="ad-tl ad-tl-${w}"><span class="ad-tl-time">${hhmm(t)}</span><span class="ad-tl-mark"></span><span class="ad-tl-text">${esc(s)}</span></li>`).join('')}</ol></section>
+    <section class="ad-section"><h3 class="ad-section-title">Settings</h3><div class="p-row"><label class="ad-field"><span>Max. concurrent</span><input class="ad-input" id="mc-${a.name}" type="number" min="1" max="8" value="${a.max}" style="width:90px"></label><label class="p-row" style="gap:6px;align-self:end;height:36px"><input type="checkbox" id="stz-${a.name}" checked> Scale to zero</label></div></section>
+  </div><div class="ad-drawer-foot"><button class="ad-btn ad-btn-quiet" type="button" data-act="close">Delete…</button><button class="ad-btn" type="button" data-chat-new="1">${ic('chat')}Discuss</button>${a.life === 'paused' ? `<button class="ad-btn ad-btn-primary" type="button" data-toast="Resumed ${a.name}. It starts on the next work item.">${ic('play')}Resume</button>` : `<button class="ad-btn" type="button" data-toast="Paused ${a.name}. Runs in progress finish.">${ic('pause')}Pause</button>`}<button class="ad-btn" type="button" data-toast="Saved the settings of ${a.name}.">Save</button></div>`);
+}
+function toast(msg) {
+  const s = document.getElementById('toast-slot');
+  s.innerHTML = `<div class="ad-toast" role="status">${esc(msg)}</div>`;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { s.innerHTML = ''; }, 3500);
+}
+
+// ---------- palette: commands, and the project scope picker ----------
+function palette(items, placeholder) {
+  lastFocus = document.activeElement;
+  const o = document.getElementById('overlay');
+  o.innerHTML = `<div class="ad-scrim" data-act="close"></div><div class="ad-palette" role="dialog" aria-label="${esc(placeholder)}"><input id="pal-q" placeholder="${esc(placeholder)}" autocomplete="off" aria-controls="pal-list"><ul id="pal-list" role="listbox"></ul></div>`;
+  const q = o.querySelector('#pal-q'); let i = 0, hits = items;
+  const draw = () => { o.querySelector('#pal-list').innerHTML = hits.slice(0, 60).map(([l, , h], n) => `<li role="option" aria-selected="${n === i}" data-n="${n}">${esc(l)}<span class="ad-muted">${esc(h)}</span></li>`).join('') || '<li class="ad-muted">No match</li>'; };
+  q.addEventListener('input', () => { hits = items.filter(([l, , h]) => (l + ' ' + h).toLowerCase().includes(q.value.toLowerCase())); i = 0; draw(); });
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { i = Math.min(i + 1, hits.length - 1); draw(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { i = Math.max(i - 1, 0); draw(); e.preventDefault(); }
+    if (e.key === 'Enter' && hits[i]) { closeOverlay(); hits[i][1](); }
+  });
+  o.querySelector('#pal-list').addEventListener('click', (e) => { const li = e.target.closest('[data-n]'); if (li) { closeOverlay(); hits[+li.dataset.n][1](); } });
+  draw(); q.focus();
+}
+const commands = () => [
+  ...NAV.map(([id, l]) => [`Go to ${l}`, () => go(id), '']), ...ADMIN.map(([id, l]) => [`Go to ${l}`, () => go(id), 'admin']),
+  ...D.projects.map((p) => [`Project ${p}`, () => setScope(`p:${p}`), `${D.agents.filter((a) => a.repo === p).length} agents`]),
+  ...D.agents.map((a) => [`Agent ${a.name}`, () => openAgent(a.name), short(a.repo)]),
+  ['Pause all agents', () => toast(`Paused ${D.agents.filter((a) => a.life !== 'paused').length} agents. Runs in progress finish.`), 'admin'],
+  ['Switch theme', () => theme(), ''], ['Keyboard shortcuts', () => help(), '?'],
+];
+function scopePicker() {
+  const wait = (p) => D.inbox.filter((i) => i.repo === p).length;
+  palette([
+    ['My projects', () => setScope('mine'), `${MINE.length} projects`], ['All projects', () => setScope('all'), `${D.projects.length} projects`],
+    ...[...D.projects].sort((a, b) => wait(b) - wait(a)).map((p) => [p, () => setScope(`p:${p}`), wait(p) ? `${wait(p)} waiting for you` : `${D.agents.filter((a) => a.repo === p).length} agents`]),
+  ], 'Show projects: type a name');
+}
+function setScope(v) { scope = v; expanded.clear(); sel = 0; render(); }
+function help() {
+  drawer(`<div class="ad-drawer-head"><h2 class="ad-drawer-title" id="dr-title">Keyboard</h2><button class="p-iconbtn" type="button" data-act="close" aria-label="Close">${ic('x')}</button></div><div class="ad-drawer-body"><div class="p-help">
+  <span><span class="ad-kbd">Ctrl K</span> <span class="ad-kbd">/</span></span><span>Search: pages, projects, agents, commands</span><span><span class="ad-kbd">P</span></span><span>Change the projects shown</span><span><span class="ad-kbd">G</span> <span class="ad-kbd">T</span></span><span>Today (P Projects, W Work, A Agents, U Usage, S Security)</span>
+  <span><span class="ad-kbd">J</span> <span class="ad-kbd">K</span></span><span>Next, previous item</span><span><span class="ad-kbd">Enter</span></span><span>Open the item</span><span><span class="ad-kbd">Esc</span></span><span>Close the drawer</span>
+  </div><p class="ad-muted">There is no one-key approve. A decision always opens the request first.</p></div>`);
+}
+
+// ---------- routing and events ----------
+const TITLES = Object.fromEntries([...NAV, ...ADMIN, ['more', 'More']].map(([id, l]) => [id, l]));
+function go(v) { location.hash = v; }
+function render() {
+  const view = (location.hash.slice(1) || 'today').split('?')[0];
+  // only the page names in VIEWS: a name from the URL never reaches a property lookup on an object
+  const VIEWS = new Map(Object.entries(V));
+  const v = VIEWS.has(view) ? view : 'today';
+  renderNav(v); renderConn();
+  document.getElementById('shell').classList.toggle('ad-shell-fill', v === 'chat');
+  document.getElementById('crumbs').innerHTML = `<span class="ad-hide-phone">/</span><strong>${TITLES[v]}</strong>`;
+  document.getElementById('main').innerHTML = VIEWS.get(v)(); fill(document.body);
+}
+function theme() {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+  try { localStorage.setItem('ad-theme', r.dataset.theme); } catch (e) { /* storage blocked */ }
+}
+try { const t = localStorage.getItem('ad-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-chat],[data-chat-list],[data-chat-new],[data-chat-start],[data-chat-send],[data-chat-stop],[data-chat-end],[data-chat-ask],[data-chat-create],[data-chat-discard],[data-chat-assign],[data-open],[data-act],[data-confirm],[data-decide],[data-toast],[data-conn],[data-ext],[data-size],[data-scope],[data-pick],[data-expand],[data-fold],[data-ig],[data-av],.ad-item');
+  if (!t) return;
+  if (chatClick(t)) return;
+  if (t.dataset.ext) { e.preventDefault(); toast('In the console this opens the issue or PR on the forge.'); return; }
+  if (t.dataset.size) { setSize(t.dataset.size); toast(t.dataset.size === 'large' ? `Large example: ${D.projects.length} projects, ${D.agents.length} agents. Showing your ${MINE.length} projects.` : 'Small example: 7 agents.'); return; }
+  if (t.dataset.scope) { setScope(t.dataset.scope); return; }
+  if (t.dataset.pick) { scope = `p:${t.dataset.pick}`; expanded.clear(); location.hash === '#work' ? render() : go('work'); return; }
+  if (t.dataset.expand) { const x = t.dataset.expand; expanded.has(x) ? expanded.delete(x) : expanded.add(x); render(); return; }
+  if (t.dataset.fold) { const x = t.dataset.fold, open = t.getAttribute('aria-expanded') === 'true'; expanded.delete(x); expanded.delete(`-${x}`); expanded.add(open ? `-${x}` : x); render(); return; }
+  if (t.dataset.ig) { inboxGroup = t.dataset.ig; expanded.clear(); render(); return; }
+  if (t.dataset.av) { agentView = t.dataset.av; render(); return; }
+  if (t.dataset.open) { const [kind, id] = t.dataset.open.split(':'); kind === 'approval' ? openApproval(id) : openAgent(id); return; }
+  if (t.dataset.confirm) { const [id, d] = t.dataset.confirm.split(':'); openApproval(id, d); return; }
+  if (t.dataset.decide) {
+    const [id, d] = t.dataset.decide.split(':'); const a = D.approvals.find((x) => x.id === id); a.done = d;
+    const ix = D.inbox.findIndex((x) => x.ref === id); if (ix >= 0) D.inbox.splice(ix, 1);
+    closeOverlay(); render(); toast(`${DEC[d][0]}: ${id}. ${a.agent} continues in less than a minute.`); return;
+  }
+  if (t.dataset.toast) { closeOverlay(); toast(t.dataset.toast); return; }
+  if (t.dataset.conn) { conn = t.dataset.conn; render(); return; }
+  const act = t.dataset.act;
+  if (act === 'close') closeOverlay();
+  else if (act === 'conn-live') { conn = 'live'; render(); toast('Connected. The data is live again.'); }
+  else if (act === 'pause-all') toast(`Paused ${S().agents.filter((a) => a.life !== 'paused').length} agents in the projects shown. Runs in progress finish.`);
+  else if (act === 'add') toast('Add agent opens a short form: name, repository, forge, max. concurrent.');
+  else if (act === 'add-limit') toast('Pick a project, then type its limits. A project limit can only be lower than the global limit.');
+  else if (act === 'saved') toast('Saved. The effective limit applies to the next run.');
+  else if (t.classList.contains('ad-item') && !e.target.closest('button,a')) { sel = +t.dataset.idx; t.querySelector('button, a')?.click(); }
+});
+let gKey = 0;
+document.addEventListener('keydown', (e) => {
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
+  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) { e.preventDefault(); palette(commands(), 'Search pages, projects, agents, commands'); return; }
+  if (e.key === 'Escape') { closeOverlay(); return; }
+  if (typing || document.getElementById('overlay').innerHTML) return;
+  if (gKey && Date.now() - gKey < 1200) { const m = { t: 'today', p: 'projects', w: 'work', a: 'agents', u: 'usage', s: 'security' }[e.key]; gKey = 0; if (m) go(m); return; }
+  if (e.key === 'g') { gKey = Date.now(); return; }
+  if (e.key === 'p') { scopePicker(); return; }
+  if (e.key === '?') { help(); return; }
+  const list = document.getElementById('inbox'); if (!list) return;
+  const items = list.querySelectorAll('.ad-item');
+  if (e.key === 'j' || e.key === 'k') { sel = Math.max(0, Math.min(items.length - 1, sel + (e.key === 'j' ? 1 : -1))); items.forEach((li, n) => li.setAttribute('aria-selected', n === sel)); items[sel]?.scrollIntoView({ block: 'nearest' }); }
+  if (e.key === 'Enter') items[sel]?.querySelector('button, a')?.click();
+});
+document.getElementById('open-palette').addEventListener('click', () => palette(commands(), 'Search pages, projects, agents, commands'));
+document.getElementById('scope').addEventListener('click', scopePicker);
+document.getElementById('theme').addEventListener('click', theme);
+window.addEventListener('hashchange', () => { closeOverlay(); render(); document.getElementById('main').focus({ preventScroll: true }); });
+// a link with #large opens the large example
+if (location.hash === '#large') { try { history.replaceState(null, '', '#today'); } catch (e) { /* not allowed */ } D = largeData(); scope = 'mine'; }
+fill(document.body); render();
+})();
+</script>
+</body>
+</html>
