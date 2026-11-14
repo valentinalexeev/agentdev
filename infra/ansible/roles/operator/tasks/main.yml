@@ -1,0 +1,150 @@
+---
+# Same result as the old 12-operator.sh: namespaces with the cost labels (#184), the image, the CRDs, the operator and
+# the executor egress (#135). The operator restarts only after a new local image or a changed manifest.
+- name: Namespaces with the cost labels (#184)
+  kubernetes.core.k8s:
+    context: "{{ operator_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ item }}", labels: "{{ operator_cost_labels }}"}}
+  loop: ["{{ operator_platform_ns }}", "{{ operator_agents_ns }}", "{{ operator_exec_ns }}"]
+
+- name: Build the local operator image
+  ansible.builtin.command:
+    argv: ["{{ operator_container_engine }}", build, -q, -t, "{{ operator_image }}", "{{ repo_root }}/images/operator"]
+  changed_when: false
+  when: operator_image is match('agentdev-operator:')
+
+- name: Published operator image present locally
+  ansible.builtin.shell: >-
+    {{ operator_container_engine }} image inspect {{ operator_image | quote }} >/dev/null 2>&1
+    || { {{ operator_container_engine }} pull -q {{ operator_image | quote }} >/dev/null && echo pulled; }
+  register: operator_pull
+  changed_when: "'pulled' in operator_pull.stdout"
+  when: operator_image is not match('agentdev-operator:')
+
+- name: Load the operator image into kind
+  ansible.builtin.command:
+    argv: [kind, load, docker-image, "{{ operator_image }}", --name, "{{ operator_kind_cluster }}"]
+  register: operator_load
+  changed_when: "'already present on all nodes' not in (operator_load.stdout ~ operator_load.stderr)"
+  when: operator_kind_cluster | length > 0
+
+- name: "CRDs agents, securityevents, approvals, executors, executorruns, sshtargets, projectsecrets (agentdev.dev)"
+  kubernetes.core.k8s:
+    context: "{{ operator_context }}"
+    src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
+  loop: "{{ operator_crds }}"
+
+- name: External Secrets Operator CRD (step 13)
+  kubernetes.core.k8s_info:
+    context: "{{ operator_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: externalsecrets.external-secrets.io
+  register: operator_eso_crd
+
+- name: Botboard Service (step 07)
+  kubernetes.core.k8s_info:
+    context: "{{ operator_context }}"
+    kind: Service
+    namespace: "{{ operator_botboard_ns }}"
+    name: botboard
+  register: operator_botboard_svc
+  when: operator_botboard_url | length == 0
+
+- name: Operator Deployment, RBAC and executors namespace
+  kubernetes.core.k8s:
+    context: "{{ operator_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=operator_render) | from_yaml_all | list }}"
+  vars:
+    operator_store: >-
+      {{ 'agentdev-secrets' if operator_secrets_store_enabled | bool and operator_eso_crd.resources | length > 0 else '' }}
+    operator_render:
+      src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ operator_platform_ns }}"
+        AGENTS_NS: "{{ operator_agents_ns }}"
+        COST_LABELS: "{{ operator_cost_labels.items() | map('join', '=') | join(',') }}"
+        OPERATOR_IMAGE: "{{ operator_image }}"
+        WORKER_IMAGE: "{{ operator_worker_image }}"
+        FORGE_IMAGE: "{{ operator_forge_image }}"
+        IMAGE_PULL_POLICY: "{{ operator_image_pull_policy }}"
+        FORGE_URL: http://gitea.{{ operator_forge_ns }}.svc.cluster.local:3000
+        FORGE_PUBLIC_URL: "{{ operator_forge_public_url }}"
+        FORGE_ADMIN_USER: "{{ operator_forge_admin_user }}"
+        BOTBOARD_URL: >-
+          {{ operator_botboard_url if operator_botboard_url | length > 0
+             else ('http://botboard.' ~ operator_botboard_ns ~ '.svc.cluster.local'
+                   if operator_botboard_svc.resources | default([]) | length > 0 else '') }}
+        POLL_SECONDS: "{{ operator_poll_seconds }}"
+        IDLE_SECONDS: "{{ operator_idle_seconds }}"
+        AGENT_STORAGE_CLASS: "{{ operator_agent_storage_class }}"
+        AGENT_STATE_STORAGE: "{{ operator_agent_state_storage }}"
+        EGRESS_PROXY: http://egress-proxy.{{ operator_agents_ns }}.svc.cluster.local:3128
+        # harness guide (#206): the agents' egress list as step 06 builds it, for the text only
+        AGENT_EGRESS_HOSTS: >-
+          {{ (operator_egress_hosts + operator_egress_extra_hosts)
+             | reject('in', ['api.anthropic.com'] if operator_claude_proxy | bool else []) | join(' ') }}
+        SECURITY_PAUSE_AFTER: "{{ operator_security.pause_after }}"
+        SECURITY_RETENTION_DAYS: "{{ operator_security.retention_days }}"
+        SECURITY_MAX_PER_AGENT: "{{ operator_security.max_per_agent }}"
+        SECURITY_RATE_PER_MIN: "{{ operator_security.rate_per_min }}"
+        SECURITY_RATE_BURST: "{{ operator_security.rate_burst }}"
+        APPROVAL_RETENTION_DAYS: "{{ operator_approvals.retention_days }}"
+        APPROVALS: "{{ operator_approvals.enabled | string | lower }}"
+        APPROVAL_TIMEOUT_MINUTES: "{{ operator_approvals.timeout_minutes }}"
+        EXEC_NS: "{{ operator_exec_ns }}"
+        EXECUTOR_POLL_SECONDS: "{{ operator_executor.poll_seconds }}"
+        EXECUTOR_RETENTION_DAYS: "{{ operator_executor.retention_days }}"
+        EXECUTOR_APPLY_START_MINUTES: "{{ operator_executor.apply_start_minutes }}"
+        EXECUTOR_EGRESS_HOSTS: "{{ operator_executor_egress_hosts | join(' ') }}"
+        USAGE_FIVE_HOUR: "{{ operator_usage.five_hour }}"
+        USAGE_WEEKLY: "{{ operator_usage.weekly }}"
+        # external forwarder watch (#213, PR #286): off on kind. Extra values are harmless before #286 merges.
+        FORWARDER_NS: ""
+        FORWARDER_SELECTOR: ""
+        FORWARDER_NOT_READY_MINUTES: ""
+        SECRETS_STORE: "{{ operator_store }}"
+        # the kind store's value Secrets have one key, value
+        SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
+        CLAUDE_PROXY_URL: >-
+          {{ ('http://claude-proxy.' ~ operator_agents_ns ~ '.svc.cluster.local:8080') if operator_claude_proxy | bool else '' }}
+      replace: []
+  register: operator_applied
+
+- name: Executor egress (#135) - proxy and executor NetworkPolicy, 80/443 for the proxy on kind, and the SSH CA (#204)
+  kubernetes.core.k8s:
+    context: "{{ operator_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=item) | from_yaml_all | list }}"
+  loop:
+    - src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
+      values: {EXEC_NS: "{{ operator_exec_ns }}", FORGE_NS: "{{ operator_forge_ns }}", EGRESS_PROXY_IMAGE: "{{ operator_egress_proxy_image }}"}
+      replace: []
+    - src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
+      values: {EXEC_NS: "{{ operator_exec_ns }}"}
+      replace: []
+    # SSH CA (#204): runs once scripts/ssh-ca-init.sh made Secret step-ca; until then the pod waits for the Secret
+    - src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
+      values: {EXEC_NS: "{{ operator_exec_ns }}", PLATFORM_NS: "{{ operator_platform_ns }}", STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
+      replace: []
+  loop_control: {label: "{{ item.src | basename }}"}
+
+# a local tag keeps its name after a rebuild, and a changed ConfigMap or RBAC does not change the pod template:
+# restart after a new image or any manifest change
+- name: Restart the operator after a new local image or a manifest change
+  ansible.builtin.command: kubectl --context {{ operator_context }} -n {{ operator_platform_ns }} rollout restart deploy/agentdev-operator
+  when: (operator_load is changed or operator_applied is changed) and not ansible_check_mode
+  changed_when: true
+
+- name: Wait for the operator and the executor egress proxy
+  ansible.builtin.command: >-
+    kubectl --context {{ operator_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }}
+    --timeout={{ operator_timeout if item.name == 'agentdev-operator' else 180 }}s
+  loop:
+    - {ns: "{{ operator_platform_ns }}", name: agentdev-operator}
+    - {ns: "{{ operator_exec_ns }}", name: executor-egress-proxy}
+  loop_control: {label: "{{ item.name }}"}
+  changed_when: false
+  when: not ansible_check_mode

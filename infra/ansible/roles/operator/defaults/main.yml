@@ -1,0 +1,42 @@
+---
+# agentdev operator on kind (#106, was 12-operator.sh): the CRDs, manifests/operator.yaml.tmpl and the executor egress
+# manifests, through templates/render.j2 as deploy.yml does on GKE. Values follow config.env (12-operator.sh).
+operator_context: kind-agentdev
+operator_kind_cluster: agentdev          # kind cluster to load a local image into; empty: no load
+operator_container_engine: docker
+operator_platform_ns: agentdev-platform
+operator_agents_ns: coding-agents
+operator_exec_ns: agentdev-executors
+operator_forge_ns: forge
+operator_botboard_ns: botboard
+operator_image: agentdev-operator:dev    # agentdev-operator:* is built from images/operator
+operator_worker_image: agentdev/worker:mvp
+operator_forge_image: agentdev/forge:mvp
+operator_image_pull_policy: Never        # kind: step 06 loads the worker and forge images
+# SSH certificate authority (#204): step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+operator_step_ca_image: smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3
+operator_egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+operator_forge_public_url: http://localhost:3000
+operator_forge_admin_user: owner
+operator_botboard_url: ""                # empty: the in-cluster botboard when its Service exists (step 07)
+operator_cost_labels: {service: agentdev, environment: dev}
+operator_poll_seconds: 20
+operator_idle_seconds: 900
+operator_agent_storage_class: ""
+operator_agent_state_storage: 10Gi
+operator_security: {pause_after: 5, retention_days: 30, max_per_agent: 500, rate_per_min: 10, rate_burst: 20}
+operator_approvals: {enabled: false, timeout_minutes: 30, retention_days: 90}
+operator_executor: {poll_seconds: 60, retention_days: 30, apply_start_minutes: 30}
+operator_executor_egress_hosts: [registry.terraform.io, releases.hashicorp.com]
+operator_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
+                        files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
+operator_egress_extra_hosts: []
+operator_claude_proxy: true
+operator_usage: {five_hour: 80, weekly: 90}
+# scoped secrets store (#202): on only when External Secrets Operator is installed (step 13), else the operator's
+# cache never syncs
+operator_secrets_store_enabled: true
+operator_crds: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_sshtargets.yaml,
+                agentdev.dev_projectsecrets.yaml]
+operator_timeout: 120
