@@ -91,7 +91,10 @@ func main() {
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
 	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
-		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}} // #27, 0 = no cap
+		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}, // #27, 0 = no cap
+		events: store}
+	wr.jobs = newJobCache(forgeJobs{gitea: gp, github: gh}, 30*time.Second) // #345, jobs.go
+	wr.platform = newPlatformChecker(agents, forgeProbeFrom(gp, gh), cfg.Namespace, env("PLATFORM_NS", "agentdev-platform"))
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
 	}
@@ -229,6 +232,12 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cannot read agents"})
 			return
 		}
+		// R35 (#380): an admin sees every agent, other users only agents with a repository where they have forge
+		// write access (as security events and agent detail); filtered before counts, scope and paging
+		if wr != nil {
+			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+			list = wr.filterVisible(r.Context(), id, list)
+		}
 		// counter badge on the overview (#70): events of the last 7 days per agent
 		if events != nil {
 			counts, err := events.Counts(r.Context(), time.Now().Add(-7*24*time.Hour))
@@ -240,11 +249,48 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			}
 		}
 		addBudgets(r.Context(), list) // #66
-		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+		if wr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+			return
+		}
+		// repo, scope=mine, limit and cursor (#345, scope.go); without them the answer is as before
+		q := r.URL.Query()
+		id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+		sc, err := wr.scopeOf(r.Context(), id, q)
+		if err == nil && q.Get("limit") == "" && q.Get("cursor") == "" && q.Get("repo") == "" && !sc.mine {
+			writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+			return
+		}
+		pg, perr := parsePage(q, 1<<20)
+		if err == nil {
+			err = perr
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		kept := list[:0]
+		for _, a := range list {
+			if sc.agent(a) {
+				kept = append(kept, a)
+			}
+		}
+		span, next := pg.slice(len(kept))
+		resp := map[string]any{"agents": kept[span[0]:span[1]]}
+		if next != "" {
+			resp["next_cursor"] = next
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})))
 	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
 	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
+		mux.Handle("GET /api/jobs", auth(verify, http.HandlerFunc(wr.listJobs)))             // #345, jobs.go
+		mux.Handle("GET /api/stream", auth(verify, wr.stream()))                             // #345, stream.go (SSE)
+		mux.Handle("GET /api/agents/{name}", auth(verify, http.HandlerFunc(wr.agentDetail))) // #344, detail.go
+		if wr.platform != nil {
+			mux.Handle("GET /api/platform", auth(verify, wr.platform.handler(wr.adminGroup))) // #344, admins only
+		}
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
 		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only

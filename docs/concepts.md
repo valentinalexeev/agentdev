@@ -99,6 +99,13 @@ flowchart LR
   a2 -- poll, push, PR, reply --> forge
 ```
 
+## Job
+
+A **job** is one issue handed to an agent (assigned on Gitea, label `agent:<name>` on GitHub) and the PR the agent
+opens for it on its branch `agent/<name>/issue-<n>`. The console shows its phase: `queued` (no PR yet), `build` (the
+agent waits on an approval), `review` (PR open) and `done` (PR merged or closed). The phase comes from the forge and
+from the Approval objects, the records people and the operator write. It never comes from what the agent says (#345).
+
 ## Project
 
 A **project** is one repository plus the agents that work on it, described by one spec file

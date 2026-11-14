@@ -19,11 +19,27 @@ rules:
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
+# console (#344): the harness guide of an agent (operator-written) and the health of the agents-namespace parts
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get]}
+- {apiGroups: [apps], resources: [deployments], resourceNames: [webhook-router, claude-proxy, egress-proxy], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-api-read}
+subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}]
+---
+# GET /api/platform (#344): readiness of the operator and authentik, by name; no Secrets, no other objects
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-api-platform, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [apps], resources: [deployments], resourceNames: [agentdev-operator, authentik-server], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-api-platform, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-api-platform}
 subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}]
 ---
 apiVersion: apps/v1
@@ -46,6 +62,8 @@ spec:
         - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
         - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: PLATFORM_NS, value: "${PLATFORM_NS}"}   # GET /api/platform (#344)
+        - {name: API_IMAGE, value: "${API_IMAGE}"}       # its tag is the instance version on the Platform page
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
         - {name: APPROVALS, value: "${APPROVALS}"}   # #67: decide approval requests from forge comments
