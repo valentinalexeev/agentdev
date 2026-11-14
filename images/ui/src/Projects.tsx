@@ -27,7 +27,7 @@ export function ProjectsPage() {
       </div>
       {!d.ready ? <p className="ad-muted">Loading…</p> : rows.length === 0 ? <Empty title="No projects">A project shows here when an agent works on its repository.</Empty> : (
         <div className="ad-table-wrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-2l">
             <thead><tr><th>Project</th><th>Agents</th><th className="ad-num">Waiting for you</th><th className="ad-num">Stopped</th>
               <th className="ad-num ad-hide-phone">Working</th><th className="ad-num ad-hide-phone">Tokens 24 h</th><th className="ad-num ad-hide-phone">Events 7 d</th></tr></thead>
             <tbody>

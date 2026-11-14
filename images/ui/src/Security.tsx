@@ -49,7 +49,7 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
       {events && events.length === 0 && <Empty title="No security events for this filter">When a guardrail refuses an action, it shows here.</Empty>}
       {events && events.length > 0 && (
         <div className="ad-table-wrap">
-          <table className="ad-table">
+          <table className="ad-table ad-table-2l">
             <thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th>Source / rule</th><th>Job</th><th>Action</th></tr></thead>
             <tbody>
               {events.map((e) => (

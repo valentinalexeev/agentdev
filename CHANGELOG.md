@@ -42,6 +42,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Web console on phones (#343): below 760 px a bottom bar (Today, Projects, Agents, Approvals, More) replaces the
+  left menu. Drawers are full-screen sheets, tables show two lines per row, and the layout uses safe-area insets. No
+  page scrolls sideways at 390 px. A web app manifest and icons let Chrome on Android and Safari on iOS add the console
+  to the home screen. Re-run: Ansible `deploy.yml` with the new UI image; no `./run.sh` step.
 - Web console: Today page, project scope and connection states (#342, #339). **Today** is the new start page with one
   inbox (approvals, guardrail and blocked agents, usage pauses), sorted by expiry, then by age. Agents show two axes:
   lifecycle and attention. A project scope in the top bar (My projects, All projects, one project; key `P`) filters

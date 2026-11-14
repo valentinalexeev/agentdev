@@ -115,7 +115,7 @@ export function TodayPage({ token, onExpired }: { token: string; onExpired: () =
       <section className="ad-section">
         <div className="ad-section-head"><h2 className="ad-section-title">Fleet</h2><a className="ad-link" href="#agents">All agents</a></div>
         {attn.length === 0 ? <p className="ad-muted" style={{ margin: 0 }}>All {d.agents.length} agents are ok.</p> : (
-          <div className="ad-table-wrap"><table className="ad-table"><tbody>
+          <div className="ad-table-wrap"><table className="ad-table ad-table-2l"><tbody>
             {attn.slice(0, 6).map((a) => (
               <tr key={a.name}><td><AgentTag name={a.name} /></td><td className="ad-code ad-hide-phone">{short(a.repo)}</td>
                 <td><Lamp phase={a.life} /></td><td><Attention attn={a.attn} label={ATTN_LABEL[a.attn]} /></td>

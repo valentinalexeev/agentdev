@@ -115,6 +115,7 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
   const d = useData()
   const [dark, toggleTheme] = useTheme()
   const [picking, setPicking] = useState(false)
+  const [more, setMore] = useState(false)
   const name = String(user.profile.preferred_username ?? user.profile.email ?? '')
   const title = NAV.find(([id]) => id === page)?.[1] ?? 'Today'
   const count = (id: string) => id === 'today' ? (d.inbox.length > 0 && <span className="ad-count" aria-label={`${d.inbox.length} waiting for you`}>{d.inbox.length}</span>)
@@ -151,11 +152,11 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
         <div className="ad-crumbs ad-hide-phone"><strong>{title}</strong></div>
         <span style={{ marginLeft: 'auto' }} />
         <ConnState />
-        <button className="ad-iconbtn" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>
+        <button className="ad-iconbtn ad-hide-phone" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>
           <Icon name={dark ? 'sun' : 'moon'} />
         </button>
         <span className="ad-user"><span className="ad-avatar" aria-hidden="true">{name.slice(0, 2)}</span><span>{name}</span></span>
-        <button className="ad-btn ad-btn-quiet" type="button" onClick={onLogout}>Sign out</button>
+        <button className="ad-btn ad-btn-quiet ad-hide-phone" type="button" onClick={onLogout}>Sign out</button>
       </header>
       <ConnBanner onSignIn={onSignIn} />
       <main className="ad-main" id="main" tabIndex={-1}>
@@ -166,8 +167,47 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
                 : page === 'projects' ? <ProjectsPage />
                   : <TodayPage token={token} onExpired={onExpired} />}
       </main>
+      <nav className="ad-bottombar" aria-label="Main">
+        {BOTTOM.map((id) => {
+          const [, label, icon] = NAV.find(([n]) => n === id)!
+          return (
+            <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined}>
+              <Icon name={icon} /><span>{label}</span>{id === 'today' || id === 'approvals' ? count(id) : null}
+            </a>
+          )
+        })}
+        <button className="ad-nav" type="button" aria-haspopup="dialog" aria-current={MORE.includes(page) ? 'page' : undefined}
+          onClick={() => setMore(true)}><Icon name="more" /><span>More</span></button>
+      </nav>
+      {more && <MoreSheet page={page} name={name} dark={dark} onTheme={toggleTheme} onLogout={onLogout} onClose={() => setMore(false)} />}
       {picking && <ScopePicker onClose={() => setPicking(false)} />}
     </div>
+  )
+}
+
+// Phone (#343): below 760 px the rail is a bottom bar with the 4 most used pages and More. More is a bottom sheet
+// with the other pages, the theme and sign out.
+const BOTTOM = ['today', 'projects', 'agents', 'approvals']
+const MORE = NAV.map(([id]) => id).filter((id) => !BOTTOM.includes(id))
+
+function MoreSheet({ page, name, dark, onTheme, onLogout, onClose }: {
+  page: string; name: string; dark: boolean; onTheme: () => void; onLogout: () => void; onClose: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => { const el = ref.current; if (el && !el.open) el.showModal(); return () => el?.close() }, [])
+  return (
+    <dialog ref={ref} className="ad-sheet" aria-label="More" onCancel={(e) => { e.preventDefault(); onClose() }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <span className="ad-sheet-grip" aria-hidden="true" />
+      <nav className="ad-rail-group">
+        {NAV.filter(([id]) => MORE.includes(id)).map(([id, label, icon]) => (
+          <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
+            <Icon name={icon} /><span>{label}</span></a>
+        ))}
+        <button className="ad-nav" type="button" onClick={onTheme}><Icon name={dark ? 'sun' : 'moon'} /><span>{dark ? 'Light theme' : 'Dark theme'}</span></button>
+        <button className="ad-nav" type="button" onClick={onLogout}><Icon name="x" /><span>Sign out {name}</span></button>
+      </nav>
+    </dialog>
   )
 }
 

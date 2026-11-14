@@ -188,6 +188,20 @@ shows a banner with the cause:
 | Offline | Your device has no network. | Connect to the network. |
 | Signed out | Your sign-in expired. | Click **Sign in**. The web UI opens the same page again. |
 
+### Use the web UI on a phone
+
+On a screen that is narrower than 760 px, the left menu changes to a bottom bar. The bottom bar has **Today**,
+**Projects**, **Agents**, **Approvals** and **More**. **More** opens a sheet with **Security**, **Usage**, the theme
+and **Sign out**. The approval panel fills the screen. The decision buttons are at the bottom, in reach of your thumb.
+
+To install the web UI on the home screen:
+
+1. Open the web UI in Chrome on Android or in Safari on iOS.
+2. Sign in.
+3. Open the browser menu (Safari: the share button).
+4. Tap **Add to Home Screen**.
+   The web UI opens from the icon without the browser bar.
+
 ### Know the state of an agent
 
 The web UI shows the state of an agent on two axes. The **lifecycle** tells what the pods do. The **attention** tells
