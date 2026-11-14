@@ -284,6 +284,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
   token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
   `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
   `ANTHROPIC_API_KEY=...`; the message names the format, never the value. Test: `infra/ansible/tests/claude_credential.yml`.
+- `images/worker/test/jobs.test.sh` failed the case "after the backoff it runs again" on Alpine (`bash:5`) (#281).
+  BusyBox `sed` has no `-u`, so every stub job failed. The worker image uses GNU `sed` and is not affected. The test
+  now checks its prerequisites (GNU `sed -u`, `flock`) first and names the missing package.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
