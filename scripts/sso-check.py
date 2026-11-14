@@ -116,10 +116,18 @@ def run_flow(b, base, flow_url):
 
 
 def sign_in(base, idp, claims, user=TEST_USER):
-    b = Browser()
-    url, st, body = follow(b, f"{base}/source/oauth/login/agentdev-sso/", base)
-    if not url.startswith(idp):
-        raise RuntimeError(f"source did not redirect to the stand-in (got {urllib.parse.urlparse(url).netloc})")
+    # #304: on a new cluster the step restarts authentik and applies the SSO blueprint just before this check. For a
+    # short time the source is not usable and authentik answers on its own host. Retry for up to 60 seconds.
+    deadline = time.monotonic() + 60
+    while True:
+        b = Browser()
+        url, st, body = follow(b, f"{base}/source/oauth/login/agentdev-sso/", base)
+        if url.startswith(idp):
+            break
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"source did not redirect to the stand-in (got {urllib.parse.urlparse(url).netloc}, "
+                               f"HTTP {st})")
+        time.sleep(3)
     st, hd, _ = b.req(url, data={"username": user, "claims": json.dumps(claims)})
     loc = hd.get("Location", "")
     if "code=" not in loc:
