@@ -11,11 +11,15 @@ need envsubst; need jq
 
 log "Building and loading ${WORKER_IMAGE}, ${FORGE_IMAGE}, ${ROUTER_IMAGE} and ${CLAUDE_PROXY_IMAGE}"
 # local tags (agentdev/...) are built from this checkout; a published image (the compatibility e2e, #178, runs the
-# previous release's worker and forge) is pulled and loaded as it is. Pull one platform, the one of this engine: a
-# multi-arch pull keeps an index that `kind load` (ctr import --all-platforms) cannot import (#378).
-pull_platform="linux/$("${CONTAINER_ENGINE}" info -f '{{.Architecture}}' | sed 's/^x86_64$/amd64/; s/^aarch64$/arm64/')"
-build_or_pull() { if [[ "$1" == agentdev/* ]]; then "${CONTAINER_ENGINE}" build -q -t "$1" "$2" >/dev/null
-                  else "${CONTAINER_ENGINE}" pull -q --platform "${pull_platform}" "$1" >/dev/null; fi; }
+# previous release's worker and forge) is pulled for one platform and then re-tagged through a one-line build, so the
+# local image has one manifest. With the containerd image store (Docker on GitHub runners), a pulled image keeps the
+# multi-arch index, and `kind load` (ctr import --all-platforms) fails on the missing platforms (#378).
+engine_arch=$("${CONTAINER_ENGINE}" info -f '{{.Architecture}}' 2>/dev/null || "${CONTAINER_ENGINE}" info -f '{{.Host.Arch}}')
+pull_platform="linux/$(sed 's/^x86_64$/amd64/; s/^aarch64$/arm64/' <<< "${engine_arch}")"
+[[ "${pull_platform}" =~ ^linux/(amd64|arm64)$ ]] || die "unknown container engine architecture: ${engine_arch}"
+build_or_pull() { if [[ "$1" == agentdev/* ]]; then "${CONTAINER_ENGINE}" build -q -t "$1" "$2" >/dev/null; return; fi
+                  "${CONTAINER_ENGINE}" pull -q --platform "${pull_platform}" "$1" >/dev/null
+                  printf 'FROM %s\n' "$1" | "${CONTAINER_ENGINE}" build -q --platform "${pull_platform}" -t "$1" - >/dev/null; }
 build_or_pull "${WORKER_IMAGE}" "${SPIKE_DIR}/images/worker"
 build_or_pull "${FORGE_IMAGE}" "${SPIKE_DIR}/images/forge"
 "${CONTAINER_ENGINE}" build -q -t "${ROUTER_IMAGE}" "${SPIKE_DIR}/images/router" >/dev/null
