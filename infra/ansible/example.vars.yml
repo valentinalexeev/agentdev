@@ -32,6 +32,7 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #     namespace: tailscale                  #   the reverse proxy's namespace
 #     pod_selector: {app: ts-ingress}       #   optional, in that namespace
 #     cidrs: [100.64.0.0/10]                #   or its source addresses
+#   forwarder_not_ready_minutes: 10         # #213: SecurityEvent when no forwarder pod is Ready this long (needs pod_selector)
 #   smoke: true                             # post-deploy smoke test of the public hosts (#213); false: off
 #   smoke_timeout: 300                      #   seconds per check
 # authentik trusts X-Forwarded-* only from these ranges (#160): add your reverse proxy's range, keep the defaults
