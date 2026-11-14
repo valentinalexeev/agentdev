@@ -1,0 +1,17 @@
+# GKE (#196, ADR 0002 D5): Google Managed Service for Prometheus scrapes port 9464 of claude-proxy and the operator.
+# Applied by infra/ansible/deploy.yml when telemetry.pod_monitoring is true (off by default); needs
+# enable_managed_prometheus = true in infra/terraform. The collectors run in gmp-system, which the NetworkPolicies of
+# the two pods admit (telemetry.scraper_ns). Scrape interval 60 s: about 20 series per agent.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}
+spec:
+  selector: {matchLabels: {app: claude-proxy}}
+  endpoints: [{port: metrics, interval: 60s, path: /metrics}]
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {matchLabels: {app: agentdev-operator}}
+  endpoints: [{port: metrics, interval: 60s, path: /metrics}]

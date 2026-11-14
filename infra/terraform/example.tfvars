@@ -17,7 +17,7 @@ github_repository  = "my-org/my-agentdev-deploy" # the deployment repo, not this
 # agent_disk_type      = "pd-standard"
 # system_pool_spot     = false   # #171: Spot for the system pool; short platform gaps on preemption
 # gateway_enabled           = null    # #208: null = on only with public_hosts; true keeps the load balancer anyway
-# enable_managed_prometheus = false   # #208: agentdev does not use it
+# enable_managed_prometheus = false   # #208; true for the Claude cost metrics (#196, Ansible telemetry.pod_monitoring)
 # enable_filestore_csi      = false   # #208: agentdev uses persistent disks only
 # monitoring_components     = ["SYSTEM_COMPONENTS"]   # #208: null = the GKE default list (adds kube-state-metrics)
 # public_hosts         = ["agentdev.example.com"]   # public HTTPS entry point (#120); DNS A record -> webhook_ip

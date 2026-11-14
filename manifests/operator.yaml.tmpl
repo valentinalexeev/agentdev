@@ -131,6 +131,10 @@ spec:
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
         - {name: TELEMETRY_INSTANCE, value: "${TELEMETRY_INSTANCE}"}   # #278: label agentdev_instance on every metric
         - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
+        - {name: JOB_TIMEOUT, value: "${JOB_TIMEOUT}"}         # #196: seconds per Claude run, 0 = off
+        - {name: MAX_BUDGET_USD, value: "${MAX_BUDGET_USD}"}   # #196: --max-budget-usd per run; empty = off
+        - {name: CLAUDE_CODE_TELEMETRY, value: "${CLAUDE_CODE_TELEMETRY}"}   # #196 D7: Claude Code's own OTel, dashboards only
+        - {name: CLAUDE_CODE_OTLP_URL, value: "${CLAUDE_CODE_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
         - {name: FORWARDER_NS, value: "${FORWARDER_NS}"}
         - {name: FORWARDER_SELECTOR, value: "${FORWARDER_SELECTOR}"}   # k=v,k2=v2 (ingress.forwarder.pod_selector)

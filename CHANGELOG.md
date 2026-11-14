@@ -61,6 +61,21 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Optional telemetry backends (#196, ADR 0002 D5): `TELEMETRY_STACK=true ./run.sh 14` installs an OpenTelemetry
+  Collector and Prometheus (pinned charts) in `monitoring` on kind. Off by default (`./run.sh` does not run step 14).
+  Grafana is optional and off by default (`TELEMETRY_GRAFANA=true` adds it). The dashboard
+  `grafana/agentdev-llm-cost.json` imports into any external Grafana: the data source and the agentdev instance
+  (label `agentdev_instance`) are variables. On GKE,
+  `telemetry.pod_monitoring: true` (with Terraform `enable_managed_prometheus = true`) creates `PodMonitoring`
+  objects for Managed Service for Prometheus. The collector forwards only `claude_code.*` metrics from agents. It sets
+  `agentdev.agent` from the sending pod, limits requests to 1 MiB, and Grafana is ClusterIP without anonymous access.
+- Run guards (#196, ADR 0002 D6/D7): `JOB_TIMEOUT` (default 3600 s, 0 = off) stops a Claude run that takes too long;
+  `MAX_BUDGET_USD` adds `--max-budget-usd` per run; `CLAUDE_JOB_BUDGET_UNITS` makes `claude-proxy` refuse a job id
+  after that many units (loop guard, event `job-budget-exhausted`, `stopped` on `GET /status`). The worker sends the
+  job id as `X-Agentdev-Job`, appended to any existing `ANTHROPIC_CUSTOM_HEADERS`, and ends processes of a run that
+  detached and survived it. Optional Claude Code telemetry (`CLAUDE_CODE_TELEMETRY`, off) for dashboards only.
+  Ansible: `job_timeout`, `max_budget_usd`, `claude_job_budget_units`, `claude_code_telemetry`. Re-run: `./run.sh 06`
+  and `12`, or the playbook; new worker, proxy and operator images.
 - OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
   9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
   `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,

@@ -142,6 +142,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
+			env("JOB_TIMEOUT", r.D.jobTimeout()), env("MAX_BUDGET_USD", r.D.MaxBudgetUSD), // run guards (#196)
+			env("CLAUDE_CODE_TELEMETRY", r.D.ClaudeCodeTelemetry), env("CLAUDE_CODE_OTLP_URL", r.D.ClaudeCodeOTLPURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
 		), r.claudeProxyEnv(n)...),

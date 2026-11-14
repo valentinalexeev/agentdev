@@ -106,6 +106,22 @@ func serveOperatorMetrics(ctx context.Context, addr string, h http.Handler, shut
 	return nil
 }
 
+// guardValue returns v if it matches re, else def (run guards, #196: values reach the worker's argv).
+func guardValue(v, re, def string) string {
+	if regexp.MustCompile(re).MatchString(v) {
+		return v
+	}
+	return def
+}
+
+// jobTimeout is JOB_TIMEOUT for the worker; the default 3600 when unset (tests build Defaults by hand).
+func (d Defaults) jobTimeout() string {
+	if d.JobTimeout == "" {
+		return "3600"
+	}
+	return d.JobTimeout
+}
+
 // instanceAttr names the agentdev instance (TELEMETRY_INSTANCE, default "agentdev"). Prometheus label:
 // agentdev_instance (the label "instance" belongs to the scrape target).
 const instanceAttr = "agentdev.instance"

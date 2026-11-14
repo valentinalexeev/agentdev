@@ -89,6 +89,11 @@ func main() {
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
 		ExecNS:           execNS,
+		JobTimeout:       guardValue(env("JOB_TIMEOUT", "3600"), `^[0-9]{1,7}$`, "3600"), // #196
+		MaxBudgetUSD:     guardValue(os.Getenv("MAX_BUDGET_USD"), `^([0-9]{1,6}(\.[0-9]{1,2})?)?$`, ""),
+		// D7: off unless exactly "true" and a plain http(s) URL
+		ClaudeCodeTelemetry: guardValue(os.Getenv("CLAUDE_CODE_TELEMETRY"), `^true$`, "false"),
+		ClaudeCodeOTLPURL:   guardValue(os.Getenv("CLAUDE_CODE_OTLP_URL"), `^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?)?$`, ""),
 	}}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

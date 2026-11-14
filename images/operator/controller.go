@@ -42,6 +42,11 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// run guards (#196, ADR 0002 D6): JOB_TIMEOUT seconds (0 = off) and MAX_BUDGET_USD (empty = off) of each run;
+	// the worker checks both values again before use
+	JobTimeout, MaxBudgetUSD string
+	// Claude Code native telemetry (#196 D7): "true" and an http(s) collector URL; dashboards only, never control
+	ClaudeCodeTelemetry, ClaudeCodeOTLPURL string
 }
 
 type AgentReconciler struct {

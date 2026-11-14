@@ -240,6 +240,28 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
    `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
    rounded up.
 
+### Stop a run that takes too long or costs too much
+
+Three guards stop one Claude run (#196, ADR 0002 D6). Set them in `config.env` (kind) or `instance.yml` (GKE), then
+run `./run.sh 06` and `./run.sh 12`, or the playbook.
+
+| kind (`config.env`) | GKE (`instance.yml`) | Default | What it does |
+|---|---|---|---|
+| `JOB_TIMEOUT` | `job_timeout` | 3600 | Seconds for one run. Then the run stops and counts as failed. 0 = no limit. |
+| `MAX_BUDGET_USD` | `max_budget_usd` | empty | USD for one run (Claude Code `--max-budget-usd`). Use it when the instance bills by API key. |
+| `CLAUDE_JOB_BUDGET_UNITS` | `claude_job_budget_units` | 0 | Cost units for one job id in the proxy. Then the proxy answers 429 and writes `job-budget-exhausted`. 0 = off. |
+
+NOTE: The job id comes from the agent container, so the model can change it. `CLAUDE_JOB_BUDGET_UNITS` stops a run
+that loops. It does not protect the instance. The budget of the agent does.
+
+### Claude Code telemetry (optional)
+
+Claude Code can send its own metrics and events (tool use, sessions, commits) to an OpenTelemetry Collector (#196,
+ADR 0002 D7). It is off by default. Turn it on with `CLAUDE_CODE_TELEMETRY=true` and `CLAUDE_CODE_OTLP_URL` (kind),
+or `claude_code_telemetry: {enabled: true, otlp_url: ...}` (GKE). agentdev uses this data for dashboards only,
+never for a limit or a pause, because the model can send data to the same endpoint. Prompts and tool details are
+never logged.
+
 ### Metrics and OpenTelemetry
 
 `claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
@@ -258,6 +280,54 @@ If you use another scraper, set both: the namespace and the labels of its pods.
 | `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
 | `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
 | `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+### Dashboards: Prometheus and Grafana
+
+agentdev collects the metrics. You show them in a Grafana of your choice. The dashboard
+`grafana/agentdev-llm-cost.json` shows units and USD per agent and model, the cache-read share, budget used and
+limit, the 5 h and 7 d utilization, pauses and refused requests.
+
+To use an external Grafana (recommended):
+
+1. Make sure that your Prometheus scrapes port 9464 of `claude-proxy` and the operator (see Metrics above).
+2. In Grafana, open **Dashboards**, **New**, **Import**. Upload `grafana/agentdev-llm-cost.json`.
+3. Select the data source **Prometheus** variable: the Prometheus with the agentdev metrics.
+4. Select the **Instance** variable. Its values come from the label `agentdev_instance` (`TELEMETRY_INSTANCE` /
+   `telemetry.instance`). One Grafana can show many agentdev instances.
+
+On `kind` an optional step installs an OpenTelemetry Collector and Prometheus in namespace `monitoring` (#196,
+ADR 0002 D5). It is off by default. Grafana in this stack is also off by default.
+
+1. Run `TELEMETRY_STACK=true ./run.sh 14`. Prometheus is then at
+   `kubectl -n monitoring port-forward svc/prometheus-server 9090:80`.
+2. Optional: to add a Grafana with the dashboard, run `TELEMETRY_STACK=true TELEMETRY_GRAFANA=true ./run.sh 14`.
+3. Run `kubectl -n monitoring port-forward svc/grafana 3001:80` and open `http://localhost:3001`. The user is
+   `admin`, the password is in `.secrets/platform/grafana-admin`. Open **agentdev: Claude cost and usage** (folder
+   agentdev).
+
+To remove the stack, run `./run.sh 14` again without `TELEMETRY_STACK=true`. To remove only Grafana, run it with
+`TELEMETRY_STACK=true` and without `TELEMETRY_GRAFANA=true`.
+
+The stack is hardened against the agents, which can reach the collector when `CLAUDE_CODE_TELEMETRY=true`. Grafana
+is a ClusterIP Service without anonymous access. The collector accepts at most 1 MiB per request and refuses data under
+memory pressure. It also replaces `agentdev.agent` on `claude_code.*` series with the `agent` label of the pod that
+sent them, so an agent cannot report as another agent. Only the Prometheus server reaches port 9464. The cost
+panels come from the proxy, not from the agents.
+
+On GKE, Managed Service for Prometheus collects the metrics:
+
+1. In the deployment repository set `enable_managed_prometheus = true` in `terraform/instance.tfvars` and apply.
+2. Set `telemetry: {pod_monitoring: true}` in `ansible/instance.yml` and run the playbook. It creates a
+   `PodMonitoring` for `claude-proxy` and the operator (scrape interval 60 s, about 20 series per agent).
+3. Make sure that both targets are scraped. With Dataplane V2 the GMP collectors in `gmp-system` are ordinary pods,
+   so the NetworkPolicies (namespace `gmp-system`, label `app.kubernetes.io/name: collector`) admit them. In Cloud
+   Monitoring, Metrics Explorer, run the PromQL query `up{job=~"claude-proxy|agentdev-operator"}`. Both series must
+   be `1`. If a series is `0`, check `telemetry.scraper_ns` and `telemetry.scraper_selector`.
+4. Import `grafana/agentdev-llm-cost.json` into your external Grafana (data source: Managed Service for
+   Prometheus), or use Cloud Monitoring with PromQL. agentdev does not install Grafana on GKE.
+
+The billing truth stays in the Anthropic Console (Usage and Cost pages). For instances that bill by API key, a
+workspace spend limit in the Console is a second fuse behind the proxy (ADR 0002, U4).
 
 Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
 it, one external Prometheus and Grafana can show many instances.

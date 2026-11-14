@@ -39,6 +39,7 @@ type jobTotal struct {
 	Requests int64            `json:"requests"`
 	First    time.Time        `json:"first"`
 	Last     time.Time        `json:"last"`
+	Stopped  bool             `json:"stopped,omitempty"` // refused by CLAUDE_JOB_BUDGET_UNITS
 	tokens   tokenCounts
 }
 
@@ -82,6 +83,18 @@ func (j *jobs) used(agent, job string) int64 {
 		return e.Units
 	}
 	return 0
+}
+
+// firstRefusal marks the job as stopped and is true only the first time (one event per job).
+func (j *jobs) firstRefusal(agent, job string) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	e := j.m[agent][job]
+	if e == nil || e.Stopped {
+		return false
+	}
+	e.Stopped = true
+	return true
 }
 
 // pruneLocked drops jobs older than the retention and keeps room for one more job of the agent.

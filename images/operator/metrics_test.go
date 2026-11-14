@@ -46,7 +46,7 @@ func TestOperatorPausedMetric(t *testing.T) {
 func TestMetricsPortOnlyFromScraper(t *testing.T) {
 	vals := map[string]string{"AGENTS_NS": "coding-agents", "PLATFORM_NS": "agentdev-platform", "EXEC_NS": "agentdev-executors",
 		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}",
-		"TELEMETRY_OTLP_URL": "", "TELEMETRY_INSTANCE": "agentdev", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_SECRET_SOURCES": "[]"}
+		"TELEMETRY_OTLP_URL": "", "TELEMETRY_INSTANCE": "agentdev", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_JOB_BUDGET_UNITS": "0", "JOB_TIMEOUT": "3600", "MAX_BUDGET_USD": "", "CLAUDE_CODE_TELEMETRY": "false", "CLAUDE_CODE_OTLP_URL": "", "CLAUDE_SECRET_SOURCES": "[]"}
 	docs := append(renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals), renderTmpl(t, "../../manifests/operator.yaml.tmpl", vals)...)
 	seen := 0
 	for _, d := range docs {
@@ -90,5 +90,18 @@ func TestMetricsPortOnlyFromScraper(t *testing.T) {
 	}
 	if seen != 2 {
 		t.Errorf("found %d policies", seen)
+	}
+}
+
+func TestRunGuardValues(t *testing.T) {
+	if guardValue("90", `^[0-9]{1,7}$`, "3600") != "90" || guardValue("$(id)", `^[0-9]{1,7}$`, "3600") != "3600" {
+		t.Error("JOB_TIMEOUT check")
+	}
+	re := `^([0-9]{1,6}(\.[0-9]{1,2})?)?$`
+	if guardValue("2.5", re, "") != "2.5" || guardValue("", re, "") != "" || guardValue("1.234", re, "") != "" {
+		t.Error("MAX_BUDGET_USD check")
+	}
+	if (Defaults{}).jobTimeout() != "3600" {
+		t.Error("default JOB_TIMEOUT")
 	}
 }

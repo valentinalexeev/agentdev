@@ -166,6 +166,37 @@ func captureOut(t *testing.T) *strings.Builder {
 	return b
 }
 
+func TestJobBudgetLoopGuard(t *testing.T) {
+	f := newFixture(t, 0)
+	f.srv.Config.Handler.(*server).jobLimit = 300
+	f.upstream = func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":20}}`) // 200 units
+	}
+	key := agentKey(testSigning, "alice")
+	for i, want := range []int{200, 200, 429, 429} {
+		resp := f.post("/v1/messages", key, `{}`, map[string]string{"X-Agentdev-Job": "issue-9"})
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("request %d: %d", i, resp.StatusCode)
+		}
+	}
+	if n := strings.Count(f.logs.String(), "job-budget-exhausted"); n != 1 {
+		t.Errorf("%d job events", n)
+	}
+	// another job of the same agent, and requests without a job id, are not stopped by it
+	for _, job := range []string{"issue-10", ""} {
+		resp := f.post("/v1/messages", key, `{}`, map[string]string{"X-Agentdev-Job": job})
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Errorf("job %q: %d", job, resp.StatusCode)
+		}
+	}
+	if st := f.srv.Config.Handler.(*server).jobs.snapshot(defaultPrices()); !st[0].Stopped || st[0].Job != "issue-9" {
+		t.Errorf("stopped flag %+v", st[0])
+	}
+}
+
 // Review of #275: an agent sending many fresh job ids cannot evict its expensive jobs from the report.
 func TestJobsChurnKeepsExpensiveJobs(t *testing.T) {
 	j := newJobs()

@@ -25,6 +25,7 @@
             CLAUDE_BUDGET_UNITS: "{{ claude_budget_units | int }}"
             CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             TELEMETRY_OTLP_URL: ""
+            CLAUDE_JOB_BUDGET_UNITS: "0"
             TELEMETRY_INSTANCE: agentdev
             TELEMETRY_SCRAPER_NS: gmp-system
             TELEMETRY_SCRAPER_SELECTOR: '{"app.kubernetes.io/name": "collector"}'
@@ -60,3 +61,16 @@
           - bad.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 2
       vars:
         bad: {"$(id)": 1, w_out: "1e9", w_in: "-1"}
+
+    - name: PodMonitoring renders for both pods on port metrics (#196 D5)
+      vars:
+        pm_vars:
+          src: "{{ repo_root }}/manifests/telemetry/podmonitoring.yaml.tmpl"
+          values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}"}
+          replace: []
+        pm: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=pm_vars) | from_yaml_all | list }}"
+      ansible.builtin.assert:
+        that:
+          - pm | map(attribute='kind') | unique | list == ['PodMonitoring']
+          - pm | map(attribute='spec.selector.matchLabels.app') | list == ['claude-proxy', 'agentdev-operator']
+          - pm | map(attribute='spec.endpoints.0.port') | unique | list == ['metrics']

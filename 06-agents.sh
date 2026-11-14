@@ -103,6 +103,7 @@ CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS:-0}"
 [[ -z "${TELEMETRY_OTLP_URL:-}" || "${TELEMETRY_OTLP_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] \
   || die "TELEMETRY_OTLP_URL must be an https URL"
 [[ "${TELEMETRY_INSTANCE:-agentdev}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "TELEMETRY_INSTANCE must be a DNS label"
+[[ "${CLAUDE_JOB_BUDGET_UNITS:-0}" =~ ^[0-9]+$ ]] || die "CLAUDE_JOB_BUDGET_UNITS must be a number of cost units (0 = off)"
 [[ "${CLAUDE_BUDGET_UNITS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_UNITS must be a number of cost units (0 = no limit)"
 # #196: CLAUDE_PRICES ("key=value ...") becomes the ConfigMap claude-proxy-prices; the proxy checks the values again
 CLAUDE_PRICES_DATA="{"
@@ -116,8 +117,9 @@ CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA%, }}"
 # shellcheck disable=SC2086 # AGENTS is a space-separated list
 AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
   CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS}" CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA}" \
-  TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_INSTANCE="${TELEMETRY_INSTANCE:-agentdev}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" TELEMETRY_SCRAPER_SELECTOR="${TELEMETRY_SCRAPER_SELECTOR}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_SECRET_SOURCES}' \
+  TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_INSTANCE="${TELEMETRY_INSTANCE:-agentdev}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" TELEMETRY_SCRAPER_SELECTOR="${TELEMETRY_SCRAPER_SELECTOR}" \
+  CLAUDE_JOB_BUDGET_UNITS="${CLAUDE_JOB_BUDGET_UNITS:-0}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_JOB_BUDGET_UNITS} ${CLAUDE_SECRET_SOURCES}' \
   < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"
