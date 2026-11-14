@@ -107,6 +107,11 @@
         TELEMETRY_INSTANCE: "{{ operator_telemetry.instance }}"
         TELEMETRY_SCRAPER_NS: "{{ operator_telemetry.scraper_ns }}"
         TELEMETRY_SCRAPER_SELECTOR: "{{ operator_telemetry.scraper_selector | to_json }}"
+        # run guards (#196 D6/D7)
+        JOB_TIMEOUT: "{{ operator_run_guards.job_timeout }}"
+        MAX_BUDGET_USD: "{{ operator_run_guards.max_budget_usd }}"
+        CLAUDE_CODE_TELEMETRY: "{{ operator_run_guards.claude_code_telemetry | string | lower }}"
+        CLAUDE_CODE_OTLP_URL: "{{ operator_run_guards.claude_code_otlp_url }}"
         # external forwarder watch (#213, PR #286): off on kind. Extra values are harmless before #286 merges.
         FORWARDER_NS: ""
         FORWARDER_SELECTOR: ""

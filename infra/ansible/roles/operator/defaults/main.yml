@@ -31,6 +31,9 @@ operator_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, 
 operator_egress_extra_hosts: []
 operator_claude_proxy: true
 operator_usage: {five_hour: 80, weekly: 90}
+# run guards (#196 D6/D7), as config.env
+operator_run_guards: {job_timeout: 3600, max_budget_usd: "", claude_code_telemetry: false,
+                      claude_code_otlp_url: "http://otel-collector.monitoring.svc.cluster.local:4318"}
 # telemetry (#196 D4), as config.env: the Prometheus server of ./run.sh 14 in monitoring
 operator_telemetry:
   otlp_url: ""
