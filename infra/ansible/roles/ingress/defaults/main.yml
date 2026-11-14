@@ -73,6 +73,8 @@ ingress_fwd_authkey_secret: "{{ ingress_fwd_deploy.authkey_secret | default('fun
 # short registration retry does not restart the pod
 ingress_fwd_liveness_period: "{{ ingress_fwd_deploy.liveness_period_seconds | default(30) }}"
 ingress_fwd_liveness_threshold: "{{ ingress_fwd_deploy.liveness_failure_threshold | default(20) }}"
+# extra egress CIDRs (a headscale or funnel-ingress on a private or CGNAT address); public addresses are always allowed
+ingress_fwd_extra_egress_cidrs: "{{ ingress_fwd_deploy.egress_cidrs | default([]) }}"
 ingress_fwd_resources: >-
   {{ ingress_fwd_deploy.resources | default({'requests': {'cpu': '20m', 'memory': '64Mi'},
                                              'limits': {'memory': '256Mi'}}) }}

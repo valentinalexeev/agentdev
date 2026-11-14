@@ -10,6 +10,8 @@
       - ingress_fwd_control_url is match('^https://')
       - ingress_fwd_services | length > 0
       - ingress_fwd_services | select('search', 'webhook-router\\.[^:]+:8081') | list | length == 0
+      - ingress_fwd_extra_egress_cidrs | reject('match', ingress_cidr_re) | list | length == 0
+      - ingress_fwd_extra_egress_cidrs | map('regex_replace', '^.*/', '') | map('int') | select('lt', 8) | list | length == 0
       - ingress_fwd_liveness_period | int > 0 and ingress_fwd_liveness_threshold | int > 0
     fail_msg: >-
       ingress.forwarder.deploy needs ingress.forwarder.namespace and pod_selector (the watch and the smoke test use

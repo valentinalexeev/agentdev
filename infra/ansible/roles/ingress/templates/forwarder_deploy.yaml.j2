@@ -86,3 +86,10 @@ spec:
     - ipBlock:
         cidr: 0.0.0.0/0
         except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
+{% if ingress_fwd_extra_egress_cidrs | length > 0 %}
+  # extra addresses (deploy.egress_cidrs): a headscale or funnel-ingress on a private or CGNAT address
+  - to:
+{% for c in ingress_fwd_extra_egress_cidrs %}
+    - {ipBlock: {cidr: "{{ c }}"}}
+{% endfor %}
+{% endif %}

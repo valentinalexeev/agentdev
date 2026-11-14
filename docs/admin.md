@@ -1347,7 +1347,9 @@ liveness probe restarts the pod after 10 minutes without registration (`liveness
 `liveness_failure_threshold` 20). The published Services are, by default, the UI, `/hook` of the router, and authentik
 when the role deploys it (`deploy.services`, format `name=port@host:port`). The router's internal port 8081 is never
 published. The playbook refuses an image tag `main` or `latest`, and a `control_url` that does not use `https`. A new
-key version in Secret Manager restarts the forwarder on the next run.
+key version in Secret Manager restarts the forwarder on the next run. The NetworkPolicy blocks private, CGNAT and
+link-local addresses. When headscale or `funnel-ingress` has such an address, add it in `deploy.egress_cidrs`
+(for example `[100.64.0.0/10]`; no range wider than `/8`).
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.

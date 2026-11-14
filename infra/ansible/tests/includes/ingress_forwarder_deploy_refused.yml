@@ -3,7 +3,7 @@
 - name: Setting {{ t_bad }}
   block:
     - name: Run the checks
-      ansible.builtin.include_tasks: ../roles/ingress/tasks/forwarder.yml
+      ansible.builtin.include_tasks: ../../roles/ingress/tasks/forwarder.yml
       vars:
         ingress_fwd_deploy: "{{ t_good | combine(t_bad) }}"
         gcp_project: agentdev-test-no-such-project

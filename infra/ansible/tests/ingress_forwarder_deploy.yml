@@ -71,12 +71,21 @@
         t_np: "{{ t_objs | selectattr('kind', 'equalto', 'NetworkPolicy') | first }}"
 
     - name: The good settings pass the checks (control for the refusals below; stops at the first gcloud call)
-      ansible.builtin.include_tasks: ingress_forwarder_deploy_bad.yml
+      ansible.builtin.include_tasks: includes/ingress_forwarder_deploy_refused.yml
       loop: [{}]
       loop_control: {loop_var: t_bad}
       vars:
         t_good: {image: 'ghcr.io/x/funnel-sidecar:0.19.0', control_url: 'https://headscale.example.com'}
         t_expect_refused: false
+
+    - name: Extra egress CIDRs (private headscale)
+      ansible.builtin.assert:
+        that: "(t_x | selectattr('kind', 'equalto', 'NetworkPolicy') | first).spec.egress[3].to == [{'ipBlock': {'cidr': '100.64.0.0/10'}}]"
+        quiet: true
+      vars:
+        t_x: >-
+          {{ lookup('ansible.builtin.template', '../roles/ingress/templates/forwarder_deploy.yaml.j2',
+                    template_vars={'ingress_fwd_extra_egress_cidrs': ['100.64.0.0/10']}) | from_yaml_all | list }}
 
     - name: Off without deploy
       ansible.builtin.assert:
@@ -86,12 +95,13 @@
         ingress: {mode: external, host: a.example.com, forwarder: {namespace: x, pod_selector: {app: y}}}
 
     - name: Settings checks refuse an unpinned image, http control and the router's internal port
-      ansible.builtin.include_tasks: ingress_forwarder_deploy_bad.yml
+      ansible.builtin.include_tasks: includes/ingress_forwarder_deploy_refused.yml
       loop:
         - {image: 'ghcr.io/x/funnel-sidecar:main'}
         - {image: 'ghcr.io/x/funnel-sidecar'}
         - {control_url: 'http://headscale.example.com'}
         - {services: ['hook=8081@webhook-router.coding-agents.svc.cluster.local:8081']}
+        - {egress_cidrs: [0.0.0.0/0]}
       loop_control: {loop_var: t_bad}
       vars:
         t_good: {image: 'ghcr.io/x/funnel-sidecar:0.19.0', control_url: 'https://headscale.example.com'}
