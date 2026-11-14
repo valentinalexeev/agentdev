@@ -2101,6 +2101,21 @@ Optional secrets: `agentdev-chat-clone-token` (read-only clone token) and, on Gi
 
 Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
 
+Notes:
+
+- The API and the worker must run the same `image_tag` (ADR 0006): the API starts the worker image's
+  `chat-session-server`. Chat is off by default, so an instance that does not turn it on is not affected.
+- A terminal view (`tmux attach -t chat` in the session pod) keeps a session open for at most 2 hours
+  (`CHAT_TERMINAL_MAX_SECONDS` in the pod) after the last console viewer. Claude runs as the same user as tmux, so it
+  could fake a terminal client; only console presence, reported by the API, renews the session without limit.
+- The terminal view renders `/state/chat/events.jsonl`, which Claude can also write. It is display only; the console
+  reads the events from the session server's memory.
+- On kind, the clone token is `agentdev-api`'s read-only Gitea token, copied into the Secret `agentdev-chat-clone`
+  in the agents namespace. Only the clone initContainer of a chat pod reads it (admission policy
+  `agentdev-api-chat-jobs`).
+- On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
+  **Create issue**, and the audit log records them.
+
 ## Webhooks
 
 Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
