@@ -129,6 +129,9 @@ check bash -c "${KUBECTL} -n ${AGENTS_NS} logs deploy/claude-proxy | grep 'AGENT
 if [[ "${COMPAT_API:-0}" == 1 ]]; then
   desc="API: agentdev-api is ready"
   check k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=60s
+  # console chat boundaries (#346, R101): NetworkPolicy shape and the admission policy (server dry run as the API)
+  desc="security: console chat NetworkPolicy and admission (e2e-gke-security.sh --kind --only chat)"
+  check "${root}/scripts/e2e-gke-security.sh" --kind --context "kind-${CLUSTER_NAME}" --agent alice --only chat
 fi
 
 log "Result: ${pass} PASS, ${fail} FAIL"
