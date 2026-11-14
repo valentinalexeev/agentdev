@@ -42,6 +42,11 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=8
 	// +kubebuilder:default=2
 	MaxConcurrent int32 `json:"maxConcurrent,omitempty"`
+	// Turn limit of one Claude run (`claude -p --max-turns`, #336). A larger task may need more. 0 or unset: 40.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=500
+	// +optional
+	MaxTurns int32 `json:"maxTurns,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
