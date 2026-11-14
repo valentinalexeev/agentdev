@@ -18,6 +18,8 @@ kind: Deployment
 metadata: {name: claude-proxy, namespace: ${AGENTS_NS}, labels: {app: claude-proxy}}
 spec:
   replicas: 1   # the budget is counted in this pod; more replicas would each count their own share
+  # Recreate: one pod counts the budget. Agents survive the few seconds without it: the loop waits for the proxy before a
+  # run and resumes a run that lost it (#177, CLAUDE_PROXY_WAIT)
   strategy: {type: Recreate}
   selector: {matchLabels: {app: claude-proxy}}
   template:

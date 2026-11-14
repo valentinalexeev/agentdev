@@ -35,6 +35,18 @@ loop stops its jobs and saves their work in progress as a local commit on the jo
 `AGENT_GRACE_SECONDS` (default 300); nothing is pushed then, and the job continues on the next pod as below. The
 Agent's condition `Updated` shows the state: `Current`, `Draining`, `Drained`, `Forced`, `NotRunning` or `Replacing`.
 
+**Rolling rollout** (#176). The agent template has a version: a short hash of the operator's settings (images,
+URLs, limits). When it changes, agents move a few at a time. The canary (`ROLLOUT_CANARY`, default the first agent by
+name) moves first, and its new pod must stay ready with no container restart for `ROLLOUT_GATE_SECONDS` (default
+120). The worker exits at start when its forge identity, forge access or Claude fails, so a broken image or setting
+fails this gate. The operator reads only the pod status from the kubelet, nothing the model can write. Then the other
+agents move, `ROLLOUT_MAX_UNAVAILABLE` (default 1) at a time, each drained first. Stopped agents move at once after the
+canary; a stopped canary is started once for the gate. A failed gate (a restart, or not ready within
+`ROLLOUT_GATE_TIMEOUT_MINUTES`) stops the rollout: that agent is `Failed`, every agent not yet moved keeps its old
+template (`Halted`). Each Agent shows `status.rollout` (`version`, `phase`, `reason`); `scripts/rollout-wait.sh` waits
+for it and fails with the agent and reason. A rollback is the previous settings, which is a new version: the same
+rollout runs back.
+
 **An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
 started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
 (`/state/jobs/<job>.*`). When the pod starts again, the job:
@@ -238,6 +250,22 @@ runner can start any program. So the security boundary is the pod, not the list 
   (forge sidecar, egress allow-list, Claude credential proxy, approvals in the UI) is in
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
+
+## Platform updates while agents work
+
+A platform update (#177) replaces the router, the operator, the Claude proxy, the API and the egress proxies while agent
+jobs run:
+
+- **Operator:** the update starts the new pod first. Only the holder of the Lease `agentdev-operator` (in the operator
+  namespace) reconciles; the old pod releases it when it stops, and the new pod takes over.
+- **Claude proxy:** one pod, replaced with `Recreate`, because it counts the token budget. Before each run the loop
+  waits until the proxy answers (`CLAUDE_PROXY_WAIT`, default 60 s). When a run fails and the loop's own check finds
+  the proxy down, the loop waits for it and resumes the same Claude session once (#175).
+- **API and database:** the schema only expands in a release (new tables, new columns with a default or nullable, new
+  indexes). The old API pod keeps working during the update. A unit test (`TestSchemaIsExpandOnly`) refuses a drop,
+  a rename, a type change and a new `NOT NULL` column without a default, and checks the columns of the previous release.
+- **System node pool:** new-pod-first needs room for one more pod. On GKE the system pool may add its second node during
+  an update (autoscaling, at most 2 nodes).
 
 ## Project secrets
 

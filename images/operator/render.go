@@ -72,6 +72,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		return corev1.EnvVar{Name: k, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: sel}}
 	}
 	s.Spec.Template.Labels = labels
+	// #176: the template version, so the rollout knows which agents run an older one
+	s.Spec.Template.Annotations = map[string]string{versionAnnotation: r.D.templateVersion()}
 	p := &s.Spec.Template.Spec
 	p.RuntimeClassName = ptr.To("gvisor")
 	p.NodeSelector = map[string]string{"agentdev/pool": "sandboxes"}

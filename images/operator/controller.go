@@ -57,6 +57,8 @@ type AgentReconciler struct {
 	// Drains: pods whose forge sidecar reported that their jobs ended (#174); nil: replace only on the timeout
 	Drains *DrainSignals
 	Now    func() time.Time
+	// Rollout: canary, batch size and health gate of a new agent template version (#176)
+	Rollout RolloutConfig
 	wake   chan event.GenericEvent
 	ns     string // agents namespace, for requeueAgent
 }
@@ -115,7 +117,36 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	// rolling rollout (#176): an agent on an older template version moves only when the canary and the batch allow it
+	ver := r.D.templateVersion()
+	hold, holdPhase, holdReason := false, "", ""
+	isCanary := false
+	{
+		var cur appsv1.StatefulSet
+		switch err := r.Get(ctx, client.ObjectKeyFromObject(sts), &cur); {
+		case apierrors.IsNotFound(err): // new agent: the current version at once
+		case err != nil:
+			return ctrl.Result{}, err
+		case templateVersionOf(&cur) != ver:
+			hasPod := cur.Spec.Replicas != nil && *cur.Spec.Replicas > 0
+			ok, phase, reason, err := r.mayMove(ctx, &a, hasPod)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			hold, holdPhase, holdReason = !ok, phase, reason
+		}
+		var list v1.AgentList
+		if err := r.List(ctx, &list, client.InNamespace(a.Namespace)); err == nil {
+			isCanary = r.Rollout.withDefaults().canaryOf(list.Items) == a.Name
+		}
+	}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+		if hold { // keep the old template; only replicas follow paused/blocked below
+			if a.Spec.Paused || sts.Annotations["agentdev/blocked"] == "true" {
+				sts.Spec.Replicas = ptr.To[int32](0)
+			}
+			return nil
+		}
 		blocked := sts.Annotations["agentdev/blocked"] == "true"
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
@@ -135,6 +166,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		default: // scale-to-zero and existing: the router owns replicas
 			sts.Spec.Replicas = current
 		}
+		// the canary of a new version runs once so the health gate can check it (#176); idle, it stops again
+		if isCanary && !a.Spec.Paused && !blocked && rolloutPending(&a, ver) {
+			sts.Spec.Replicas = ptr.To[int32](1)
+		}
 		return controllerutil.SetControllerReference(&a, sts, r.Scheme())
 	})
 	if err != nil {
@@ -149,7 +184,26 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rollout: %w", err)
 	}
-	if err := r.updateStatus(ctx, &a, sts, updated); err != nil {
+	// rollout state (#176): held agents wait or are halted; moved ones go through the health gate
+	rs := &v1.RolloutStatus{Version: ver, Phase: holdPhase, Reason: holdReason}
+	if hold {
+		if after == 0 || after > 30*time.Second {
+			after = 30 * time.Second
+		}
+	} else {
+		phase, reason, wait, err := r.gate(ctx, &a, sts, isCanary)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("health gate: %w", err)
+		}
+		rs.Phase, rs.Reason = phase, reason
+		if phase == RolloutFailed && (a.Status.Rollout == nil || a.Status.Rollout.Phase != RolloutFailed) {
+			l.Info("rollout stopped: the health gate failed", "agent", a.Name, "version", ver, "reason", reason)
+		}
+		if wait > 0 && (after == 0 || wait < after) {
+			after = wait
+		}
+	}
+	if err := r.updateStatus(ctx, &a, sts, updated, rs); err != nil {
 		return ctrl.Result{}, err
 	}
 	if guideRetry && (after == 0 || after > 30*time.Second) {
@@ -201,7 +255,7 @@ func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool,
 	return pvc.DeletionTimestamp != nil, nil
 }
 
-func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, extra ...metav1.Condition) error {
+func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, updated metav1.Condition, rs *v1.RolloutStatus) error {
 	want := int32(0)
 	if sts.Spec.Replicas != nil {
 		want = *sts.Spec.Replicas
@@ -209,9 +263,8 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	// a copy: equalStatus compares against a.Status, so the new conditions must not be written into it first
 	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation,
 		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...)}
-	for _, c := range extra {
-		meta.SetStatusCondition(&s.Conditions, c)
-	}
+	meta.SetStatusCondition(&s.Conditions, updated)
+	s.Rollout = rs
 	switch {
 	case sts.Annotations["agentdev/blocked"] == "true":
 		s.Phase = "blocked"
@@ -242,6 +295,9 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {
+	if (x.Rollout == nil) != (y.Rollout == nil) || x.Rollout != nil && *x.Rollout != *y.Rollout {
+		return false
+	}
 	if x.Phase != y.Phase || x.Ready != y.Ready || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
 		return false
 	}

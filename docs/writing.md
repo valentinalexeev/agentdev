@@ -178,7 +178,8 @@ Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terrafo
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
-kindnet, Argo CD, Flux, terminal, Claude Code.
+kindnet, Argo CD, Flux, terminal, Claude Code, Lease (a Kubernetes lock object, #177), canary (the first agent of a
+rollout, #176).
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
