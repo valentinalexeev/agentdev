@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # kind e2e of SSH server enrolment (#204, docs/adr/0007). Needs a kind cluster with the operator (./run.sh 01 12).
-#   scripts/e2e-ssh.sh enrol     CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
+#   scripts/e2e-ssh.sh [enrol]   CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
+#   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (./run.sh 05): PR head without SSH,
+#                                merge plan with the check certificate, apply after the approval, snapshot
 # Every check prints PASS or FAIL; the exit code is the number of failures. Idempotent: reuses the CA and server.
 set -uo pipefail
 source "$(dirname "$0")/../lib.sh"
+set +e   # every check reports; lib.sh turns -e on
 need jq
 SRV_NS="${SSH_E2E_NS:-agentdev-e2e-servers}"
 SRV_IMAGE="${SSH_E2E_IMAGE:-agentdev-test-sshd:dev}"
@@ -96,6 +99,11 @@ k -n "${SRV_NS}" wait --for=jsonpath='{.status.phase}'=Failed pod/e2e-curl --tim
 code=$(k -n "${SRV_NS}" logs e2e-curl 2>/dev/null || true)
 k -n "${SRV_NS}" delete pod e2e-curl --wait=false >/dev/null
 rc=1; [[ "${code}" == 000 ]] && rc=0; check "${rc}" "another pod cannot reach step-ca (curl: ${code:-none}, 000 = no connection)"
+
+if [[ "${1:-enrol}" == ansible ]]; then
+  # shellcheck source=/dev/null
+  source "${SPIKE_DIR}/scripts/e2e-ssh-ansible.sh"
+fi
 
 printf '\n%d failure(s)\n' "${fails}"
 exit "${fails}"

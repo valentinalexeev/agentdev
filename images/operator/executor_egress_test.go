@@ -346,7 +346,8 @@ func TestExecutorEgressManifest(t *testing.T) {
 			acl = v.Secret
 		}
 	}
-	if acl == nil || acl.Optional == nil || !*acl.Optional || len(acl.Items) != 1 || acl.Items[0].Key != execEgressACL {
+	if acl == nil || acl.Optional == nil || !*acl.Optional || len(acl.Items) != 2 || acl.Items[0].Key != execEgressACL ||
+		acl.Items[1].Key != execEgressSSHACL {
 		t.Fatalf("proxy does not mount %s/%s: %+v", execEgressSecret, execEgressACL, acl)
 	}
 	if dep.Spec.Template.Labels["app"] != execEgressApp || dep.Spec.Template.Spec.Containers[0].Name != "squid" {
@@ -368,7 +369,7 @@ func TestExecutorEgressManifest(t *testing.T) {
 			}
 		}
 	}
-	for _, n := range []string{"executor-egress-proxy", "executor-egress-proxy-dns", "executor-egress-proxy-web"} {
+	for _, n := range []string{"executor-egress-proxy", "executor-egress-proxy-dns", "executor-egress-proxy-web", "executor-egress-proxy-ssh"} {
 		if _, ok := pols[n]; !ok {
 			t.Errorf("policy %s missing", n)
 		}

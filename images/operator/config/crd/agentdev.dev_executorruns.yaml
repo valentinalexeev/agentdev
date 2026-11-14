@@ -61,10 +61,11 @@ spec:
               operator only; immutable.
             properties:
               action:
-                description: plan | apply
+                description: plan | apply | snapshot
                 enum:
                 - plan
                 - apply
+                - snapshot
                 type: string
               approval:
                 description: 'apply: the Approval that allowed it.'
@@ -72,8 +73,8 @@ spec:
                 type: string
               commit:
                 description: Commit, 40 hex characters (from the forge API, checked
-                  by the operator).
-                pattern: ^[0-9a-f]{40}$
+                  by the operator). Empty for snapshot runs.
+                pattern: ^([0-9a-f]{40})?$
                 type: string
               executor:
                 description: Executor name.
@@ -90,9 +91,10 @@ spec:
                 pattern: ^([0-9a-f]{64})?$
                 type: string
               pr:
-                description: Pull request number the results are posted to.
+                description: Pull request number the results are posted to. 0 for
+                  snapshot runs.
                 format: int64
-                minimum: 1
+                minimum: 0
                 type: integer
               specHash:
                 description: |-
@@ -103,17 +105,17 @@ spec:
               stage:
                 description: |-
                   pr: plan of a pull request head (unreviewed code, result informative only). merge: plan of a merge commit of
-                  the protected branch (the only plan that can be applied). apply: apply of an approved merge plan.
+                  the protected branch (the only plan that can be applied). apply: apply of an approved merge plan. snapshot:
+                  scheduled fact gathering (no commit, no PR, #205).
                 enum:
                 - pr
                 - merge
                 - apply
+                - snapshot
                 type: string
             required:
             - action
-            - commit
             - executor
-            - pr
             - stage
             type: object
           status:
@@ -151,6 +153,11 @@ spec:
         x-kubernetes-validations:
         - message: ExecutorRun spec is immutable
           rule: self.spec == oldSelf.spec
+        - message: snapshot runs have no commit and no PR; other runs need both
+          rule: 'self.spec.stage == ''snapshot'' ? (self.spec.action == ''snapshot''
+            && !has(self.spec.commit) && !has(self.spec.pr)) : (self.spec.action !=
+            ''snapshot'' && has(self.spec.commit) && size(self.spec.commit) == 40
+            && has(self.spec.pr) && self.spec.pr >= 1)'
     served: true
     storage: true
     subresources:

@@ -139,7 +139,7 @@ func main() {
 				EgressProxy:     os.Getenv("EXECUTOR_EGRESS_PROXY"),
 				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
 				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
-			EgressLogs: kubeSinceLogs(cs)}
+			EgressLogs: kubeSinceLogs(cs), SSHCA: sshCAFromSecret(mgr.GetAPIReader(), execNS)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)

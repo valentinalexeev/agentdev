@@ -31,6 +31,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - agentdev-snapshots
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - agentdev-usage
   resources:
   - configmaps

@@ -28,6 +28,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 # harness guide (#206): one key per agent, written by the operator only; agent pods mount their own key read-only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
+# server snapshots (#205, #204): one key per executor, written by the operator only, read by the agents' tools
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-snapshots], verbs: [get, update]}
 # scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
 # its fields); the operator never reads the synced Secrets
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
