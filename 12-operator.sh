@@ -41,6 +41,9 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "operator_egress_proxy_image=${EGRESS_PROXY_IMAGE}" -e "operator_forge_public_url=${FORGE_HOST_URL}" \
   -e "operator_forge_admin_user=${FORGE_ADMIN_USER}" -e "operator_poll_seconds=${POLL_SECONDS}" \
   -e "operator_idle_seconds=${IDLE_SECONDS}" -e "operator_agent_storage_class=${AGENT_STORAGE_CLASS:-}" \
-  -e "operator_agent_state_storage=${AGENT_STATE_STORAGE:-10Gi}" -e "${vars}"
+  -e "operator_agent_state_storage=${AGENT_STATE_STORAGE:-10Gi}" \
+  -e "operator_agent_ephemeral_request=${AGENT_EPHEMERAL_REQUEST:-1Gi}" -e "operator_agent_ephemeral_limit=${AGENT_EPHEMERAL_LIMIT:-8Gi}" \
+  -e "operator_forge_mirror_limit=${FORGE_MIRROR_LIMIT:-4Gi}" -e "operator_forge_ephemeral_limit=${FORGE_EPHEMERAL_LIMIT:-5Gi}" \
+  -e "${vars}"
 ok "executor-egress-proxy up; executors may reach: ${EXECUTOR_EGRESS_HOSTS} plus their spec.egressHosts"
 record "agentdev operator up in ${PLATFORM_NS}, watching Agents in ${AGENTS_NS} (Ansible, $(( ($(ms_now)-t0)/1000 ))s)"

@@ -57,6 +57,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi
+  with its git mirror `emptyDir` capped at 4Gi, `state-init` 64Mi. A pod past a limit is evicted by the kubelet and
+  the StatefulSet recreates it; the work tree on the state volume is not counted. The values are settings with these
+  defaults: `AGENT_EPHEMERAL_REQUEST`, `AGENT_EPHEMERAL_LIMIT`, `FORGE_MIRROR_LIMIT`, `FORGE_EPHEMERAL_LIMIT`
+  (`config.env`, operator env; Ansible `agent_ephemeral_request`, `agent_ephemeral_limit`, `forge_mirror_limit`,
+  `forge_ephemeral_limit`). An empty or invalid value gives the default. Re-run: Ansible `operator` role
+  (new operator image), agent pods roll on the next reconcile.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder

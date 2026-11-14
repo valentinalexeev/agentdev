@@ -87,8 +87,13 @@ func main() {
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
 		ExecNS:           execNS,
-		GraceSeconds:     env("AGENT_GRACE_SECONDS", "300"),
-		DrainMaxMinutes:  env("DRAIN_MAX_MINUTES", "60"),
+		// #251 part 3: empty or invalid gives the default (render.go)
+		AgentEphemeralRequest: os.Getenv("AGENT_EPHEMERAL_REQUEST"),
+		AgentEphemeralLimit:   os.Getenv("AGENT_EPHEMERAL_LIMIT"),
+		ForgeMirrorLimit:      os.Getenv("FORGE_MIRROR_LIMIT"),
+		ForgeEphemeralLimit:   os.Getenv("FORGE_EPHEMERAL_LIMIT"),
+		GraceSeconds:          env("AGENT_GRACE_SECONDS", "300"),
+		DrainMaxMinutes:       env("DRAIN_MAX_MINUTES", "60"),
 	}, Drains: &DrainSignals{}, ns: ns}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")

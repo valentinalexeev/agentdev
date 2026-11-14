@@ -57,6 +57,11 @@ sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-on
 # "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
 agent_storage_class: agentdev-agent
 agent_state_storage: 10Gi
+# ephemeral-storage of agent pods (#251): past a limit the kubelet evicts the pod and the StatefulSet recreates it
+agent_ephemeral_request: 1Gi        # agent container request
+agent_ephemeral_limit: 8Gi          # agent container limit (/tmp, caches outside the state volume)
+forge_mirror_limit: 4Gi             # forge sidecar git mirror emptyDir
+forge_ephemeral_limit: 5Gi          # forge sidecar limit; at least forge_mirror_limit
 idle_seconds: 900                   # cluster-wide (the operator's); per-agent idle time is not in the Agent spec yet
 botboard_url: ""                    # agents report work to botboard (#26), e.g. http://botboard.<tailnet>; empty = off
 
