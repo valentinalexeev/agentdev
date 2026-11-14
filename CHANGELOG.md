@@ -12,11 +12,28 @@ While the version is `0.x`, breaking changes bump MINOR.
   each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
   `deploy.yml` with the new API image; no `./run.sh` step.
 ### Fixed
+- kind step 09 (#304): the SSO stand-in check no longer fails on a new cluster. The step restarts authentik just
+  before the check, and the source `agentdev-sso` is not usable for a short time. `scripts/sso-check.py` now tries
+  the first redirect again for up to 60 seconds. Re-run: `./run.sh 09`. GKE does not change.
 - `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
   `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
 - Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
   The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
   Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.
+- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
+  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
+  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
+  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
+- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
+  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
+  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
+  Merged or closed PRs keep their last checks (no false `anomaly`).
+- Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
+  because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
+  neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
+  a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
+  with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
+  Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Changed
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
@@ -28,6 +45,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
+  SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
+  `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
+  namespace. Re-run: `deploy.yml` (operator and role `ingress`); kind is not changed.
 - Template drift check (#317): `scripts/template-drift.sh <deployment repo dir>` compares a deployment repository
   with `examples/deployment/gcp-gke` of its pinned `ref=`: `deploy.yml` (diff), `main.tf` blocks and module
   arguments, `instance.yml` keys. Exit 0 with warnings, 1 with `--strict`. The template `deploy.yml` has a new
@@ -116,6 +137,69 @@ While the version is `0.x`, breaking changes bump MINOR.
   replies to. Both parts are fenced as untrusted. The size is capped by the new worker environment variables
   `FEEDBACK_CONTEXT_ITEMS` (default 20 thread items) and `FEEDBACK_CONTEXT_CHARS` (default 12000 characters, `0`
   turns it off). From round 2 on an agent no longer loses the original requirement or earlier review decisions.
+
+### Security
+- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
+  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
+
+### Deprecated
+- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
+  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
+  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
+  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
+- Step 09 (#106): `09-authentik.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags authentik`:
+  the role `authentik` of `deploy.yml` with the secrets in `.secrets/platform` (files, as before), then the new kind-only
+  role `authentik_kind` (akadmin in `agentdev-admins` and the membership check, the company SSO stand-in, its blueprint
+  and `scripts/sso-check.py`). Same result; `SSO_STANDIN` and `SSO_CHECK` still apply. GKE does not change.
+- Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
+  (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
+  Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
+  a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
+- Step 10 (#106): `10-api.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags api`: the role
+  `api` of `deploy.yml`, with the new secret source `files` (`.secrets/platform/pg-agentdev-api`, `siem-webhook`,
+  `.secrets/github-app`), the image built and loaded into kind, and the Gitea account `agentdev-api` (#100). Same
+  result (database roles and grants, Secrets `agentdev-api-db`, `-forge`, `-github`, `-siem`, Deployment). Changed:
+  the API restarts only when a Secret or the loaded image changes, so a second run changes nothing. GKE does not change.
+- Step 12 (#106): `12-operator.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags operator`
+  (new role `operator`, the same manifests through `templates/render.j2`). Same result (namespace labels, CRDs,
+  operator, executor egress; secrets store on only with External Secrets Operator). A first run over a cluster from the
+  old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
+  run changes nothing. GKE does not change.
+
+## [1.0.0] - 2026-11-12
+
+### Upgrade
+Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Terraform `ref=` together.
+1. **Claude secrets (#212).** Each `claude-shared` and `agent-<name>-claude` secret must have a line
+   `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. Otherwise the playbook stops. Check the format before you
+   merge (docs/admin.md, "Give an agent its own Claude credential").
+2. **Router port 8082 (#218).** The probes and the GKE load balancer health check now use port 8082. Deploy the
+   router image and the manifests of the same release in one run. An old router image with the new manifests fails
+   its probe.
+3. **Deployment template (#207).** Copy the new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the
+   deployment repository. The old copy tries GCP authentication on PRs and fails.
+4. **Public entry point (#120).** `examples/deployment/gcp-gke/terraform/main.tf` now sets `public_hosts`,
+   `cloud_armor` and `output "ingress"`. Copy them if your `main.tf` came from an older template.
+5. **OIDC client id and audience (#323).** New instance values `api.oidc_client_id` (default `agentdev`) and
+   `api.ui_oidc_scopes` (default `openid profile email forge`). `api.oidc_audience` now defaults to
+   `api.oidc_client_id`. With the defaults, nothing changes. If you set `api.oidc_client_id`, the API audience follows
+   it, unless you also set `api.oidc_audience`.
+6. **Minimal OIDC providers (#322, #323).** For a provider that gives `groups` only when the scope is requested (for
+   example Pocket ID), set `api.ui_oidc_scopes: "openid profile email groups forge"`. When the access token has no
+   `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo` endpoint. authentik needs no
+   change (infra/ansible/README.md, "Claim contract").
+7. **Upgrade notes (#315).** `scripts/upgrade-notes.sh --repo <agentdev path or URL> <from> <to>` prints these steps
+   for your upgrade. Run it from the deployment repository.
+
+### Added
+- UI (#323): Ansible `api.ui_oidc_scopes` (default `openid profile email forge`) and `api.oidc_client_id` (default
+  `agentdev`). The UI gets them as `OIDC_SCOPES` and `OIDC_CLIENT_ID` through `/config.json`. `api.oidc_audience`
+  follows `api.oidc_client_id`. The defaults keep authentik as it is. For Pocket ID, use the scopes
+  `openid profile email groups forge`.
+- `scripts/upgrade-notes.sh <from> <to>` (#315) prints only the `### Upgrade` parts of `CHANGELOG.md` for the
+  versions in (from, to], newest first. It reads `CHANGELOG.md` at tag `v<to>` (`CHANGELOG_REF` for another ref)
+  of the agentdev repository: the script's own clone, or `--repo <path or URL>`. It works from a deployment repository.
+  Test: `scripts/test/upgrade-notes-test.sh`.
 - Release lines (ADR 0004): `release/X.Y` branches for frozen and released minors, `main` for the next minor,
   `next/X.0` for the next major. Tags `vX.Y.Z` are set only on `release/X.Y`; patches get no branch. A fix goes to
   the lowest affected line and is merged forward. Supported: the latest minor and the one before it. New
@@ -172,20 +256,29 @@ While the version is `0.x`, breaking changes bump MINOR.
   Set `MCP_PROJECTS`, then re-run `./run.sh 08` (it runs mcp-sync for each spec). GKE: no step to re-run.
 
 ### Fixed
-- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
-  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
-  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
-  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
-- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
-  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
-  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
-  Merged or closed PRs keep their last checks (no false `anomaly`).
-- Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
-  because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
-  neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
-  a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
-  with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
-  Gitea already routed comments by the PR author; a router test now covers it.
+- Worker (#336): a PR or an issue comment never gets the log line `claude exited ...` as its text. When Claude exits
+  with an error or at the turn limit, the PR description and the issue get a fixed note with the exit code and a
+  fixed class (`error`, `max-turns`, `rate-limit`). The class `max-turns` comes from the `subtype` field of the CLI
+  result event only; stderr and the transcript are still never logged. New instance value `max_turns` (default 40,
+  1 to 500; per agent `agents[].max_turns`; kind: `MAX_TURNS`), field `maxTurns` in the Agent CRD. Re-run: the
+  playbook (CRD, operator and Agents), or `./run.sh 12 06` on kind.
+- API (#322): OIDC providers with minimal access tokens (for example Pocket ID) now work. When the access
+  token has no `groups` and no `forge_login*` claim, the API reads them from the provider's `userinfo_endpoint`.
+  The userinfo `sub` must be the token's `sub`. An error or a different subject refuses the token. Results are
+  cached per token until it expires. authentik tokens have the claims, so authentik does not change.
+- Deployment template CI (#207): a pull request no longer gets GCP credentials. On `pull_request` the example
+  `deploy.yml` runs only `terraform fmt -check`, `terraform init -backend=false` + `validate` and
+  `ansible-playbook --syntax-check` at the pinned release. Plan, apply and the playbook run only on `main`. The
+  header and docs no longer say "PR plan". Copy the new file into your deployment repository. A read-only plan
+  identity for PRs is #291.
+- `scripts/e2e-gke-security.sh`: the check `forge: GitHub works for the sidecar (proxy credential)` gave HTTP 000 on
+  a healthy instance (#211). Squid sends no 407 challenge, and busybox `wget` sends the proxy credential only after one.
+  The check now opens the tunnel with git and `http.proxyAuthMethod=basic`, as the sidecar does (#162). A new check
+  `forge: GitHub is refused with a wrong proxy credential` makes sure the probe still fails without the right credential.
+- Ansible refuses a Secret Manager `claude-shared` or `agent-<name>-claude` without a recognised key (#212). A bare
+  token, an empty secret or an unknown key used to sync to an empty Secret, and the first agent run failed with
+  `503 claude-proxy: no Claude credential for agent`. The secret needs a line `CLAUDE_CODE_OAUTH_TOKEN=...` or
+  `ANTHROPIC_API_KEY=...`; the message names the format, never the value. Test: `infra/ansible/tests/claude_credential.yml`.
 - The billing budget made a 403 in every CI plan after the first apply (#199): the module now gives its automation
   account `roles/billing.costsManager` on `billing_account_id` (only with `create_budget`). Not breaking, but the
   identity of the first apply after the upgrade needs `billing.accounts.setIamPolicy` on the billing account
@@ -256,8 +349,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   `scripts/check-tracked-artifacts.sh` fails if git tracks `__pycache__`, `*.pyc`, `.DS_Store` or `node_modules`.
 
 ### Security
-- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
-  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
+- Risk entries R116 (chat session pods not verified on GKE) and R117 (SSO domain restriction not verified on GKE),
+  status accepted: known gaps of 1.0.0 by owner decision on #125.
+- The router has a health-only port 8082 (`HEALTH_PORT`, #218). It serves only `GET /healthz`. The kubelet probes,
+  the GKE HealthCheckPolicy and the Google Front End rule of the NetworkPolicy `webhook-router-from-forwarder` use it,
+  so the Google ranges no longer reach the internal port 8081 (`/status`, `/register`, `/idle`). Upgrade: deploy the
+  router image and the manifests of the same release together (kind: `./run.sh 06`; GKE: the playbook, roles
+  `ingress` and the router in `deploy.yml`). A new router image with old manifests keeps working on 8081.
 - Router internal endpoints off the public port (#214). On an external ingress (#160) that sent every path of the
   webhook host to the router, `/status` (the agent list and repositories), `/healthz`, `/register` and `/idle` were
   public. The router now has two listeners: `PORT` (8080, the port that the Gateway, the HTTPRoute and a forwarder
@@ -328,28 +426,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   `gitea_forge`). Same result (Gitea, owner account, seeded repo, one write collaborator with a token in
   `.secrets/<agent>.token` per agent, branch protection of `main`). Changed: the branch protection is replaced only
   when it differs, so a second run changes nothing; the owner password is no longer printed. GKE does not change.
-- Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
-  `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
-  the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with
-  `OBS_MCP=true`); existing secret files are kept, so the database keeps its passwords. GKE does not change.
-- Step 09 (#106): `09-authentik.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags authentik`:
-  the role `authentik` of `deploy.yml` with the secrets in `.secrets/platform` (files, as before), then the new kind-only
-  role `authentik_kind` (akadmin in `agentdev-admins` and the membership check, the company SSO stand-in, its blueprint
-  and `scripts/sso-check.py`). Same result; `SSO_STANDIN` and `SSO_CHECK` still apply. GKE does not change.
-- Step 07 (#106): `07-botboard.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags botboard`
-  (new role `botboard`, the same `manifests/botboard.yaml.tmpl` through `templates/render.j2`). Same result (namespace,
-  Deployment and Service `botboard`, rollout waited for); a second run changes nothing. The tag is optional (`never`):
-  a plain `kind.yml` run does not deploy botboard, as `./run.sh` without arguments does not. GKE does not change.
-- Step 10 (#106): `10-api.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags api`: the role
-  `api` of `deploy.yml`, with the new secret source `files` (`.secrets/platform/pg-agentdev-api`, `siem-webhook`,
-  `.secrets/github-app`), the image built and loaded into kind, and the Gitea account `agentdev-api` (#100). Same
-  result (database roles and grants, Secrets `agentdev-api-db`, `-forge`, `-github`, `-siem`, Deployment). Changed:
-  the API restarts only when a Secret or the loaded image changes, so a second run changes nothing. GKE does not change.
-- Step 12 (#106): `12-operator.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags operator`
-  (new role `operator`, the same manifests through `templates/render.j2`). Same result (namespace labels, CRDs,
-  operator, executor egress; secrets store on only with External Secrets Operator). A first run over a cluster from the
-  old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
-  run changes nothing. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and
@@ -758,5 +834,6 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
