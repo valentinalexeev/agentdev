@@ -229,6 +229,38 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
    `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
    rounded up.
 
+### Metrics and OpenTelemetry
+
+`claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
+
+| Metric (Prometheus name) | What it shows |
+|---|---|
+| `gen_ai_client_token_usage` | tokens per request, by `gen_ai_token_type` (`input`, `output`) and `agentdev_cache` (`read`, `write`) |
+| `gen_ai_client_operation_duration_seconds` | time of a model request |
+| `agentdev_cost_units_total` | cost units by agent and model |
+| `agentdev_cost_usd_total` | estimated USD, only when `usd_per_million_units` is set |
+| `agentdev_budget_used`, `agentdev_budget_limit` | units of the agent in 24 hours, and its budget |
+| `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
+| `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
+| `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
+
+The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
+with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
+`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
+
 ### Reference: the Claude proxy
 
 | Item | Value |

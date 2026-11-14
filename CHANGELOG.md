@@ -33,6 +33,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
+  9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
+  `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,
+  `agentdev.requests.refused`, `agentdev.usage.paused`. NetworkPolicy: only the scraper namespace
+  (`TELEMETRY_SCRAPER_NS`, Ansible `telemetry.scraper_ns`), and in it only the scraper pods (`TELEMETRY_SCRAPER_SELECTOR`,
+  `telemetry.scraper_selector`), reach the port. Unknown models are labelled `unknown`. Optional OTLP export of metrics and
+  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Every series has the label `agentdev_instance`
+  (`TELEMETRY_INSTANCE` / `telemetry.instance`, default `agentdev`), so one external Prometheus and Grafana can show
+  many instances. Re-run: `./run.sh 06` and `12`, or the playbook.
 - Ansible post-deploy smoke test (#213), on by default in both ingress modes. At the end of `deploy.yml` the playbook
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and

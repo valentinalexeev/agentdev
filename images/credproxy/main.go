@@ -69,6 +69,7 @@ type reqInfo struct {
 	agent string
 	job   string // X-Agentdev-Job, checked (jobs.go); "" = none
 	cred  credential
+	start time.Time
 }
 
 type server struct {
@@ -77,6 +78,7 @@ type server struct {
 	budget   *budget
 	prices   *prices
 	jobs     *jobs
+	tel      *telemetry // nil = no metrics (tests)
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
 	now      func() time.Time
@@ -127,6 +129,11 @@ func (s *server) observe(resp *http.Response) error {
 	now := s.now()
 	u := usageLine{Agent: info.agent, Secret: info.cred.secret, Job: info.job}
 	fromHeaders(&u, resp.StatusCode, resp.Header, now)
+	s.tel.window(info.cred.secret, "5h", u.FiveHour)
+	s.tel.window(info.cred.secret, "7d", u.Weekly)
+	if u.RateLimited {
+		s.tel.refuse(info.agent, "rate_limited")
+	}
 	if resp.Request.URL.Path != "/v1/messages" { // count_tokens: no spend, but the headers still count
 		if u.FiveHour != nil || u.Weekly != nil || u.RateLimited {
 			emitLine(usagePrefix, u)
@@ -137,6 +144,8 @@ func (s *server) observe(resp *http.Response) error {
 	resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(t tokenCounts, model string) {
 		p := s.prices.get()
 		units := p.units(model, t)
+		usd, hasUSD := p.usdOf(units)
+		s.tel.record(resp.Request.Context(), info.agent, info.job, p.modelLabel(model), t, units, usd, hasUSD, info.start, s.now(), resp.StatusCode)
 		u.Model, u.Units, u.Tokens, u.Multiplier = model, units, t.byName(), p.multiplier(model)
 		u.InputTokens, u.OutputTokens = t.input(), t[tokOut]
 		u.CacheRead, u.CacheWrite = t[tokCacheRead], t[tokCacheWrite5m]+t[tokCacheWrite1h]
@@ -177,6 +186,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := verifyKey(s.signing, callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))
 	if agent == "" {
+		s.tel.refuse("", "bad_key")
 		emitEvent("", "proxy-key-invalid", "medium", r.Method+" "+clip(r.URL.Path, 100)+": missing or wrong agent key")
 		apiError(w, http.StatusUnauthorized, "authentication_error", "claude-proxy: missing or wrong agent key")
 		return
@@ -187,6 +197,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ok, used, limit := s.budget.allow(agent); !ok {
+		s.tel.refuse(agent, "budget")
 		if s.budget.firstRefusal(agent) {
 			emitEvent(agent, "budget-exhausted", "low", "budget of the agent used: "+strconv.FormatInt(used, 10)+" of "+strconv.FormatInt(limit, 10)+" units in 24 h")
 		}
@@ -199,7 +210,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusServiceUnavailable, "api_error", "claude-proxy: no Claude credential for agent "+agent)
 		return
 	}
-	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred})))
+	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred, s.now()})))
 }
 
 func clip(s string, n int) string {
@@ -237,9 +248,17 @@ func main() {
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
 	s.prices = newPrices(os.Getenv("PRICES_DIR"))
+	tel, err := newTelemetry(os.Getenv("TELEMETRY_OTLP_URL"), b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.tel = tel
 	srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	if addr := envOr("METRICS_LISTEN", ":9464"); addr != "off" { // #196 D4: separate port, scraper only (NetworkPolicy)
+		go tel.serveMetrics(ctx, addr)
+	}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)

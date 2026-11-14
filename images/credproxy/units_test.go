@@ -191,6 +191,14 @@ func TestJobsChurnKeepsExpensiveJobs(t *testing.T) {
 	}
 }
 
+func TestModelLabelBounded(t *testing.T) {
+	p := defaultPrices()
+	if p.modelLabel("claude-sonnet-4-5-20250929") != "claude-sonnet-4-5-20250929" || p.modelLabel("gpt-x") != "unknown" ||
+		p.modelLabel("") != "unknown" || p.modelLabel("zzz-"+strings.Repeat("a", 90)) != "unknown" {
+		t.Error("model label not bounded to known families")
+	}
+}
+
 // Acceptance of #196 (owner decision 2026-11-08, option 1): through the real proxy path, a cache-read-heavy fixture
 // response gives units = ceil(sum(tokens x weight) x multiplier) exactly, the usage line carries the numbers to
 // recompute it, and the units are under 20% of the raw tokens.
