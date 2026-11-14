@@ -54,6 +54,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ingress (#316): with `ingress.forwarder.deploy` the playbook runs the funnel forwarder (headlamp funnel-sidecar):
+  one replica, readiness and liveness probes on `/readyz` (a lost route registration restarts the pod after 10
+  minutes), the pre-auth key from the Secret Manager secret `funnel-sidecar-authkey`, and a NetworkPolicy. Opt-in;
+  remove the old manifest from the deployment repository (docs/admin.md, Deployed forwarder). Re-run: Ansible
+  `deploy.yml`; no `./run.sh` step.
+
 - Gitea parity, part 2 (#241, 1.4.0). P5: the agent labels its own PR `agent:<name>` on Gitea too (forge sidecar:
   the same check as on GitHub, only that label, only on a PR from its own branch). Gitea does not make a missing
   label, so the Ansible role `gitea_forge` and `lib-forge.sh` make `agent:<name>` for each agent. P7: on Gitea the

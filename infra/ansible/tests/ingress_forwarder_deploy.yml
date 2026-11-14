@@ -1,0 +1,97 @@
+# Deployed forwarder (#316): render templates/forwarder_deploy.yaml.j2 and check the settings checks. No cluster.
+# Run: ansible-playbook infra/ansible/tests/ingress_forwarder_deploy.yml
+- name: Deployed forwarder (#316)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    kube_context: none
+    gcp_project: p
+    ingress:
+      mode: external
+      host: agentdev.example.com
+      webhook_host: hooks.example.com
+      ui: true
+      forwarder:
+        namespace: agentdev-funnel
+        pod_selector: {app: funnel-forwarder}
+        deploy:
+          image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0
+          control_url: https://headscale.example.com
+  tasks:
+    - name: Load the defaults (group_vars, roles authentik, api and ingress)
+      ansible.builtin.include_vars: "{{ item }}"
+      loop: [../group_vars/all.yml, ../roles/authentik/defaults/main.yml, ../roles/api/defaults/main.yml,
+             ../roles/ingress/defaults/main.yml]
+
+    - name: Render
+      ansible.builtin.set_fact:
+        t_objs: "{{ lookup('ansible.builtin.template', '../roles/ingress/templates/forwarder_deploy.yaml.j2') | from_yaml_all | list }}"
+      vars:
+        ingress_fwd_authkey_version: '7'
+
+    - name: One replica, Recreate, readiness and liveness on /readyz, Secret funnel-sidecar
+      ansible.builtin.assert:
+        that:
+          - ingress_fwd_deploy_on | bool
+          - t_objs | map(attribute='kind') | list == ['Namespace', 'ServiceAccount', 'Deployment', 'NetworkPolicy']
+          - t_dep.spec.replicas == 1 and t_dep.spec.strategy.type == 'Recreate'
+          - "t_dep.spec.selector.matchLabels == {'app': 'funnel-forwarder'}"
+          - t_c.readinessProbe.httpGet.path == '/readyz' and t_c.livenessProbe.httpGet.path == '/readyz'
+          - t_c.livenessProbe.periodSeconds * t_c.livenessProbe.failureThreshold == 600
+          - t_c.securityContext.readOnlyRootFilesystem and t_c.securityContext.capabilities.drop == ['ALL']
+          - "(t_c.env | selectattr('name', 'equalto', 'TS_AUTHKEY') | first).valueFrom.secretKeyRef == {'name': 'funnel-sidecar', 'key': 'authkey'}"
+          - t_dep.spec.template.metadata.annotations['agentdev.dev/authkey-version'] == '7'
+          - not t_dep.spec.template.spec.automountServiceAccountToken
+        quiet: true
+      vars:
+        t_dep: "{{ t_objs | selectattr('kind', 'equalto', 'Deployment') | first }}"
+        t_c: "{{ t_dep.spec.template.spec.containers[0] }}"
+
+    - name: Services by default UI and the router's public port only (never 8081), no authentik without auth_host
+      ansible.builtin.assert:
+        that:
+          - t_svc == 'ui=8080@agentdev-ui.agentdev-platform.svc.cluster.local:8080,hook=8081@webhook-router.coding-agents.svc.cluster.local:8080'
+        quiet: true
+      vars:
+        t_dep: "{{ t_objs | selectattr('kind', 'equalto', 'Deployment') | first }}"
+        t_svc: "{{ (t_dep.spec.template.spec.containers[0].env | selectattr('name', 'equalto', 'FUNNEL_SERVICES') | first).value }}"
+
+    - name: NetworkPolicy no ingress, egress DNS, the published pods and the internet without private ranges
+      ansible.builtin.assert:
+        that:
+          - t_np.spec.ingress == []
+          - t_np.spec.egress | length == 3
+          - t_np.spec.egress[1].ports | map(attribute='port') | list == [8080, 9000]
+          - "'10.0.0.0/8' in t_np.spec.egress[2].to[0].ipBlock.except"
+          - "'100.64.0.0/10' in t_np.spec.egress[2].to[0].ipBlock.except"
+        quiet: true
+      vars:
+        t_np: "{{ t_objs | selectattr('kind', 'equalto', 'NetworkPolicy') | first }}"
+
+    - name: The good settings pass the checks (control for the refusals below; stops at the first gcloud call)
+      ansible.builtin.include_tasks: ingress_forwarder_deploy_bad.yml
+      loop: [{}]
+      loop_control: {loop_var: t_bad}
+      vars:
+        t_good: {image: 'ghcr.io/x/funnel-sidecar:0.19.0', control_url: 'https://headscale.example.com'}
+        t_expect_refused: false
+
+    - name: Off without deploy
+      ansible.builtin.assert:
+        that: not (ingress_fwd_deploy_on | bool)
+        quiet: true
+      vars:
+        ingress: {mode: external, host: a.example.com, forwarder: {namespace: x, pod_selector: {app: y}}}
+
+    - name: Settings checks refuse an unpinned image, http control and the router's internal port
+      ansible.builtin.include_tasks: ingress_forwarder_deploy_bad.yml
+      loop:
+        - {image: 'ghcr.io/x/funnel-sidecar:main'}
+        - {image: 'ghcr.io/x/funnel-sidecar'}
+        - {control_url: 'http://headscale.example.com'}
+        - {services: ['hook=8081@webhook-router.coding-agents.svc.cluster.local:8081']}
+      loop_control: {loop_var: t_bad}
+      vars:
+        t_good: {image: 'ghcr.io/x/funnel-sidecar:0.19.0', control_url: 'https://headscale.example.com'}

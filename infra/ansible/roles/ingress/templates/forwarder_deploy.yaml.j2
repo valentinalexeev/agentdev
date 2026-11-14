@@ -1,0 +1,88 @@
+{# Deployed forwarder (#316): the funnel-sidecar of headlamp publishes the public Services on the tailnet ingress.
+   One replica only (a second node registering the same names gets 409), Recreate. Readiness and liveness on /readyz
+   (200 only while every route is registered): a dropped registration (headlamp#95) restarts the pod. The pre-auth
+   key is the Secret funnel-sidecar (key authkey), made by tasks/forwarder.yml from Secret Manager. #}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ ingress_forwarder.namespace }}
+  labels: {{ ({'app.kubernetes.io/part-of': 'agentdev'} | combine(agentdev_effective_labels | default({}))) | to_json }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: {{ ingress_fwd_name }}, namespace: {{ ingress_forwarder.namespace }}, labels: {app.kubernetes.io/part-of: agentdev}}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ ingress_fwd_name }}
+  namespace: {{ ingress_forwarder.namespace }}
+  labels: {{ (ingress_fwd_labels | combine({'app.kubernetes.io/part-of': 'agentdev'})) | to_json }}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {{ ingress_fwd_labels | to_json }}}
+  template:
+    metadata:
+      labels: {{ ingress_fwd_labels | to_json }}
+      annotations: {agentdev.dev/authkey-version: "{{ ingress_fwd_authkey_version | default('') }}"}
+    spec:
+      serviceAccountName: {{ ingress_fwd_name }}
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: forwarder
+        image: {{ ingress_fwd_image }}
+        env:
+        - {name: FUNNEL_NS, value: "{{ ingress_fwd_ns_label }}"}
+        - {name: FUNNEL_SERVICES, value: "{{ ingress_fwd_services | join(',') }}"}
+        - {name: FUNNEL_API_URL, value: "{{ ingress_fwd_api_url }}"}
+        - {name: FUNNEL_CONTROL_URL, value: "{{ ingress_fwd_control_url }}"}
+        - name: TS_AUTHKEY
+          valueFrom: {secretKeyRef: {name: funnel-sidecar, key: authkey}}
+        readinessProbe:
+          httpGet: {path: /readyz, port: 8081}
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /readyz, port: 8081}
+          initialDelaySeconds: 60
+          periodSeconds: {{ ingress_fwd_liveness_period | int }}
+          failureThreshold: {{ ingress_fwd_liveness_threshold | int }}
+          timeoutSeconds: 5
+        resources: {{ ingress_fwd_resources | to_json }}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: [ALL]}
+        volumeMounts:
+        - {name: funnel-state, mountPath: /tmp/funnel-sidecar}
+      volumes:
+      - {name: funnel-state, emptyDir: {}}
+---
+{# egress: DNS and anywhere on the internet (headscale control, DERP, tailnet peers) plus the published Services;
+   no other in-cluster address. Ingress: none (the forwarder dials out only). #}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: {{ ingress_fwd_name }}, namespace: {{ ingress_forwarder.namespace }}, labels: {app.kubernetes.io/part-of: agentdev}}
+spec:
+  podSelector: {matchLabels: {{ ingress_fwd_labels | to_json }}}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
+    - {ipBlock: {cidr: 169.254.20.10/32}}
+    ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+  - to:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ platform_ns }}}}, podSelector: {matchLabels: {app: agentdev-ui}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ platform_ns }}}}, podSelector: {matchLabels: {app.kubernetes.io/name: authentik, app.kubernetes.io/component: server}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ agents_ns }}}}, podSelector: {matchLabels: {app: webhook-router}}}
+    ports: [{port: 8080}, {port: 9000}]   # UI and router public port (never the router's internal 8081), authentik pod
+  # headscale, DERP relays and tailnet peers (WireGuard over UDP, HTTPS); no private, CGNAT or link-local range
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
