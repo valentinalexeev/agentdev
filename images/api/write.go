@@ -151,6 +151,7 @@ type writer struct {
 	limits     agentLimits
 	events     eventStore       // security event counts for the agent detail (#344); nil: 0
 	platform   *platformChecker // GET /api/platform (#344); nil: not served
+	jobs       *jobCache        // GET /api/jobs (#345), forge-backed; nil: no jobs
 	createMu   sync.Mutex       // one create at a time, so two requests cannot both pass the caps (one API replica)
 }
 
