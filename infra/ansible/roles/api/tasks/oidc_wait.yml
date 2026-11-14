@@ -1,0 +1,22 @@
+---
+- name: Wait for the OIDC issuer's discovery document
+  ansible.builtin.uri:
+    url: "{{ api_oidc_discovery_url | trim | regex_replace('/$', '') }}/.well-known/openid-configuration"
+    status_code: 200
+  register: api_oidc_discovery
+  until: api_oidc_discovery.status == 200
+  retries: "{{ (api_oidc_wait_seconds | int / 10) | round(0, 'ceil') | int }}"
+  delay: 10
+  ignore_errors: true
+  when:
+    - not ansible_check_mode
+    - not (api_oidc_discovery_url | trim) is search('\\.svc(\\.cluster\\.local)?([:/]|$)')
+
+- name: Stop when the OIDC issuer does not answer
+  ansible.builtin.fail:
+    msg: >-
+      The OIDC issuer does not answer: {{ api_oidc_discovery.url | default(api_oidc_discovery_url) }} gave
+      {{ api_oidc_discovery.status | default('no response') }} for {{ api_oidc_wait_seconds }} s. The API exits without
+      it. Start the provider first and make sure the cluster reaches it (docs/admin.md, "External OIDC provider"),
+      then run the playbook again.
+  when: api_oidc_discovery is failed
