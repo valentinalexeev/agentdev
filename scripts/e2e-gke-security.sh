@@ -416,11 +416,19 @@ if section chat; then
       out=$(try "$img" "agent-$AGENT-proxy" '["NET_ADMIN"]'); echo "$out" | grep -q 'agentdev-api-chat-jobs'
       check $? "admission: the API cannot create a chat Job that adds capabilities" "$(echo "$out" | head -1)"
     fi
-    other=$(k -n "$AGENTS_NS" get jobs -o json 2>/dev/null | jq -r '[.items[]|select(.metadata.labels["agentdev/console"]!="true")|.metadata.name][0] // ""')
-    if [ -n "$other" ]; then
+    # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
+    # the operator of this script, so the check runs on every cluster (#389 review)
+    other=e2e-sec-nonconsole-$$
+    if k -n "$AGENTS_NS" create -f - >/dev/null 2>&1 <<EOF
+{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"$other","labels":{"app":"e2e-security"}},
+ "spec":{"suspend":true,"ttlSecondsAfterFinished":60,"template":{"spec":{"restartPolicy":"Never",
+ "containers":[{"name":"x","image":"busybox:latest","command":["true"]}]}}}}
+EOF
+    then
       out=$(k -n "$AGENTS_NS" delete job "$other" --dry-run=server --as="$sa" 2>&1); echo "$out" | grep -q 'agentdev-api-chat-jobs-delete'
-      check $? "admission: the API cannot delete a Job that is not a console chat Job ($other)" "$(echo "$out" | head -1)"
-    else skip "delete check: no non-console Job in $AGENTS_NS to try (dry run)"; fi
+      check $? "admission: the API cannot delete a Job that is not a console chat Job" "$(echo "$out" | head -1)"
+      k -n "$AGENTS_NS" delete job "$other" --wait=false >/dev/null 2>&1 || true
+    else skip "delete check: cannot create the dummy Job $other in $AGENTS_NS"; fi
   fi
 fi
 

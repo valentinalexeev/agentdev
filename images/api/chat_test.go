@@ -404,18 +404,28 @@ func TestChatIdleStop(t *testing.T) {
 func TestChatPresenceDrivesIdle(t *testing.T) {
 	e := newChatEnv(t)
 	sid := e.start(t)
-	e.c.join(sid, "wendy")
-	e.c.pumpOnce(sid)
-	if got := e.server.viewers; len(got) != 1 || got[0] != "wendy" {
-		t.Fatalf("presence: %v", got)
+	// e.start runs the background pump too: it may post an older presence after our pumpOnce (#389 review), so
+	// pump until the server shows the expected viewers, reading them under the lock
+	viewers := func(want string) {
+		t.Helper()
+		var got []string
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			e.c.pumpOnce(sid)
+			e.server.mu.Lock()
+			got = append([]string(nil), e.server.viewers...)
+			e.server.mu.Unlock()
+			if strings.Join(got, ",") == want {
+				return
+			}
+		}
+		t.Fatalf("presence: %v, want %q", got, want)
 	}
+	e.c.join(sid, "wendy")
+	viewers("wendy")
 	e.c.leave(sid, "wendy")
 	base := time.Now().UTC()
 	e.c.nowFn = func() time.Time { return base.Add(time.Minute) }
-	e.c.pumpOnce(sid)
-	if got := e.server.viewers; len(got) != 0 {
-		t.Fatalf("viewer kept after leaving: %v", got)
-	}
+	viewers("") // the viewer is gone after leaving
 }
 
 func TestChatEventLogAppendOnly(t *testing.T) {
