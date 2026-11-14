@@ -6,6 +6,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Console chat backend (#346): `chat-session-server` in the worker image and the session API
+  (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.
+  Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
+
 ### Security
 - R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
   Other users see only the events of agents with a repository where they have write access on the forge. Before,

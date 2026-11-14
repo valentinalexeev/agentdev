@@ -2078,6 +2078,29 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
 when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, it will go to the chat page of the UI.
 
+### Console chat sessions
+
+The API can start sessions for the console Chat page (#346). These sessions are Jobs that run
+`chat-session-server`. Only the API connects to the session pod (NetworkPolicy and a token for each session).
+
+1. Set `api.chat.enabled: true` in `ansible/instance.yml`.
+2. Run the Ansible `deploy.yml`.
+   On GKE, Ansible makes the Secret Manager entry `agentdev-api-chat-token-key` once.
+
+| Setting (`api.chat`) | API variable | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `CHAT_SESSIONS` | false | Turns on the session API. |
+| `idle_minutes` | `CHAT_IDLE_SECONDS` | 30 | The session stops this time after the last viewer leaves. |
+| `retention_days` | `CHAT_RETENTION_DAYS` | 30 | The API deletes transcripts that are older. |
+| `max_sessions` | `CHAT_MAX_SESSIONS` | 0 (no limit) | Maximum sessions that run at the same time. |
+| `max_sessions_per_user` | `CHAT_MAX_SESSIONS_PER_USER` | 0 (no limit) | Maximum sessions of one person. |
+| | `CHAT_MAX_SECONDS` | 28800 | Maximum time of one session. |
+
+Optional secrets: `agentdev-chat-clone-token` (read-only clone token) and, on Gitea, `agentdev-chat-issue-token`
+(site admin, `write:issue`, used with `Sudo`, so the issue author is the person).
+
+Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
+
 ## Webhooks
 
 Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
