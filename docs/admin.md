@@ -81,6 +81,13 @@ The concurrency is the number of items that one agent works on at the same time.
    On GKE: set `max_concurrent`, or `agents[].max_concurrent` for one agent.
 2. Deploy again.
 
+The turn limit is the maximum number of turns of one Claude run (#336). When a run uses all its turns, the agent
+writes "class `max-turns`" on the PR and on the issue. A large task can need more turns.
+
+1. On `kind`: set `MAX_TURNS` (the default is 40, the maximum is 500).
+   On GKE: set `max_turns`, or `agents[].max_turns` for one agent.
+2. Deploy again.
+
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
 
@@ -148,6 +155,7 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Own Claude credential | `.secrets/<agent>.claude` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
+| Turn limit of one Claude run (#336) | `MAX_TURNS` (default 40) | `max_turns`, `agents[].max_turns` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
@@ -850,7 +858,7 @@ WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Man
    ```
 
 4. Optional: give the API access to the forge. Refer to "Give the API access to the forge".
-5. Open a pull request in the deployment repository. Merge it after the dry run.
+5. Open a pull request in the deployment repository. Do the dry run (`--check`). Merge after the checks pass.
    The playbook deploys the API in `agentdev-platform`.
 6. Make sure that the API is ready: `kubectl -n agentdev-platform rollout status deploy/agentdev-api`
 
@@ -1279,6 +1287,12 @@ selector does not need `cidrs`. A reverse proxy outside the cluster needs `cidrs
 is wider than `/8` (for example `0.0.0.0/0`). To allow it, set `ingress.forwarder_allow_wide_cidrs: true`. The
 playbook also refuses an `authentik_trusted_proxy_cidrs` range that is wider than `/8`, unless
 `authentik_trusted_proxy_allow_wide: true`.
+
+NOTE: With `ingress.forwarder.namespace` and `pod_selector`, the operator monitors the forwarder pods (#213). When
+no pod is Ready for 10 minutes, the operator writes a warning to its log. It also records one SecurityEvent with
+source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event. Each outage gives one event. To
+change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
+namespace that can only read pods. Without `pod_selector`, the monitor is off.
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
@@ -2099,7 +2113,9 @@ agentdev uses strict SemVer. While the version is `0.x`, a MINOR version change 
 1. Read `CHANGELOG.md`.
 2. In the deployment repository, change the module `ref=vX.Y.Z` and `image_tag` to the same version.
 3. Open one pull request with the two changes.
-4. Make sure that the dry run of the pull request has no error. If the dry run shows `no value for ${...}`, the new
+4. Make sure that the checks of the pull request pass. The pull request checks do not use cloud credentials, so
+   also do the dry run manually: `ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff`.
+   If the dry run shows `no value for ${...}`, the new
    release has a manifest value that your playbook version does not fill. Make sure that `ref=` and `image_tag`
    are the same version.
 
