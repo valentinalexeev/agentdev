@@ -96,6 +96,8 @@
         PLATFORM_NS: "{{ platform_ns }}"
         UI_IMAGE: "{{ api_ui_image }}"
         OIDC_ISSUER: "{{ api_oidc_issuer }}"
+        OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+        OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
       replace: []
   when: api_ui | bool
 

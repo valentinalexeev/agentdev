@@ -36,6 +36,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 	if maxc == 0 {
 		maxc = 2
 	}
+	maxTurns := a.Spec.MaxTurns // #336
+	if maxTurns <= 0 {
+		maxTurns = 40
+	}
 	labels := withCostLabels(map[string]string{"app": "coding-agent", "agent": n}, r.D.CostLabels)
 
 	if s.Labels == nil {
@@ -134,7 +138,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
 	}}
 	agentEnv := append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-		env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
+		env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
 		env("ROUTER_URL", routerURL(ns)),
 		env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 		env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),

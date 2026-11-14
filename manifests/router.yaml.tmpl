@@ -53,10 +53,11 @@ spec:
         - {name: FORGE_POLL_DIR, value: /var/run/agentdev/forge-poll}
         volumeMounts: [{name: forge-poll, mountPath: /var/run/agentdev/forge-poll, readOnly: true}]
         # http: webhook deliveries only (the port a Gateway or reverse proxy publishes); internal: /healthz, /status,
-        # /register, /idle for in-cluster callers (#214)
-        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
-        readinessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 5}
-        livenessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 20, failureThreshold: 3}
+        # /register, /idle for in-cluster callers (#214); health: GET /healthz only, for the probes and the load
+        # balancer health check (#218)
+        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}, {name: health, containerPort: 8082}]
+        readinessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20, failureThreshold: 3}
         resources:
           requests: {cpu: 20m, memory: 32Mi}
           limits:   {cpu: 500m, memory: 128Mi}
@@ -70,4 +71,6 @@ kind: Service
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
 spec:
   selector: {app: webhook-router}
-  ports: [{name: http, port: 8080, targetPort: http}, {name: internal, port: 8081, targetPort: internal}]
+  # health: the GKE HealthCheckPolicy probes it (#218)
+  ports: [{name: http, port: 8080, targetPort: http}, {name: internal, port: 8081, targetPort: internal},
+          {name: health, port: 8082, targetPort: health}]
