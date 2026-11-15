@@ -239,6 +239,15 @@ runner can start any program. So the security boundary is the pod, not the list 
   [security-model.md](security-model.md). Repo code and issue text always go to the model provider: that is inherent
   to the product.
 
+## Versions during an upgrade
+
+An upgrade does not replace every pod at the same moment: agent pods of the previous release keep running next to
+the new router, Claude proxy, API and operator until their jobs end. [ADR 0006](adr/0006-mixed-version-compatibility.md)
+sets the rule that makes this safe: the calls between components, the pod template, the CRD fields, the state volume
+and the database schema accept the previous MINOR release, change only by adding, and drop an old form one release
+after the new form shipped. A unit test (`images/operator/testdata/pod-contract.txt`) fails when the operator stops
+rendering a name an older agent pod may use.
+
 ## Project secrets
 
 A project secret is a credential, for example a registry token, that the agents of one project (or one agent) can
