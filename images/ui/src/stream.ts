@@ -4,9 +4,9 @@
 // The stream reconnects with exponential backoff and jitter. The caller keeps polling while the stream is not open,
 // so the console never depends on the stream alone.
 
-export interface StreamMsg { type: string; time: string; data: unknown }
+interface StreamMsg { type: string; time: string; data: unknown }
 
-export interface StreamHandlers {
+interface StreamHandlers {
   onOpen: () => void // the server sent "hello"
   onMessage: (m: StreamMsg) => void
   onDown: (retryInMs: number, failures: number) => void // closed or failed; next try after retryInMs
@@ -16,13 +16,13 @@ export interface StreamHandlers {
 const MIN_MS = 1000
 const MAX_MS = 60000
 
-export function backoff(failures: number): number {
+function backoff(failures: number): number {
   const base = Math.min(MAX_MS, MIN_MS * 2 ** Math.max(0, failures - 1))
   return Math.round(base / 2 + Math.random() * (base / 2)) // jitter: 50 to 100 % of the step
 }
 
 // Parses SSE text: returns the complete messages and the rest of the buffer.
-export function parseSSE(buf: string): [StreamMsg[], string] {
+function parseSSE(buf: string): [StreamMsg[], string] {
   const out: StreamMsg[] = []
   const parts = buf.replace(/\r\n/g, '\n').split('\n\n')
   const rest = parts.pop() ?? ''
