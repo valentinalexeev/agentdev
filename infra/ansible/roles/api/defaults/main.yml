@@ -53,3 +53,8 @@ api_db_pod: platform-db-0
 # web UI (#48) next to the API; the role ingress makes it public on https://<ingress.host>/ (#120)
 api_ui: "{{ api.ui | default(true) }}"
 api_ui_image: "{{ image_registry }}/agentdev-ui:{{ image_tag }}"
+# The agents namespace (#357): the API manifest has objects in it. Steps 06 and 12 (GKE: deploy.yml) create it, the
+# role makes it too so that `kind.yml --tags api` works alone. Labels as deploy.yml (#184); kind.yml sets the same
+# cost labels as the operator role.
+api_ns_labels: "{{ agentdev_effective_labels }}"
+api_agents_ns_definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ api_ns_labels }}"}}

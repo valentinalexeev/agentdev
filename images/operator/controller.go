@@ -64,6 +64,7 @@ type AgentReconciler struct {
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
 
@@ -96,6 +97,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return controllerutil.SetControllerReference(&a, svc, r.Scheme())
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
+	}
+
+	// workload identity (#352): the agent's own service account, before the pod that names it. No token is mounted
+	// from it automatically; the pod gets only a projected token with audience claude-proxy (render.go).
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.AutomountServiceAccountToken = ptr.To(false)
+		if sa.Labels == nil {
+			sa.Labels = map[string]string{}
+		}
+		sa.Labels["app"], sa.Labels["agent"] = "coding-agent", a.Name
+		return controllerutil.SetControllerReference(&a, sa, r.Scheme())
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("service account: %w", err)
 	}
 
 	// harness guide (#206): written before the pod that mounts it. The mount is optional, so a failure here never blocks
@@ -267,7 +282,7 @@ func (r *AgentReconciler) requeueAgent(agent string) {
 
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.wake = make(chan event.GenericEvent, 64)
-	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
+	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).Owns(&corev1.ServiceAccount{}).
 		WatchesRawSource(source.Channel(r.wake, &handler.EnqueueRequestForObject{}))
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
