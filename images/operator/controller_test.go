@@ -565,3 +565,62 @@ func TestMaxTurnsFromSpec(t *testing.T) { // #336: maxTurns in the Agent reaches
 		t.Fatalf("MAX_TURNS = %q, want 120", got)
 	}
 }
+
+// #352: own service account per agent, no automounted API token, and the claude-proxy token only in the agent container.
+func TestAgentServiceAccountAndProxyToken(t *testing.T) {
+	r, c := setup(t, agent("alice", nil))
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	reconcile(t, r, "alice")
+	var sa corev1.ServiceAccount
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-alice"}, &sa); err != nil {
+		t.Fatalf("service account: %v", err)
+	}
+	if sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken || len(sa.OwnerReferences) != 1 {
+		t.Errorf("service account automount/owner: %v %v", sa.AutomountServiceAccountToken, sa.OwnerReferences)
+	}
+	s := getSTS(t, c, "alice")
+	p := s.Spec.Template.Spec
+	if p.ServiceAccountName != "agent-alice" || p.AutomountServiceAccountToken == nil || *p.AutomountServiceAccountToken {
+		t.Errorf("pod SA %q automount %v", p.ServiceAccountName, p.AutomountServiceAccountToken)
+	}
+	var found bool
+	for _, v := range p.Volumes {
+		if v.Name == "proxy-token" {
+			pt := v.Projected.Sources[0].ServiceAccountToken
+			found = pt.Audience == "claude-proxy" && *pt.ExpirationSeconds == 600 && pt.Path == "token"
+		}
+	}
+	if !found {
+		t.Errorf("projected token volume missing or wrong: %v", p.Volumes)
+	}
+	mounted := func(ct corev1.Container) bool {
+		for _, m := range ct.VolumeMounts {
+			if m.Name == "proxy-token" {
+				return m.MountPath == "/var/run/secrets/agentdev/proxy" && m.ReadOnly
+			}
+		}
+		return false
+	}
+	if !mounted(*container(s, "agent")) {
+		t.Error("agent container has no read-only proxy token")
+	}
+	for _, ct := range append(p.InitContainers, *container(s, "forge")) {
+		for _, m := range ct.VolumeMounts {
+			if m.Name == "proxy-token" {
+				t.Errorf("%s mounts the proxy token", ct.Name)
+			}
+		}
+	}
+	// mixed versions: the HMAC key stays until the proxy runs in token mode
+	if !hasEnv(container(s, "agent"), "ANTHROPIC_AUTH_TOKEN") {
+		t.Error("ANTHROPIC_AUTH_TOKEN removed")
+	}
+	// without the proxy no token volume
+	r2, c2 := setup(t, agent("bob", nil))
+	reconcile(t, r2, "bob")
+	for _, v := range getSTS(t, c2, "bob").Spec.Template.Spec.Volumes {
+		if v.Name == "proxy-token" {
+			t.Error("token volume without claude-proxy")
+		}
+	}
+}

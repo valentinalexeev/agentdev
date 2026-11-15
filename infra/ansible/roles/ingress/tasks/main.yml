@@ -20,6 +20,11 @@
       through your own reverse proxy (docs/admin.md, External ingress).
   when: ingress_mode == 'external'
 
+# deployed forwarder (#316): opt-in with ingress.forwarder.deploy; without it the role leaves any forwarder alone
+- name: Deployed forwarder (funnel-sidecar)
+  ansible.builtin.include_tasks: forwarder.yml
+  when: ingress_fwd_deploy_on | bool
+
 # opt-in: without ingress.forwarder the objects are removed, so the default-deny of the platform namespace applies again
 - name: NetworkPolicies for the external forwarder
   kubernetes.core.k8s:

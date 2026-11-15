@@ -6,15 +6,30 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- Workload identity for agents at the Claude proxy (#352). The operator creates a ServiceAccount `agent-<name>` per
+  agent and mounts a projected token (audience `claude-proxy`, 10 minutes) only in the agent container. The 1.1
+  worker sends it through Claude Code's `apiKeyHelper`. `claude-proxy` checks it with TokenReview (own ServiceAccount
+  bound to the ClusterRole `agentdev-claude-proxy-tokenreview`, `tokenreviews` `create` only, egress to the API server addresses only). New setting `CLAUDE_PROXY_AUTH`
+  (`kind`) / `claude_proxy_auth` (Ansible): `key`, `both` (default) or `token`. Mixed versions: with `both` a 1.0
+  worker keeps using its HMAC key. Re-run: `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE
+  (operator RBAC, claude-proxy, new images).
+
 ### Fixed
 - Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
   request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
   compat e2e). New worker image; no `./run.sh` step.
+- Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
+  the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
 - Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
   engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
   the agents.
 
 ### Security
+- R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
+  a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
+  audience. `scripts/e2e-gke-security.sh` checks a token of another audience (401) and, in mode `token`, the HMAC key
+  (401).
 - R106 fixed (#380): `GET /api/agents` (Agents page, Today counts) lists for an `agentdev-admins` member every
   agent, for other users only the agents with a repository where they have write access on the forge (R35 rule).
   Before, each signed-in user saw every agent and its repositories. Re-run: Ansible `deploy.yml` with the new API
@@ -57,6 +72,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- Ingress (#316): with `ingress.forwarder.deploy` the playbook runs the funnel forwarder (headlamp funnel-sidecar):
+  one replica, readiness and liveness probes on `/readyz` (a lost route registration restarts the pod after 10
+  minutes), the pre-auth key from the Secret Manager secret `funnel-sidecar-authkey`, and a NetworkPolicy. Opt-in;
+  remove the old manifest from the deployment repository (docs/admin.md, Deployed forwarder). Re-run: Ansible
+  `deploy.yml`; no `./run.sh` step.
+
 - Gitea parity, part 2 (#241, 1.4.0). P5: the agent labels its own PR `agent:<name>` on Gitea too (forge sidecar:
   the same check as on GitHub, only that label, only on a PR from its own branch). Gitea does not make a missing
   label, so the Ansible role `gitea_forge` and `lib-forge.sh` make `agent:<name>` for each agent. P7: on Gitea the
