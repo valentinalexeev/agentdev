@@ -21,6 +21,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   changes; a 1.0 worker or forge sidecar does not ask, so its job stops at the soft limit like at a hard limit. Re-run:
   `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE (claude-proxy Role, approvals CRD, new
   images).
+- Console chat backend (#346): `chat-session-server` in the worker image and the session API
+  (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.
+  Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
+  Off by default. The API and the worker must run the same `image_tag` (ADR 0006). Admission policies hold the
+  API's chat Jobs (create and delete); `scripts/e2e-gke-security.sh --only chat` checks them (R101, R104).
 - Web Push notifications (#347). People subscribe a device in the console **Settings** and get a notification for a
   new approval, an agent stopped by a guardrail or blocked, and a usage pause. The notification has the agent,
   repository, request type and expiry only, never text from the model. **Deny** and **Snooze** work from the
@@ -193,6 +198,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   wall, phase matrix, Projects page), the Chat page for interactive sessions (thread, tool steps, permission cards,
   issue drafts the person creates), needed API and phases. `console-prototype.html` shows every screen with a small
   and a large example.
+- Ansible preflight (#314): `infra/ansible/preflight.yml` only reads, and `deploy.yml` imports it first. A deploy
+  now stops before its first change when a Claude secret has the wrong format (the #212 message), when the playbook
+  checkout is on a release tag other than `v<image_tag>` (#218), when the cluster does not serve a CRD the instance
+  values need (Gateway API, FQDNNetworkPolicy), or when an image is not on ghcr.io at `image_tag`. Run it alone with
+  `bash scripts/upgrade-check.sh <instance.yml>` or `deploy.yml --tags preflight`. The deployment example workflow
+  runs it on `main` before `terraform apply`, and clones the playbook at `agentdev_ref`. To apply: copy the
+  new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment repository.
 - Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
   operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
   when no job runs, and the operator then replaces the pod (at once when the pod does not run; after

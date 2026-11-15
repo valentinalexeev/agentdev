@@ -116,6 +116,14 @@ if [[ "${pr}" =~ ^[0-9]+$ ]]; then
   desc="push: the PR branch has the file of the fake model"
   if [[ "${CLAUDE_REAL:-0}" == 1 ]]; then check true
   else check bash -c "curl -fsS -u '${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}' '${FORGE_HOST_URL}/api/v1/repos/${REPO}/contents/STUB_CHANGE.md?ref=${head}' >/dev/null"; fi
+  # #394: a worker before 1.1 (the previous release in this test) sets its feedback cursor only after the review
+  # request and the board update that follow the PR; a comment in those seconds is never answered. Wait until the
+  # review request is on the PR, then a few seconds more, before commenting.
+  for _ in $(seq 30); do
+    ga GET "/repos/${REPO}/pulls/${pr}" | jq -e '(.requested_reviewers // []) | length > 0' >/dev/null && break
+    sleep 2
+  done
+  sleep 10
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   ga POST "/repos/${REPO}/issues/${pr}/comments" '{"body":"Please change the file again."}' >/dev/null
   desc="reply: alice answers the PR comment"
@@ -129,6 +137,9 @@ check bash -c "${KUBECTL} -n ${AGENTS_NS} logs deploy/claude-proxy | grep 'AGENT
 if [[ "${COMPAT_API:-0}" == 1 ]]; then
   desc="API: agentdev-api is ready"
   check k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=60s
+  # console chat boundaries (#346, R101): NetworkPolicy shape and the admission policy (server dry run as the API)
+  desc="security: console chat NetworkPolicy and admission (e2e-gke-security.sh --kind --only chat)"
+  check "${root}/scripts/e2e-gke-security.sh" --kind --context "kind-${CLUSTER_NAME}" --agent alice --only chat
 fi
 
 log "Result: ${pass} PASS, ${fail} FAIL"
