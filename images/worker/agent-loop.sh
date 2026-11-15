@@ -367,7 +367,7 @@ untrusted() { printf '<untrusted>\n%s\n</untrusted>' "${1//<\/untrusted>/<\/untr
 # Read on every run, so a changed guide applies without a restart. It follows the security rules, which stay first and
 # win. Capped: it is in the context of every run. Missing or empty: the run has the security rules only.
 GUIDE_FILE="${GUIDE_FILE:-/etc/agentdev/guide/guide.md}"
-GUIDE_MAX_BYTES=8000
+GUIDE_MAX_BYTES=16000   # operator: fixed part max. 6000, project section (#54) max. 8 KiB plus its heading
 harness_guide() {
   local g=""
   [[ -f "${GUIDE_FILE}" && -r "${GUIDE_FILE}" ]] && g=$(head -c "${GUIDE_MAX_BYTES}" "${GUIDE_FILE}" 2>/dev/null)

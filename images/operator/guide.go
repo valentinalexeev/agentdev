@@ -7,8 +7,8 @@ package main
 // of the agent's repository), never from repository content or model output. Every value passes a pattern check before
 // it is written; a value that fails is left out, not escaped. The text goes to one ConfigMap, agentdev-guides, key =
 // agent name. The agent pod mounts its own key read-only (render.go); the loop appends it to the system prompt of every
-// run, after the security rules (images/worker/agent-loop.sh). A project-editable section comes with the Project
-// object of #54; it is appended, it never replaces this text.
+// run, after the security rules (images/worker/agent-loop.sh). The project section (#54, Project.spec.guideAppend) is
+// the one part edited by people: it is appended under its own heading after this text, and never replaces it.
 
 import (
 	"context"
@@ -64,6 +64,82 @@ var (
 	guidePathRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 	guideRepoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
 )
+
+// projectGuideHeading starts the project section (#54). The fixed part above it comes from the operator only.
+const projectGuideHeading = "\n## Project guide (from the members of project %s, not from agentdev)\n\n"
+
+// guideMaxProjectBytes caps the project section in the guide (the CRD allows 8 KiB; the whole guide stays small).
+const guideMaxProjectBytes = 8192
+
+// projectOf returns the agent's Project when spec.project names one that contains spec.repo on the same forge. The
+// reason is "" for no project, else why the project is not used.
+func (r *AgentReconciler) projectOf(ctx context.Context, a *v1.Agent) (*v1.Project, string, error) {
+	if a.Spec.Project == "" {
+		return nil, "", nil
+	}
+	var p v1.Project
+	if err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: a.Spec.Project}, &p); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Sprintf("project %q not found", a.Spec.Project), nil
+		}
+		return nil, "", err
+	}
+	if forgeOr(p.Spec.Forge) != forgeOr(a.Spec.Forge) {
+		return nil, fmt.Sprintf("project %q is on forge %s, the agent on %s", p.Name, forgeOr(p.Spec.Forge), forgeOr(a.Spec.Forge)), nil
+	}
+	for _, repo := range p.Spec.Repos {
+		if repo == a.Spec.Repo {
+			return &p, "", nil
+		}
+	}
+	return nil, fmt.Sprintf("spec.repo %s is not in project %q", a.Spec.Repo, p.Name), nil
+}
+
+func forgeOr(f string) string {
+	if f == "" {
+		return "gitea"
+	}
+	return f
+}
+
+// projectSection is the project's own guide text: control characters other than newline and tab removed, size capped
+// at a line end. It is data from project members; the heading says so, and it comes after the fixed part.
+func projectSection(p *v1.Project) string {
+	if p == nil {
+		return ""
+	}
+	var b strings.Builder
+	if len(p.Spec.Repos) > 1 {
+		var repos []string
+		for _, x := range p.Spec.Repos {
+			if guideRepoRe.MatchString(x) {
+				repos = append(repos, x)
+			}
+		}
+		if len(repos) > 0 {
+			fmt.Fprintf(&b, "- Project %s: repositories %s.\n", p.Name, strings.Join(repos, " "))
+		}
+	}
+	text := strings.Map(func(c rune) rune {
+		if c == '\n' || c == '\t' || (c >= 0x20 && c != 0x7f && !(c >= 0x80 && c < 0xa0)) {
+			return c
+		}
+		return -1
+	}, strings.ReplaceAll(p.Spec.GuideAppend, "\r\n", "\n"))
+	text = strings.TrimSpace(text)
+	if len(text) > guideMaxProjectBytes {
+		text = text[:guideMaxProjectBytes]
+		if i := strings.LastIndexByte(text, '\n'); i > 0 {
+			text = text[:i]
+		}
+		text = strings.ToValidUTF8(text, "")
+	}
+	if text != "" {
+		fmt.Fprintf(&b, projectGuideHeading, p.Name)
+		b.WriteString(text + "\n")
+	}
+	return b.String()
+}
 
 // guideText renders the guide of agent a from trusted operator inputs only.
 func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
@@ -149,6 +225,11 @@ func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
 		}
 	}
 	return out
+}
+
+// guideWithProject is the fixed guide plus the project section, which is appended after the capped fixed part.
+func (r *AgentReconciler) guideWithProject(a *v1.Agent, execs []v1.Executor, p *v1.Project) string {
+	return r.guideText(a, execs) + projectSection(p)
 }
 
 // executorsFor lists the Executors whose repository is a's (EXEC_NS); none when executors are off.

@@ -138,6 +138,7 @@ rules:
   - agentdev.dev
   resources:
   - executors
+  - projects
   - projectsecrets
   verbs:
   - get

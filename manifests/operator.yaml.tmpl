@@ -9,6 +9,8 @@ kind: Role
 metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 rules:   # same rules as the generated images/operator/config/rbac/role.yaml, scoped to one namespace
 - {apiGroups: [agentdev.dev], resources: [agents, agents/status], verbs: [get, list, watch, update, patch]}
+# projects (#54): read only; members edit spec.guideAppend through the API
+- {apiGroups: [agentdev.dev], resources: [projects], verbs: [get, list, watch]}
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
 - {apiGroups: [""], resources: [services], verbs: [get, list, watch, create, update, patch, delete]}
 # volume layout change (#173): the operator deletes an agent's old claims when it recreates its StatefulSet
