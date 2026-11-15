@@ -82,10 +82,12 @@ type server struct {
 	upstream *url.URL
 	proxy    *httputil.ReverseProxy
 	now      func() time.Time
+	authMode string         // CLAUDE_PROXY_AUTH: key, token or both (#352)
+	reviewer *tokenReviewer // nil when authMode is key
 }
 
 func newServer(signing []byte, creds credStore, b *budget, upstream *url.URL, transport http.RoundTripper) *server {
-	s := &server{signing: signing, creds: creds, budget: b, prices: newPrices(""), jobs: newJobs(), upstream: upstream, now: time.Now}
+	s := &server{signing: signing, creds: creds, budget: b, prices: newPrices(""), jobs: newJobs(), upstream: upstream, now: time.Now, authMode: authKey}
 	s.proxy = &httputil.ReverseProxy{
 		Rewrite:        s.rewrite,
 		ModifyResponse: s.observe,
@@ -184,10 +186,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p)})
 		return
 	}
-	agent := verifyKey(s.signing, callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key")))
+	agent, kind := s.authenticate(r)
 	if agent == "" {
 		s.tel.refuse("", "bad_key")
-		emitEvent("", "proxy-key-invalid", "medium", r.Method+" "+clip(r.URL.Path, 100)+": missing or wrong agent key")
+		emitEvent("", "proxy-key-invalid", "medium", r.Method+" "+clip(r.URL.Path, 100)+": missing or wrong agent "+kind+" (auth mode "+s.authMode+")")
 		apiError(w, http.StatusUnauthorized, "authentication_error", "claude-proxy: missing or wrong agent key")
 		return
 	}
@@ -211,6 +213,27 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred, s.now()})))
+}
+
+// authenticate returns the agent and the kind of credential seen ("token", "key" or "credential" when none). A JWT
+// goes to TokenReview (modes token, both), anything else to the HMAC check (modes key, both). The identity comes only
+// from the credential, never from another header.
+func (s *server) authenticate(r *http.Request) (string, string) {
+	c := callerKey(r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"))
+	switch {
+	case c == "":
+		return "", "credential"
+	case looksLikeJWT(c):
+		if s.authMode == authKey || s.reviewer == nil {
+			return "", "token"
+		}
+		return s.reviewer.verify(r.Context(), c), "token"
+	default:
+		if s.authMode == authToken {
+			return "", "key"
+		}
+		return verifyKey(s.signing, c), "key"
+	}
 }
 
 func clip(s string, n int) string {
@@ -253,6 +276,23 @@ func main() {
 		log.Fatal(err)
 	}
 	s.tel = tel
+	s.authMode = envOr("CLAUDE_PROXY_AUTH", authBoth)
+	switch s.authMode {
+	case authKey:
+	case authToken, authBoth:
+		ns := envOr("AGENTS_NAMESPACE", os.Getenv("POD_NAMESPACE"))
+		if !agentRe.MatchString(ns) {
+			log.Fatal("AGENTS_NAMESPACE (or POD_NAMESPACE) must name the namespace of the agent service accounts")
+		}
+		if s.reviewer, err = inClusterReviewer(ns); err != nil {
+			if s.authMode == authToken {
+				log.Fatalf("CLAUDE_PROXY_AUTH=token needs the in-cluster API: %v", err)
+			}
+			log.Printf("token auth off, HMAC keys only: %v", err)
+		}
+	default:
+		log.Fatal("CLAUDE_PROXY_AUTH must be key, token or both")
+	}
 	srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -265,7 +305,7 @@ func main() {
 		defer cancel()
 		_ = srv.Shutdown(c)
 	}()
-	log.Printf("claude-proxy listening on %s, upstream %s, default budget %d units", srv.Addr, up.Host, def)
+	log.Printf("claude-proxy listening on %s, upstream %s, default budget %d units, auth %s", srv.Addr, up.Host, def, s.authMode)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

@@ -85,6 +85,11 @@ github_app:
 #     namespace: tailscale
 #     pod_selector: {app: ts-ingress}       # optional
 #     # cidrs: [100.64.0.0/10]              # a reverse proxy outside the cluster
+#     deploy:                               # optional (#316): the playbook runs the funnel forwarder (headlamp)
+#       image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # pinned: a release, a sha tag or a digest
+#       control_url: https://headscale.example.com
+#       # api_url: http://funnel-ingress:9100  # default
+#       # authkey_secret: funnel-sidecar-authkey   # Secret Manager secret with the pre-auth key (default)
 # The proxy sets Host, X-Forwarded-Proto and X-Forwarded-For; authentik trusts them only from these ranges:
 # authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.

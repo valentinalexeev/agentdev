@@ -279,6 +279,9 @@ with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetr
 | Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
 | Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
+| Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
+| Accepted identity | `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE): `key`, `both` (default) or `token` |
+| Access to the API server | the proxy has the service account `claude-proxy`, bound to the ClusterRole `agentdev-claude-proxy-tokenreview` (`tokenreviews` `create` only). Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
 | Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
@@ -286,6 +289,35 @@ with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetr
 | Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
 | Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
 | Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
+
+### Agent identity at the Claude proxy (#352)
+
+Each agent has its own Kubernetes service account `agent-<agent>`. The operator makes it. The agent container gets a
+token of this service account with the audience `claude-proxy`. The token expires after 10 minutes, and Kubernetes
+renews it. The proxy checks the token with the Kubernetes TokenReview API.
+
+The setting `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE) selects what the proxy accepts:
+
+| Value | The proxy accepts |
+|---|---|
+| `key` | only the proxy key (the behaviour before 1.1) |
+| `both` | the proxy key or the token. This is the default |
+| `token` | only the token. The proxy refuses the proxy key |
+
+A worker of 1.1 or later sends the token. An older worker sends the proxy key.
+
+To accept only the token:
+
+1. Make sure that each agent runs a worker of 1.1 or later:
+   `kubectl -n coding-agents get pods -l app=coding-agent -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'`
+2. Make sure that no `proxy-key-invalid` security event shows `wrong agent token` after the upgrade.
+3. On `kind`: set `CLAUDE_PROXY_AUTH=token` in `config.env`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
+4. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+5. Run `scripts/e2e-gke-security.sh`. Make sure that the proxy key check shows PASS.
+
+CAUTION: Do not set `token` while an agent runs an older worker. The proxy then refuses all calls of that agent.
+
+To go back, set `both` and deploy again.
 
 WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that
 agent from inside the cluster.
@@ -303,6 +335,16 @@ The router starts a stopped agent when:
 
 NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
 1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
+
+NOTE: The worker asks the proxy once at start whether it takes the token. When the proxy answers 401 (mode `key`, or
+a proxy from before 1.1) or does not answer, the agent uses its key. So agents keep working during an upgrade in
+any order and after a switch back to `key`.
+
+NOTE: The NetworkPolicy of the proxy allows only the addresses of the Service `default/kubernetes` at deploy time.
+On GKE these addresses can change (control plane IP rotation, a change of the private endpoint). Then the token
+check fails with 401 until the next playbook run. In mode `both` the agents use their key meanwhile. In mode
+`token` all agents stop. After such a change, run the playbook again. `scripts/e2e-gke-security.sh` checks that the
+proxy reaches the API server.
 
 ### Settings
 
@@ -1393,6 +1435,45 @@ no pod is Ready for 10 minutes, the operator writes a warning to its log. It als
 source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event. Each outage gives one event. To
 change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
 namespace that can only read pods. Without `pod_selector`, the monitor is off.
+
+#### Deployed forwarder
+
+With `ingress.forwarder.deploy`, the playbook also runs the funnel forwarder of headlamp (#316). Before, the
+deployment repository applied its own manifest, and a forwarder that lost its route registration stayed not Ready
+until somebody restarted it (headlamp#95).
+
+1. Put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey` (other name:
+   `ingress.forwarder.deploy.authkey_secret`).
+2. In `ansible/instance.yml`, set the forwarder namespace, the pod selector and `deploy`:
+
+   ```yaml
+   ingress:
+     mode: external
+     forwarder:
+       namespace: agentdev-funnel
+       pod_selector: {app: funnel-forwarder}
+       deploy:
+         image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # a release, a sha tag or a digest
+         control_url: https://headscale.example.com
+   ```
+
+3. Run the playbook. It makes the namespace, the Secret `funnel-sidecar`, a Deployment with one replica, and a
+   NetworkPolicy. The forwarder can reach DNS, the UI, the router's public port, authentik and public addresses.
+   Nothing can connect to it.
+4. Delete the old manifest from the deployment repository (for example `k8s/funnel-forwarder.yaml`). The Deployment
+   name `funnel-forwarder` stays the same, so the playbook takes over the existing Deployment. Kubernetes does not
+   let a run change the selector of a Deployment: when the old selector is not `ingress.forwarder.pod_selector`, the
+   run fails. Then delete the old Deployment
+   (`kubectl -n agentdev-funnel delete deployment funnel-forwarder`) and run the playbook again.
+
+The readiness probe and the liveness probe ask `/readyz`. It answers 200 only while every route is registered. The
+liveness probe restarts the pod after 10 minutes without registration (`liveness_period_seconds` 30 x
+`liveness_failure_threshold` 20). The published Services are, by default, the UI, `/hook` of the router, and authentik
+when the role deploys it (`deploy.services`, format `name=port@host:port`). The router's internal port 8081 is never
+published. The playbook refuses an image tag `main` or `latest`, and a `control_url` that does not use `https`. A new
+key version in Secret Manager restarts the forwarder on the next run. The NetworkPolicy blocks private, CGNAT and
+link-local addresses. When headscale or `funnel-ingress` has such an address, add it in `deploy.egress_cidrs`
+(for example `[100.64.0.0/10]`; no range wider than `/8`).
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.

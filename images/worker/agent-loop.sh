@@ -44,10 +44,39 @@ drop_stale_claude_login() {
     rm -f "${HOME}/.claude.json.tmp"
   fi
 }
+# Workload identity (#352): with the projected service account token mounted (audience claude-proxy, renewed by the
+# kubelet), Claude Code reads it through apiKeyHelper and sends it instead of the HMAC key. The helper is passed with
+# --settings on each call (not written to the claude volume, so nothing the model edits changes it). The TTL makes
+# Claude Code call the helper again each minute, so the rotated file is read. ANTHROPIC_AUTH_TOKEN would win over the
+# helper, so it is removed for the claude process. Without the file (older operator) the key stays as before.
+# Mixed versions (ADR 0006, #398 review): a proxy in mode key, or a 1.0 proxy, refuses the token with 401. The loop
+# asks the proxy once with the token (count_tokens, no spend; the proxy checks the caller before anything else) and
+# keeps the HMAC key when the answer is 401 or the proxy does not answer.
+PROXY_TOKEN_FILE="${PROXY_TOKEN_FILE:-/var/run/secrets/agentdev/proxy/token}"
+CLAUDE_AUTH=()
+proxy_accepts_token() {  # 0 when the proxy at ANTHROPIC_BASE_URL takes the token in $1
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H "Authorization: Bearer $(cat "$1")" \
+    -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' --data '{}' \
+    "${ANTHROPIC_BASE_URL%/}/v1/messages/count_tokens" 2>/dev/null) || return 1
+  [[ "${code}" =~ ^[0-9]{3}$ && "${code}" != 000 && "${code}" != 401 ]]
+}
+claude_proxy_auth() {
+  CLAUDE_AUTH=()
+  [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${PROXY_TOKEN_FILE}" ]] || return 0
+  if ! proxy_accepts_token "${PROXY_TOKEN_FILE}"; then
+    log "claude-proxy refuses the workload token (mode key or an older proxy): using the agent key"
+    return 0
+  fi
+  CLAUDE_AUTH=(--settings "$(jq -cn --arg f "${PROXY_TOKEN_FILE}" '{apiKeyHelper: ("cat " + ($f | @sh))}')")
+  export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+  unset ANTHROPIC_AUTH_TOKEN
+}
 # ---------- end Claude credential proxy ----------
 drop_stale_claude_login
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
+claude_proxy_auth   # after log(): it logs the fallback to the agent key
 # security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
 # #70). JOB is set inside each background job (start_job). Written to fd 3, the loop's own stdout (exec 3>&1 below),
 # so an event raised inside a captured function (dir=$(worktree ...)) or a job's prefixed pipe stays a clean line.
@@ -436,7 +465,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
-          claude -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
+          claude "${CLAUDE_AUTH[@]}" -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
@@ -708,7 +737,11 @@ ${summary}"
   fi
   rm -f "${STATE}/seen/issue-${n}.asked"
   if push_step "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
-    local pr
+    local pr opened_at
+    # #394: the feedback cursor starts when the PR is opened, not after the follow-up calls (review request, label,
+    # board): a comment in those seconds was older than the cursor and never answered. A second earlier is safe, the
+    # agent's own comments are filtered out by login.
+    opened_at=$(date -u -d '-1 second' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1S +%Y-%m-%dT%H:%M:%SZ)
     # #175: a restart after the PR was created must not open a second one (the forge refuses it anyway)
     pr=$(open_pr_for "${branch}")
     [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
@@ -728,8 +761,8 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     [[ -n "${stopped}" ]] && comment "${n}" "🤖 I opened PR #${pr}, but: ${stopped}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
     echo "${n} ${title}" > "${STATE}/seen/pr-${pr}.board"   # issue number and title for later card updates
-    # anything already on the PR at this point is ours; start the feedback cursor after it
-    date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
+    # feedback by others from the moment the PR was opened is answered (#394)
+    [[ -r "${STATE}/seen/pr-${pr}" ]] || echo "${opened_at}" > "${STATE}/seen/pr-${pr}"
   else
     log "no changes produced for issue #${n}"
     board_card "issue-${n}" "#${n} ${title}" blocked "could not produce a change (see the issue)" "$(web_url "issues/${n}")"
@@ -1129,7 +1162,7 @@ ready_check() {
   else lines+=("- ❌ forge: no push access to ${REPO}"); ok=0; fi
   if api GET "/repos/${REPO}/issues?state=open&$(per_page 1)" >/dev/null; then lines+=("- ✅ tracker: issues of ${REPO}")
   else lines+=("- ❌ tracker: cannot list issues of ${REPO}"); ok=0; fi
-  if claude_out=$(cd /tmp && timeout 120 claude -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
+  if claude_out=$(cd /tmp && timeout 120 claude "${CLAUDE_AUTH[@]}" -p "Reply with exactly: OK" --max-turns 1 2>&1) && [[ "${claude_out}" == *OK* ]]; then
     lines+=("- ✅ claude: $(claude --version 2>/dev/null)")
   else
     log "readiness: claude check failed: ${claude_out}"   # full text only in the pod log, never on the issue

@@ -11,6 +11,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [agents, agents/status], verbs: [get, list, watch, update, patch]}
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
 - {apiGroups: [""], resources: [services], verbs: [get, list, watch, create, update, patch, delete]}
+# workload identity (#352): one service account agent-<name> per agent (no token automount; the pod gets only a
+# projected claude-proxy token). No rights to bind roles or to create tokens.
+- {apiGroups: [""], resources: [serviceaccounts], verbs: [get, list, watch, create, update, delete]}
 # volume layout change (#173): the operator deletes an agent's old claims when it recreates its StatefulSet
 - {apiGroups: [""], resources: [persistentvolumeclaims], verbs: [get, delete]}
 - {apiGroups: [""], resources: [events], verbs: [create, patch]}

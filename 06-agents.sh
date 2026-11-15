@@ -110,6 +110,9 @@ CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS:-0}"
   || die "TELEMETRY_OTLP_URL must be an https URL"
 [[ "${TELEMETRY_INSTANCE:-agentdev}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "TELEMETRY_INSTANCE must be a DNS label"
 [[ "${CLAUDE_BUDGET_UNITS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_UNITS must be a number of cost units (0 = no limit)"
+[[ "${CLAUDE_PROXY_AUTH}" =~ ^(key|both|token)$ ]] || die "CLAUDE_PROXY_AUTH must be key, both or token (#352)"
+# workload identity (#352): the proxy reaches the API server for TokenReview, only at the addresses of default/kubernetes
+KUBE_API_EGRESS=$(KUBECTL="${KUBECTL}" "${SPIKE_DIR}/scripts/kube-api-egress.sh") || die "API server addresses not found"
 # #196: CLAUDE_PRICES ("key=value ...") becomes the ConfigMap claude-proxy-prices; the proxy checks the values again
 CLAUDE_PRICES_DATA="{"
 read -r -a prices_kv <<< "${CLAUDE_PRICES} "   # no globbing of the entries
@@ -123,7 +126,8 @@ CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA%, }}"
 AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAUDE_PROXY_IMAGE}" IMAGE_PULL_POLICY=Never \
   CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS}" CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA}" \
   TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_INSTANCE="${TELEMETRY_INSTANCE:-agentdev}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" TELEMETRY_SCRAPER_SELECTOR="${TELEMETRY_SCRAPER_SELECTOR}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_SECRET_SOURCES}' \
+  CLAUDE_PROXY_AUTH="${CLAUDE_PROXY_AUTH}" KUBE_API_EGRESS="${KUBE_API_EGRESS}" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_SECRET_SOURCES} ${CLAUDE_PROXY_AUTH} ${KUBE_API_EGRESS}' \
   < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"

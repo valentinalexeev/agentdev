@@ -65,11 +65,33 @@ class ApiError extends Error {
   }
 }
 
+// Connection state (#339): every call reports its result, so the console can show live, starting, unavailable or
+// signed out without a separate health check. 'starting': the ingress answers 502, 503 or 404 for the API while the
+// platform scales up from zero. 'offline': the browser has no network.
+export type CallResult = 'ok' | 'starting' | 'down' | 'offline' | 'unauthorized'
+const listeners = new Set<(r: CallResult) => void>()
+export function onCallResult(f: (r: CallResult) => void): () => void {
+  listeners.add(f)
+  return () => { listeners.delete(f) }
+}
+const report = (r: CallResult) => listeners.forEach((f) => f(r))
+
 async function call(token: string, method: string, path: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  const r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
-  if (r.status === 401) throw new Unauthorized('login expired')
+  let r: Response
+  try {
+    r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+  } catch (e) {
+    report(navigator.onLine === false ? 'offline' : 'down')
+    throw e
+  }
+  if (r.status === 401) { report('unauthorized'); throw new Unauthorized('login expired') }
+  // a JSON error from the API itself is an answer; an HTML 502/503/404 is the ingress while the API is away
+  const fromApi = (r.headers.get('content-type') ?? '').includes('json')
+  if (!fromApi && [404, 502, 503, 504].includes(r.status)) report('starting')
+  else if (r.status >= 500 && !fromApi) report('down')
+  else report('ok')
   if (!r.ok) {
     let msg = ''
     try { msg = (await r.json()).error ?? '' } catch { /* not JSON */ }
@@ -189,4 +211,12 @@ export async function setProjectLimits(token: string, repo: string, t: { fiveHou
 
 export function pctError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 100 ? '' : 'limit: 1 to 100 %'
+}
+
+// The caller (#57). `repos` (repositories with write access) is the proposal on #342 for "My projects"; an API
+// without it leaves the scope at all projects or one project.
+interface Me { preferred_username?: string; email?: string; groups?: string[]; repos?: string[] }
+
+export async function getMe(token: string): Promise<Me> {
+  return (await call(token, 'GET', '/api/me')).json()
 }

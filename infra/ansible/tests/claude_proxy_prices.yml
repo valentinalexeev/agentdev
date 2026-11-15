@@ -29,6 +29,8 @@
             TELEMETRY_SCRAPER_NS: gmp-system
             TELEMETRY_SCRAPER_SELECTOR: '{"app.kubernetes.io/name": "collector"}'
             CLAUDE_SECRET_SOURCES: "[]"
+            CLAUDE_PROXY_AUTH: both                                    # #352
+            KUBE_API_EGRESS: '[{"ipBlock": {"cidr": "10.0.0.1/32"}}]'  # #352
           replace: []
 
     - name: Units and prices reach the cluster objects
