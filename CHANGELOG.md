@@ -35,6 +35,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   (operator RBAC, claude-proxy, new images).
 
 ### Fixed
+- Console chat sessions with `claude_proxy_auth: token` (#400). The API's chat Job runs as the agent's service
+  account `agent-<agent>` (no automounted API token) with the projected token (audience `claude-proxy`, 10 min) in
+  the `chat` container only, like the agent pod (#352). The worker uses the token when the proxy takes it, else the
+  HMAC key, which stays mounted for mixed versions. The admission policy `agentdev-api-chat-jobs` now allows exactly
+  the service account `agent-<agent>` of the Job's `agentdev/chat-agent` label and that one projected volume. It
+  still refuses another service account, another audience or lifetime, and Secret volumes. Re-run: Ansible role
+  `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`) for the policy; new API and worker images (the same
+  `image_tag`). `scripts/e2e-gke-security.sh --only chat` checks the new shape.
 - Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
   request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
   compat e2e). New worker image; no `./run.sh` step.

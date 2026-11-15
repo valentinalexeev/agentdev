@@ -417,25 +417,44 @@ if section chat; then
     # the admission policy holds Jobs from the API's service account to the chat shape (server dry run, nothing is created)
     sa="system:serviceaccount:$PLATFORM_NS:agentdev-api"
     img=$(k -n "$PLATFORM_NS" get deploy agentdev-api -o json | jq -r '.spec.template.spec.containers[]|select(.name=="api")|.env[]?|select(.name=="CHAT_WORKER_IMAGE")|.value')
-    job() {  # job <image> <secret> <caps-add json>
-      jq -n --arg ns "$AGENTS_NS" --arg img "$1" --arg sec "$2" --argjson add "$3" --arg a "$AGENT" '{apiVersion:"batch/v1",kind:"Job",
+    # job <image> <secret> <caps-add json> [service account] [token audience] [extra volume json]: the shape of
+    # images/api/chat_kube.go, with the agent's service account and its projected claude-proxy token (#400)
+    job() {
+      jq -n --arg ns "$AGENTS_NS" --arg img "$1" --arg sec "$2" --argjson add "$3" --arg a "$AGENT" \
+        --arg sa "${4:-agent-$AGENT}" --arg aud "${5:-claude-proxy}" --argjson xv "${6:-[]}" '{apiVersion:"batch/v1",kind:"Job",
         metadata:{name:"chat-e2e-admission",namespace:$ns,labels:{app:"agent-chat","agentdev/console":"true","agentdev/chat-agent":$a,session:"chat-e2e-admission"}},
         spec:{backoffLimit:0,template:{metadata:{labels:{app:"agent-chat","agentdev/console":"true"}},spec:{restartPolicy:"Never",
-          runtimeClassName:"gvisor",automountServiceAccountToken:false,volumes:[{name:"state",emptyDir:{}}],
+          runtimeClassName:"gvisor",serviceAccountName:$sa,automountServiceAccountToken:false,
+          volumes:([{name:"state",emptyDir:{}},
+            {name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:$aud,expirationSeconds:600,path:"token"}}]}}] + $xv),
           containers:[{name:"chat",image:$img,command:["true"],
             env:[{name:"ANTHROPIC_AUTH_TOKEN",valueFrom:{secretKeyRef:{name:$sec,key:"ANTHROPIC_AUTH_TOKEN",optional:true}}}],
+            volumeMounts:[{name:"proxy-token",mountPath:"/var/run/secrets/agentdev/proxy",readOnly:true}],
             securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"],add:$add}}}]}}}}'; }
     try() { job "$@" | k create --dry-run=server --as="$sa" -f - -o name 2>&1; }
+    denied() { echo "$1" | grep -q 'agentdev-api-chat-jobs'; }
     if [ -z "$img" ]; then skip "chat admission checks: CHAT_WORKER_IMAGE not set on agentdev-api"
     else
-      out=$(try "$img" "agent-$AGENT-proxy" '[]'); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
-      check $? "admission: the API may create a console chat Job of the expected shape (control)" "$(echo "$out" | head -1)"
-      out=$(try "busybox:latest" "agent-$AGENT-proxy" '[]'); echo "$out" | grep -q 'agentdev-api-chat-jobs'
+      p="agent-$AGENT-proxy"
+      out=$(try "$img" "$p" '[]'); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: the API may create a console chat Job of the expected shape (agent-$AGENT, projected claude-proxy token; control)" "$(echo "$out" | head -1)"
+      out=$(try "busybox:latest" "$p" '[]'); denied "$out"
       check $? "admission: the API cannot create a chat Job with another image" "$(echo "$out" | head -1)"
-      out=$(try "$img" "agentdev-api-forge" '[]'); echo "$out" | grep -q 'agentdev-api-chat-jobs'
+      out=$(try "$img" "agentdev-api-forge" '[]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that reads another Secret" "$(echo "$out" | head -1)"
-      out=$(try "$img" "agent-$AGENT-proxy" '["NET_ADMIN"]'); echo "$out" | grep -q 'agentdev-api-chat-jobs'
+      out=$(try "$img" "$p" '["NET_ADMIN"]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that adds capabilities" "$(echo "$out" | head -1)"
+      # #400: only the service account of the Job's own agent, only audience claude-proxy, no Secret volume
+      for other in default agentdev-api agentdev-operator "agent-$AGENT-x"; do
+        out=$(try "$img" "$p" '[]' "$other"); denied "$out"
+        check $? "admission: the API cannot create a chat Job of agent $AGENT with service account $other" "$(echo "$out" | head -1)"
+      done
+      out=$(try "$img" "$p" '[]' "" "kubernetes"); denied "$out"
+      check $? "admission: the API cannot create a chat Job with a projected token for another audience" "$(echo "$out" | head -1)"
+      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","secret":{"secretName":"agentdev-api-forge"}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
+      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","projected":{"sources":[{"secret":{"name":"agentdev-api-forge"}}]}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
     fi
     # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
     # the operator of this script, so the check runs on every cluster (#389 review)
