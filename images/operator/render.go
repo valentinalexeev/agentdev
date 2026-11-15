@@ -176,6 +176,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
+			env("CLAUDE_PROXY_URL", r.D.ClaudeProxyURL), // #310: cost approvals read the job state from GET /status
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more

@@ -39,7 +39,13 @@ type jobTotal struct {
 	Requests int64            `json:"requests"`
 	First    time.Time        `json:"first"`
 	Last     time.Time        `json:"last"`
-	tokens   tokenCounts
+	Stopped  bool             `json:"stopped,omitempty"` // refused by CLAUDE_JOB_BUDGET_UNITS
+	// #310: the job is at its soft limit (CLAUDE_JOB_APPROVAL_UNITS) and waits for approval step ApprovalStep. The
+	// forge sidecar reads these fields (GET /status) to build the cost approval request: never from the agent.
+	WaitingApproval bool  `json:"waitingApproval,omitempty"`
+	ApprovalStep    int64 `json:"approvalStep,omitempty"`
+	ApprovalLimit   int64 `json:"approvalLimit,omitempty"` // the current soft limit of the job, in units
+	tokens          tokenCounts
 }
 
 type jobs struct {
@@ -82,6 +88,41 @@ func (j *jobs) used(agent, job string) int64 {
 		return e.Units
 	}
 	return 0
+}
+
+// firstRefusal marks the job as stopped and is true only the first time (one event per job).
+func (j *jobs) firstRefusal(agent, job string) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	e := j.m[agent][job]
+	if e == nil || e.Stopped {
+		return false
+	}
+	e.Stopped = true
+	return true
+}
+
+// askApproval marks the job as waiting for approval step at limit; true only the first time for that step (one
+// job-approval-needed event per job and step, #310).
+func (j *jobs) askApproval(agent, job string, step, limit int64) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	e := j.m[agent][job]
+	if e == nil {
+		return false
+	}
+	first := !e.WaitingApproval || e.ApprovalStep != step
+	e.WaitingApproval, e.ApprovalStep, e.ApprovalLimit = true, step, limit
+	return first
+}
+
+// approvalGranted records that an approval raised the job's soft limit to limit.
+func (j *jobs) approvalGranted(agent, job string, limit int64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if e := j.m[agent][job]; e != nil {
+		e.WaitingApproval, e.ApprovalLimit = false, limit
+	}
 }
 
 // pruneLocked drops jobs older than the retention and keeps room for one more job of the agent.

@@ -153,7 +153,7 @@ export interface Approval {
   repo: string
   forge: string
   job: string
-  source: 'claude' | 'push' | 'executor'
+  source: 'claude' | 'push' | 'executor' | 'cost'   // cost: soft job limit (#310)
   tool: string
   input: string // written by the agent: untrusted, shown as text only
   untrusted: boolean

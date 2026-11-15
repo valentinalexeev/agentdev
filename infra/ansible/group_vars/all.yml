@@ -32,6 +32,12 @@ claude_budget_units: null           # #196: cost units per agent per 24 h (input
 # The effective value is claude_budget_units_effective (tasks below).
 claude_prices: {}                   # #196: ConfigMap claude-proxy-prices (w_in, w_cw5, w_cw1h, w_cr, w_out, model.<prefix>,
                                     # usd_per_million_units); {} = built-in weights, no USD estimate
+# Per job in cost units (#196 D6, #310), 0 = off. claude_job_budget_units: hard limit of one job id. claude_job_approval_units:
+# soft limit, lower than the hard one: the agent asks a person (approval source cost), each approval adds
+# claude_job_approval_step_units (0 = the soft limit). A rejection or no answer in time ends the job as failed.
+claude_job_budget_units: 0
+claude_job_approval_units: 0
+claude_job_approval_step_units: 0
 # Telemetry (#196, ADR 0002 D4/D5): claude-proxy and the operator serve metrics on 9464, reachable only from the
 # scraper namespace (Managed Service for Prometheus: gmp-system). otlp_url: https OTLP endpoint for metrics and spans.
 telemetry:

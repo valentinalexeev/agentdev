@@ -130,6 +130,13 @@ units = units * m(model)
   bill by API key.
 - A per-job cap in the proxy (`CLAUDE_JOB_BUDGET_UNITS`, 0 = off) refuses further requests of one job id with 429.
   Because the job id is agent-supplied (D3), this is a loop guard, not a security bound.
+- Note (#310): a soft cap below it (`CLAUDE_JOB_APPROVAL_UNITS`, 0 = off) asks a person before the hard stop. At the
+  soft cap the proxy answers 429 with the marker `agentdev:job_approval`. The loop keeps the job and its Claude
+  session and asks the forge sidecar, which files an Approval (#67) of source `cost` with the numbers it reads from
+  the proxy's `GET /status`. Each allowed Approval raises the cap of that job by `CLAUDE_JOB_APPROVAL_STEP_UNITS`. The
+  proxy reads the Approvals itself from the Kubernetes API (get and list only), so the control channel is the
+  Approval status that only agentdev-api writes after a person decided (D1). The worker never tells the proxy to
+  raise it. The hard cap is unchanged and an approval cannot pass it.
 
 ### D7. Claude Code native telemetry: optional and never trusted
 

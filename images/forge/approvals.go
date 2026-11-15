@@ -52,7 +52,7 @@ type approvalRequest struct {
 	Repo        string `json:"repo"`
 	Forge       string `json:"forge"`
 	Job         string `json:"job"`
-	Source      string `json:"source"` // claude | push
+	Source      string `json:"source"` // claude | push | cost (#310)
 	Tool        string `json:"tool"`
 	Input       string `json:"input"`
 	ContentHash string `json:"contentHash"`
@@ -97,7 +97,8 @@ type approvals struct {
 	inflight map[string]chan struct{}    // fingerprint -> closed when the request being created for it is in reqs
 	voidWait time.Duration               // first pause between void attempts (doubles each time)
 	now      func() time.Time
-	selfID   int64 // the agent's forge account id, looked up once
+	selfID   int64  // the agent's forge account id, looked up once
+	proxyURL string // claude-proxy (CLAUDE_PROXY_URL), for cost approvals (#310); "" = none
 }
 
 func newApprovals(s *server, apiURL string, timeout time.Duration) *approvals {
@@ -344,6 +345,11 @@ func (a *approvals) commentBody(r *approvalRequest, status string) string {
 	body := fmt.Sprintf("%s (%s `%s`)\n\n%s\n%s\n%s\n\n", head, r.Source, r.Tool, fence, r.Input, fence)
 	if status != "" && !strings.HasPrefix(status, "still open") {
 		return body + "This request is closed. A decision comment on it has no effect."
+	}
+	if r.Source == "cost" { // #310: one step of cost units for this job; approve-job counts as approve
+		return body + fmt.Sprintf("The job reached its cost limit. A person with write access to this repository can answer "+
+			"with one of these comments:\n- `/approve %s`: allow one more step of cost units for this job\n- `/deny %s`: stop "+
+			"the job\n\nThe agent waits %d minutes, then the job stops as failed.", r.ID, r.ID, r.TimeoutSec/60)
 	}
 	return body + fmt.Sprintf("A person with write access to this repository can answer with one of these comments:\n"+
 		"- `/approve %s`: allow once\n- `/approve-job %s`: allow exactly this request again until the job ends "+
@@ -701,4 +707,114 @@ func approvalsConfig(get func(string, string) string) (on bool, apiURL string, t
 	}
 	apiURL = get("APPROVALS_URL", "")
 	return get("APPROVALS", "false") == "true" && apiURL != "", apiURL, time.Duration(min) * time.Minute
+}
+
+// ---- cost approvals (#310) ----
+
+// costStatus is the part of claude-proxy's GET /status the sidecar reads. The proxy is the only source of the numbers:
+// the loop only names its job, and the model never writes any of these values.
+type costStatus struct {
+	StepUnits int64 `json:"approvalStepUnits"`
+	Jobs      []struct {
+		Agent           string `json:"agent"`
+		Job             string `json:"job"`
+		Units           int64  `json:"units"`
+		WaitingApproval bool   `json:"waitingApproval"`
+		ApprovalStep    int64  `json:"approvalStep"`
+		ApprovalLimit   int64  `json:"approvalLimit"`
+	} `json:"jobs"`
+}
+
+// proxyJob asks claude-proxy for the state of job. ok=false: the proxy does not report the job as waiting.
+func (a *approvals) proxyJob(ctx context.Context, job string) (used, limit, step, stepUnits int64, ok bool, err error) {
+	if a.proxyURL == "" {
+		return 0, 0, 0, 0, false, errors.New("no claude-proxy (CLAUDE_PROXY_URL)")
+	}
+	c, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(c, http.MethodGet, a.proxyURL+"/status", nil)
+	if err != nil {
+		return 0, 0, 0, 0, false, err
+	}
+	resp, err := a.s.client.Do(req)
+	if err != nil {
+		return 0, 0, 0, 0, false, errors.New("claude-proxy unreachable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, 0, 0, false, fmt.Errorf("claude-proxy: HTTP %d", resp.StatusCode)
+	}
+	var st costStatus
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&st); err != nil {
+		return 0, 0, 0, 0, false, errors.New("claude-proxy: bad status")
+	}
+	for _, j := range st.Jobs {
+		if j.Agent == a.s.c.AgentName && j.Job == job && j.WaitingApproval && j.ApprovalStep > 0 && j.ApprovalStep < 1000000 && st.StepUnits > 0 {
+			return j.Units, j.ApprovalLimit, j.ApprovalStep, st.StepUnits, true, nil
+		}
+	}
+	return 0, 0, 0, 0, false, nil
+}
+
+// costApproval serves POST /cost-approval?job=: the loop's job hit the soft limit of claude-proxy. The sidecar checks
+// with the proxy that the job really waits, files one request (source cost, tool step-<n>) with the numbers the proxy
+// reported and waits for the decision. Answer: {"state": "allowed|denied|void|pending|none"}. The proxy raises the
+// limit itself when it sees the allowed Approval; this answer only tells the loop whether to resume.
+func (a *approvals) costApproval(w http.ResponseWriter, r *http.Request) {
+	job := r.URL.Query().Get("job")
+	if !jobRe.MatchString(job) {
+		http.Error(w, "bad job", http.StatusBadRequest)
+		return
+	}
+	answer := func(state string) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"state": state})
+	}
+	used, limit, step, stepUnits, waiting, err := a.proxyJob(r.Context(), job)
+	if err != nil {
+		a.s.logf("cost approval %s: %v", job, err)
+		answer("pending")
+		return
+	}
+	tool := fmt.Sprintf("step-%d", step)
+	key := job + "\x00cost\x00" + tool
+	a.mu.Lock()
+	done := a.jobTools[key]
+	a.mu.Unlock()
+	if !waiting {
+		if done {
+			answer("allowed") // allowed earlier; the proxy may not have read it yet
+			return
+		}
+		answer("none")
+		return
+	}
+	if done {
+		answer("allowed")
+		return
+	}
+	input := fmt.Sprintf("job %s of agent %s used %d of %d cost units (soft limit, CLAUDE_JOB_APPROVAL_UNITS). "+
+		"Approval step %d allows %d more units, up to %d. The numbers come from claude-proxy, not from the agent. "+
+		"Without an approval the job stops as failed.", job, a.s.c.AgentName, used, limit, step, stepUnits, limit+stepUnits)
+	req, err := a.request(job, "cost", tool, input, "cost\x00"+key)
+	if err != nil {
+		a.s.logf("cost approval %s: %v", job, err)
+		answer("pending")
+		return
+	}
+	d := a.wait(r.Context(), req, a.timeout)
+	if d.State == "allowed" {
+		a.mu.Lock()
+		a.jobTools[key] = true
+		delete(a.reqs, req.fp)
+		a.mu.Unlock()
+		a.s.logf("cost approval %s: %s allowed by %s", req.ID, tool, d.DecidedBy)
+	}
+	state := d.State
+	switch state {
+	case "allowed", "denied", "void":
+	default:
+		state = "pending"
+	}
+	answer(state)
 }

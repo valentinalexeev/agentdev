@@ -110,6 +110,16 @@ CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS:-0}"
   || die "TELEMETRY_OTLP_URL must be an https URL"
 [[ "${TELEMETRY_INSTANCE:-agentdev}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "TELEMETRY_INSTANCE must be a DNS label"
 [[ "${CLAUDE_BUDGET_UNITS}" =~ ^[0-9]+$ ]] || die "CLAUDE_BUDGET_UNITS must be a number of cost units (0 = no limit)"
+# per job (#196, #310): hard limit, soft limit with approval (must be lower than the hard limit) and its step
+for v in CLAUDE_JOB_BUDGET_UNITS CLAUDE_JOB_APPROVAL_UNITS CLAUDE_JOB_APPROVAL_STEP_UNITS; do
+  [[ "${!v:-0}" =~ ^[0-9]{1,15}$ ]] || die "${v} must be a number of cost units (0 = off)"
+done
+if (( 10#${CLAUDE_JOB_APPROVAL_UNITS:-0} > 0 && 10#${CLAUDE_JOB_BUDGET_UNITS:-0} > 0 )) \
+   && (( 10#${CLAUDE_JOB_APPROVAL_UNITS} >= 10#${CLAUDE_JOB_BUDGET_UNITS} )); then
+  die "CLAUDE_JOB_APPROVAL_UNITS must be lower than CLAUDE_JOB_BUDGET_UNITS (#310)"
+fi
+(( 10#${CLAUDE_JOB_APPROVAL_UNITS:-0} == 0 )) || [[ "${APPROVALS:-false}" == true ]] \
+  || warn "CLAUDE_JOB_APPROVAL_UNITS is set but APPROVALS=false: a job at the soft limit stops without a question"
 [[ "${CLAUDE_PROXY_AUTH}" =~ ^(key|both|token)$ ]] || die "CLAUDE_PROXY_AUTH must be key, both or token (#352)"
 # workload identity (#352): the proxy reaches the API server for TokenReview, only at the addresses of default/kubernetes
 KUBE_API_EGRESS=$(KUBECTL="${KUBECTL}" "${SPIKE_DIR}/scripts/kube-api-egress.sh") || die "API server addresses not found"
@@ -127,7 +137,9 @@ AGENTS_NS="${AGENTS_NS}" PLATFORM_NS="${PLATFORM_NS}" CLAUDE_PROXY_IMAGE="${CLAU
   CLAUDE_BUDGET_UNITS="${CLAUDE_BUDGET_UNITS}" CLAUDE_PRICES_DATA="${CLAUDE_PRICES_DATA}" \
   TELEMETRY_OTLP_URL="${TELEMETRY_OTLP_URL:-}" TELEMETRY_INSTANCE="${TELEMETRY_INSTANCE:-agentdev}" TELEMETRY_SCRAPER_NS="${TELEMETRY_SCRAPER_NS:-monitoring}" TELEMETRY_SCRAPER_SELECTOR="${TELEMETRY_SCRAPER_SELECTOR}" CLAUDE_SECRET_SOURCES="$("${SPIKE_DIR}/scripts/claude-proxy-sources.sh" ${AGENTS})" \
   CLAUDE_PROXY_AUTH="${CLAUDE_PROXY_AUTH}" KUBE_API_EGRESS="${KUBE_API_EGRESS}" \
-  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_SECRET_SOURCES} ${CLAUDE_PROXY_AUTH} ${KUBE_API_EGRESS}' \
+  CLAUDE_JOB_BUDGET_UNITS="$((10#${CLAUDE_JOB_BUDGET_UNITS:-0}))" CLAUDE_JOB_APPROVAL_UNITS="$((10#${CLAUDE_JOB_APPROVAL_UNITS:-0}))" \
+  CLAUDE_JOB_APPROVAL_STEP_UNITS="$((10#${CLAUDE_JOB_APPROVAL_STEP_UNITS:-0}))" \
+  envsubst '${AGENTS_NS} ${PLATFORM_NS} ${CLAUDE_PROXY_IMAGE} ${IMAGE_PULL_POLICY} ${CLAUDE_BUDGET_UNITS} ${CLAUDE_PRICES_DATA} ${TELEMETRY_OTLP_URL} ${TELEMETRY_INSTANCE} ${TELEMETRY_SCRAPER_NS} ${TELEMETRY_SCRAPER_SELECTOR} ${CLAUDE_SECRET_SOURCES} ${CLAUDE_PROXY_AUTH} ${KUBE_API_EGRESS} ${CLAUDE_JOB_BUDGET_UNITS} ${CLAUDE_JOB_APPROVAL_UNITS} ${CLAUDE_JOB_APPROVAL_STEP_UNITS}' \
   < "${SPIKE_DIR}/manifests/claude-proxy.yaml.tmpl" | k apply -f - >/dev/null
 k -n "${AGENTS_NS}" rollout restart deploy/claude-proxy >/dev/null   # pick up a rebuilt local image and new Secrets
 k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null || die "claude-proxy did not become ready"

@@ -73,17 +73,20 @@ type reqInfo struct {
 }
 
 type server struct {
-	signing  []byte
-	creds    credStore
-	budget   *budget
-	prices   *prices
-	jobs     *jobs
-	tel      *telemetry // nil = no metrics (tests)
-	upstream *url.URL
-	proxy    *httputil.ReverseProxy
-	now      func() time.Time
-	authMode string         // CLAUDE_PROXY_AUTH: key, token or both (#352)
-	reviewer *tokenReviewer // nil when authMode is key
+	signing   []byte
+	creds     credStore
+	budget    *budget
+	prices    *prices
+	jobs      *jobs
+	tel       *telemetry     // nil = no metrics (tests)
+	jobLimit  int64          // CLAUDE_JOB_BUDGET_UNITS (#196 D6): loop guard per job id; 0 = off
+	approval  approvalConfig // CLAUDE_JOB_APPROVAL_UNITS (#310): soft limit per job, raised only by an approval
+	approvals approvalSource // allowed cost Approvals (approval.go); nil = none can raise the soft limit
+	upstream  *url.URL
+	proxy     *httputil.ReverseProxy
+	now       func() time.Time
+	authMode  string         // CLAUDE_PROXY_AUTH: key, token or both (#352)
+	reviewer  *tokenReviewer // nil when authMode is key
 }
 
 func newServer(signing []byte, creds credStore, b *budget, upstream *url.URL, transport http.RoundTripper) *server {
@@ -183,7 +186,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				bs[i].UsedUSD = &usd
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p)})
+		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p),
+			"approvalStepUnits": s.approval.step}) // #310: units one cost approval adds (0 = soft limit off)
 		return
 	}
 	agent, kind := s.authenticate(r)
@@ -207,12 +211,28 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: the budget of agent "+agent+" for 24 h is used")
 		return
 	}
+	job := cleanJob(r.Header.Get(jobHeader))
+	// loop guard (#196 D6): the job id comes from the agent, so this only stops a run that loops, it is not a
+	// security bound (the per-agent budget above is)
+	if s.jobLimit > 0 && job != "" {
+		if used := s.jobs.used(agent, job); used >= s.jobLimit {
+			s.tel.refuse(agent, "job_budget")
+			if s.jobs.firstRefusal(agent, job) {
+				emitEvent(agent, "job-budget-exhausted", "low", "job "+job+" used "+strconv.FormatInt(used, 10)+" of "+strconv.FormatInt(s.jobLimit, 10)+" units (CLAUDE_JOB_BUDGET_UNITS)")
+			}
+			apiError(w, http.StatusTooManyRequests, "rate_limit_error", "claude-proxy: job "+job+" of agent "+agent+" used its budget (CLAUDE_JOB_BUDGET_UNITS)")
+			return
+		}
+	}
+	if refused := s.softLimit(w, agent, job); refused {
+		return
+	}
 	cred, ok := s.creds.lookup(agent)
 	if !ok {
 		apiError(w, http.StatusServiceUnavailable, "api_error", "claude-proxy: no Claude credential for agent "+agent)
 		return
 	}
-	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, cleanJob(r.Header.Get(jobHeader)), cred, s.now()})))
+	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, job, cred, s.now()})))
 }
 
 // authenticate returns the agent and the kind of credential seen ("token", "key" or "credential" when none). A JWT
@@ -269,8 +289,26 @@ func main() {
 		log.Fatal(err)
 	}
 	b := newBudget(def, os.Getenv("BUDGET_DIR"), os.Getenv("STATE_FILE"))
+	jobLimit, err := strconv.ParseInt(envOr("CLAUDE_JOB_BUDGET_UNITS", "0"), 10, 64)
+	if err != nil || jobLimit < 0 {
+		log.Fatal("CLAUDE_JOB_BUDGET_UNITS must be a non-negative integer")
+	}
 	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
 	s.prices = newPrices(os.Getenv("PRICES_DIR"))
+	s.jobLimit = jobLimit
+	if s.approval, err = approvalFromEnv(os.Getenv, jobLimit); err != nil {
+		log.Fatal(err)
+	}
+	if s.approval.soft > 0 {
+		ns := envOr("AGENTS_NAMESPACE", os.Getenv("POD_NAMESPACE"))
+		ka, kerr := inClusterApprovals(ns)
+		if kerr != nil || !agentRe.MatchString(ns) {
+			// fail closed: the soft limit holds, no approval can raise it
+			log.Printf("WARNING: cannot read Approvals (%v): CLAUDE_JOB_APPROVAL_UNITS is a hard stop", kerr)
+		} else {
+			s.approvals = ka
+		}
+	}
 	tel, err := newTelemetry(os.Getenv("TELEMETRY_OTLP_URL"), b)
 	if err != nil {
 		log.Fatal(err)

@@ -33,6 +33,8 @@ var (
 	approvalHashRe = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	approvalJobRe  = regexp.MustCompile(`^(issue|pr)-[0-9]{1,10}$`)
 	approvalRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// #310: a cost request names the approval step; claude-proxy counts one allowed step per distinct tool
+	costToolRe = regexp.MustCompile(`^step-[1-9][0-9]{0,5}$`)
 )
 
 type rawApproval struct {
@@ -84,7 +86,7 @@ func approvalFromLine(line string, pod *corev1.Pod, container, ns string) (*v1.A
 		r.Forge = "gitea"
 	}
 	if !approvalIDRe.MatchString(r.ID) || !approvalHashRe.MatchString(r.ContentHash) || !approvalHashRe.MatchString(r.SecretHash) || r.RequesterID <= 0 || !approvalJobRe.MatchString(r.Job) ||
-		!approvalRepoRe.MatchString(r.Repo) || len(r.Repo) > 201 || (r.Source != "claude" && r.Source != "push") ||
+		!approvalRepoRe.MatchString(r.Repo) || len(r.Repo) > 201 || (r.Source != "claude" && r.Source != "push" && !(r.Source == "cost" && costToolRe.MatchString(r.Tool))) ||
 		(r.Forge != "gitea" && r.Forge != "github") || r.Tool == "" || len(r.Tool) > 128 || len(r.Input) > 4100 {
 		return nil, false
 	}
