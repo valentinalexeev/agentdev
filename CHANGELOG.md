@@ -21,6 +21,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   changes; a 1.0 worker or forge sidecar does not ask, so its job stops at the soft limit like at a hard limit. Re-run:
   `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE (claude-proxy Role, approvals CRD, new
   images).
+- Web Push notifications (#347). People subscribe a device in the console **Settings** and get a notification for a
+  new approval, an agent stopped by a guardrail or blocked, and a usage pause. The notification has the agent,
+  repository, request type and expiry only, never text from the model. **Deny** and **Snooze** work from the
+  notification with a signed single-use token; **Approve** opens the approval drawer. Each person switches types and
+  mutes projects in **Settings** (stored in the API database). New `NotificationChannel` resource (cluster admin:
+  type `webpush`, VAPID Secret, allowed push hosts) and instance value `notifications.channels` (`kind`:
+  `NOTIFY_CHANNELS`), off by default. Re-run: Ansible role `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`)
+  for the CRD, the VAPID key pair, the database tables and the API RBAC; new API and UI images. Bark: #402.
 - Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
   adversarial review, 72 attack paths with the risk register entries that answer them, and 35 candidate questions
   (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
@@ -46,6 +54,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   the agents.
 
 ### Security
+- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
+  payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
 - R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
   a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
   audience. `scripts/e2e-gke-security.sh` checks a token of another audience (401) and, in mode `token`, the HMAC key
@@ -592,6 +602,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 - Step 11 (#106): `11-ui.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags ui`: the web UI
   tasks of the role `api` (moved to `roles/api/tasks/ui.yml`, same tasks on GKE), with the image built and loaded into
   kind. Changed: the UI restarts only after a new image, so a second run changes nothing. GKE does not change.
+- Step 13 (#106): `13-secrets.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags secrets` (new
+  role `secrets_store`: External Secrets Operator with the same Helm settings, the CEL policies and the Kubernetes
+  SecretStore). The tag then runs the role `operator` again, as the old step ran step 12. GKE does not change.
 
 ### Added
 - authentik on GKE (#114). New Ansible role `authentik`: the same Helm chart, `manifests/authentik-values.yaml` and

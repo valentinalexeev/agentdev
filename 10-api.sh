@@ -18,7 +18,9 @@ t0=$(ms_now)
 export FORGE_ADMIN_PASSWORD
 vars=$(jq -nc --arg ap "${APPROVALS:-false}" --arg deny "${APPROVAL_DENY_ACCOUNTS:-}" \
   --arg u5 "${USAGE_FIVE_HOUR:-80}" --arg uw "${USAGE_WEEKLY:-90}" \
+  --arg nc "${NOTIFY_CHANNELS:-}" --arg ns "${NOTIFY_SUBJECT:-mailto:admin@agentdev.local}" \
   '{approvals: {enabled: ($ap == "true")}, usage: {five_hour: $u5, weekly: $uw},
+    notifications: {channels: ($nc | split(",") | map(select(length > 0))), subject: $ns},
     api_approval_deny_accounts: ($deny | split(",") | map(select(length > 0)))}')
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags api \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \

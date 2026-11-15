@@ -13,3 +13,5 @@ GRANT EXECUTE ON FUNCTION api_audit_prune() TO agentdev_api;
 -- nobody can plant a shadowing object in the SECURITY DEFINER function's search_path (pg_catalog, public).
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CREATE ON SCHEMA public TO agentdev_owner;
+-- notifications for each user (#347): per-user data the API owns and changes (not an audit trail)
+GRANT SELECT, INSERT, UPDATE, DELETE ON notify_users, push_subscriptions, notify_settings, push_action_nonces TO agentdev_api;

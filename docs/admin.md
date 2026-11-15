@@ -1048,6 +1048,9 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
 | `approvals.enabled` | `true` | `APPROVALS` (`false`) |
 | `usage.five_hour`, `usage.weekly` | `80`, `90` | `USAGE_FIVE_HOUR`, `USAGE_WEEKLY` |
+| `notifications.channels` | `[]` (off) | `NOTIFY_CHANNELS` (empty; `webpush` turns it on) |
+| `notifications.subject` | none (required with `webpush`) | `NOTIFY_SUBJECT` (`mailto:admin@agentdev.local`) |
+| `notifications.push_hosts` | FCM, Mozilla, Apple, Windows push services | the same list |
 
 - The API and the operator get the same `approvals.enabled` and `usage` values.
 
@@ -1057,6 +1060,58 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
   changes, the playbook restarts the API.
 - The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
   version, the playbook acts as if the secret is not there.
+
+### Turn on push notifications
+
+The API can send Web Push notifications to the people who subscribe in the web UI (#347). Each person chooses the
+types and mutes projects in **Settings**. The instance value turns the channel on or off.
+
+1. In `instance.yml`, add:
+   ```yaml
+   notifications:
+     channels: [webpush]
+     subject: mailto:ops@example.com
+   ```
+   On `kind`, set `NOTIFY_CHANNELS=webpush` and `NOTIFY_SUBJECT` in `config.env`.
+2. Run the playbook (`deploy.yml`), or `ansible-playbook infra/ansible/kind.yml --tags api` on `kind`.
+3. Check the result: `kubectl -n agentdev-platform get notificationchannels`.
+   The list shows `webpush` with the type `webpush`.
+4. Check the API log: `kubectl -n agentdev-platform logs deploy/agentdev-api | grep "web push"`.
+   The log shows "web push: on (NotificationChannel webpush)" in less than one minute.
+
+To turn it off, remove `webpush` from `notifications.channels` and run the playbook again. The playbook removes the
+`NotificationChannel`. The key pair stays, so the subscriptions work again when you turn it on.
+
+CAUTION: Do not delete or replace the VAPID key pair. All browser subscriptions then stop, and each person must
+subscribe again.
+
+### Reference: push notifications
+
+- `NotificationChannel` (`agentdev.dev/v1alpha1`, short name `nch`) is a resource in the platform namespace. Only
+  cluster admins write it. Fields: `type` (`webpush`), `subject` (`mailto:` or `https://`), `vapid.secretRef.name`
+  and `allowedHosts` (host names or `*.suffix`, max. 20).
+- The playbook makes the VAPID key pair one time: Secret Manager `platform-notify-vapid` on GKE, the file
+  `.secrets/platform/notify-vapid` on `kind`. It copies the pair to the Secret `agentdev-api-vapid`. The API can read
+  only this Secret, by name.
+- The API reads the `NotificationChannel` each minute. Without one, the push endpoints give 404.
+- A subscription is accepted only for an `https` URL on port 443 on a host of `allowedHosts`. The API refuses a
+  private, loopback or link-local address after DNS.
+- The API checks for new items each 15 seconds: pending approvals, agents paused by a guardrail or blocked, and
+  usage pauses. It sends to each person who can see the agent (`agentdev-admins`, or write access on the forge,
+  checked again for each notification) and who did not mute the project or the type.
+- Max. 30 notifications for each person in 10 minutes. Max. 10 devices for each person.
+- When a push service says 404 or 410, the API removes that subscription.
+- The data is in the API database: `push_subscriptions`, `notify_settings`, `notify_users` and `push_action_nonces`.
+- Bark: #402. Network-level egress policy for the API: #403.
+
+| Endpoint | Gives |
+|---|---|
+| `GET /api/push/vapid-public-key` | `publicKey` of the VAPID key pair. 404 when push is off |
+| `POST /api/push/subscriptions` | adds the `PushSubscription` of this browser (`endpoint`, `keys.p256dh`, `keys.auth`). 201, 400 for a bad endpoint or key, 409 over 10 devices |
+| `DELETE /api/push/subscriptions?endpoint=` | removes one subscription of the caller |
+| `GET /api/notify/settings` | `channels`, `types`, `mutes`, `projects` (the caller may mute), `subscriptions`, `snoozeMinutes`, `vapidPublicKey` |
+| `PUT /api/notify/settings` | `{types: {approvals, stopped, usage}, mutes: [{project, type}]}`; `type` `*` mutes the whole project. Replaces the caller's settings. Max. 30 changes a minute (429) |
+| `POST /api/push/action` | `{token}` from a notification button: `deny` or `snooze`. No bearer token: the action token is the credential. 401 for a bad or expired token, 409 when it was used |
 
 ### Connect to the API
 
@@ -2426,6 +2481,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Egress proxy | 06 | `deploy.yml` |
 | Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
+| Scoped secrets store (External Secrets Operator, policies, store) | 13 (`kind.yml --tags secrets`, role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
