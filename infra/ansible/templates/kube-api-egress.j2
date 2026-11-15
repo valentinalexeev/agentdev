@@ -1,0 +1,10 @@
+{#- NetworkPolicy egress peers for the Kubernetes API server (#352): one /32 per address of Service default/kubernetes
+    (ClusterIP) and of its endpoints. Same output as scripts/kube-api-egress.sh (kind). Input: kube_api_ips. -#}
+{%- set out = [] -%}
+{%- for ip in kube_api_ips -%}
+{%-   if ip is not match('^[0-9]{1,3}([.][0-9]{1,3}){3}$') -%}{{ ('not an IPv4 address: ' ~ ip) | mandatory(None) }}{%- endif -%}
+{%-   if {'ipBlock': {'cidr': ip ~ '/32'}} not in out -%}{%- set _ = out.append({'ipBlock': {'cidr': ip ~ '/32'}}) -%}{%- endif -%}
+{%- endfor -%}
+{#- an empty list would render `to: []`, which allows every address (#398 review) -#}
+{%- if out | length == 0 -%}{{ 'no Kubernetes API address (Service default/kubernetes)' | mandatory(None) }}{%- endif -%}
+{{ out | to_json(separators=(',', ':')) }}

@@ -81,6 +81,21 @@ mkdir -p "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 jq -n --arg d "${WORK}" '{hasCompletedOnboarding: true, theme: "dark", projects: {($d): {hasTrustDialogAccepted: true}}}' \
   > "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
 cd "${WORK}" || exit 1
+# #352: with the projected token, Claude Code reads it through apiKeyHelper (re-read each minute) instead of the HMAC key
+# Mixed versions (#398 review): only when the proxy takes the token (a proxy in mode key answers 401), else the key.
+# The settings go to a file outside /state (the model's working state), read-only after writing.
+tok=/var/run/secrets/agentdev/proxy/token
+if [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${tok}" ]] && code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+     -X POST -H "Authorization: Bearer $(cat "${tok}")" -H 'Content-Type: application/json' \
+     -H 'anthropic-version: 2023-06-01' --data '{}' "${ANTHROPIC_BASE_URL%/}/v1/messages/count_tokens" 2>/dev/null) \
+   && [[ "${code}" =~ ^[0-9]{3}$ && "${code}" != 000 && "${code}" != 401 ]]; then
+  auth=$(mktemp -d)/claude-auth.json
+  jq -n --arg f "${tok}" '{apiKeyHelper: ("cat " + ($f | @sh))}' > "${auth}"
+  chmod 0444 "${auth}"
+  rc+=(--settings "${auth}")
+  export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+  unset ANTHROPIC_AUTH_TOKEN
+fi
 tmux new-session -d -s chat -x 200 -y 50 \
   "claude ${rc[*]} --append-system-prompt \"\$(cat /state/session-prompt.md)\"; echo 'claude exited; detach with Ctrl-b d'; sleep infinity"
 log "session ready: attach with scripts/agent-chat.sh attach (idle timeout ${IDLE_SECONDS}s)"

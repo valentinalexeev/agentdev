@@ -70,3 +70,8 @@ api_chat_forge_url: "{{ api_github_url if api_github else api_forge_url }}"
 api_sm_chat_key: agentdev-api-chat-token-key        # generated once
 api_sm_chat_clone_token: agentdev-chat-clone-token  # optional, read-only forge token for the clone
 api_sm_chat_issue_token: agentdev-chat-issue-token  # optional, Gitea only
+# The agents namespace (#357): the API manifest has objects in it. Steps 06 and 12 (GKE: deploy.yml) create it, the
+# role makes it too so that `kind.yml --tags api` works alone. Labels as deploy.yml (#184); kind.yml sets the same
+# cost labels as the operator role.
+api_ns_labels: "{{ agentdev_effective_labels }}"
+api_agents_ns_definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ api_ns_labels }}"}}

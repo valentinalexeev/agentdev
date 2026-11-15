@@ -18,6 +18,7 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 | `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`, same format and check as `claude-shared`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
+| `funnel-sidecar-authkey` | optional; only with `ingress.forwarder.deploy` (#316): the pre-auth key of the funnel forwarder (headscale). Synced to the Secret `funnel-sidecar` (key `authkey`) in `ingress.forwarder.namespace`. The name is `ingress.forwarder.deploy.authkey_secret` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
 
 SIEM addresses (not secret) go into `instance.yml` under `security.siem`: `webhook_url`, `syslog_addr`,
@@ -102,7 +103,9 @@ issuer, the UI callback and webhooks; `ingress.host` is required. `ingress.forwa
 in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-forwarder`,
 `webhook-router-from-forwarder` and `authentik-from-forwarder`; without it they are removed and default-deny stays.
 Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
-Test: `tests/ingress_external.yml`.
+Test: `tests/ingress_external.yml`. With `ingress.forwarder.deploy` the role also runs the funnel forwarder itself
+(#316, `tasks/forwarder.yml`): one replica, readiness and liveness on `/readyz`, the pre-auth key from Secret Manager,
+a NetworkPolicy. Test: `tests/ingress_forwarder_deploy.yml`.
 
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:

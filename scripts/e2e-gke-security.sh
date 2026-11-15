@@ -227,6 +227,27 @@ if section claude; then
     case "$base" in *claude-proxy*) pass "agent uses claude-proxy (ANTHROPIC_BASE_URL)";; *) fail "ANTHROPIC_BASE_URL does not point to claude-proxy";; esac
     code=$(probe forge https://api.anthropic.com/)
     ! reached "$code" && [ "$code" != 404 ]; check $? "forge: api.anthropic.com is refused" "HTTP $code"
+    # workload identity (#352, R107): the proxy refuses a token of the agent's service account for another audience,
+    # and in mode token also the HMAC key. Each request goes from the agent container, with only the header changed.
+    pcall='curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $1" "$ANTHROPIC_BASE_URL/v1/messages"'
+    mode=$(k -n "$AGENTS_NS" get deploy claude-proxy -o json | jq -r '[.spec.template.spec.containers[0].env[]?|select(.name=="CLAUDE_PROXY_AUTH")|.value][0] // "key"')
+    if [ "$mode" = key ]; then skip "claude-proxy token auth is off (CLAUDE_PROXY_AUTH=key or a proxy before 1.1)"
+    else
+      other=$(k -n "$AGENTS_NS" create token "agent-$AGENT" --audience other --duration 10m 2>/dev/null)
+      if [ -n "$other" ]; then
+        code=$(kexec agent sh -c "$pcall" pcall "$other" 2>/dev/null)
+        [ "$code" = 401 ]; check $? "claude-proxy refuses a token of agent-$AGENT for another audience (R107)" "HTTP $code"
+      else fail "cannot create a token for service account agent-$AGENT (operator 1.1 creates it)"; fi
+      kexec agent test -s /var/run/secrets/agentdev/proxy/token 2>/dev/null
+      check $? "agent container has the projected claude-proxy token (#352)"
+      ! kexec forge test -e /var/run/secrets/agentdev/proxy/token 2>/dev/null; check $? "forge container has no claude-proxy token"
+      code=$(kexec agent sh -c 'curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $(cat /var/run/secrets/agentdev/proxy/token)" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" != 401 ] && [ -n "$code" ]; check $? "claude-proxy accepts the agent's projected token (TokenReview reaches the API server)" "HTTP $code"
+    fi
+    if [ "$mode" = token ]; then
+      code=$(kexec agent sh -c 'k="${ANTHROPIC_AUTH_TOKEN:-}"; [ -n "$k" ] || { echo none; exit; }; curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $k" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" = 401 ] || [ "$code" = none ]; check $? "claude-proxy in mode token refuses the HMAC key (R107)" "HTTP $code"
+    else skip "HMAC key refusal (CLAUDE_PROXY_AUTH=$mode, not token)"; fi
     # the Claude Secrets are mounted by claude-proxy only
     users=$(k -n "$AGENTS_NS" get pods -o json | jq -r '.items[]|select(.metadata.labels.app!="claude-proxy")|.metadata.name as $p|
       [(.spec.volumes[]?|.secret.secretName//empty),(.spec.containers[]|(.env[]?|.valueFrom.secretKeyRef.name//empty),(.envFrom[]?|.secretRef.name//empty))]|

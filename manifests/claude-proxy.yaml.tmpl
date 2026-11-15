@@ -7,11 +7,33 @@
 # - It enforces a token budget per agent for 24 h (CLAUDE_BUDGET_TOKENS, per-agent files in ConfigMap
 #   claude-proxy-budgets) and prints the usage of every response as AGENTDEV_USAGE lines for the operator (#93), so
 #   usage no longer comes from inside the agent pod (closes R47).
+# - Workload identity (#352): agents may send a projected service account token (audience claude-proxy) instead of
+#   the key. The proxy checks it with TokenReview, so it has its own service account bound to the ClusterRole
+#   agentdev-claude-proxy-tokenreview (tokenreviews create, nothing else) and egress to the API server (KUBE_API_EGRESS, the
+#   ClusterIP and endpoint addresses of Service default/kubernetes, rendered by the caller). CLAUDE_PROXY_AUTH: key,
+#   both (default) or token (docs/admin.md).
 # - CLAUDE_SECRET_SOURCES is a list of projected-volume Secret sources, one per Claude Secret, rendered by the caller.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: claude-proxy-budgets, namespace: ${AGENTS_NS}}
 data: {}   # <agent>: "<tokens per 24 h>" overrides CLAUDE_BUDGET_TOKENS for that agent; 0 = no limit
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}
+automountServiceAccountToken: false   # the pod mounts a projected API token itself (below), only in the proxy
+---
+# tokenreviews create only (narrower than system:auth-delegator, which also gives subjectaccessreviews)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: agentdev-claude-proxy-tokenreview}
+rules: [{apiGroups: [authentication.k8s.io], resources: [tokenreviews], verbs: [create]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: agentdev-claude-proxy-tokenreview}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: agentdev-claude-proxy-tokenreview}
+subjects: [{kind: ServiceAccount, name: claude-proxy, namespace: ${AGENTS_NS}}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -24,7 +46,8 @@ spec:
     metadata:
       labels: {app: claude-proxy}
     spec:
-      automountServiceAccountToken: false
+      serviceAccountName: claude-proxy
+      automountServiceAccountToken: false   # the API token comes from the kube-api projected volume, same path
       securityContext: {runAsUser: 65532, runAsGroup: 65532, runAsNonRoot: true, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: proxy
@@ -36,6 +59,8 @@ spec:
         - {name: STATE_FILE, value: /var/lib/claude-proxy/spend.json}
         - {name: CREDENTIALS_DIR, value: /etc/claude-proxy/credentials}
         - {name: SIGNING_KEY_FILE, value: /etc/claude-proxy/signing/key}
+        - {name: CLAUDE_PROXY_AUTH, value: "${CLAUDE_PROXY_AUTH}"}   # key | both | token (#352)
+        - {name: AGENTS_NAMESPACE, value: "${AGENTS_NS}"}           # agent service accounts: agent-<name> here
         ports: [{name: http, containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
@@ -45,6 +70,7 @@ spec:
         - {name: signing, mountPath: /etc/claude-proxy/signing, readOnly: true}
         - {name: budgets, mountPath: /etc/claude-proxy/budgets, readOnly: true}
         - {name: state, mountPath: /var/lib/claude-proxy}
+        - {name: kube-api, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
         resources:
           requests: {cpu: 50m, memory: 64Mi}
           limits:   {cpu: "1", memory: 256Mi}
@@ -57,6 +83,12 @@ spec:
         configMap: {name: claude-proxy-budgets, optional: true}
       - name: state
         emptyDir: {sizeLimit: 16Mi}   # spend of the last 24 h; a new pod starts at zero (docs/security.md R11)
+      - name: kube-api   # the proxy's own API token for TokenReview (#352), as automount would give it
+        projected:
+          defaultMode: 0444
+          sources:
+          - serviceAccountToken: {path: token, expirationSeconds: 3600}
+          - configMap: {name: kube-root-ca.crt, items: [{key: ca.crt, path: ca.crt}]}
 ---
 apiVersion: v1
 kind: Service
@@ -66,7 +98,7 @@ spec:
   ports: [{name: http, port: 8080, targetPort: http}]
 ---
 # Only agent pods and chat sessions (model calls) and the management API (GET /status for the UI) reach the proxy; the proxy reaches
-# only DNS and HTTPS on public addresses. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (R30). On GKE,
+# only DNS, the API server (TokenReview, #352) and HTTPS on public addresses. Enforced on GKE (Dataplane V2); on kind it depends on the CNI (R30). On GKE,
 # when the cluster serves FQDNNetworkPolicy, the playbook adds one that narrows the egress to api.anthropic.com
 # (infra/ansible/deploy.yml); otherwise any public address on 443 stays reachable (docs/security.md R63).
 apiVersion: networking.k8s.io/v1
@@ -87,6 +119,9 @@ spec:
     - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: node-local-dns}}}
     - {ipBlock: {cidr: 169.254.20.10/32}}
     ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
+  # the API server for TokenReview (#352): only the addresses of Service default/kubernetes (ClusterIP and endpoints)
+  - to: ${KUBE_API_EGRESS}
+    ports: [{port: 443}, {port: 6443}]
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
