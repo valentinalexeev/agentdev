@@ -62,7 +62,7 @@
         that: "'api.anthropic.com' in kind_agents_agent_egress_hosts"
         quiet: true
 
-    - name: Render the router, egress and Claude proxy manifests with the role's value names
+    - name: Render the router and egress manifests (the Claude proxy is in the next play) with the role's value names
       ansible.builtin.set_fact:
         kind_agents_t_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=item) | from_yaml_all | list }}"
       loop:
@@ -74,10 +74,6 @@
           values: {AGENTS_NS: a, PLATFORM_NS: p, FORGE_NS: f, BOTBOARD_NS: b, EGRESS_HOSTS: pypi.org,
                    FORGE_EGRESS_HOSTS: github.com, EGRESS_PROXY_IMAGE: i, FORGE_PROXY_AUTH_SHA: "0123456789abcdef"}
           replace: []
-        - src: "{{ kind_agents_repo_root }}/manifests/claude-proxy.yaml.tmpl"
-          values: {AGENTS_NS: a, PLATFORM_NS: p, CLAUDE_PROXY_IMAGE: i, IMAGE_PULL_POLICY: Never, CLAUDE_BUDGET_TOKENS: "0",
-                   CLAUDE_SECRET_SOURCES: "[]"}
-          replace: []
       loop_control: {label: "{{ item.src | basename }}"}
 
     - name: The role sets the same value names (main.yml has each one)
@@ -86,4 +82,106 @@
         quiet: true
       loop: [AGENTS_NS, FORGE_SECRETS, REGISTER_TOKEN, ROUTER_IMAGE, IMAGE_PULL_POLICY, WAKE_POLL_SECONDS, GITEA_URL,
              GITHUB_API_URL, PLATFORM_NS, FORGE_NS, BOTBOARD_NS, EGRESS_HOSTS, FORGE_EGRESS_HOSTS, EGRESS_PROXY_IMAGE,
-             FORGE_PROXY_AUTH_SHA, CLAUDE_PROXY_IMAGE, CLAUDE_BUDGET_TOKENS, CLAUDE_SECRET_SOURCES]
+             FORGE_PROXY_AUTH_SHA, CLAUDE_PROXY_IMAGE]
+
+# ---------- Claude proxy settings ported from main's 06-agents.sh (#196, #310, #352) ----------
+- name: Role kind_agents Claude proxy settings
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/kind_agents/defaults/main.yml
+
+    - name: The repo root seen from tests/
+      ansible.builtin.set_fact:
+        kind_agents_repo_root: "{{ playbook_dir }}/../../.."
+
+    - name: Valid settings pass and give the expected values
+      ansible.builtin.include_tasks: cases/kind_agents_settings_case.yml
+      loop:
+        - {units: null, tokens: null, prices: "", want_units: 0, want_prices: {}}
+        - {units: "500", tokens: null, prices: "w_in=1 usd_per_million_units=3", want_units: 500,
+           want_prices: {w_in: "1", usd_per_million_units: "3"}}
+        - {units: null, tokens: "700", prices: "model.claude-opus=5.5", want_units: 700, want_prices: {model.claude-opus: "5.5"}}
+        - {units: "0", tokens: "700", prices: "", want_units: 0, want_prices: {}}
+        - {units: "", tokens: "", prices: "", want_units: 0, want_prices: {}, job: "100", approval: "50", step: "10"}
+      loop_control: {loop_var: case}
+
+    - name: Invalid settings fail
+      ansible.builtin.include_tasks: cases/kind_agents_settings_bad.yml
+      loop:
+        - {kind_agents_claude_prices: "w_in=x"}
+        - {kind_agents_claude_prices: "bogus=1"}
+        - {kind_agents_claude_budget_units: "-1"}
+        - {kind_agents_claude_job_budget_units: "100", kind_agents_claude_job_approval_units: "100"}
+        - {kind_agents_claude_job_budget_units: "abc"}
+        - {kind_agents_claude_proxy_auth: "none"}
+        - {kind_agents_telemetry: {otlp_url: "http://x", instance: agentdev, scraper_ns: monitoring, scraper_selector: {a: b}}}
+        - {kind_agents_telemetry: {otlp_url: "", instance: "Bad_Name", scraper_ns: monitoring, scraper_selector: {a: b}}}
+        - {kind_agents_telemetry: {otlp_url: "", instance: agentdev, scraper_ns: monitoring, scraper_selector: {}}}
+      loop_control: {loop_var: bad}
+
+    - name: KUBE_API_EGRESS from the shared template matches scripts/kube-api-egress.sh
+      ansible.builtin.command:
+        argv: ["{{ kind_agents_repo_root }}/scripts/kube-api-egress.sh", 10.96.0.1, 172.18.0.2, 10.96.0.1]
+      register: kind_agents_t_egress
+      changed_when: false
+
+    - name: Compare the API server peers
+      ansible.builtin.assert:
+        that:
+          - >-
+            (lookup('ansible.builtin.template', '../templates/kube-api-egress.j2',
+             template_vars={'kube_api_ips': ['10.96.0.1', '172.18.0.2', '10.96.0.1']}) | trim | from_json)
+            == (kind_agents_t_egress.stdout | from_json)
+        quiet: true
+
+    - name: Render the Claude proxy manifest with the new values
+      ansible.builtin.set_fact:
+        kind_agents_t_proxy: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=kind_agents_t_vars) | from_yaml_all | list }}"
+      vars:
+        kind_agents_t_vars:
+          src: "{{ kind_agents_repo_root }}/manifests/claude-proxy.yaml.tmpl"
+          values:
+            AGENTS_NS: a
+            PLATFORM_NS: p
+            CLAUDE_PROXY_IMAGE: i
+            IMAGE_PULL_POLICY: Never
+            CLAUDE_BUDGET_UNITS: "500"
+            TELEMETRY_OTLP_URL: ""
+            TELEMETRY_INSTANCE: agentdev
+            TELEMETRY_SCRAPER_NS: monitoring
+            TELEMETRY_SCRAPER_SELECTOR: "{{ kind_agents_telemetry.scraper_selector | to_json }}"
+            CLAUDE_PRICES_DATA: '{"w_in": "1"}'
+            CLAUDE_PROXY_AUTH: token
+            CLAUDE_JOB_BUDGET_UNITS: "100"
+            CLAUDE_JOB_APPROVAL_UNITS: "50"
+            CLAUDE_JOB_APPROVAL_STEP_UNITS: "10"
+            KUBE_API_EGRESS: '[{"ipBlock":{"cidr":"10.96.0.1/32"}}]'
+            CLAUDE_SECRET_SOURCES: "[]"
+          replace: []
+
+    - name: The rendered proxy has the env, prices and API server egress
+      ansible.builtin.assert:
+        that:
+          - "kind_agents_t_cm.data == {'w_in': '1'}"
+          - kind_agents_t_env.CLAUDE_PROXY_AUTH == 'token'
+          - kind_agents_t_env.CLAUDE_JOB_BUDGET_UNITS | string == '100'
+          - kind_agents_t_env.CLAUDE_JOB_APPROVAL_UNITS | string == '50'
+          - kind_agents_t_env.CLAUDE_JOB_APPROVAL_STEP_UNITS | string == '10'
+          - kind_agents_t_text is search('10.96.0.1/32')
+          - kind_agents_t_text is search('app.kubernetes.io/component')
+        quiet: true
+      vars:
+        kind_agents_t_cm: "{{ kind_agents_t_proxy | selectattr('metadata.name', 'equalto', 'claude-proxy-prices') | first }}"
+        kind_agents_t_dep: "{{ kind_agents_t_proxy | selectattr('kind', 'equalto', 'Deployment') | first }}"
+        kind_agents_t_env: "{{ kind_agents_t_dep.spec.template.spec.containers[0].env | items2dict(key_name='name', value_name='value') }}"
+        kind_agents_t_text: "{{ kind_agents_t_proxy | to_json }}"
+
+    - name: The role sets every value of the Claude proxy manifest
+      ansible.builtin.assert:
+        that: lookup('ansible.builtin.file', '../roles/kind_agents/tasks/main.yml') is search('\n\s+' ~ item ~ ':')
+        quiet: true
+      loop: [CLAUDE_BUDGET_UNITS, TELEMETRY_OTLP_URL, TELEMETRY_INSTANCE, TELEMETRY_SCRAPER_NS, TELEMETRY_SCRAPER_SELECTOR,
+             CLAUDE_PRICES_DATA, CLAUDE_PROXY_AUTH, CLAUDE_JOB_BUDGET_UNITS, CLAUDE_JOB_APPROVAL_UNITS,
+             CLAUDE_JOB_APPROVAL_STEP_UNITS, KUBE_API_EGRESS, CLAUDE_SECRET_SOURCES]

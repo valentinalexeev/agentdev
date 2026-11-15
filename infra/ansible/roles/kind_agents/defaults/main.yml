@@ -33,7 +33,24 @@ kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-50
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true
-kind_agents_claude_budget_tokens: 0
+# #196: budget per agent per 24 h in cost units (CLAUDE_BUDGET_UNITS); null = unset. kind_agents_claude_budget_tokens
+# (CLAUDE_BUDGET_TOKENS) is deprecated (removed in 2.0.0): alone it counts as units 1:1 (tasks/claude_budget.yml, as GKE)
+kind_agents_claude_budget_units: null
+kind_agents_claude_budget_tokens: null
+# CLAUDE_PRICES as in config.env: "key=value ..." (w_in w_cw5 w_cw1h w_cr w_out usd_per_million_units model.<prefix>)
+kind_agents_claude_prices: ""
+# per job in cost units, 0 = off (#196 D6, #310): hard limit, soft limit (lower than the hard one) and approval step
+kind_agents_claude_job_budget_units: 0
+kind_agents_claude_job_approval_units: 0
+kind_agents_claude_job_approval_step_units: 0
+kind_agents_approvals: false                  # APPROVALS: the soft limit asks a person only when true
+kind_agents_claude_proxy_auth: both           # key | both | token (#352)
+# telemetry (#196, #278): same keys as deploy.yml's telemetry; kind's scraper is the Prometheus of ./run.sh 14
+kind_agents_telemetry:
+  otlp_url: ""
+  instance: agentdev
+  scraper_ns: monitoring
+  scraper_selector: {app.kubernetes.io/name: prometheus, app.kubernetes.io/component: server}
 kind_agents_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
                            files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
 kind_agents_egress_extra_hosts: []

@@ -1,0 +1,21 @@
+# Parity check (#352): the playbook's API server egress peers equal scripts/kube-api-egress.sh (kind).
+# Run: ansible-playbook infra/ansible/tests/kube_api_egress.yml
+- name: Kube API egress peers match the kind script (#352)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kube_api_ips: [10.96.0.1, 172.18.0.2, 10.96.0.1]
+  tasks:
+    - name: Render the template
+      ansible.builtin.set_fact:
+        rendered: "{{ lookup('ansible.builtin.template', '../templates/kube-api-egress.j2') | trim | from_json }}"
+    - name: Run the kind helper
+      ansible.builtin.command: "{{ playbook_dir }}/../../../scripts/kube-api-egress.sh 10.96.0.1 172.18.0.2 10.96.0.1"
+      register: kind_out
+      changed_when: false
+    - name: Compare
+      ansible.builtin.assert:
+        that:
+          - rendered == (kind_out.stdout | from_json)
+          - rendered | length == 2
+          - rendered[1].ipBlock.cidr == '172.18.0.2/32'

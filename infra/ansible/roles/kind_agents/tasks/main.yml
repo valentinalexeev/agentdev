@@ -7,13 +7,14 @@
       - kind_agents_forge_kind in ['gitea', 'github']
       - kind_agents_agents | length > 0
       - kind_agents_agents | reject('match', kind_agents_name_re) | list | length == 0
-      - kind_agents_claude_budget_tokens | string is match('^[0-9]+$')
       - kind_agents_wake_poll_seconds | string is match('^[0-9]+$')
       - kind_agents_github_installation_id | string is match('^([1-9][0-9]{0,15})?$')
     fail_msg: >-
-      FORGE_KIND must be gitea or github; AGENTS are DNS labels; CLAUDE_BUDGET_TOKENS and WAKE_POLL_SECONDS are
-      numbers; GITHUB_INSTALLATION_ID is empty or a number
+      FORGE_KIND must be gitea or github; AGENTS are DNS labels; WAKE_POLL_SECONDS is a number; GITHUB_INSTALLATION_ID is empty or a number
     quiet: true
+
+- name: Claude proxy settings (budget, prices, job limits, auth mode, telemetry)
+  ansible.builtin.include_tasks: settings.yml
 
 - name: Secrets directory (0700)
   ansible.builtin.file: {path: "{{ kind_agents_secrets_dir }}", state: directory, mode: "0700"}
@@ -194,12 +195,26 @@
   register: kind_agents_signing
   no_log: true
 
+# workload identity (#352): the proxy calls TokenReview, so its NetworkPolicy allows the API server addresses
+- name: API server addresses (Service default/kubernetes) for the Claude proxy egress
+  kubernetes.core.k8s_info:
+    context: "{{ kind_agents_context }}"
+    kind: "{{ item }}"
+    namespace: default
+    name: kubernetes
+  loop: [Service, Endpoints]
+  register: kind_agents_kube_api
+
 - name: Claude credential proxy
   kubernetes.core.k8s:
     context: "{{ kind_agents_context }}"
     definition: "{{ lookup('ansible.builtin.template', '../../templates/render.j2', template_vars=kind_agents_vars_proxy) | from_yaml_all | list }}"
   vars:
     agents: "{{ kind_agents_agents | map('regex_replace', '^(.*)$', '{\"name\": \"\\1\"}') | map('from_json') | list }}"
+    kube_api_ips: >-
+      {{ ([kind_agents_kube_api.results[0].resources[0].spec.clusterIP] if kind_agents_kube_api.results[0].resources else [])
+         + (kind_agents_kube_api.results[1].resources | map(attribute='subsets', default=[]) | flatten
+            | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list) }}
     kind_agents_vars_proxy:
       src: "{{ kind_agents_repo_root }}/manifests/claude-proxy.yaml.tmpl"
       values:
@@ -207,7 +222,19 @@
         PLATFORM_NS: "{{ kind_agents_platform_ns }}"
         CLAUDE_PROXY_IMAGE: "{{ kind_agents_credproxy_image }}"
         IMAGE_PULL_POLICY: Never
-        CLAUDE_BUDGET_TOKENS: "{{ kind_agents_claude_budget_tokens | int }}"
+        CLAUDE_BUDGET_UNITS: "{{ claude_budget_units_effective | int }}"
+        TELEMETRY_OTLP_URL: "{{ kind_agents_telemetry.otlp_url | default('') }}"
+        TELEMETRY_INSTANCE: "{{ kind_agents_telemetry.instance | default('agentdev') }}"
+        TELEMETRY_SCRAPER_NS: "{{ kind_agents_telemetry.scraper_ns | default('monitoring') }}"
+        TELEMETRY_SCRAPER_SELECTOR: "{{ kind_agents_telemetry.scraper_selector | to_json }}"
+        # values as strings; the proxy checks each key and value again (#196)
+        CLAUDE_PRICES_DATA: "{{ dict(kind_agents_prices.keys() | zip(kind_agents_prices.values() | map('string'))) | to_json }}"
+        CLAUDE_PROXY_AUTH: "{{ kind_agents_claude_proxy_auth }}"
+        CLAUDE_JOB_BUDGET_UNITS: "{{ kind_agents_claude_job_budget_units | int }}"
+        CLAUDE_JOB_APPROVAL_UNITS: "{{ kind_agents_claude_job_approval_units | int }}"
+        CLAUDE_JOB_APPROVAL_STEP_UNITS: "{{ kind_agents_claude_job_approval_step_units | int }}"
+        # same template as deploy.yml (and scripts/kube-api-egress.sh); fails on an empty list
+        KUBE_API_EGRESS: "{{ lookup('ansible.builtin.template', '../../templates/kube-api-egress.j2', template_vars={'kube_api_ips': kube_api_ips}) | trim }}"
         # same output as scripts/claude-proxy-sources.sh (tests/kind_agents.yml compares them)
         CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', '../../templates/claude-proxy-sources.j2') | trim }}"
       replace: []

@@ -25,9 +25,20 @@ json_list() { if [[ -z "${1// }" ]]; then echo '[]'; else printf '%s\n' $1 | jq 
 vars=$(jq -nc --argjson a "$(json_list "${AGENTS}")" --argjson eh "$(json_list "${EGRESS_HOSTS}")" \
   --argjson ex "$(json_list "${EGRESS_EXTRA_HOSTS:-}")" --argjson fh "$(json_list "${FORGE_EGRESS_HOSTS}")" \
   --arg s2z "${SCALE_TO_ZERO}" --arg cp "${CLAUDE_PROXY:-true}" \
+  --arg bu "${CLAUDE_BUDGET_UNITS:-}" --arg bt "${CLAUDE_BUDGET_TOKENS:-}" --arg pr "${CLAUDE_PRICES:-}" \
+  --arg jb "${CLAUDE_JOB_BUDGET_UNITS:-0}" --arg ja "${CLAUDE_JOB_APPROVAL_UNITS:-0}" \
+  --arg js "${CLAUDE_JOB_APPROVAL_STEP_UNITS:-0}" --arg ap "${APPROVALS:-false}" --arg au "${CLAUDE_PROXY_AUTH:-both}" \
+  --arg tu "${TELEMETRY_OTLP_URL:-}" --arg ti "${TELEMETRY_INSTANCE:-agentdev}" --arg tn "${TELEMETRY_SCRAPER_NS:-monitoring}" \
+  --argjson tsel "${TELEMETRY_SCRAPER_SELECTOR}" \
   '{kind_agents_agents: $a, kind_agents_egress_hosts: $eh, kind_agents_egress_extra_hosts: $ex,
     kind_agents_forge_egress_hosts: $fh, kind_agents_scale_to_zero: ($s2z | ascii_downcase | IN("true", "1", "yes")),
-    kind_agents_claude_proxy: ($cp == "true")}')
+    kind_agents_claude_proxy: ($cp == "true"),
+    kind_agents_claude_budget_units: (if $bu == "" then null else $bu end),
+    kind_agents_claude_budget_tokens: (if $bt == "" then null else $bt end),
+    kind_agents_claude_prices: $pr, kind_agents_claude_job_budget_units: $jb, kind_agents_claude_job_approval_units: $ja,
+    kind_agents_claude_job_approval_step_units: $js, kind_agents_approvals: ($ap == "true"), kind_agents_claude_proxy_auth: $au,
+    kind_agents_telemetry: {otlp_url: $tu, instance: $ti, scraper_ns: $tn, scraper_selector: $tsel}}') \
+  || die "TELEMETRY_SCRAPER_SELECTOR must be a JSON object"
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags agents \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "kind_agents_container_engine=${CONTAINER_ENGINE}" \
   -e "kind_agents_secrets_dir=${SPIKE_DIR}/.secrets" -e "kind_agents_ns=${AGENTS_NS}" -e "kind_agents_platform_ns=${PLATFORM_NS}" \
@@ -37,8 +48,7 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "kind_agents_egress_proxy_image=${EGRESS_PROXY_IMAGE}" -e "kind_agents_forge_kind=${FORGE_KIND}" \
   -e "kind_agents_repo=${REPO}" -e "kind_agents_github_installation_id=${GITHUB_INSTALLATION_ID}" \
   -e "kind_agents_forge_url=${FORGE_HOST_URL}" -e "kind_agents_forge_admin_user=${FORGE_ADMIN_USER}" \
-  -e "kind_agents_max_concurrent=${MAX_CONCURRENT}" -e "kind_agents_max_turns=${MAX_TURNS}" -e "kind_agents_wake_poll_seconds=${WAKE_POLL_SECONDS}" \
-  -e "kind_agents_claude_budget_tokens=${CLAUDE_BUDGET_TOKENS}" -e "${vars}"
+  -e "kind_agents_max_concurrent=${MAX_CONCURRENT}" -e "kind_agents_max_turns=${MAX_TURNS}" -e "kind_agents_wake_poll_seconds=${WAKE_POLL_SECONDS}" -e "${vars}"
 s=$(( ($(ms_now)-t0)/1000 ))
 if [[ "${FORGE_KIND}" == github ]]; then
   ok "GitHub: the App's webhook goes to its public_url (GKE); on kind the agents poll every ${POLL_SECONDS}s"

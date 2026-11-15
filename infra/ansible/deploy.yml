@@ -9,6 +9,12 @@
 # Uses the same manifests as the kind setup (manifests/*.tmpl), so both environments stay in step.
 # Secrets come from Secret Manager at run time (gcloud as the caller) and are only ever passed to
 # the Kubernetes API: every task that touches one has no_log.
+# Read-only checks first (#314): Claude secret formats (#212), same release (#218), CRDs, images on ghcr.io.
+# Only the checks: --tags preflight (or scripts/upgrade-check.sh). Skip them: --skip-tags preflight.
+- name: Preflight
+  ansible.builtin.import_playbook: preflight.yml
+  tags: [preflight]
+
 - name: Deploy agentdev to GKE
   hosts: localhost
   gather_facts: false
@@ -78,6 +84,39 @@
           agentdev-api-internal, which this playbook deploys only with an OIDC issuer (api.oidc_issuer, or authentik
           with ingress.auth_host); without it every prompt and protected push would be refused. Set one, or opt out with approvals.enabled: false
           (docs/admin.md, Turn on approvals).
+        quiet: true
+
+    # #196 (ADR 0002 D2): the budget is in cost units. claude_budget_tokens is deprecated (1.2.0, removed in 2.0.0):
+    # alone it counts as units 1:1; claude_budget_units wins when both are set. Prices reach the ConfigMap as strings.
+    - name: "Claude budget in cost units (claude_budget_tokens deprecated, #196)"
+      ansible.builtin.include_tasks: tasks/claude_budget.yml
+
+    - name: Claude budget in cost units and valid prices (#196)
+      ansible.builtin.assert:
+        that:
+          - (claude_budget_units_effective | string) is match('^[0-9]+$')
+          - claude_prices is mapping
+          - (claude_job_budget_units | string) is match('^[0-9]{1,15}$')
+          - (claude_job_approval_units | string) is match('^[0-9]{1,15}$')
+          - (claude_job_approval_step_units | string) is match('^[0-9]{1,15}$')
+          - >-
+            (claude_job_approval_units | int) == 0 or (claude_job_budget_units | int) == 0
+            or (claude_job_approval_units | int) < (claude_job_budget_units | int)
+          - (telemetry.instance | default('agentdev')) is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+          - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
+          - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) is mapping"
+          - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) | length > 0"
+          - >-
+            claude_prices.keys()
+            | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$')
+            | list | length == 0
+          - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
+        fail_msg: >-
+          claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer;
+          claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$;
+          claude_job_budget_units, claude_job_approval_units and claude_job_approval_step_units are non-negative integers,
+          and claude_job_approval_units is lower than claude_job_budget_units when both are set (#310).
         quiet: true
 
     - name: Scale to zero has a wake source (#181)
@@ -401,6 +440,10 @@
             EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+            TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
             # external forwarder watch (#213): on only with ingress.forwarder namespace and pod_selector
             FORWARDER_NS: >-
               {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
@@ -646,6 +689,24 @@
       loop: "{{ proxy_keys.stdout_lines[:-1] if (claude_proxy | bool and not ansible_check_mode) else [] }}"
       no_log: true
 
+    # workload identity (#352): the proxy calls TokenReview, so its NetworkPolicy allows the API server addresses
+    - name: API server addresses (Service default/kubernetes) for the Claude proxy egress
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: "{{ item }}"
+        namespace: default
+        name: kubernetes
+      loop: [Service, Endpoints]
+      register: kube_api
+      when: claude_proxy | bool
+
+    # an empty peer list would make the egress rule match every address: fail instead
+    - name: The API server has at least one address
+      ansible.builtin.assert:
+        that: kube_api.results[0].resources | length > 0
+        fail_msg: "Service default/kubernetes not found: the Claude proxy NetworkPolicy cannot name the API server"
+      when: claude_proxy | bool and not ansible_check_mode
+
     - name: Claude credential proxy
       kubernetes.core.k8s:
         <<: *k8s
@@ -658,10 +719,25 @@
             PLATFORM_NS: "{{ platform_ns }}"
             CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
-            CLAUDE_BUDGET_TOKENS: "{{ claude_budget_tokens | int }}"
+            CLAUDE_BUDGET_UNITS: "{{ claude_budget_units_effective | int }}"
+            TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+            TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+            TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+            TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
+            # values as strings; the proxy checks each key and value again (#196)
+            CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
+            CLAUDE_PROXY_AUTH: "{{ claude_proxy_auth }}"   # key | both | token (#352)
+            CLAUDE_JOB_BUDGET_UNITS: "{{ claude_job_budget_units | int }}"                 # #196: hard limit per job
+            CLAUDE_JOB_APPROVAL_UNITS: "{{ claude_job_approval_units | int }}"             # #310: soft limit per job
+            CLAUDE_JOB_APPROVAL_STEP_UNITS: "{{ claude_job_approval_step_units | int }}"   # #310: units per approval
+            KUBE_API_EGRESS: "{{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': kube_api_ips}) | trim }}"
             # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
             CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
           replace: []
+        kube_api_ips: >-
+          {{ ([kube_api.results[0].resources[0].spec.clusterIP] if kube_api.results[0].resources else [])
+             + (kube_api.results[1].resources | map(attribute='subsets', default=[]) | flatten
+                | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list) }}
       when: claude_proxy | bool
 
     # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the

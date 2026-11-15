@@ -161,22 +161,50 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
 | Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
-## Claude proxy and token budget
+## Claude proxy and budget
 
 The Claude proxy (`claude-proxy`) is the only pod that has the Claude credentials (#66). An agent sends its model
 requests to the proxy with its proxy key. The proxy adds the real credential and sends the request to the Anthropic
-API. The proxy also counts the tokens of each agent and stops an agent that used its budget.
+API. The proxy also counts the spend of each agent and stops an agent that used its budget.
 
-### Set the token budget of all agents
+### Cost units
 
-The budget is the number of tokens (input, cache and output) that one agent can use in 24 hours.
+The budget counts **cost units**, not raw tokens (#196, [ADR 0002](adr/0002-llm-telemetry-and-cost-control.md)).
+One unit is the price of one input token at 3 USD per million (Sonnet 4.x). The proxy weights each token type and
+the model of the response:
 
-1. On `kind`: set `CLAUDE_BUDGET_TOKENS` in `config.env`. On GKE: set `claude_budget_tokens` in `instance.yml`.
+| Token type | Weight |
+|---|---|
+| input | 1 |
+| cache write, 5 minutes | 1.25 |
+| cache write, 1 hour | 2 |
+| cache read | 0.1 |
+| output | 5 |
+
+Model multipliers (input price / 3 USD, list prices of November 2026): Opus 5.5 1.33, Opus 4.5 to 5 1.67, Opus 4
+and 4.1 5, Sonnet 4.x 1, Sonnet 5 and 5.5 0.67, Haiku 4.5 0.33, Haiku 5.5 0.03, Fable 5.x 3.33. A family name (for
+example `claude-opus`) covers new versions at the current family price. A model outside every family counts with
+the highest multiplier. The token weights are the same for every model; some models price cache reads lower (Opus
+5.5: 0.05), so the units of those models are a little high. Change the multipliers in `claude-proxy-prices` when
+Anthropic changes its prices. Claude Code reads most of its context from the cache, so a run uses far fewer units
+than raw tokens (often less than 20 %).
+
+### Set the budget of all agents
+
+The budget is the number of cost units that one agent can use in 24 hours.
+
+1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `config.env`. On GKE: set `claude_budget_units` in `instance.yml`.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
 NOTE: The value 0 means no limit. This is the default.
 
-### Set the token budget of one agent
+NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` are deprecated since 1.2.0 and will be removed in 2.0.0.
+Until then they still work: when only the old variable is set, its value is used as cost units (1 token = 1 unit).
+When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy, `./run.sh 06` and the playbook
+show a warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
+tokens, so you can lower the value (see the CHANGELOG, 1.2.0 Deprecated).
+
+### Set the budget of one agent
 
 1. Run this command (use 0 for no limit):
    `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
@@ -184,11 +212,95 @@ NOTE: The value 0 means no limit. This is the default.
 
 NOTE: A deploy does not change this value. The template of the ConfigMap has no data.
 
-### Look at the token use
+### Change the weights or show USD
 
-1. Open the web UI. The column **Claude tokens (24 h)** shows the tokens of each agent and the budget.
+The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w_cw1h`, `w_cr`, `w_out`,
+`model.<name prefix>` (the longest prefix wins) and `usd_per_million_units`. Each value is a number with at most
+6 decimals. The proxy ignores a bad key or value, keeps the built-in value and writes a `proxy-price-invalid`
+security event.
+
+1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
+   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`. With 3, the USD
+   estimate follows the list prices, because one unit is priced at 3 USD per million.
+2. Deploy again. The proxy reads the ConfigMap again within one minute.
+
+NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
+`usd_per_million_units` only when the instance bills by API key. Without it, the web UI shows units only.
+
+### Limit the cost of one job
+
+A job is the work of an agent on one issue or one pull request. The proxy can stop a job that uses too many cost
+units (#196, #310). There are two limits per job:
+
+- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent writes
+  a comment "waiting for approval" with the source `cost` on its issue or pull request. One approval gives the job
+  one more step of units (`CLAUDE_JOB_APPROVAL_STEP_UNITS`). Then the agent continues in the same Claude session.
+- The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
+
+1. On `kind`: set `CLAUDE_JOB_APPROVAL_UNITS`, `CLAUDE_JOB_APPROVAL_STEP_UNITS` and `CLAUDE_JOB_BUDGET_UNITS` in
+   `config.env`. On GKE: set `claude_job_approval_units`, `claude_job_approval_step_units` and
+   `claude_job_budget_units` in `instance.yml`.
+2. On `kind`, set `APPROVALS=true`. On GKE, approvals are on by default.
+3. Deploy again: `./run.sh 06` and `./run.sh 12`, or a pull request in the deployment repository.
+
+NOTE: The value 0 means off. This is the default for all three settings. A step of 0 is the same as the soft limit.
+
+NOTE: The soft limit must be lower than the hard limit when you set both. `./run.sh 06`, the playbook and the proxy
+stop with an error if it is not.
+
+NOTE: A denial, a void request or no answer within the approval timeout (`APPROVAL_TIMEOUT_MINUTES`, default 30)
+ends the job as failed, as at the hard limit.
+
+NOTE: Only the proxy raises the limit. It reads the allowed approvals of the job from the Kubernetes API (Role
+`agentdev-claude-proxy-approvals`: `get` and `list` on `approvals`). The worker and the model cannot raise it.
+
+NOTE: The job id comes from the agent (`X-Agentdev-Job`). Thus the limits per job stop a run that loops. They are
+not a security limit. The budget of the agent (24 hours) is the security limit.
+
+### Look at the spend
+
+1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
+
+   `budgets` lists units per agent. `jobs` lists each job (issue or pull request) of the last 7 days with its
+   units, tokens by type and number of requests, most expensive first. The worker names the job in the header
+   `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
+   `weights` lists the weight of each token type. Each `AGENTDEV_USAGE` line of the proxy has `tokens` (by type),
+   `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
+   rounded up.
+
+### Metrics and OpenTelemetry
+
+`claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
+
+| Metric (Prometheus name) | What it shows |
+|---|---|
+| `gen_ai_client_token_usage` | tokens per request, by `gen_ai_token_type` (`input`, `output`) and `agentdev_cache` (`read`, `write`) |
+| `gen_ai_client_operation_duration_seconds` | time of a model request |
+| `agentdev_cost_units_total` | cost units by agent and model |
+| `agentdev_cost_usd_total` | estimated USD, only when `usd_per_million_units` is set |
+| `agentdev_budget_used`, `agentdev_budget_limit` | units of the agent in 24 hours, and its budget |
+| `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
+| `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
+| `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
+
+The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
+with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
+`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
 
 ### Reference: the Claude proxy
 
@@ -197,6 +309,9 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
 | Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
+| Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
+| Accepted identity | `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE): `key`, `both` (default) or `token` |
+| Access to the API server | the proxy has the service account `claude-proxy`, bound to the ClusterRole `agentdev-claude-proxy-tokenreview` (`tokenreviews` `create` only). Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
 | Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
@@ -204,6 +319,35 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
 | Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
 | Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
+
+### Agent identity at the Claude proxy (#352)
+
+Each agent has its own Kubernetes service account `agent-<agent>`. The operator makes it. The agent container gets a
+token of this service account with the audience `claude-proxy`. The token expires after 10 minutes, and Kubernetes
+renews it. The proxy checks the token with the Kubernetes TokenReview API.
+
+The setting `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE) selects what the proxy accepts:
+
+| Value | The proxy accepts |
+|---|---|
+| `key` | only the proxy key (the behaviour before 1.1) |
+| `both` | the proxy key or the token. This is the default |
+| `token` | only the token. The proxy refuses the proxy key |
+
+A worker of 1.1 or later sends the token. An older worker sends the proxy key.
+
+To accept only the token:
+
+1. Make sure that each agent runs a worker of 1.1 or later:
+   `kubectl -n coding-agents get pods -l app=coding-agent -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'`
+2. Make sure that no `proxy-key-invalid` security event shows `wrong agent token` after the upgrade.
+3. On `kind`: set `CLAUDE_PROXY_AUTH=token` in `config.env`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
+4. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+5. Run `scripts/e2e-gke-security.sh`. Make sure that the proxy key check shows PASS.
+
+CAUTION: Do not set `token` while an agent runs an older worker. The proxy then refuses all calls of that agent.
+
+To go back, set `both` and deploy again.
 
 WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that
 agent from inside the cluster.
@@ -221,6 +365,16 @@ The router starts a stopped agent when:
 
 NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
 1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
+
+NOTE: The worker asks the proxy once at start whether it takes the token. When the proxy answers 401 (mode `key`, or
+a proxy from before 1.1) or does not answer, the agent uses its key. So agents keep working during an upgrade in
+any order and after a switch back to `key`.
+
+NOTE: The NetworkPolicy of the proxy allows only the addresses of the Service `default/kubernetes` at deploy time.
+On GKE these addresses can change (control plane IP rotation, a change of the private endpoint). Then the token
+check fails with 401 until the next playbook run. In mode `both` the agents use their key meanwhile. In mode
+`token` all agents stop. After such a change, run the playbook again. `scripts/e2e-gke-security.sh` checks that the
+proxy reaches the API server.
 
 ### Settings
 
@@ -894,6 +1048,9 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
 | `approvals.enabled` | `true` | `APPROVALS` (`false`) |
 | `usage.five_hour`, `usage.weekly` | `80`, `90` | `USAGE_FIVE_HOUR`, `USAGE_WEEKLY` |
+| `notifications.channels` | `[]` (off) | `NOTIFY_CHANNELS` (empty; `webpush` turns it on) |
+| `notifications.subject` | none (required with `webpush`) | `NOTIFY_SUBJECT` (`mailto:admin@agentdev.local`) |
+| `notifications.push_hosts` | FCM, Mozilla, Apple, Windows push services | the same list |
 
 - The API and the operator get the same `approvals.enabled` and `usage` values.
 
@@ -903,6 +1060,58 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
   changes, the playbook restarts the API.
 - The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
   version, the playbook acts as if the secret is not there.
+
+### Turn on push notifications
+
+The API can send Web Push notifications to the people who subscribe in the web UI (#347). Each person chooses the
+types and mutes projects in **Settings**. The instance value turns the channel on or off.
+
+1. In `instance.yml`, add:
+   ```yaml
+   notifications:
+     channels: [webpush]
+     subject: mailto:ops@example.com
+   ```
+   On `kind`, set `NOTIFY_CHANNELS=webpush` and `NOTIFY_SUBJECT` in `config.env`.
+2. Run the playbook (`deploy.yml`), or `ansible-playbook infra/ansible/kind.yml --tags api` on `kind`.
+3. Check the result: `kubectl -n agentdev-platform get notificationchannels`.
+   The list shows `webpush` with the type `webpush`.
+4. Check the API log: `kubectl -n agentdev-platform logs deploy/agentdev-api | grep "web push"`.
+   The log shows "web push: on (NotificationChannel webpush)" in less than one minute.
+
+To turn it off, remove `webpush` from `notifications.channels` and run the playbook again. The playbook removes the
+`NotificationChannel`. The key pair stays, so the subscriptions work again when you turn it on.
+
+CAUTION: Do not delete or replace the VAPID key pair. All browser subscriptions then stop, and each person must
+subscribe again.
+
+### Reference: push notifications
+
+- `NotificationChannel` (`agentdev.dev/v1alpha1`, short name `nch`) is a resource in the platform namespace. Only
+  cluster admins write it. Fields: `type` (`webpush`), `subject` (`mailto:` or `https://`), `vapid.secretRef.name`
+  and `allowedHosts` (host names or `*.suffix`, max. 20).
+- The playbook makes the VAPID key pair one time: Secret Manager `platform-notify-vapid` on GKE, the file
+  `.secrets/platform/notify-vapid` on `kind`. It copies the pair to the Secret `agentdev-api-vapid`. The API can read
+  only this Secret, by name.
+- The API reads the `NotificationChannel` each minute. Without one, the push endpoints give 404.
+- A subscription is accepted only for an `https` URL on port 443 on a host of `allowedHosts`. The API refuses a
+  private, loopback or link-local address after DNS.
+- The API checks for new items each 15 seconds: pending approvals, agents paused by a guardrail or blocked, and
+  usage pauses. It sends to each person who can see the agent (`agentdev-admins`, or write access on the forge,
+  checked again for each notification) and who did not mute the project or the type.
+- Max. 30 notifications for each person in 10 minutes. Max. 10 devices for each person.
+- When a push service says 404 or 410, the API removes that subscription.
+- The data is in the API database: `push_subscriptions`, `notify_settings`, `notify_users` and `push_action_nonces`.
+- Bark: #402. Network-level egress policy for the API: #403.
+
+| Endpoint | Gives |
+|---|---|
+| `GET /api/push/vapid-public-key` | `publicKey` of the VAPID key pair. 404 when push is off |
+| `POST /api/push/subscriptions` | adds the `PushSubscription` of this browser (`endpoint`, `keys.p256dh`, `keys.auth`). 201, 400 for a bad endpoint or key, 409 over 10 devices |
+| `DELETE /api/push/subscriptions?endpoint=` | removes one subscription of the caller |
+| `GET /api/notify/settings` | `channels`, `types`, `mutes`, `projects` (the caller may mute), `subscriptions`, `snoozeMinutes`, `vapidPublicKey` |
+| `PUT /api/notify/settings` | `{types: {approvals, stopped, usage}, mutes: [{project, type}]}`; `type` `*` mutes the whole project. Replaces the caller's settings. Max. 30 changes a minute (429) |
+| `POST /api/push/action` | `{token}` from a notification button: `deny` or `snooze`. No bearer token: the action token is the credential. 401 for a bad or expired token, 409 when it was used |
 
 ### Connect to the API
 
@@ -922,7 +1131,13 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
 | `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308) |
+| `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
+| `GET /api/platform` | the health of the platform for the Platform page (#344). Only `agentdev-admins` (403 for other users). It gives `version`, `checked` and `components`: `api`, `router`, `operator`, `claude-proxy`, `authentik`, `forge-token`, `egress-proxy` and `agent-pool`. Each has `status` (`ok`, `degraded`, `down`, `absent`, `unknown`), `detail` and a `command` to look deeper. It gives no Secret values. |
+| `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 30 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. Same visibility as the agent drawer. |
+| `GET /api/stream` | live updates for the console (#345), server-sent events. Each message is `event: <type>`, `id: <n>`, `data: {"type", "time", "data"}`. Types: `hello` (`heartbeatSeconds`), `heartbeat` (every 15 s), `agents` (the visible agent list), `approval` (one approval, on create and change), `approval-removed` (`name`), `security-event` (one event), `usage` (read `GET /api/usage` again), `bye` (`reason`; reconnect). Only items the caller may see, with the rules of their list. The stream ends after 30 minutes, max. 5 streams for each user (429). Read it with `fetch()` and the bearer token. |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308). `repo` and `scope` as below |
+
+**Filters on the lists** (#345). `GET /api/agents`, `GET /api/approvals`, `GET /api/security-events` and `GET /api/jobs` take `repo=owner/name` (only items of that repository) and `scope=mine` (only repositories where the caller has write access, also for admins; `scope=all` is the default). `GET /api/agents`, `GET /api/approvals` and `GET /api/jobs` also take `limit` and `cursor`; `next_cursor` in the answer gives the next page. A filter only narrows: it never shows an item the visibility rule hides.
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
@@ -1311,6 +1526,45 @@ no pod is Ready for 10 minutes, the operator writes a warning to its log. It als
 source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event. Each outage gives one event. To
 change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
 namespace that can only read pods. Without `pod_selector`, the monitor is off.
+
+#### Deployed forwarder
+
+With `ingress.forwarder.deploy`, the playbook also runs the funnel forwarder of headlamp (#316). Before, the
+deployment repository applied its own manifest, and a forwarder that lost its route registration stayed not Ready
+until somebody restarted it (headlamp#95).
+
+1. Put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey` (other name:
+   `ingress.forwarder.deploy.authkey_secret`).
+2. In `ansible/instance.yml`, set the forwarder namespace, the pod selector and `deploy`:
+
+   ```yaml
+   ingress:
+     mode: external
+     forwarder:
+       namespace: agentdev-funnel
+       pod_selector: {app: funnel-forwarder}
+       deploy:
+         image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # a release, a sha tag or a digest
+         control_url: https://headscale.example.com
+   ```
+
+3. Run the playbook. It makes the namespace, the Secret `funnel-sidecar`, a Deployment with one replica, and a
+   NetworkPolicy. The forwarder can reach DNS, the UI, the router's public port, authentik and public addresses.
+   Nothing can connect to it.
+4. Delete the old manifest from the deployment repository (for example `k8s/funnel-forwarder.yaml`). The Deployment
+   name `funnel-forwarder` stays the same, so the playbook takes over the existing Deployment. Kubernetes does not
+   let a run change the selector of a Deployment: when the old selector is not `ingress.forwarder.pod_selector`, the
+   run fails. Then delete the old Deployment
+   (`kubectl -n agentdev-funnel delete deployment funnel-forwarder`) and run the playbook again.
+
+The readiness probe and the liveness probe ask `/readyz`. It answers 200 only while every route is registered. The
+liveness probe restarts the pod after 10 minutes without registration (`liveness_period_seconds` 30 x
+`liveness_failure_threshold` 20). The published Services are, by default, the UI, `/hook` of the router, and authentik
+when the role deploys it (`deploy.services`, format `name=port@host:port`). The router's internal port 8081 is never
+published. The playbook refuses an image tag `main` or `latest`, and a `control_url` that does not use `https`. A new
+key version in Secret Manager restarts the forwarder on the next run. The NetworkPolicy blocks private, CGNAT and
+link-local addresses. When headscale or `funnel-ingress` has such an address, add it in `deploy.egress_cidrs`
+(for example `[100.64.0.0/10]`; no range wider than `/8`).
 
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
@@ -2116,6 +2370,44 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
 when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, it will go to the chat page of the UI.
 
+### Console chat sessions
+
+The API can start sessions for the console Chat page (#346). These sessions are Jobs that run
+`chat-session-server`. Only the API connects to the session pod (NetworkPolicy and a token for each session).
+
+1. Set `api.chat.enabled: true` in `ansible/instance.yml`.
+2. Run the Ansible `deploy.yml`.
+   On GKE, Ansible makes the Secret Manager entry `agentdev-api-chat-token-key` once.
+
+| Setting (`api.chat`) | API variable | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `CHAT_SESSIONS` | false | Turns on the session API. |
+| `idle_minutes` | `CHAT_IDLE_SECONDS` | 30 | The session stops this time after the last viewer leaves. |
+| `retention_days` | `CHAT_RETENTION_DAYS` | 30 | The API deletes transcripts that are older. |
+| `max_sessions` | `CHAT_MAX_SESSIONS` | 0 (no limit) | Maximum sessions that run at the same time. |
+| `max_sessions_per_user` | `CHAT_MAX_SESSIONS_PER_USER` | 0 (no limit) | Maximum sessions of one person. |
+| | `CHAT_MAX_SECONDS` | 28800 | Maximum time of one session. |
+
+Optional secrets: `agentdev-chat-clone-token` (read-only clone token) and, on Gitea, `agentdev-chat-issue-token`
+(site admin, `write:issue`, used with `Sudo`, so the issue author is the person).
+
+Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
+
+Notes:
+
+- The API and the worker must run the same `image_tag` (ADR 0006): the API starts the worker image's
+  `chat-session-server`. Chat is off by default, so an instance that does not turn it on is not affected.
+- A terminal view (`tmux attach -t chat` in the session pod) keeps a session open for at most 2 hours
+  (`CHAT_TERMINAL_MAX_SECONDS` in the pod) after the last console viewer. Claude runs as the same user as tmux, so it
+  could fake a terminal client; only console presence, reported by the API, renews the session without limit.
+- The terminal view renders `/state/chat/events.jsonl`, which Claude can also write. It is display only; the console
+  reads the events from the session server's memory.
+- On kind, the clone token is `agentdev-api`'s read-only Gitea token, copied into the Secret `agentdev-chat-clone`
+  in the agents namespace. Only the clone initContainer of a chat pod reads it (admission policy
+  `agentdev-api-chat-jobs`).
+- On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
+  **Create issue**, and the audit log records them.
+
 ## Webhooks
 
 Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
@@ -2229,6 +2521,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Egress proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` |
 | Claude credential proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
+| Scoped secrets store (External Secrets Operator, policies, store) | 13 (`kind.yml --tags secrets`, role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |

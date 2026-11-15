@@ -18,6 +18,7 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 | `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`, same format and check as `claude-shared`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
+| `funnel-sidecar-authkey` | optional; only with `ingress.forwarder.deploy` (#316): the pre-auth key of the funnel forwarder (headscale). Synced to the Secret `funnel-sidecar` (key `authkey`) in `ingress.forwarder.namespace`. The name is `ingress.forwarder.deploy.authkey_secret` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
 
 SIEM addresses (not secret) go into `instance.yml` under `security.siem`: `webhook_url`, `syslog_addr`,
@@ -102,7 +103,9 @@ issuer, the UI callback and webhooks; `ingress.host` is required. `ingress.forwa
 in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-forwarder`,
 `webhook-router-from-forwarder` and `authentik-from-forwarder`; without it they are removed and default-deny stays.
 Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
-Test: `tests/ingress_external.yml`.
+Test: `tests/ingress_external.yml`. With `ingress.forwarder.deploy` the role also runs the funnel forwarder itself
+(#316, `tasks/forwarder.yml`): one replica, readiness and liveness on `/readyz`, the pre-auth key from Secret Manager,
+a NetworkPolicy. Test: `tests/ingress_forwarder_deploy.yml`.
 
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
@@ -114,6 +117,21 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 `group_vars/all.yml` holds only generic defaults. Instance values (`gcp_project`, `gcp_zone`, `image_tag`,
 `reviewer`, `agents`) come from the deployment (`example.vars.yml` shows the shape); the playbook stops with a
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
+
+### Preflight (#314)
+`preflight.yml` only reads. `deploy.yml` imports it first, so a deploy stops before its first change. It checks:
+1. Claude secrets (#212): `claude-shared` and each `agent-<name>-claude` that exists has a `KEY=VALUE` line.
+2. Release (#218): the playbook checkout is on tag `v<image_tag>`, so the router image and its manifests match.
+   A checkout that is not on a release tag gives a warning.
+3. CRDs: the Gateway API (with `ingress.mode: gateway`, the default when `ingress` is set) and FQDNNetworkPolicy
+   (with `egress_fqdn_policy`).
+4. Images: each agentdev image exists on ghcr.io at `image_tag`.
+```bash
+bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml                  # preflight only
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --tags preflight         # the same
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --skip-tags preflight    # deploy without it
+```
+`-e '{"preflight_checks": ["claude", "images"]}'` selects some checks only. Test: `tests/preflight.yml`.
 
 ## kind (#106)
 The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
@@ -132,6 +150,7 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 10 | `api` | `api` (same role as GKE) |
 | 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
+| 13 | `secrets` | `secrets_store`, then `operator` |
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -184,6 +203,8 @@ Generated values (router secrets, wake tokens, proxy signing key, forge proxy ke
 `kind_agents_secrets_dir` (mode 600), created once. Credentials come from the environment (`FORGE_ADMIN_PASSWORD`,
 `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`) or from `.secrets/<agent>.claude`, never from `-e`; every task that
 uses one has `no_log`. Restarts happen only after a new image id or a changed Secret, so a second run changes nothing.
+The Claude proxy settings (`roles/kind_agents/tasks/settings.yml`: budget units, prices, per-job limits, auth mode,
+telemetry) use the same checks as `deploy.yml`, `tasks/claude_budget.yml` and `templates/kube-api-egress.j2`.
 GKE keeps its own tasks in `deploy.yml` (Secret Manager); `tests/kind_agents.yml` checks that both render the same.
 
 ```bash
