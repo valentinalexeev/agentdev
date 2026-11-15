@@ -106,7 +106,8 @@ func TestAgentsVisibility(t *testing.T) {
 		{"reader", "", "bob"}, // read access on owner/x is not enough
 		{"group", "", "alice,bob"},
 		{"nobody", "", ""},
-		{"writer", "?repo=owner/y", "alice"}, // a query cannot widen the view (no bob), and no 403 reveals bob
+		{"writer", "?repo=owner/y", ""},      // a query cannot widen the view (no bob), and no 403 reveals bob
+		{"writer", "?repo=owner/x", "alice"}, // the repo filter (#345) applies after the visibility filter
 	} {
 		w := do(t, h, "/api/agents"+c.query, c.token)
 		var p struct{ Agents []agent }

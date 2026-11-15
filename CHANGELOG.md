@@ -12,6 +12,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
   Off by default. The API and the worker must run the same `image_tag` (ADR 0006). Admission policies hold the
   API's chat Jobs (create and delete); `scripts/e2e-gke-security.sh --only chat` checks them (R101, R104).
+- Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
+  adversarial review, 72 attack paths with the risk register entries that answer them, and 35 candidate questions
+  (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
+  ingress, another OIDC provider, self-hosting loop) and the effect on a project that adopts agents (its CI, its
+  releases and their consumers), with the chains by which an attacker uses an instance to reach every deployment
+  of a downstream project. ADR 0008 records the review method and the severity scale. Documentation only.
 - Workload identity for agents at the Claude proxy (#352). The operator creates a ServiceAccount `agent-<name>` per
   agent and mounts a projected token (audience `claude-proxy`, 10 minutes) only in the agent container. The 1.1
   worker sends it through Claude Code's `apiKeyHelper`. `claude-proxy` checks it with TokenReview (own ServiceAccount
@@ -21,6 +27,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   (operator RBAC, claude-proxy, new images).
 
 ### Fixed
+- Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
+  request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
+  compat e2e). New worker image; no `./run.sh` step.
 - Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
   the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
 - Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
@@ -65,6 +74,22 @@ While the version is `0.x`, breaking changes bump MINOR.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Changed
+- Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
+  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
+  Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
+  Each `AGENTDEV_USAGE` line has `tokens` by type and `multiplier`, and `GET /status` has `weights`, so a check can
+  calculate the units again exactly.
+  The budget variables are `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (the old token variables are deprecated,
+  see Deprecated). Weights, model multipliers and an
+  optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
+  pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
+  stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
+  `model`, `job`, `units` and cache token counts. Defaults do not change (0 = no limit). A budget that was set keeps
+  its number but now counts units, so the same number allows more traffic (units are usually less than raw tokens);
+  per-agent values in ConfigMap `claude-proxy-budgets` are read as units too. Re-run `./run.sh 06` on kind, or the
+  playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
+  tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
+  (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
 - **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
   `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
   API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
@@ -74,6 +99,35 @@ While the version is `0.x`, breaking changes bump MINOR.
   Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Added
+- API for the console (#345): `GET /api/jobs` gives the jobs of the agents (issue, PR, phase, outcome, times) from the
+  forge and the pending approvals, never from agent output. `GET /api/stream` sends live updates as server-sent events
+  (agents, approvals, security events, usage, heartbeat), only for items the caller may see. The lists take `repo` and
+  `scope=mine` filters and `limit`/`cursor` paging. The agent drawer fills `recentJobs`. No RBAC change. Re-run:
+  `./run.sh 10` on kind, Ansible `deploy.yml` (role `api`) on GKE.
+- API for the console (#344): `GET /api/agents/{name}` gives one agent with its pods, what it waits on (approvals,
+  usage pause, pause, block) and its harness guide. Admins see every agent; other users only agents with a repository
+  where they have write access (404 otherwise). `GET /api/platform` (`agentdev-admins` only) gives the health of the
+  API, router, operator, Claude proxy, authentik, forge credential, egress proxy and agent pool. The API Role gets
+  by-name `get` on the ConfigMap `agentdev-guides` and on the platform Deployments, never on Secrets. Re-run: `./run.sh
+  10` on kind, Ansible `deploy.yml` (role `api`) on GKE.
+- Web console on phones (#343): below 760 px a bottom bar (Today, Projects, Agents, Approvals, More) replaces the
+  left menu. Drawers are full-screen sheets, tables show two lines per row, and the layout uses safe-area insets. No
+  page scrolls sideways at 390 px. A web app manifest and icons let Chrome on Android and Safari on iOS add the console
+  to the home screen. Re-run: Ansible `deploy.yml` with the new UI image; no `./run.sh` step.
+- Web console: Today page, project scope and connection states (#342, #339). **Today** is the new start page with one
+  inbox (approvals, guardrail and blocked agents, usage pauses), sorted by expiry, then by age. Agents show two axes:
+  lifecycle and attention. A project scope in the top bar (My projects, All projects, one project; key `P`) filters
+  every page and count. A new **Projects** page has one row per repository. Lists with more than 10 items group
+  themselves (4 per group, "Show N more"). When the API is away, the page keeps the last data and a banner shows live,
+  stale, starting, unavailable, offline or signed out. Sign-in returns to the same page. "My projects" shows only when
+  `GET /api/me` returns `repos` (open decision on #342). Re-run: Ansible `deploy.yml` with the new UI image; no
+  `./run.sh` step.
+- Web console in the design system (#341): left menu with the mark and the approval count, top bar with the user and
+  a light and dark theme button, status lamps (an agent at zero pods shows as "idle"), severity tags, agent tags,
+  tables, usage meters, and the approval detail as a side panel with the agent text in a marked untrusted block.
+  The fonts are self-hosted (the CSP allows no third-party styles). `npm run build` checks that the design-system
+  copies in `images/ui` match `docs/design-system`. No API change. Re-run: Ansible `deploy.yml` with the new UI image;
+  no `./run.sh` step.
 - Ingress (#316): with `ingress.forwarder.deploy` the playbook runs the funnel forwarder (headlamp funnel-sidecar):
   one replica, readiness and liveness probes on `/readyz` (a lost route registration restarts the pod after 10
   minutes), the pre-auth key from the Secret Manager secret `funnel-sidecar-authkey`, and a NetworkPolicy. Opt-in;
@@ -87,6 +141,15 @@ While the version is `0.x`, breaking changes bump MINOR.
   `tools/ghwatch -forge gitea` reads a Gitea repository into the same snapshot. P2 (code scanning) and P4 (inline
   replies) are documented as differences in `docs/admin.md`. Re-run: `./run.sh 05` on kind, the playbook (role
   `gitea_forge`) on GKE with Gitea; new worker, forge and router images.
+- OpenTelemetry metrics for Claude spend (#196, ADR 0002 D4): `claude-proxy` and the operator serve `/metrics` on port
+  9464 with the GenAI conventions (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) and
+  `agentdev.cost.units`, `agentdev.cost.usd`, `agentdev.budget.used/limit`, `agentdev.ratelimit.utilization`,
+  `agentdev.requests.refused`, `agentdev.usage.paused`. NetworkPolicy: only the scraper namespace
+  (`TELEMETRY_SCRAPER_NS`, Ansible `telemetry.scraper_ns`), and in it only the scraper pods (`TELEMETRY_SCRAPER_SELECTOR`,
+  `telemetry.scraper_selector`), reach the port. Unknown models are labelled `unknown`. Optional OTLP export of metrics and
+  spans (`TELEMETRY_OTLP_URL` / `telemetry.otlp_url`, https only). Every series has the label `agentdev_instance`
+  (`TELEMETRY_INSTANCE` / `telemetry.instance`, default `agentdev`), so one external Prometheus and Grafana can show
+  many instances. Re-run: `./run.sh 06` and `12`, or the playbook.
 - External forwarder monitor (#213): with `ingress.forwarder.namespace` and `pod_selector`, the operator records one
   SecurityEvent (source `ingress`, rule `forwarder-not-ready`) and a log warning when no forwarder pod is Ready for
   `ingress.forwarder_not_ready_minutes` (default 10). The playbook adds a read-only pods Role in the forwarder
@@ -194,6 +257,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 
 ### Deprecated
+- `CLAUDE_BUDGET_TOKENS` (env, `config.env`) and `claude_budget_tokens` (Ansible instance var) are deprecated and will
+  be removed in 2.0.0 (#196, owner decision on #196). Replacement: `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (cost
+  units). Until 2.0.0 both are accepted: when only the old one is set, its value is used as units (1 token = 1 unit);
+  when both are set, the new one wins. `claude-proxy`, `./run.sh 06` and the playbook log one warning that names the
+  replacement. Migration: rename the variable in `config.env` or `instance.yml`. Optional: lower the value, since a
+  units budget allows more traffic than the same number of tokens (rule of thumb: divide by 4 for typical Claude Code
+  traffic, or start with 0 and set the limit after a day of `GET /status`).
 - Step 08 (#106): `08-mcp.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags mcp`: the role
   `platform` of `deploy.yml`, with the secrets in `.secrets/platform` (files, as before) instead of Secret Manager and
   the images loaded into kind. Same result (Postgres; ContextForge and mcp-sync only with `MCP_PROJECTS`; obs-mcp with

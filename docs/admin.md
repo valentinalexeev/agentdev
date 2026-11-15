@@ -161,22 +161,50 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
 | Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
-## Claude proxy and token budget
+## Claude proxy and budget
 
 The Claude proxy (`claude-proxy`) is the only pod that has the Claude credentials (#66). An agent sends its model
 requests to the proxy with its proxy key. The proxy adds the real credential and sends the request to the Anthropic
-API. The proxy also counts the tokens of each agent and stops an agent that used its budget.
+API. The proxy also counts the spend of each agent and stops an agent that used its budget.
 
-### Set the token budget of all agents
+### Cost units
 
-The budget is the number of tokens (input, cache and output) that one agent can use in 24 hours.
+The budget counts **cost units**, not raw tokens (#196, [ADR 0002](adr/0002-llm-telemetry-and-cost-control.md)).
+One unit is the price of one input token at 3 USD per million (Sonnet 4.x). The proxy weights each token type and
+the model of the response:
 
-1. On `kind`: set `CLAUDE_BUDGET_TOKENS` in `config.env`. On GKE: set `claude_budget_tokens` in `instance.yml`.
+| Token type | Weight |
+|---|---|
+| input | 1 |
+| cache write, 5 minutes | 1.25 |
+| cache write, 1 hour | 2 |
+| cache read | 0.1 |
+| output | 5 |
+
+Model multipliers (input price / 3 USD, list prices of November 2026): Opus 5.5 1.33, Opus 4.5 to 5 1.67, Opus 4
+and 4.1 5, Sonnet 4.x 1, Sonnet 5 and 5.5 0.67, Haiku 4.5 0.33, Haiku 5.5 0.03, Fable 5.x 3.33. A family name (for
+example `claude-opus`) covers new versions at the current family price. A model outside every family counts with
+the highest multiplier. The token weights are the same for every model; some models price cache reads lower (Opus
+5.5: 0.05), so the units of those models are a little high. Change the multipliers in `claude-proxy-prices` when
+Anthropic changes its prices. Claude Code reads most of its context from the cache, so a run uses far fewer units
+than raw tokens (often less than 20 %).
+
+### Set the budget of all agents
+
+The budget is the number of cost units that one agent can use in 24 hours.
+
+1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `config.env`. On GKE: set `claude_budget_units` in `instance.yml`.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
 NOTE: The value 0 means no limit. This is the default.
 
-### Set the token budget of one agent
+NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` are deprecated since 1.2.0 and will be removed in 2.0.0.
+Until then they still work: when only the old variable is set, its value is used as cost units (1 token = 1 unit).
+When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy, `./run.sh 06` and the playbook
+show a warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
+tokens, so you can lower the value (see the CHANGELOG, 1.2.0 Deprecated).
+
+### Set the budget of one agent
 
 1. Run this command (use 0 for no limit):
    `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
@@ -184,11 +212,65 @@ NOTE: The value 0 means no limit. This is the default.
 
 NOTE: A deploy does not change this value. The template of the ConfigMap has no data.
 
-### Look at the token use
+### Change the weights or show USD
 
-1. Open the web UI. The column **Claude tokens (24 h)** shows the tokens of each agent and the budget.
+The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w_cw1h`, `w_cr`, `w_out`,
+`model.<name prefix>` (the longest prefix wins) and `usd_per_million_units`. Each value is a number with at most
+6 decimals. The proxy ignores a bad key or value, keeps the built-in value and writes a `proxy-price-invalid`
+security event.
+
+1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
+   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`. With 3, the USD
+   estimate follows the list prices, because one unit is priced at 3 USD per million.
+2. Deploy again. The proxy reads the ConfigMap again within one minute.
+
+NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
+`usd_per_million_units` only when the instance bills by API key. Without it, the web UI shows units only.
+
+### Look at the spend
+
+1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
+
+   `budgets` lists units per agent. `jobs` lists each job (issue or pull request) of the last 7 days with its
+   units, tokens by type and number of requests, most expensive first. The worker names the job in the header
+   `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
+   `weights` lists the weight of each token type. Each `AGENTDEV_USAGE` line of the proxy has `tokens` (by type),
+   `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
+   rounded up.
+
+### Metrics and OpenTelemetry
+
+`claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
+
+| Metric (Prometheus name) | What it shows |
+|---|---|
+| `gen_ai_client_token_usage` | tokens per request, by `gen_ai_token_type` (`input`, `output`) and `agentdev_cache` (`read`, `write`) |
+| `gen_ai_client_operation_duration_seconds` | time of a model request |
+| `agentdev_cost_units_total` | cost units by agent and model |
+| `agentdev_cost_usd_total` | estimated USD, only when `usd_per_million_units` is set |
+| `agentdev_budget_used`, `agentdev_budget_limit` | units of the agent in 24 hours, and its budget |
+| `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
+| `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
+| `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
+
+The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
+with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
+`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
 
 ### Reference: the Claude proxy
 
@@ -964,7 +1046,13 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
 | `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308) |
+| `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
+| `GET /api/platform` | the health of the platform for the Platform page (#344). Only `agentdev-admins` (403 for other users). It gives `version`, `checked` and `components`: `api`, `router`, `operator`, `claude-proxy`, `authentik`, `forge-token`, `egress-proxy` and `agent-pool`. Each has `status` (`ok`, `degraded`, `down`, `absent`, `unknown`), `detail` and a `command` to look deeper. It gives no Secret values. |
+| `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 30 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. Same visibility as the agent drawer. |
+| `GET /api/stream` | live updates for the console (#345), server-sent events. Each message is `event: <type>`, `id: <n>`, `data: {"type", "time", "data"}`. Types: `hello` (`heartbeatSeconds`), `heartbeat` (every 15 s), `agents` (the visible agent list), `approval` (one approval, on create and change), `approval-removed` (`name`), `security-event` (one event), `usage` (read `GET /api/usage` again), `bye` (`reason`; reconnect). Only items the caller may see, with the rules of their list. The stream ends after 30 minutes, max. 5 streams for each user (429). Read it with `fetch()` and the bearer token. |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308). `repo` and `scope` as below |
+
+**Filters on the lists** (#345). `GET /api/agents`, `GET /api/approvals`, `GET /api/security-events` and `GET /api/jobs` take `repo=owner/name` (only items of that repository) and `scope=mine` (only repositories where the caller has write access, also for admins; `scope=all` is the default). `GET /api/agents`, `GET /api/approvals` and `GET /api/jobs` also take `limit` and `cursor`; `next_cursor` in the answer gives the next page. A filter only narrows: it never shows an item the visibility rule hides.
 
 | `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |

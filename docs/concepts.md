@@ -110,6 +110,13 @@ flowchart LR
   a2 -- poll, push, PR, reply --> forge
 ```
 
+## Job
+
+A **job** is one issue handed to an agent (assigned on Gitea, label `agent:<name>` on GitHub) and the PR the agent
+opens for it on its branch `agent/<name>/issue-<n>`. The console shows its phase: `queued` (no PR yet), `build` (the
+agent waits on an approval), `review` (PR open) and `done` (PR merged or closed). The phase comes from the forge and
+from the Approval objects, the records people and the operator write. It never comes from what the agent says (#345).
+
 ## Project
 
 A **project** is one repository plus the agents that work on it, described by one spec file
@@ -221,7 +228,7 @@ runner can start any program. So the security boundary is the pod, not the list 
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
   the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
-  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a budget per agent in cost units (tokens weighted by type and model, #196)
   for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
   come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.

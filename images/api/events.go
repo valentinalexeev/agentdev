@@ -306,6 +306,15 @@ func listSecurityEvents(store eventStore, wr *writer) http.Handler {
 		if wr != nil {
 			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
 			f.Agents = wr.visibleAgents(r.Context(), id)
+			// repo and scope=mine (#345) narrow to the agents of the matching repositories
+			sc, err := wr.scopeOf(r.Context(), id, q)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if sc.repoFilter != "" || sc.mine {
+				f.Agents = narrowAgents(r.Context(), wr, f.Agents, sc)
+			}
 		}
 		// one extra row tells whether another page exists
 		want := f.Limit
@@ -359,6 +368,25 @@ func (w *writer) visibleAgents(ctx context.Context, id *identity) []string {
 				out = append(out, a.Name)
 				break
 			}
+		}
+	}
+	return out
+}
+
+// narrowAgents keeps the names of visible (nil = all) that have a repository passing sc.
+func narrowAgents(ctx context.Context, wr *writer, visible []string, sc scope) []string {
+	out := []string{}
+	lister, ok := wr.store.(agentLister)
+	if !ok {
+		return out
+	}
+	list, err := lister.List(ctx)
+	if err != nil {
+		return out
+	}
+	for _, a := range list {
+		if (visible == nil || slices.Contains(visible, a.Name)) && sc.agent(a) {
+			out = append(out, a.Name)
 		}
 	}
 	return out
