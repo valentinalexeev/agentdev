@@ -35,6 +35,9 @@ kind: Role
 metadata: {name: agentdev-api-platform, namespace: ${PLATFORM_NS}}
 rules:
 - {apiGroups: [apps], resources: [deployments], resourceNames: [agentdev-operator, authentik-server], verbs: [get]}
+# notifications (#347): the instance's NotificationChannel objects and the VAPID key pair they name, nothing else
+- {apiGroups: [agentdev.dev], resources: [notificationchannels], verbs: [get, list, watch]}
+- {apiGroups: [""], resources: [secrets], resourceNames: [agentdev-api-vapid], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -75,6 +78,9 @@ spec:
         # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
         - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
         - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
+        # notification channels on for this instance (#347): webpush; empty = off. The NotificationChannel object in
+        # this namespace gives the VAPID key and the allowed push hosts
+        - {name: NOTIFY_CHANNELS, value: "${NOTIFY_CHANNELS}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it

@@ -63,6 +63,12 @@ github_app:
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
 #   max_agents: 0                         # agentdev #27: cap on all agents for UI/API creates; 0 = no cap
 #   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
+# Notifications for each user (agentdev #347): channels on for the instance. Users subscribe and mute in the console Settings.
+# The VAPID key pair is made once (Secret Manager platform-notify-vapid). push_hosts: the push services the API may call.
+# notifications:
+#   channels: [webpush]                   # Bark: #402
+#   subject: mailto:ops@example.com       # VAPID contact for the push services (mailto: or https://)
+#   push_hosts: [fcm.googleapis.com, updates.push.services.mozilla.com, "*.push.apple.com", "*.notify.windows.com"]
 # Approvals (agentdev #67) are on by default and need api.oidc_issuer. To turn them off:
 # approvals: {enabled: false}
 # rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174: wait for running jobs before an agent pod is replaced

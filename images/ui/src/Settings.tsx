@@ -1,5 +1,5 @@
 // Settings (#347): notifications for this person. Web Push on this device (opt-in), one switch per type, and mutes
-// per project and type. The API keeps the settings; the instance admin turns channels on (notify.channels).
+// per project and type. The API keeps the settings; the instance admin turns channels on (notifications.channels).
 import { useCallback, useEffect, useState } from 'react'
 import {
   addPushSubscription, getNotifySettings, putNotifySettings, removePushSubscription, Unauthorized,
@@ -97,7 +97,7 @@ export function SettingsPage({ token, onExpired }: { token: string; onExpired: (
       {error && <p className="ad-error" role="alert">{error}</p>}
       <section className="ad-section">
         <div className="ad-section-head"><h2 className="ad-section-title">Push notifications on this device</h2></div>
-        {!on ? <Empty title="Notifications are off on this instance">An instance admin turns them on (notify.channels: [webpush]).</Empty>
+        {!on ? <Empty title="Notifications are off on this instance">An instance admin turns them on (notifications.channels: [webpush]).</Empty>
           : !pushSupported() ? <p className="ad-muted" style={{ margin: 0 }}>This browser cannot receive push notifications. On iPhone and iPad, add the console to the home screen first.</p>
             : (
               <div className="ad-form" style={{ alignItems: 'flex-start' }}>
