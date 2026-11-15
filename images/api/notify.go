@@ -711,6 +711,10 @@ func (n *notifyAPI) action(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, http.StatusNotFound, map[string]string{"error": "web push is not enabled on this instance"})
 		return
 	}
+	if !actionLimit.allow(clientAddr(r)) {
+		writeJSON(rw, http.StatusTooManyRequests, map[string]string{"error": "too many actions; try again in a minute"})
+		return
+	}
 	var b struct {
 		Token string `json:"token"`
 	}
@@ -721,3 +725,6 @@ func (n *notifyAPI) action(rw http.ResponseWriter, r *http.Request) {
 	code, out := n.push.runAction(r.Context(), b.Token)
 	writeJSON(rw, code, out)
 }
+
+// actionLimit: POST /api/push/action has no bearer token, so it is limited per client address (60 a minute).
+var actionLimit = newRateLimiter(60, time.Minute)

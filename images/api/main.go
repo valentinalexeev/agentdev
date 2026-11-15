@@ -339,8 +339,9 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 		mux.Handle("DELETE /api/push/subscriptions", auth(verify, http.HandlerFunc(n.unsubscribe)))
 		mux.Handle("GET /api/notify/settings", auth(verify, http.HandlerFunc(n.getSettings)))
 		mux.Handle("PUT /api/notify/settings", auth(verify, http.HandlerFunc(n.putSettings)))
-		// no OIDC token: the service worker has none. The signed, single-use action token is the credential.
-		mux.Handle("POST /api/push/action", auditAuth("push-action", http.HandlerFunc(n.action)))
+		// no OIDC token: the service worker has none. The signed, single-use action token is the credential; runAction
+		// audits every outcome itself (auditAuth would log a 401 here as a missing bearer token)
+		mux.Handle("POST /api/push/action", http.HandlerFunc(n.action))
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
 		// every signed-in user, filtered by forge write access (review #102, R35 #308); Secret names for admins only
