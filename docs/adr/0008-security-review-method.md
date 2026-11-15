@@ -46,7 +46,7 @@ Severity is impact times likelihood, each on three levels.
 
 | Level | Meaning |
 |---|---|
-| high | A credential that works outside the instance leaves it; code reaches a protected branch or infrastructure is changed without the decision of a person; the evidence of either is lost or forged; one tenant reads another tenant's code or secrets |
+| high | A credential that works outside the instance leaves it; code reaches a protected branch or infrastructure is changed without the decision of a person; the evidence of either is lost or forged; one tenant reads another tenant's code or secrets; attacker code can reach a release of a project that the agents work on (its consumers are counted, not the instance) |
 | medium | Data that is not a credential leaves the instance (code of the agent's own repository, prompts, topology); a control stops working without notice; the instance or the shared model subscription is unusable for more than one hour |
 | low | Effect stays inside one agent's own repository branch, budget or pod and is visible to an administrator |
 
@@ -63,6 +63,10 @@ Severity is impact times likelihood, each on three levels.
 | high | critical | high | medium |
 | medium | high | medium | low |
 | low | medium | low | low |
+
+Impact is counted where the path ends. An instance is a way into every project its agents write for, and a
+project is a way into every site that installs it (threat model, target T7). A weakness that gives a forge
+credential or a CI run of a project is therefore never below impact high, however small the instance is.
 
 A finding records both inputs and one sentence of reason for each, so that a reader can disagree with an input
 without redoing the analysis. New `R` entries from the review carry the severity. Existing entries get one when

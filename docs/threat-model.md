@@ -187,6 +187,10 @@ The vectors are those of #401. Each row says what the attacker starts with.
 | V6 | compromised dependency or build input | one of: a GitHub Action, a base image, a Go or npm module, a Helm chart, a package the agent installs, a release artifact of agentdev |
 | V7 | untrusted content | text that reaches the model: issues, reviews, comments, repository files, check output, tool output, logs |
 
+Each attacker can have two aims. The first is the instance and its projects. The second is T7: the instance is
+only the way in, and the attacker accepts a slow, quiet path (a change that passes review, a wait for the next
+release) because the prize is every deployment of a downstream project.
+
 ## Attack targets
 
 | ID | Target (#401) | Assets |
@@ -197,6 +201,13 @@ The vectors are those of #401. Each row says what the attacker starts with.
 | T4 | privilege escalation to administrative or infrastructure control | A3, A5, A13 |
 | T5 | unintended or destructive change by an agent | A8, A9, A10 |
 | T6 | loss or forgery of evidence (from the administrator outcomes of #401) | A11 |
+| T7 | compromise of the consumers of an adopting project: the attacker uses the instance to put code into a project's release, and reaches every deployment of that project | A17 |
+
+T7 changes what an instance is worth to an attacker. The value of an instance is not its own data: it is the sum of
+everything that installs the software its agents write. A project that ships infrastructure (a network control
+plane, an ingress, an identity service) to many sites makes the instance that writes it a target for attackers who
+have no interest in the instance or in the project's own repository. [Downstream amplification](#downstream-amplification)
+follows these chains.
 
 ## Attack paths
 
@@ -328,6 +339,39 @@ in the project or in the project's consumers.
 | P65 | **Dependencies and licences.** The agent adds a dependency or copies code. The project's pins and third-party record drift | V6, V7 | T5 at the consumers | the run contract forbids unrelated dependency changes | partly |
 | P66 | **Availability.** The project's delivery now depends on the instance, on one model subscription and, in a loop (P54), on components the project itself builds | V5 | T3 | agents poll when webhooks fail | partly (TM-26) |
 
+### Downstream amplification
+
+An attack on T7 is a chain. Each row is one way to get attacker code from the instance into what a project
+ships. The chain is as strong as the last gate that the **forge and the project** enforce, because the first
+links (sandbox, sidecar policy) are agentdev's and an attacker who broke them is past them.
+
+```mermaid
+flowchart LR
+  a["agentdev weakness\n(sandbox, sidecar, App key,\nplatform, release of agentdev)"] --> b["write to the project:\nbranch, PR, CI run, tag"]
+  b --> c["the project's release:\nimages, modules, charts"]
+  c --> d["every deployment\nof the project"]
+  d -. "a deployment can be\nthe instance itself (P54)" .-> a
+```
+
+| Path | Chain | Vectors | What stops it today | Coverage |
+|---|---|---|---|---|
+| P67 | **Forge credential used outside the sidecar.** The attacker gets the App key or an installation token (sidecar defect, node escape, compromised API). The limits of the sidecar (own branch prefix, no tags, protected paths, no force) are not limits of the forge. The token can do all that the App's permissions and the repository's rules allow: push a tag that starts the release workflow, create a release, write to a branch without a rule | V4, V5 | key only in sidecar and API (R48, R93); the App has no `workflows` permission; branch rules of the repository | gap: the difference between the sidecar's policy and what the forge itself refuses is not written down or checked (TM-34) |
+| P68 | **Publication from a pull request.** The project's CI runs agent code on the agent's pull request with a token that can write packages or with a deploy secret (P57). The attacker replaces a published artifact or adds one, and no person merged anything | V4, V7 | the project's workflow conditions | gap (TM-28) |
+| P69 | **A change that passes review.** The injected agent writes a small defect into code where a defect is a backdoor (authentication, access policy, certificate signing, update or install scripts). One reviewer with many agent PRs approves it (P46, P49). It ships with the next release | V7, V3 | review gate | gap (TM-12, TM-22, TM-30) |
+| P70 | **Two steps, each harmless in review.** A first merged PR changes an instruction file, a build script or a test helper. A later agent job or the release build then does the harmful step, in a PR about another subject or in no PR | V7 | review gate | gap (TM-11) |
+| P71 | **Through agentdev itself.** A hostile agentdev release (P33 to P35) runs in every instance. Each instance writes into each of its projects, and each project ships to its consumers. One build input of agentdev reaches three levels down | V6 | owner approval of agentdev changes; provenance at build | gap (TM-05, TM-06) |
+| P72 | **The release step.** Agents cannot push tags, so a release is an act of a person. If the forge does not enforce that (tag rules, an approval on the release environment), any writer credential on the repository, the agent's included (P67), can release | V4, V5 | the sidecar's branch prefix | gap: which release steps of a project must stay with a person, and does the forge enforce each (TM-35) |
+
+What follows for the review and for the hardening plan:
+
+- A weakness that gives a forge credential or a CI run of a project is rated by the project's consumers, not by
+  the instance (ADR 0008, D3).
+- The controls that count for T7 are outside the pod: the App's permissions, the repository's branch and tag
+  rules, the project's workflow conditions, and what the consumers verify before they install. agentdev can set
+  some (bootstrap), check some (TM-32, TM-34) and only document the rest.
+- A project with many deployments is a reason for its own forge App, its own agent and stricter rules (TM-21,
+  TM-30), also inside a one-owner instance.
+
 ### Targets by attacker
 
 Paths for each pair. An empty cell means that no path was found, which is a statement to test, not a proof.
@@ -340,6 +384,7 @@ Paths for each pair. An empty cell means that no path was found, which is a stat
 | T4 escalation | P2 | P8, P10, P11, P51 | P14 | P20, P22, P23, P57 | P26, P29, P31, P32, P50, P51 | P33 to P36, P39, P53 to P55 | P54, P57 |
 | T5 destructive change | P5, P62 | P8, P9, P49, P59, P63, P64 | P13, P14 | P18, P21, P23, P24 | P25, P26, P28, P29, P32 | P33, P37, P38, P54, P65 | P40 to P43, P46, P49, P52, P54, P58 to P61, P63, P65 |
 | T6 evidence | | P10 | P16 | | P28 | | P52 |
+| T7 consumers of a project | | | P69 | P67, P68, P72 | P67, P72 | P71 | P68 to P70 |
 
 ## Administrator outcomes
 
@@ -366,10 +411,13 @@ guidance.
    P9 and P10 say what one of them can do alone.
 5. The model provider handles prompts and code under its terms (R14, accepted).
 6. An instance installs a release by tag from the published registry, as `CLAUDE.md` §7 requires.
+7. The consumers of an adopting project trust its releases as before the switch. They do not know, and cannot
+   check, that an agent wrote a change. P67 to P72 say what that trust now rests on.
 
 ## Candidates for the code review
 
-Order: evidence and containment first (they limit every other finding), then paths that reach all instances,
+Order: evidence and containment first (they limit every other finding), then paths that reach the consumers of
+a project or all instances,
 then paths that need only untrusted text or that leave the instance for an adopting project, then the rest by
 number.
 
@@ -379,13 +427,15 @@ number.
 | TM-15 | Which evidence exists only inside the instance (pod logs, state volumes, `Approval` objects), who can delete it, and what are the retention defaults of the cluster, cloud and forge audit logs? | P10, P16 | question |
 | TM-14 | Is there one tested procedure to stop all agents and executors, and one to rotate each credential of A1 to A5? | all | #371 is open |
 | TM-16 | Which controls can be off without any signal (enforcement of NetworkPolicies, `CLAUDE_PROXY`, approvals, Cloud Armor)? | P4, all | question |
+| TM-34 | For each permission of the forge App: what can a token do on a repository that the sidecar would refuse (tags, releases, other branches, settings)? Which repository rules close each case, and can the instance check them? | P67 | question |
+| TM-35 | Which release steps of an adopting project must stay with a person, and does the forge enforce each (tag rules, environment approval)? | P72 | question |
+| TM-28 | Which paths of a repository run in its CI on an agent's pull request, and with which token and secrets? What must the adoption steps require from the project's workflows? | P57, P68 | seen in the tree: `PROTECTED_PATHS` default in `images/forge/main.go` |
 | TM-05 | Pin actions by commit and base images by digest; add a vulnerability scan for dependencies and images | P24, P33, P34 | seen in the tree: `.github/workflows/*.yml`, `images/agent`, `images/router`, `images/worker` Dockerfiles |
 | TM-06 | Verify the signature or provenance of an image at deploy or at admission; pin by digest | P35 | seen in the tree: no verification step in `infra/`, `examples/` or `docs/` |
 | TM-17 | Which identity runs a plan for a pull request in the deployment repository, and what can it change? | P39 | #291 is open |
 | TM-18 | Who learns of a security advisory for an installed component, and how fast does a pin change reach an instance? | P36 | question |
 | TM-10 | Can a job leave files on the state volume that change the behaviour of a later job of the same agent? | P21 | question |
 | TM-11 | Which files of a repository does the agent follow as instructions, who can change them, and can an unmerged branch change them? Should they be protected paths? | P41, P42, P59 | seen in the tree: the run contract in `images/worker/agent-loop.sh` names `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md` |
-| TM-28 | Which paths of a repository run in its CI on an agent's pull request, and with which token and secrets? What must the adoption steps require from the project's workflows? | P57 | seen in the tree: `PROTECTED_PATHS` default in `images/forge/main.go` |
 | TM-27 | What stops private text from reaching a public branch, PR or comment before a person sees it? | P56 | question |
 | TM-26 | Which agents of an instance work on the instance's own inputs, and which extra gate do those repositories need? | P54, P66 | question |
 | TM-32 | Can the instance check, for each repository, that required review is on and that no agent identity can bypass it? | P63 | seen in the tree: `scripts/bootstrap-project.sh` keeps an existing rule |
