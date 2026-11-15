@@ -6,3 +6,11 @@
 
 .ad-main:focus { outline: none; }
 .ad-nowrap { white-space: nowrap; }
+.ad-guide { display: block; margin: 0; padding: var(--space-3); background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ad-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 18px; color: var(--ink); }
+.ad-cmd { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }
+.ad-cmd code { overflow-wrap: anywhere; min-width: 0; }
+.ad-field-inline { flex-direction: row; align-items: center; gap: var(--space-2); }
+.ad-row-link { color: inherit; text-decoration: none; border-radius: var(--radius-sm); }
+.ad-row-link:hover .ad-agent-name { text-decoration: underline; }
+.ad-row-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

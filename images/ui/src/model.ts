@@ -2,6 +2,8 @@
 import type { Agent, Approval, Usage } from './api'
 
 export const POLL_MS = 15000
+// The default ADMIN_GROUP of the API. Only hides or shows the Admin menu; the API decides (403).
+export const ADMIN_GROUP = 'agentdev-admins'
 export const STALE_MS = 60000 // no good update for this long: "updated N min ago"
 export const DOWN_MS = 5 * 60000 // still failing after this long: "API unavailable"
 

@@ -222,6 +222,55 @@ check at the time of each change (see "Reference: who can change an agent" in `a
 permission, the web UI shows the message of the API, for example "you need write access to owner/repo". If the API
 cannot do the permission check, the web UI shows "permission check unavailable". Try again later.
 
+### See the details of an agent
+
+1. On the page **Agents**, click the name of the agent.
+   A panel opens on the right side (on a phone, it fills the screen). The address `#agents/<name>` opens the same
+   panel, so you can send a link to one agent.
+2. Use the tabs, or push the left and right arrow keys on a tab:
+   - **Overview**: what the agent waits on (your decision, a usage limit, a pause, a block), its pods and its
+     settings. Click **Decide** to open the approval request.
+   - **Jobs**: the last 10 issues and pull requests of the agent, newest first, with the phase and the outcome
+     (merged, closed without merge, closed with no change).
+   - **Usage**: the Claude units of the last 24 hours against the budget, and a usage pause.
+   - **Settings**: **Pause** or **Resume**, **Max. concurrent** and **Scale to zero**.
+   - **Guide**: the harness guide that the operator writes for this agent.
+3. To close the panel, click the close button or push Escape.
+
+You see the details only of agents with a repository where you have write access. For other agents, the panel shows
+"Agent not found". Titles of issues and pull requests show as plain text.
+
+### Find who changed an agent (administrators)
+
+The page **Audit** is in the **Admin** part of the menu. Only members of `agentdev-admins` see it. For other people,
+the API refuses the request and the page tells you to ask an administrator.
+
+1. Click **Audit**.
+   Each row tells one change in words, for example "valentinalexeev paused carol: ok" or "mia tried to delete gus:
+   denied (needs admin access)". A change that the API allowed also shows the old and the new values and the reason
+   it was allowed.
+2. To find an entry, type a **Person** or an **Agent**, select an **Action** (pause, resume, change, create,
+   delete), and click a result and a time.
+3. To see the full entry, click **Raw**. Each row then shows the JSON of the entry.
+4. Click **Load older entries** to see more.
+
+### Check the platform (administrators)
+
+The page **Platform** is in the **Admin** part of the menu, for members of `agentdev-admins` only.
+
+1. Click **Platform**.
+   The page shows the version of the instance and one health lamp for each part: API, webhook router, operator,
+   Claude credential proxy, authentik, forge credential, egress proxy and agent pool. The parts with a problem are at
+   the top. The page checks again every 30 seconds. Click **Check again** to check now.
+2. To look deeper, click **Copy** next to the command of the part, and run the command in a terminal with `kubectl`.
+
+| Health lamp | Meaning |
+|---|---|
+| green dot, ok | The part works. |
+| amber square, degraded | The part works with fewer pods than it needs, or some agent pods do not start. |
+| red square, down | The part does not work. |
+| empty ring, not installed or unknown | The instance does not use the part, or the API cannot read it. |
+
 ### Pause an agent
 
 1. Sign in to the web UI.

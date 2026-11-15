@@ -23,6 +23,7 @@ export interface Data {
   inScopeRepo: (repo: string) => boolean
   inScopeAgent: (name: string) => boolean
   mine: string[] | null // null: the API does not say which projects are mine
+  admin: boolean // in agentdev-admins: the Admin pages show in the menu (the API checks again: 403)
   conn: Conn
   failedSince: number
   reload: () => void

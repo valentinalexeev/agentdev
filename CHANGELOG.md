@@ -7,6 +7,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Web console (#344): agent drawer, Audit page and Platform page. A click on an agent name (or `#agents/<name>`) opens
+  a drawer with what the agent waits on, its pods, the recent jobs as a timeline, usage, settings and the harness
+  guide. **Audit** (story view and raw JSON, filters for person, agent, action, result and time) and **Platform**
+  (one health lamp per platform part, the version, a copyable `kubectl` command) show in an **Admin** menu group for
+  `agentdev-admins` only; for other people the page explains the API's 403. All agent and forge text shows as plain
+  text. `scripts/mock-api.mjs` serves the new endpoints (`/mock/member` for a person without admin access). New UI
+  image; no API or RBAC change.
 - Web Push notifications (#347). People subscribe a device in the console **Settings** and get a notification for a
   new approval, an agent stopped by a guardrail or blocked, and a usage pause. The notification has the agent,
   repository, request type and expiry only, never text from the model. **Deny** and **Snooze** work from the

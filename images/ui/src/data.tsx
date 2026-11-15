@@ -6,7 +6,7 @@ import {
   getMe, getUsage, listAgents, listApprovals, listSecurityEvents, onCallResult, Unauthorized,
   type Agent, type Approval, type CallResult, type SecurityEvent, type Usage,
 } from './api'
-import { agentView, buildInbox, DOWN_MS, POLL_MS, STALE_MS, type Scope } from './model'
+import { ADMIN_GROUP, agentView, buildInbox, DOWN_MS, POLL_MS, STALE_MS, type Scope } from './model'
 import { Ctx, type Conn, type Data } from './useData'
 
 interface Snapshot { agents: Agent[]; pending: Approval[]; usage: Usage | null; events: SecurityEvent[]; at: number }
@@ -23,7 +23,11 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
   const [now, setNow] = useState(() => Date.now())
   const [tick, setTick] = useState(0)
   const [mine, setMine] = useState<string[] | null>(null)
-  useEffect(() => { getMe(token).then((m) => setMine(Array.isArray(m.repos) ? m.repos : null)).catch(() => setMine(null)) }, [token])
+  const [admin, setAdmin] = useState(false)
+  useEffect(() => {
+    getMe(token).then((m) => { setMine(Array.isArray(m.repos) ? m.repos : null); setAdmin((m.groups ?? []).includes(ADMIN_GROUP)) })
+      .catch(() => setMine(null))
+  }, [token])
 
   useEffect(() => onCallResult((r) => setLast((p) => (p.r === r ? p : { r, since: Date.now() }))), [])
   useEffect(() => {
@@ -80,10 +84,10 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
     return {
       ready: snap.at > 0, at: snap.at, agents, allAgents: all, pending, inbox, hiddenInbox: fullInbox.length - inbox.length,
       usage: snap.usage, events: snap.events.filter((e) => inScopeAgent(e.agent)),
-      projects: allProjects.filter(inScopeRepo), allProjects, scope: eff, setScope, inScopeRepo, inScopeAgent, mine,
+      projects: allProjects.filter(inScopeRepo), allProjects, scope: eff, setScope, inScopeRepo, inScopeAgent, mine, admin,
       conn, failedSince: last.since, reload, now,
     }
-  }, [snap, scope, mine, last, now, setScope, reload])
+  }, [snap, scope, mine, admin, last, now, setScope, reload])
 
   return <Ctx.Provider value={data}>{children}</Ctx.Provider>
 }

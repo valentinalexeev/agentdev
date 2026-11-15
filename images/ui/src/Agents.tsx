@@ -49,7 +49,7 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
   const modal = deleting || creating || editing
   const row = (a: AgentView) => (
     <tr key={a.name}>
-      <td><AgentTag name={a.name} /></td>
+      <td><a className="ad-row-link" href={`#agents/${encodeURIComponent(a.name)}`} aria-label={`Open agent ${a.name}`}><AgentTag name={a.name} /></a></td>
       <td className="ad-nowrap"><Lamp phase={a.life} /></td>
       <td><Attention attn={a.attn} label={ATTN_LABEL[a.attn]} />{a.why && <div className="ad-muted" style={{ fontSize: 12, lineHeight: '16px', marginTop: 2 }}>{a.why}</div>}</td>
       <td className="ad-code ad-nowrap ad-hide-phone">{(a.repos ?? []).join(', ')}</td>
