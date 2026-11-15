@@ -13,6 +13,9 @@ to an ID that this file does not define (#126).
 The security model these entries refer to is described in [concepts.md](concepts.md#security-model) and, for the
 planned target, [security-model.md](security-model.md).
 
+The attackers, assets and attack paths that these entries answer, and the paths that have no entry yet, are in
+[threat-model.md](threat-model.md) (#401).
+
 ## Agent runtime (worker)
 
 | ID | Risk | Source | Status | Where / how |

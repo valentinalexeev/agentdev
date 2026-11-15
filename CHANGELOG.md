@@ -15,6 +15,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   type `webpush`, VAPID Secret, allowed push hosts) and instance value `notifications.channels` (`kind`:
   `NOTIFY_CHANNELS`), off by default. Re-run: Ansible role `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`)
   for the CRD, the VAPID key pair, the database tables and the API RBAC; new API and UI images. Bark: #402.
+- Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
+  adversarial review, 72 attack paths with the risk register entries that answer them, and 35 candidate questions
+  (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
+  ingress, another OIDC provider, self-hosting loop) and the effect on a project that adopts agents (its CI, its
+  releases and their consumers), with the chains by which an attacker uses an instance to reach every deployment
+  of a downstream project. ADR 0008 records the review method and the severity scale. Documentation only.
 - Workload identity for agents at the Claude proxy (#352). The operator creates a ServiceAccount `agent-<name>` per
   agent and mounts a projected token (audience `claude-proxy`, 10 minutes) only in the agent container. The 1.1
   worker sends it through Claude Code's `apiKeyHelper`. `claude-proxy` checks it with TokenReview (own ServiceAccount
