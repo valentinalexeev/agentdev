@@ -9,6 +9,12 @@
 # Uses the same manifests as the kind setup (manifests/*.tmpl), so both environments stay in step.
 # Secrets come from Secret Manager at run time (gcloud as the caller) and are only ever passed to
 # the Kubernetes API: every task that touches one has no_log.
+# Read-only checks first (#314): Claude secret formats (#212), same release (#218), CRDs, images on ghcr.io.
+# Only the checks: --tags preflight (or scripts/upgrade-check.sh). Skip them: --skip-tags preflight.
+- name: Preflight
+  ansible.builtin.import_playbook: preflight.yml
+  tags: [preflight]
+
 - name: Deploy agentdev to GKE
   hosts: localhost
   gather_facts: false
