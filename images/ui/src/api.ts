@@ -249,3 +249,97 @@ export async function addPushSubscription(token: string, sub: PushSubscriptionJS
 export async function removePushSubscription(token: string, endpoint: string): Promise<void> {
   await call(token, 'DELETE', `/api/push/subscriptions?endpoint=${encodeURIComponent(endpoint)}`)
 }
+
+// Jobs (#345): one issue or pull request of an agent, from the forge and the approvals, never from agent output.
+// `title` is written by people or the agent on the forge: untrusted, render as text.
+export type JobPhase = 'queued' | 'build' | 'review' | 'done'
+export interface Job {
+  id: string
+  agent: string
+  repo: string
+  forge: string
+  issue?: number
+  pr?: number
+  title: string
+  url?: string
+  prUrl?: string
+  phase: JobPhase
+  outcome?: 'merged' | 'closed' | string
+  created: string
+  updated: string
+  closed?: string
+}
+
+// Agent detail (#344): the drawer. 404 when the person may not see the agent.
+export interface PodView { name: string; phase: string; ready: boolean; restarts: number; started?: string; reason?: string }
+export interface WaitingItem {
+  kind: 'approval' | 'usage-pause' | 'paused' | 'blocked' | 'invalid' | string
+  ref?: string; job?: string; repo?: string; reason?: string; since?: string; until?: string
+}
+export interface AgentDetail extends Agent {
+  pods: PodView[]
+  waitingOn: WaitingItem[]
+  recentJobs: Job[]
+  guide?: string // the harness guide, written by the operator
+}
+
+export async function getAgentDetail(token: string, name: string): Promise<AgentDetail> {
+  return (await call(token, 'GET', `/api/agents/${encodeURIComponent(name)}`)).json()
+}
+
+// Platform health (#344), agentdev-admins only: 403 for everyone else.
+export type Health = 'ok' | 'degraded' | 'down' | 'absent' | 'unknown'
+export interface PlatformComponent { name: string; status: Health; detail: string; command: string }
+export interface Platform { version: string; checked: string; components: PlatformComponent[] }
+
+export async function getPlatform(token: string): Promise<Platform> {
+  return (await call(token, 'GET', '/api/platform')).json()
+}
+
+// Audit trail of the write API (#91), agentdev-admins only.
+export type AuditResult = 'ok' | 'denied' | 'invalid' | 'error' | 'unauthenticated'
+export interface AuditState { repo: string; forge: string; claudeSecret?: string; maxConcurrent: number; scaleToZero: boolean; paused: boolean }
+export interface AuditEntry {
+  time: string
+  who: { sub: string; username: string; forgeUser: string; groups?: string[] }
+  action: 'patch' | 'create' | 'delete' | string
+  agent: string
+  result: AuditResult
+  reason?: string
+  request?: unknown
+  before: AuditState | null
+  after: AuditState | null
+  grant?: string
+  keepState?: boolean
+  remote?: string
+}
+export interface AuditFilter { agent?: string; result?: AuditResult | ''; since?: string; cursor?: string }
+
+export async function listAudit(token: string, f: AuditFilter): Promise<{ entries: { id: number; entry: AuditEntry }[]; next_cursor?: string }> {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+  return (await call(token, 'GET', `/api/audit?${q}`)).json()
+}
+
+// The HTTP status of a failed call (403: not allowed, 404: not found or not visible), 0 when it has none.
+export function statusOf(e: unknown): number {
+  return e instanceof ApiError ? e.status : 0
+}
+
+// GET /api/jobs with the scope filters. Reads every page (500 per page, at most 10 pages).
+export async function listJobs(token: string, f: { agent?: string; repo?: string; scope?: string; phase?: JobPhase }): Promise<{ jobs: Job[]; unavailable?: string[] }> {
+  const jobs: Job[] = []
+  let unavailable: string[] | undefined
+  let cursor = ''
+  for (let i = 0; i < 10; i++) {
+    const q = new URLSearchParams({ limit: '500' })
+    for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+    if (cursor) q.set('cursor', cursor)
+    const r = await (await call(token, 'GET', `/api/jobs?${q}`)).json()
+    jobs.push(...(r.jobs ?? []))
+    unavailable = r.unavailable ?? unavailable
+    if (!r.next_cursor) break
+    cursor = r.next_cursor
+  }
+  return { jobs, unavailable }
+}

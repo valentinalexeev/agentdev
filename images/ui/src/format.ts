@@ -1,5 +1,5 @@
 // Helpers shared by the pages (no components here, so fast refresh works).
-import type { Approval } from './api'
+import type { Approval, AuditEntry, Job } from './api'
 
 // lane hue from the name: x = (x * 31 + charCode) >>> 0, lane x % 6 + 1 (design-system.md, "Agent identity")
 export function lane(name: string): number {
@@ -36,3 +36,20 @@ export function kTokens(n: number): string {
 
 export const GROUP_AT = 10 // a list groups itself above this many items (docs/console-ux.md, "At scale")
 export const CAP = 4 // items per group before "Show N more"
+
+// The outcome of a finished job, in words (merged, closed without merge, closed with no change)
+export function outcomeText(j: Job): string {
+  if (j.phase !== 'done') return ''
+  return j.outcome === 'merged' ? 'merged' : j.outcome === 'closed' ? (j.pr ? 'closed without merge' : 'closed, no change') : (j.outcome || 'done')
+}
+
+// The verb of an entry: a patch that only flips `paused` is a pause or a resume.
+export function verb(e: AuditEntry): string {
+  if (e.action === 'patch') {
+    const req = (e.request && typeof e.request === 'object' ? e.request : {}) as Record<string, unknown>
+    const keys = Object.keys(req)
+    if (keys.length === 1 && keys[0] === 'paused') return req.paused ? 'pause' : 'resume'
+    return 'change'
+  }
+  return e.action
+}
