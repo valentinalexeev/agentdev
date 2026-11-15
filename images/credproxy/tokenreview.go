@@ -9,6 +9,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -52,13 +54,31 @@ type tokenReviewer struct {
 	bearer    func() (string, error) // the proxy's own service account token (re-read: it is rotated too)
 	now       func() time.Time
 
-	mu    sync.Mutex
-	cache map[[32]byte]cacheEntry
+	mu       sync.Mutex
+	cache    map[[32]byte]cacheEntry
+	cacheKey []byte // random per process: the cache index is an HMAC of the token, never the token or a plain hash
 }
 
 func newTokenReviewer(apiURL, namespace string, client *http.Client, bearer func() (string, error)) *tokenReviewer {
 	return &tokenReviewer{url: strings.TrimRight(apiURL, "/") + "/apis/authentication.k8s.io/v1/tokenreviews",
-		namespace: namespace, client: client, bearer: bearer, now: time.Now, cache: map[[32]byte]cacheEntry{}}
+		namespace: namespace, client: client, bearer: bearer, now: time.Now, cache: map[[32]byte]cacheEntry{}, cacheKey: randomKey()}
+}
+
+func randomKey() []byte {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		panic(err) // crypto/rand does not fail on supported platforms
+	}
+	return k
+}
+
+// index is the cache key of a token: HMAC-SHA256 with the per-process key (a lookup key, not a stored credential).
+func (t *tokenReviewer) index(tok string) [32]byte {
+	m := hmac.New(sha256.New, t.cacheKey)
+	m.Write([]byte(tok))
+	var k [32]byte
+	copy(k[:], m.Sum(nil))
+	return k
 }
 
 // inClusterReviewer builds a reviewer from the pod's service account files and KUBERNETES_SERVICE_HOST/PORT.
@@ -128,7 +148,7 @@ func (t *tokenReviewer) agentFor(user string) string {
 
 // verify returns the agent of a valid token, or "".
 func (t *tokenReviewer) verify(ctx context.Context, tok string) string {
-	key := sha256.Sum256([]byte(tok))
+	key := t.index(tok)
 	now := t.now()
 	t.mu.Lock()
 	if e, ok := t.cache[key]; ok && now.Before(e.expires) {
