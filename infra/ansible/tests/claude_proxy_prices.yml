@@ -10,6 +10,9 @@
     platform_ns: agentdev-platform
     claude_budget_units: 2000000
     claude_prices: {w_cr: 0.1, model.claude-opus: 5, usd_per_million_units: 3}
+    claude_job_budget_units: 900000
+    claude_job_approval_units: 300000
+    claude_job_approval_step_units: 200000
   tasks:
     - name: Render as deploy.yml does
       ansible.builtin.set_fact:
@@ -30,6 +33,9 @@
             TELEMETRY_SCRAPER_SELECTOR: '{"app.kubernetes.io/name": "collector"}'
             CLAUDE_SECRET_SOURCES: "[]"
             CLAUDE_PROXY_AUTH: both                                    # #352
+            CLAUDE_JOB_BUDGET_UNITS: "{{ claude_job_budget_units | int }}"                 # #196
+            CLAUDE_JOB_APPROVAL_UNITS: "{{ claude_job_approval_units | int }}"             # #310
+            CLAUDE_JOB_APPROVAL_STEP_UNITS: "{{ claude_job_approval_step_units | int }}"   # #310
             KUBE_API_EGRESS: '[{"ipBlock": {"cidr": "10.0.0.1/32"}}]'  # #352
           replace: []
 
@@ -37,6 +43,8 @@
       vars:
         np: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy') | first }}"
         cm: "{{ docs | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.name', 'equalto', 'claude-proxy-prices') | first }}"
+        role: "{{ docs | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.name', 'equalto', 'agentdev-claude-proxy-approvals') | first }}"
+        rb: "{{ docs | selectattr('kind', 'equalto', 'RoleBinding') | selectattr('metadata.name', 'equalto', 'agentdev-claude-proxy-approvals') | first }}"
         env: "{{ (docs | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
                  | items2dict(key_name='name', value_name='value') }}"
       ansible.builtin.assert:
@@ -45,6 +53,11 @@
           - cm.data['model.claude-opus'] == '5'
           - cm.data['usd_per_million_units'] == '3'
           - env.CLAUDE_BUDGET_UNITS == '2000000'
+          - env.CLAUDE_JOB_BUDGET_UNITS == '900000'
+          - env.CLAUDE_JOB_APPROVAL_UNITS == '300000'
+          - env.CLAUDE_JOB_APPROVAL_STEP_UNITS == '200000'
+          - (role.rules | length) == 1 and role.rules[0].resources == ['approvals'] and role.rules[0].verbs == ['get', 'list']
+          - rb.subjects[0].name == 'claude-proxy' and rb.roleRef.name == 'agentdev-claude-proxy-approvals'
           - env.PRICES_DIR == '/etc/claude-proxy/prices'
           - "'CLAUDE_BUDGET_TOKENS' not in env"
           - np.spec.ingress[1].from[0].podSelector.matchLabels['app.kubernetes.io/name'] == 'collector'
@@ -62,3 +75,15 @@
           - bad.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 2
       vars:
         bad: {"$(id)": 1, w_out: "1e9", w_in: "-1"}
+
+    - name: The deploy.yml assert refuses a soft job limit at or above the hard one (#310)
+      ansible.builtin.assert:
+        that:
+          - ((c.soft | int) == 0 or (c.hard | int) == 0 or (c.soft | int) < (c.hard | int)) != c.refused
+      loop:
+        - {soft: 300, hard: 900, refused: false}
+        - {soft: 0, hard: 900, refused: false}
+        - {soft: 300, hard: 0, refused: false}
+        - {soft: 900, hard: 900, refused: true}
+        - {soft: 901, hard: 900, refused: true}
+      loop_control: {loop_var: c}

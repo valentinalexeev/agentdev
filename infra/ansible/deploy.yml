@@ -90,6 +90,12 @@
         that:
           - (claude_budget_units_effective | string) is match('^[0-9]+$')
           - claude_prices is mapping
+          - (claude_job_budget_units | string) is match('^[0-9]{1,15}$')
+          - (claude_job_approval_units | string) is match('^[0-9]{1,15}$')
+          - (claude_job_approval_step_units | string) is match('^[0-9]{1,15}$')
+          - >-
+            (claude_job_approval_units | int) == 0 or (claude_job_budget_units | int) == 0
+            or (claude_job_approval_units | int) < (claude_job_budget_units | int)
           - (telemetry.instance | default('agentdev')) is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
           - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
           - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
@@ -102,7 +108,9 @@
           - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
         fail_msg: >-
           claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer;
-          claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$.
+          claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$;
+          claude_job_budget_units, claude_job_approval_units and claude_job_approval_step_units are non-negative integers,
+          and claude_job_approval_units is lower than claude_job_budget_units when both are set (#310).
         quiet: true
 
     - name: Scale to zero has a wake source (#181)
@@ -713,6 +721,9 @@
             # values as strings; the proxy checks each key and value again (#196)
             CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
             CLAUDE_PROXY_AUTH: "{{ claude_proxy_auth }}"   # key | both | token (#352)
+            CLAUDE_JOB_BUDGET_UNITS: "{{ claude_job_budget_units | int }}"                 # #196: hard limit per job
+            CLAUDE_JOB_APPROVAL_UNITS: "{{ claude_job_approval_units | int }}"             # #310: soft limit per job
+            CLAUDE_JOB_APPROVAL_STEP_UNITS: "{{ claude_job_approval_step_units | int }}"   # #310: units per approval
             KUBE_API_EGRESS: "{{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': kube_api_ips}) | trim }}"
             # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
             CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
