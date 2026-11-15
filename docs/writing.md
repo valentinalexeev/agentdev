@@ -179,7 +179,8 @@ Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terrafo
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
-kindnet, Argo CD, Flux, terminal, Claude Code.
+kindnet, Argo CD, Flux, terminal, Claude Code, push notification (a message that the browser shows when the web UI is
+not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device.
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
@@ -197,6 +198,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | drain | tell an agent to start no new job and let its running jobs finish (#174) |
 | edit | change the text of a forge comment after you wrote it |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
+| mute | stop the notifications of a project or a type (#347) |
 | merge | add the changes of a pull request to the main branch |
 | publish | make a Service of the cluster available on a public or tailnet URL |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
@@ -206,6 +208,8 @@ authentik page. A label is not a word of the text, so a label does not break the
 | resolve | mark a thread of a pull request as done |
 | revoke | make a token not valid |
 | sign in, sign out | start or end a session in the web UI |
+| snooze | delay a notification, so that it comes again later (#347) |
+| subscribe | ask for push notifications on a device (#347) |
 
 ## Before you merge a manual change
 

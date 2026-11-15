@@ -51,7 +51,7 @@ spec:
               NotificationChannel is an instance-level notification channel (#347, owner decision on #347: the instance part is
               a resource like ModelConfig and McpServer; the per-user part, subscriptions and mutes, stays in the API database).
               It lives in the platform namespace next to the API, which reads it; only cluster admins (Ansible) write it. The
-              API uses the first valid channel of a type (by name) when the instance value notify.channels turns the type on.
+              API uses the first valid channel of a type (by name) when the instance value notifications.channels turns the type on.
 
               Type webpush: the VAPID key pair is in the Secret spec.vapid.secretRef (keys publicKey and privateKey, base64url,
               created once by Ansible); allowedHosts are the push services the API may send to (subscription endpoints on other
