@@ -373,6 +373,9 @@ To deny or delay a request without the web UI:
 1. Click **Deny** in the notification.
    The request is denied, as if you clicked **Deny** in the web UI. The history shows "push".
 2. Or click **Snooze 15 min**.
+
+NOTE: You get notifications only for 24 hours after your last visit to the console. Open the console again to
+turn them back on. A snooze is lost when the API restarts. The request stays in the Today inbox.
    You get the same notification again after 15 minutes, if the request has no decision then.
 
 NOTE: Each button works one time and for at most 30 minutes. After that, open the web UI.

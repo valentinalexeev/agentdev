@@ -372,3 +372,63 @@ func TestPublicIP(t *testing.T) {
 var metaCreate = metav1.CreateOptions{}
 
 func parseIP(s string) net.IP { return net.ParseIP(s) }
+
+// #404 review: push never uses the snapshot's admin group (only the live forge permission), and a snapshot older than
+// snapTTL drives neither delivery nor actions.
+func TestPushSnapshotTrust(t *testing.T) {
+	e := newPushEnv(t)
+	ctx := context.Background()
+	_ = e.p.pass(ctx)
+	e.subscribe(t, "group", "https://fcm.googleapis.com/fcm/send/g")  // agentdev-admins, no forge access
+	e.subscribe(t, "writer", "https://fcm.googleapis.com/fcm/send/w") // forge write on owner/x
+	obj := approvalObj("carol", "f6a7b8c9f6a7b8c9", "owner/x", t0)
+	if _, err := e.k.d.Resource(approvalsGVR).Namespace("coding-agents").Create(ctx, obj, metaCreate); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.p.pass(ctx)
+	for _, s := range e.sent {
+		if strings.HasSuffix(s.endpoint, "/g") {
+			t.Fatalf("admin group from the snapshot got a push")
+		}
+	}
+	if len(e.sent) != 1 {
+		t.Fatalf("writer push: %d", len(e.sent))
+	}
+	tok := lastActions(t, e)
+	// a token of the admin-group user (signed for them) does not decide either: no forge access
+	key := actionKey(e.ch)
+	gt := signAction(key, actionClaims{Sub: "s-g", Name: "carol-f6a7b8c9f6a7b8c9", Hash: strings.Repeat("ab", 32),
+		Action: "deny", Exp: now().Add(time.Minute).Unix(), Nonce: newNonce(), Version: 1})
+	act := func(tk string) *httptest.ResponseRecorder {
+		b, _ := json.Marshal(map[string]string{"token": tk})
+		return e.call(t, "POST", "/api/push/action", "", string(b))
+	}
+	if w := act(gt); w.Code == 200 {
+		t.Fatalf("admin group decided through push: %s", w.Body)
+	}
+	// no console visit for longer than snapTTL: no new push, and the writer's token is refused
+	base := now()
+	now = func() time.Time { return base.Add(snapTTL + time.Minute) }
+	n := len(e.sent)
+	obj = approvalObj("carol", "a7b8c9d0a7b8c9d0", "owner/x", now())
+	if _, err := e.k.d.Resource(approvalsGVR).Namespace("coding-agents").Create(ctx, obj, metaCreate); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.p.pass(ctx)
+	if len(e.sent) != n {
+		t.Fatalf("stale snapshot still notified")
+	}
+	if w := act(tok["deny"]); w.Code != http.StatusUnauthorized {
+		t.Fatalf("stale snapshot action: %d %s", w.Code, w.Body)
+	}
+	// a console visit refreshes it
+	e.call(t, "GET", "/api/notify/settings", "writer", "")
+	obj = approvalObj("carol", "b8c9d0e1b8c9d0e1", "owner/x", now())
+	if _, err := e.k.d.Resource(approvalsGVR).Namespace("coding-agents").Create(ctx, obj, metaCreate); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.p.pass(ctx)
+	if len(e.sent) == n {
+		t.Fatalf("refreshed snapshot not notified")
+	}
+}

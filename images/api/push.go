@@ -510,8 +510,11 @@ func (p *pusher) deliver(ctx context.Context, u userSnap, it item) {
 	if ch == nil {
 		return
 	}
-	id := u.identity()
-	visible := p.w.isAdmin(id)
+	if !u.fresh(now()) {
+		return // no console visit for snapTTL: no push until the next one (#404 review)
+	}
+	id := u.pushIdentity() // live forge permission only, never the snapshot's admin group
+	visible := false
 	for _, repo := range it.repos {
 		if visible {
 			break
@@ -603,15 +606,18 @@ func (p *pusher) runAction(ctx context.Context, tok string) (int, any) {
 			Request: map[string]any{"approval": c.Name, "action": c.Action}})
 		return http.StatusConflict, map[string]string{"error": "this action was already used"}
 	}
-	if !ok {
-		return http.StatusUnauthorized, map[string]string{"error": errBadToken.Error()}
+	if !ok || !u.fresh(now()) {
+		audit(auditEntry{Who: who, Action: "push-action", Result: "denied", Reason: "no recent console visit",
+			Request: map[string]any{"approval": c.Name, "action": c.Action}})
+		return http.StatusUnauthorized, map[string]string{"error": "open the console to use this action"}
 	}
 	switch c.Action {
 	case "deny":
 		if p.ar == nil {
 			return http.StatusNotFound, map[string]string{"error": "approvals are off"}
 		}
-		return p.ar.decideAs(ctx, u.identity(), c.Name, decideBody{Decision: "deny", ContentHash: c.Hash}, "push")
+		// forge permission only (pushIdentity): a snapshot's admin group never decides (#404 review)
+		return p.ar.decideAs(ctx, u.pushIdentity(), c.Name, decideBody{Decision: "deny", ContentHash: c.Hash}, "push")
 	default: // snooze
 		p.mu.Lock()
 		p.snoozed[c.Sub+"\x00"+c.Name] = now().Add(snoozeFor)

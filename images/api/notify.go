@@ -84,6 +84,26 @@ type userSnap struct {
 	ForgeLoginGitHub string   `json:"forge_login_github,omitempty"`
 	ForgeLoginGitea  string   `json:"forge_login_gitea,omitempty"`
 	Groups           []string `json:"groups,omitempty"`
+	// Updated is when the user last called a notify endpoint with a valid token (set by the store, not stored in
+	// the JSON). Push and its actions trust the snapshot only for snapTTL after that (#404 review).
+	Updated time.Time `json:"-"`
+}
+
+// snapTTL bounds how long a snapshot (forge logins) may drive push delivery and Deny/Snooze after the user's last
+// console visit. The admin group of a snapshot is never used for push (pushIdentity): a removed admin must not keep
+// the admin bypass. After snapTTL the user gets no push until the next console visit (fail closed).
+const snapTTL = 24 * time.Hour
+
+func (u userSnap) fresh(at time.Time) bool {
+	return !u.Updated.IsZero() && at.Sub(u.Updated) <= snapTTL
+}
+
+// pushIdentity is the identity for push delivery and actions: forge logins only, no groups, so only the live forge
+// permission counts (R35), never the snapshot's agentdev-admins membership.
+func (u userSnap) pushIdentity() *identity {
+	id := u.identity()
+	id.Groups = nil
+	return id
 }
 
 func snapOf(id *identity) userSnap {
@@ -131,6 +151,7 @@ func newMemNotify() *memNotify {
 func (m *memNotify) SaveUser(_ context.Context, u userSnap) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	u.Updated = now()
 	m.users[u.Subject] = u
 	return nil
 }
@@ -250,7 +271,8 @@ func (s *pgStore) SaveUser(ctx context.Context, u userSnap) error {
 
 func (s *pgStore) User(ctx context.Context, sub string) (userSnap, bool, error) {
 	var raw []byte
-	err := s.db.QueryRow(ctx, `SELECT snapshot FROM notify_users WHERE subject = $1`, sub).Scan(&raw)
+	var updated time.Time
+	err := s.db.QueryRow(ctx, `SELECT snapshot, updated FROM notify_users WHERE subject = $1`, sub).Scan(&raw, &updated)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows") {
 			return userSnap{}, false, nil
@@ -258,7 +280,11 @@ func (s *pgStore) User(ctx context.Context, sub string) (userSnap, bool, error) 
 		return userSnap{}, false, err
 	}
 	var u userSnap
-	return u, json.Unmarshal(raw, &u) == nil, nil
+	if json.Unmarshal(raw, &u) != nil {
+		return userSnap{}, false, nil
+	}
+	u.Updated = updated
+	return u, true, nil
 }
 
 func (s *pgStore) AddSubscription(ctx context.Context, p pushSub, max int) error {
@@ -711,7 +737,9 @@ func (n *notifyAPI) action(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, http.StatusNotFound, map[string]string{"error": "web push is not enabled on this instance"})
 		return
 	}
-	if !actionLimit.allow(clientAddr(r)) {
+	// one bucket for all callers (#404 review): the API sits behind the UI proxy, so the peer address is the proxy,
+	// and X-Forwarded-For is client-supplied. Tokens are HMAC-signed, so this only bounds load.
+	if !actionLimit.allow("push-action") {
 		writeJSON(rw, http.StatusTooManyRequests, map[string]string{"error": "too many actions; try again in a minute"})
 		return
 	}
@@ -726,5 +754,5 @@ func (n *notifyAPI) action(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, code, out)
 }
 
-// actionLimit: POST /api/push/action has no bearer token, so it is limited per client address (60 a minute).
-var actionLimit = newRateLimiter(60, time.Minute)
+// actionLimit: POST /api/push/action has no bearer token; it is limited for the whole instance (300 a minute).
+var actionLimit = newRateLimiter(300, time.Minute)
