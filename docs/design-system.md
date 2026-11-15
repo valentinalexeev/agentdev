@@ -256,6 +256,15 @@ with no work, not an error.
 - No approval by timeout. The UI says what happens without a decision.
 - A push notification never contains model-written text.
 
+### How `images/ui` loads the system
+
+`images/ui` has no colour values of its own. `npm run sync-design-system` copies `tokens.css`, `components.css`,
+`console.css` and `favicon.svg` into `images/ui/src/design-system/` and `images/ui/public/`. The copies are committed,
+because the image build sees only `images/ui`. `npm run build` fails when a copy differs from `docs/design-system`.
+The fonts come from the `@fontsource` packages (self-hosted), because the console CSP allows no third-party styles.
+Classes the console needs beyond the prototype (`ad-attn`, `ad-reason`, `ad-iconbtn`, `ad-user`, `ad-limit-row`,
+`ad-meters`, `ad-sub`, `dialog.ad-drawer`) are at the end of `console.css`.
+
 ### Moving `images/ui` to the system
 
 | Today | In the design system |
