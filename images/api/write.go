@@ -149,7 +149,10 @@ type writer struct {
 	adminGroup string
 	usage      usageStore // usage limits (#93); nil: the endpoints are not served
 	limits     agentLimits
-	createMu   sync.Mutex // one create at a time, so two requests cannot both pass the caps (one API replica)
+	events     eventStore       // security event counts for the agent detail (#344); nil: 0
+	platform   *platformChecker // GET /api/platform (#344); nil: not served
+	jobs       *jobCache        // GET /api/jobs (#345), forge-backed; nil: no jobs
+	createMu   sync.Mutex       // one create at a time, so two requests cannot both pass the caps (one API replica)
 }
 
 // agentLimits (#27): caps on the number of Agent objects that POST /api/agents may reach. 0 = no cap.

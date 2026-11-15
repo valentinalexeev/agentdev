@@ -739,6 +739,19 @@ func (ar *approvalReader) list(rw http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(ctxIdentity{}).(*identity)
 	q := r.URL.Query()
 	state, agent, repo := q.Get("state"), q.Get("agent"), q.Get("project")
+	if repo == "" {
+		repo = q.Get("repo") // #345: the same filter name as the other lists
+	}
+	pg, err := parsePage(q, 1<<20) // no limit given: every item, as before
+	if err != nil {
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sc, err := ar.w.scopeOf(r.Context(), id, url.Values{"scope": {q.Get("scope")}})
+	if err != nil {
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	switch state {
 	case "", "all", "pending", "allowed", "denied", "void", "decided":
 	default:
@@ -761,13 +774,23 @@ func (ar *approvalReader) list(rw http.ResponseWriter, r *http.Request) {
 		if state != "" && state != "all" && state != a.State && !(state == "decided" && a.State != "pending") {
 			continue
 		}
-		if !can(a.Repo, a.Forge) {
+		if !can(a.Repo, a.Forge) || !sc.repo(a.Forge, a.Repo) {
 			continue
 		}
 		out = append(out, a)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
-	writeJSON(rw, http.StatusOK, map[string]any{"approvals": out})
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Created.Equal(out[j].Created) {
+			return out[i].Created.After(out[j].Created)
+		}
+		return out[i].Name < out[j].Name
+	})
+	span, next := pg.slice(len(out))
+	resp := map[string]any{"approvals": out[span[0]:span[1]]}
+	if next != "" {
+		resp["next_cursor"] = next
+	}
+	writeJSON(rw, http.StatusOK, resp)
 }
 
 func (ar *approvalReader) get(rw http.ResponseWriter, r *http.Request) {

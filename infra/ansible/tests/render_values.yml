@@ -55,6 +55,13 @@
           - env.USAGE_WEEKLY == '85'
           - env.MAX_AGENTS == '2'   # #27
           - env.MAX_AGENTS_PER_USER == '0'
+          - env.PLATFORM_NS == platform_ns   # GET /api/platform (#344)
+          - env.API_IMAGE == api_image
+          # #344: by-name reads of the guide ConfigMap and the platform Deployments, never Secrets
+          - (api_docs | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.name', 'equalto', 'agentdev-api-platform')
+             | first).rules[0].resourceNames == ['agentdev-operator', 'authentik-server']
+          - (api_docs | selectattr('kind', 'in', ['Role', 'ClusterRole']) | map(attribute='rules') | flatten
+             | map(attribute='resources') | flatten) is not contains('secrets')
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder
