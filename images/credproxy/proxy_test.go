@@ -254,7 +254,7 @@ func TestBudget(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("bob: %d", resp.StatusCode)
 	}
-	os.WriteFile(filepath.Join(f.b.dir, "alice"), []byte("1000\n"), 0o644)
+	os.WriteFile(filepath.Join(f.b.dir, "alice"), []byte("100000\n"), 0o644) // units: unknown model counts x5
 	resp = f.post("/v1/messages", key, `{}`, nil)
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -296,7 +296,7 @@ func TestBudgetWindowAndState(t *testing.T) {
 func TestMeterCapsJSON(t *testing.T) {
 	m := &tokenMeter{}
 	m.Write(bytes.Repeat([]byte("x"), meterCap+1))
-	if in, o := m.totals(); in != 0 || o != 0 {
+	if tc, _ := m.totals(); tc != (tokenCounts{}) {
 		t.Error("oversized body counted")
 	}
 }
@@ -332,5 +332,22 @@ func TestBetaQueryAllowed(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || f.got.URL.RawQuery != "beta=true" {
 		t.Errorf("status %d query %q", resp.StatusCode, f.got.URL.RawQuery)
+	}
+}
+
+// Review of #275: spend written by the token-counting proxy (no unit marker) is not read as units.
+func TestBudgetStateNeedsUnitMarker(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.json")
+	os.WriteFile(p, []byte(`{"alice":{"hours":[999999,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"stamps":[500000,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}`), 0o600)
+	b := newBudget(100, "", p)
+	b.now = func() time.Time { return time.Unix(500000*3600, 0) }
+	if ok, used, _ := b.allow("alice"); !ok || used != 0 {
+		t.Errorf("old token state read as units: %d", used)
+	}
+	b.add("alice", 7)
+	data, _ := os.ReadFile(p)
+	if !strings.Contains(string(data), `"unit":"units"`) {
+		t.Errorf("state without marker: %s", data)
 	}
 }
