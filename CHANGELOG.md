@@ -7,6 +7,11 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Console chat backend (#346): `chat-session-server` in the worker image and the session API
+  (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.
+  Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
+  Off by default. The API and the worker must run the same `image_tag` (ADR 0006). Admission policies hold the
+  API's chat Jobs (create and delete); `scripts/e2e-gke-security.sh --only chat` checks them (R101, R104).
 - Web Push notifications (#347). People subscribe a device in the console **Settings** and get a notification for a
   new approval, an agent stopped by a guardrail or blocked, and a usage pause. The notification has the agent,
   repository, request type and expiry only, never text from the model. **Deny** and **Snooze** work from the
