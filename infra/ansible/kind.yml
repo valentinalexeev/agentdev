@@ -121,6 +121,7 @@
         api_kind_cluster: "{{ kind_cluster_name }}"
         api_image: agentdev-api:dev
         api_ui: false
+        api_ns_labels: {service: agentdev, environment: dev}   # = operator_cost_labels (#357)
         api_oidc_issuer: https://localhost:9443/application/o/agentdev/
         api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
         api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
