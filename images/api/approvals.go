@@ -573,7 +573,7 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		st := map[string]any{"state": "allowed", "scope": "once"}
 		switch verb {
 		case "approve-job":
-			if a.Source != "executor" { // an executor apply is single-use (#69): approve-job counts as once
+			if a.Source != "executor" && a.Source != "cost" { // single-use: an executor apply (#69), one cost step (#310)
 				st["scope"] = "job"
 			}
 		case "deny":
@@ -885,8 +885,8 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 		fail(http.StatusNotFound, "denied", "not found") // do not reveal other projects
 		return
 	}
-	if a.Source == "executor" && body.Decision == "approve-job" {
-		st["scope"] = "once" // an executor apply is single-use (#69)
+	if (a.Source == "executor" || a.Source == "cost") && body.Decision == "approve-job" {
+		st["scope"] = "once" // single-use: an executor apply (#69), one step of cost units (#310)
 	}
 	grant, err := ar.w.authorize(r.Context(), id, a.Forge, a.Repo, permWrite, true)
 	if err != nil {
