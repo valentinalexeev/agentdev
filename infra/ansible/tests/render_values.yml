@@ -41,6 +41,7 @@
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             MAX_AGENTS: "{{ api_max_agents }}"
             MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+            NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
           replace: []
 
     - name: The API container gets the values
@@ -57,11 +58,15 @@
           - env.MAX_AGENTS_PER_USER == '0'
           - env.PLATFORM_NS == platform_ns   # GET /api/platform (#344)
           - env.API_IMAGE == api_image
-          # #344: by-name reads of the guide ConfigMap and the platform Deployments, never Secrets
+          # #344: by-name reads of the guide ConfigMap and the platform Deployments; Secrets only agentdev-api-vapid by
+          # name (#347, the VAPID key pair of the NotificationChannel), get only
           - (api_docs | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.name', 'equalto', 'agentdev-api-platform')
              | first).rules[0].resourceNames == ['agentdev-operator', 'authentik-server']
-          - (api_docs | selectattr('kind', 'in', ['Role', 'ClusterRole']) | map(attribute='rules') | flatten
-             | map(attribute='resources') | flatten) is not contains('secrets')
+          - >-
+            (api_docs | selectattr('kind', 'in', ['Role', 'ClusterRole']) | map(attribute='rules') | flatten
+             | selectattr('resources', 'contains', 'secrets') | list)
+            == [{'apiGroups': [''], 'resources': ['secrets'], 'resourceNames': ['agentdev-api-vapid'], 'verbs': ['get']}]
+          - env.NOTIFY_CHANNELS == ''   # #347: off by default
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder

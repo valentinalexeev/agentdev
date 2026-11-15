@@ -18,7 +18,8 @@ function outcome(a: Approval): string {
   return `${a.state}${a.scope ? ` (${a.scope})` : ''}${a.decidedVia ? ` via ${a.decidedVia}` : ''}${a.reason ? `: ${a.reason}` : ''}`
 }
 
-export function Approvals({ token, onExpired }: { token: string; onExpired: () => void }) {
+// openName (#347): the approval to open at start, from a notification link (#approvals?open=<name>).
+export function Approvals({ token, onExpired, openName = '' }: { token: string; onExpired: () => void; openName?: string }) {
   const [tab, setTab] = useState<'pending' | 'decided'>('pending')
   const [list, setList] = useState<{ tab: string; items: Approval[] } | null>(null)
   const [error, setError] = useState('')
@@ -35,6 +36,14 @@ export function Approvals({ token, onExpired }: { token: string; onExpired: () =
     const t = setInterval(load, REFRESH_MS)
     return () => { alive = false; clearInterval(t) }
   }, [token, tab, fail, reload])
+
+  // a notification link opens that request's drawer once the list has it; a decided or unknown one shows nothing
+  const [linkDone, setLinkDone] = useState(!openName)
+  if (!linkDone && list) {
+    const hit = list.items.find((a) => a.name === openName)
+    if (hit) setOpen(hit)
+    setLinkDone(true)
+  }
 
   const d = useData()
   const all = list && list.tab === tab ? list.items : null

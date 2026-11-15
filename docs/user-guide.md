@@ -318,6 +318,71 @@ all secrets.
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
 requests that have no decision.
 
+### Get notifications on your phone or computer
+
+The web UI can send a push notification when an agent waits for you (#347). The administrator turns on this
+function (`notifications.channels: [webpush]`). A notification shows the agent, the repository, the request type and
+the expiry time. It never shows text from an agent.
+
+1. Open the web UI and click **Settings**. On a phone, click **More**, then **Settings**.
+2. Click **Get notifications on this device**.
+3. In the browser dialog, click **Allow**.
+   The page shows "This device gets notifications."
+4. Do these steps again on each phone or computer. You can have 10 devices.
+
+NOTE: On an iPhone or iPad, add the web UI to the home screen first (Share, **Add to Home Screen**). Then open it from
+the home screen and do the steps.
+
+To stop the notifications on a device:
+
+1. Open the web UI on that device and click **Settings**.
+2. Click **Stop on this device**.
+
+### Choose the notifications you get
+
+You get three types of notification:
+
+| Type | When |
+|---|---|
+| Approvals | An agent asks for a tool or a protected change. |
+| Stopped agents | A guardrail paused an agent, or the operator blocked an agent. |
+| Usage limits | An agent starts no new runs until a usage window resets. |
+
+1. Open the web UI and click **Settings**.
+2. Under **Types**, clear the box of a type that you do not want.
+   The change applies to all devices at once.
+
+To mute a project:
+
+1. Under **Mute a project**, find the project.
+2. Select **All** to mute all types of the project. Or select one type.
+   A muted project sends no notification to any device.
+
+NOTE: You see only the projects where you have write access, or all projects for `agentdev-admins`.
+
+### Answer an approval from a notification
+
+WARNING: You cannot approve from a notification. Open the request and read it first.
+
+1. Click the notification.
+   The web UI opens the request on the **Approvals** page.
+2. Make the decision as in the steps above.
+
+To deny or delay a request without the web UI:
+
+1. Click **Deny** in the notification.
+   The request is denied, as if you clicked **Deny** in the web UI. The history shows "push".
+2. Or click **Snooze 15 min**.
+
+NOTE: You get notifications only for 24 hours after your last visit to the console. Open the console again to
+turn them back on. A snooze is lost when the API restarts. The request stays in the Today inbox.
+   You get the same notification again after 15 minutes, if the request has no decision then.
+
+NOTE: Each button works one time and for at most 30 minutes. After that, open the web UI.
+
+NOTE: **Deny** checks your write access again. If you lost the access, the request does not change.
+
+
 ### Set a lower usage limit for your project
 
 The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.

@@ -90,3 +90,32 @@ SET search_path = pg_catalog, public AS $$
 	SELECT count(*) FROM d
 $$;
 REVOKE ALL ON FUNCTION api_audit_prune() FROM PUBLIC;
+
+-- Notifications for each user (#347). Per-user data, edited by the user in the console Settings: push
+-- subscriptions (one row per browser), settings (project '' = the switch of a type for all projects; a project row
+-- with enabled=false is a mute; type '*' mutes every type of the project), the identity snapshot the sender uses for
+-- the visibility check, and the used nonces of notification action tokens (single-use, kept until they expire).
+CREATE TABLE IF NOT EXISTS notify_users (
+	subject  text        PRIMARY KEY CHECK (length(subject) <= 255),
+	snapshot jsonb       NOT NULL,
+	updated  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+	endpoint text        PRIMARY KEY CHECK (length(endpoint) <= 1024 AND endpoint LIKE 'https://%'),
+	subject  text        NOT NULL,
+	p256dh   text        NOT NULL CHECK (length(p256dh) <= 200),
+	auth     text        NOT NULL CHECK (length(auth) <= 200),
+	created  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS push_subscriptions_subject ON push_subscriptions (subject);
+CREATE TABLE IF NOT EXISTS notify_settings (
+	subject text    NOT NULL,
+	project text    NOT NULL DEFAULT '' CHECK (length(project) <= 201),
+	type    text    NOT NULL CHECK (type IN ('approvals','stopped','usage','*')),
+	enabled boolean NOT NULL,
+	PRIMARY KEY (subject, project, type)
+);
+CREATE TABLE IF NOT EXISTS push_action_nonces (
+	nonce   text        PRIMARY KEY CHECK (length(nonce) = 32),
+	expires timestamptz NOT NULL
+);

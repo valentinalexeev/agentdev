@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -115,6 +116,23 @@ func main() {
 		isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 		go func() { log.Fatal(isrv.ListenAndServe()) }()
+	}
+	// notifications for each user (#347): NOTIFY_CHANNELS lists the channels on for this instance (webpush); the
+	// NotificationChannel object in PLATFORM_NS gives the VAPID key and the allowed push hosts
+	if chans := strings.Split(os.Getenv("NOTIFY_CHANNELS"), ","); slices.Contains(chans, "webpush") {
+		ns, _ := store.(notifyStore)
+		if ns == nil {
+			ns = newMemNotify()
+		}
+		cs := &channelSource{k: agents, ns: env("PLATFORM_NS", "agentdev-platform"), enabled: true}
+		go cs.run(ctx)
+		var ar *approvalReader
+		if os.Getenv("APPROVALS") == "true" {
+			ar = &approvalReader{store: agents, w: wr, agents: agents}
+		}
+		p := newPusher(ns, wr, ar, cs.get)
+		wr.notify = &notifyAPI{store: ns, w: wr, channels: cs.get, limit: newRateLimiter(30, time.Minute), push: p}
+		go p.run(ctx)
 	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
@@ -313,6 +331,17 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			mux.Handle("GET /api/approvals/{name}", auth(verify, http.HandlerFunc(ar.get)))
 			mux.Handle("POST /api/approvals/{name}/decision", auditAuth("approval-decision", auth(verify, http.HandlerFunc(ar.decide))))
 		}
+	}
+	if wr != nil && wr.notify != nil { // notifications for each user (#347), notify.go and push.go
+		n := wr.notify
+		mux.Handle("GET /api/push/vapid-public-key", auth(verify, http.HandlerFunc(n.vapidKey)))
+		mux.Handle("POST /api/push/subscriptions", auth(verify, http.HandlerFunc(n.subscribe)))
+		mux.Handle("DELETE /api/push/subscriptions", auth(verify, http.HandlerFunc(n.unsubscribe)))
+		mux.Handle("GET /api/notify/settings", auth(verify, http.HandlerFunc(n.getSettings)))
+		mux.Handle("PUT /api/notify/settings", auth(verify, http.HandlerFunc(n.putSettings)))
+		// no OIDC token: the service worker has none. The signed, single-use action token is the credential; runAction
+		// audits every outcome itself (auditAuth would log a 401 here as a missing bearer token)
+		mux.Handle("POST /api/push/action", http.HandlerFunc(n.action))
 	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
 		// every signed-in user, filtered by forge write access (review #102, R35 #308); Secret names for admins only
