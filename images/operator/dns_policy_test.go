@@ -26,7 +26,14 @@ func allPolicies(t *testing.T) map[string]networkingv1.NetworkPolicy {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, d := range strings.Split(os.Expand(string(b), func(string) string { return "x" }), "\n---\n") {
+		// a peer-list variable (KUBE_API_EGRESS, #352) gets a list; every other one a plain word
+		expand := func(k string) string {
+			if strings.HasSuffix(k, "_EGRESS") {
+				return "[{ipBlock: {cidr: 10.0.0.1/32}}]"
+			}
+			return "x"
+		}
+		for _, d := range strings.Split(os.Expand(string(b), expand), "\n---\n") {
 			if !strings.Contains(d, "kind: NetworkPolicy") {
 				continue
 			}

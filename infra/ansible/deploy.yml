@@ -646,6 +646,24 @@
       loop: "{{ proxy_keys.stdout_lines[:-1] if (claude_proxy | bool and not ansible_check_mode) else [] }}"
       no_log: true
 
+    # workload identity (#352): the proxy calls TokenReview, so its NetworkPolicy allows the API server addresses
+    - name: API server addresses (Service default/kubernetes) for the Claude proxy egress
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: "{{ item }}"
+        namespace: default
+        name: kubernetes
+      loop: [Service, Endpoints]
+      register: kube_api
+      when: claude_proxy | bool
+
+    # an empty peer list would make the egress rule match every address: fail instead
+    - name: The API server has at least one address
+      ansible.builtin.assert:
+        that: kube_api.results[0].resources | length > 0
+        fail_msg: "Service default/kubernetes not found: the Claude proxy NetworkPolicy cannot name the API server"
+      when: claude_proxy | bool and not ansible_check_mode
+
     - name: Claude credential proxy
       kubernetes.core.k8s:
         <<: *k8s
@@ -659,9 +677,15 @@
             CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
             IMAGE_PULL_POLICY: IfNotPresent
             CLAUDE_BUDGET_TOKENS: "{{ claude_budget_tokens | int }}"
+            CLAUDE_PROXY_AUTH: "{{ claude_proxy_auth }}"   # key | both | token (#352)
+            KUBE_API_EGRESS: "{{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': kube_api_ips}) | trim }}"
             # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
             CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
           replace: []
+        kube_api_ips: >-
+          {{ ([kube_api.results[0].resources[0].spec.clusterIP] if kube_api.results[0].resources else [])
+             + (kube_api.results[1].resources | map(attribute='subsets', default=[]) | flatten
+                | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list) }}
       when: claude_proxy | bool
 
     # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
