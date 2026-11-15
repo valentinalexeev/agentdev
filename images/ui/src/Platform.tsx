@@ -13,7 +13,7 @@ const NAMES: Record<string, string> = {
 }
 const RANK: Record<Health, number> = { down: 0, degraded: 1, unknown: 2, ok: 3, absent: 4 }
 
-export function HealthLamp({ status }: { status: Health }) {
+function HealthLamp({ status }: { status: Health }) {
   const cls = status === 'ok' ? 'ad-health-ok' : status === 'degraded' ? 'ad-health-degraded' : status === 'down' ? 'ad-health-down' : 'ad-health-zero'
   const label = status === 'absent' ? 'not installed' : status
   return <span className={`ad-health ${cls}`}><span className="ad-health-dot" aria-hidden="true" /><span className="ad-label">{label}</span></span>
