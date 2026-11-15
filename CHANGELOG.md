@@ -10,7 +10,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 - Workload identity for agents at the Claude proxy (#352). The operator creates a ServiceAccount `agent-<name>` per
   agent and mounts a projected token (audience `claude-proxy`, 10 minutes) only in the agent container. The 1.1
   worker sends it through Claude Code's `apiKeyHelper`. `claude-proxy` checks it with TokenReview (own ServiceAccount
-  bound to `system:auth-delegator`, egress to the API server addresses only). New setting `CLAUDE_PROXY_AUTH`
+  bound to the ClusterRole `agentdev-claude-proxy-tokenreview`, `tokenreviews` `create` only, egress to the API server addresses only). New setting `CLAUDE_PROXY_AUTH`
   (`kind`) / `claude_proxy_auth` (Ansible): `key`, `both` (default) or `token`. Mixed versions: with `both` a 1.0
   worker keeps using its HMAC key. Re-run: `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE
   (operator RBAC, claude-proxy, new images).

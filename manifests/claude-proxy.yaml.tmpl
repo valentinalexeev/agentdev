@@ -8,8 +8,8 @@
 #   claude-proxy-budgets) and prints the usage of every response as AGENTDEV_USAGE lines for the operator (#93), so
 #   usage no longer comes from inside the agent pod (closes R47).
 # - Workload identity (#352): agents may send a projected service account token (audience claude-proxy) instead of
-#   the key. The proxy checks it with TokenReview, so it has its own service account bound to system:auth-delegator
-#   (tokenreviews and subjectaccessreviews create, nothing else) and egress to the API server (KUBE_API_EGRESS, the
+#   the key. The proxy checks it with TokenReview, so it has its own service account bound to the ClusterRole
+#   agentdev-claude-proxy-tokenreview (tokenreviews create, nothing else) and egress to the API server (KUBE_API_EGRESS, the
 #   ClusterIP and endpoint addresses of Service default/kubernetes, rendered by the caller). CLAUDE_PROXY_AUTH: key,
 #   both (default) or token (docs/admin.md).
 # - CLAUDE_SECRET_SOURCES is a list of projected-volume Secret sources, one per Claude Secret, rendered by the caller.
@@ -23,10 +23,16 @@ kind: ServiceAccount
 metadata: {name: claude-proxy, namespace: ${AGENTS_NS}}
 automountServiceAccountToken: false   # the pod mounts a projected API token itself (below), only in the proxy
 ---
+# tokenreviews create only (narrower than system:auth-delegator, which also gives subjectaccessreviews)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: agentdev-claude-proxy-tokenreview}
+rules: [{apiGroups: [authentication.k8s.io], resources: [tokenreviews], verbs: [create]}]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
-metadata: {name: agentdev-claude-proxy-auth-delegator}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator}
+metadata: {name: agentdev-claude-proxy-tokenreview}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: agentdev-claude-proxy-tokenreview}
 subjects: [{kind: ServiceAccount, name: claude-proxy, namespace: ${AGENTS_NS}}]
 ---
 apiVersion: apps/v1

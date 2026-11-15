@@ -30,8 +30,11 @@ check "usage_post posts without the proxy" "[[ '${out}' == called ]]"
 
 # #352: with the projected token, claude gets an apiKeyHelper that prints the file and no ANTHROPIC_AUTH_TOKEN
 tokf="${work}/token"; echo 'aaa.bbb.ccc' > "${tokf}"
+# curl stub: the proxy answers PROXY_CODE (200 a proxy that takes the token, 401 mode key or a 1.0 proxy, 000 down)
+mkdir -p "${work}/bin"; printf '#!/bin/sh\nprintf %%s "${PROXY_CODE:-200}"\n[ "${PROXY_CODE:-200}" = 000 ] && exit 7\nexit 0\n' > "${work}/bin/curl"
+chmod +x "${work}/bin/curl"
 auth_case() {  # auth_case <proxy url> <token file>: prints the claude arguments, the helper TTL and the key, one per line
-  env ANTHROPIC_BASE_URL="$1" PROXY_TOKEN_FILE="$2" ANTHROPIC_AUTH_TOKEN=alice.hmac bash -c "${fn%drop_stale_claude_login}"$'\n''claude_proxy_auth; for a in "${CLAUDE_AUTH[@]}"; do echo "$a"; done; echo "ttl=${CLAUDE_CODE_API_KEY_HELPER_TTL_MS:-}"; echo "key=${ANTHROPIC_AUTH_TOKEN:-}"'
+  env PATH="${work}/bin:${PATH}" ANTHROPIC_BASE_URL="$1" PROXY_TOKEN_FILE="$2" ANTHROPIC_AUTH_TOKEN=alice.hmac bash -c "log() { :; }; ${fn%drop_stale_claude_login}"$'\n''claude_proxy_auth; for a in "${CLAUDE_AUTH[@]}"; do echo "$a"; done; echo "ttl=${CLAUDE_CODE_API_KEY_HELPER_TTL_MS:-}"; echo "key=${ANTHROPIC_AUTH_TOKEN:-}"'
 }
 out=$(auth_case http://claude-proxy:8080 "${tokf}")
 helper=$(sed -n 2p <<<"${out}" | jq -r .apiKeyHelper)
@@ -43,4 +46,10 @@ out=$(auth_case http://claude-proxy:8080 "${work}/missing")
 check "no token file: key kept, no helper" "[[ \$(head -1 <<<\"\${out}\") == ttl= ]] && grep -qx key=alice.hmac <<<\"\${out}\""
 out=$(auth_case "" "${tokf}")
 check "no proxy: no helper" "[[ \$(head -1 <<<\"\${out}\") == ttl= ]]"
+for c in 401 000; do
+  out=$(PROXY_CODE=$c auth_case http://claude-proxy:8080 "${tokf}")
+  check "proxy answers ${c} to the token (mode key, 1.0 proxy, down): key kept, no helper" "[[ \$(head -1 <<<\"\${out}\") == ttl= ]] && grep -qx key=alice.hmac <<<\"\${out}\""
+done
+out=$(PROXY_CODE=400 auth_case http://claude-proxy:8080 "${tokf}")
+check "proxy answers 400 to the empty probe (token accepted): helper" "[[ \$(sed -n 1p <<<\"\${out}\") == --settings ]]"
 exit "${fail}"

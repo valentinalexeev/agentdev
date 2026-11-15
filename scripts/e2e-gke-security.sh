@@ -242,7 +242,7 @@ if section claude; then
       check $? "agent container has the projected claude-proxy token (#352)"
       ! kexec forge test -e /var/run/secrets/agentdev/proxy/token 2>/dev/null; check $? "forge container has no claude-proxy token"
       code=$(kexec agent sh -c 'curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $(cat /var/run/secrets/agentdev/proxy/token)" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
-      [ "$code" != 401 ] && [ -n "$code" ]; check $? "claude-proxy accepts the agent's projected token" "HTTP $code"
+      [ "$code" != 401 ] && [ -n "$code" ]; check $? "claude-proxy accepts the agent's projected token (TokenReview reaches the API server)" "HTTP $code"
     fi
     if [ "$mode" = token ]; then
       code=$(kexec agent sh -c 'k="${ANTHROPIC_AUTH_TOKEN:-}"; [ -n "$k" ] || { echo none; exit; }; curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $k" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)

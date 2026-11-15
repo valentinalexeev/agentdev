@@ -199,7 +199,7 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
 | Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
 | Accepted identity | `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE): `key`, `both` (default) or `token` |
-| Access to the API server | the proxy has the service account `claude-proxy`, bound to `system:auth-delegator`. Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
+| Access to the API server | the proxy has the service account `claude-proxy`, bound to the ClusterRole `agentdev-claude-proxy-tokenreview` (`tokenreviews` `create` only). Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
 | Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
@@ -253,6 +253,16 @@ The router starts a stopped agent when:
 
 NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
 1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
+
+NOTE: The worker asks the proxy once at start whether it takes the token. When the proxy answers 401 (mode `key`, or
+a proxy from before 1.1) or does not answer, the agent uses its key. So agents keep working during an upgrade in
+any order and after a switch back to `key`.
+
+NOTE: The NetworkPolicy of the proxy allows only the addresses of the Service `default/kubernetes` at deploy time.
+On GKE these addresses can change (control plane IP rotation, a change of the private endpoint). Then the token
+check fails with 401 until the next playbook run. In mode `both` the agents use their key meanwhile. In mode
+`token` all agents stop. After such a change, run the playbook again. `scripts/e2e-gke-security.sh` checks that the
+proxy reaches the API server.
 
 ### Settings
 

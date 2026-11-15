@@ -49,20 +49,34 @@ drop_stale_claude_login() {
 # --settings on each call (not written to the claude volume, so nothing the model edits changes it). The TTL makes
 # Claude Code call the helper again each minute, so the rotated file is read. ANTHROPIC_AUTH_TOKEN would win over the
 # helper, so it is removed for the claude process. Without the file (older operator) the key stays as before.
+# Mixed versions (ADR 0006, #398 review): a proxy in mode key, or a 1.0 proxy, refuses the token with 401. The loop
+# asks the proxy once with the token (count_tokens, no spend; the proxy checks the caller before anything else) and
+# keeps the HMAC key when the answer is 401 or the proxy does not answer.
 PROXY_TOKEN_FILE="${PROXY_TOKEN_FILE:-/var/run/secrets/agentdev/proxy/token}"
 CLAUDE_AUTH=()
+proxy_accepts_token() {  # 0 when the proxy at ANTHROPIC_BASE_URL takes the token in $1
+  local code
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H "Authorization: Bearer $(cat "$1")" \
+    -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' --data '{}' \
+    "${ANTHROPIC_BASE_URL%/}/v1/messages/count_tokens" 2>/dev/null) || return 1
+  [[ "${code}" =~ ^[0-9]{3}$ && "${code}" != 000 && "${code}" != 401 ]]
+}
 claude_proxy_auth() {
   CLAUDE_AUTH=()
   [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${PROXY_TOKEN_FILE}" ]] || return 0
+  if ! proxy_accepts_token "${PROXY_TOKEN_FILE}"; then
+    log "claude-proxy refuses the workload token (mode key or an older proxy): using the agent key"
+    return 0
+  fi
   CLAUDE_AUTH=(--settings "$(jq -cn --arg f "${PROXY_TOKEN_FILE}" '{apiKeyHelper: ("cat " + ($f | @sh))}')")
   export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
   unset ANTHROPIC_AUTH_TOKEN
 }
 # ---------- end Claude credential proxy ----------
 drop_stale_claude_login
-claude_proxy_auth
 
 log() { printf '%s [%s] %s\n' "$(date -u +%H:%M:%S)" "${FORGE_USER}" "$*"; }
+claude_proxy_auth   # after log(): it logs the fallback to the agent key
 # security_event <rule> <severity> <action>: report a guardrail that fired, one JSON line on stdout (#64; collected by
 # #70). JOB is set inside each background job (start_job). Written to fd 3, the loop's own stdout (exec 3>&1 below),
 # so an event raised inside a captured function (dir=$(worktree ...)) or a job's prefixed pipe stays a clean line.

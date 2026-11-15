@@ -4,7 +4,7 @@ package main
 // claude-proxy, renewed by the kubelet (10 min expiry). The agent sends it instead of the HMAC key (keys.go). The proxy
 // checks it with the Kubernetes TokenReview API and maps system:serviceaccount:<agents ns>:agent-<name> to the agent.
 // Only the standard library is used: the in-cluster service account token and CA of the proxy pod authenticate the
-// review call (the proxy's service account is bound to system:auth-delegator).
+// review call (the proxy's service account may only create tokenreviews: ClusterRole agentdev-claude-proxy-tokenreview).
 
 import (
 	"bytes"
