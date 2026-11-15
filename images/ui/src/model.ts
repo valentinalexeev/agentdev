@@ -1,7 +1,8 @@
 // The console model (#342): two-axis agent state and the client-built inbox. Pure functions, no React.
 import type { Agent, Approval, Usage } from './api'
 
-export const POLL_MS = 15000
+export const POLL_MS = 15000 // without the live stream
+export const POLL_LIVE_MS = 60000 // with the live stream: a safety net only
 // The default ADMIN_GROUP of the API. Only hides or shows the Admin menu; the API decides (403).
 export const ADMIN_GROUP = 'agentdev-admins'
 export const STALE_MS = 60000 // no good update for this long: "updated N min ago"

@@ -6,7 +6,8 @@ import {
   getMe, getUsage, listAgents, listApprovals, listSecurityEvents, onCallResult, Unauthorized,
   type Agent, type Approval, type CallResult, type SecurityEvent, type Usage,
 } from './api'
-import { ADMIN_GROUP, agentView, buildInbox, DOWN_MS, POLL_MS, STALE_MS, type Scope } from './model'
+import { openStream } from './stream'
+import { ADMIN_GROUP, agentView, buildInbox, DOWN_MS, POLL_LIVE_MS, POLL_MS, STALE_MS, type Scope } from './model'
 import { Ctx, type Conn, type Data } from './useData'
 
 interface Snapshot { agents: Agent[]; pending: Approval[]; usage: Usage | null; events: SecurityEvent[]; at: number }
@@ -36,8 +37,14 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', on) }
   }, [])
 
+  // Live stream (#345): an event from the stream reads the snapshot again at once (debounced), so a new approval shows
+  // in about a second. While the stream is open, the poll is only a safety net (POLL_LIVE_MS); while it is down, the
+  // console polls every POLL_MS as before, and the stream reconnects with backoff.
+  const [live, setLive] = useState(false)
   useEffect(() => {
     let alive = true
+    let poll: ReturnType<typeof setInterval> | undefined
+    let soon: ReturnType<typeof setTimeout> | undefined
     const load = async () => {
       try {
         const [agents, pending, usage, ev] = await Promise.all([
@@ -51,10 +58,24 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
         // anything else: keep the last good data; the connection state says why
       }
     }
+    // change the poll only when the stream opens or closes: a failed retry must not restart the 15 s timer
+    let period = 0
+    const every = (ms: number) => { if (ms === period) return; period = ms; clearInterval(poll); poll = setInterval(load, ms) }
     load()
-    const t = setInterval(load, POLL_MS)
+    every(POLL_MS)
+    const stop = openStream(token, {
+      onOpen: () => { if (!alive) return; setLive(true); every(POLL_LIVE_MS); load() },
+      onMessage: (m) => {
+        if (!alive) return
+        // a heartbeat proves that nothing changed: the data on the page is current
+        if (m.type === 'heartbeat') { setSnap((p) => (p.at ? { ...p, at: Date.now() } : p)); return }
+        clearTimeout(soon); soon = setTimeout(load, 250)
+      },
+      onDown: () => { if (!alive) return; if (period !== POLL_MS) load(); setLive(false); every(POLL_MS) },
+      onUnauthorized: () => { if (alive) onExpired() },
+    })
     const c = setInterval(() => setNow(Date.now()), 10000)
-    return () => { alive = false; clearInterval(t); clearInterval(c) }
+    return () => { alive = false; stop(); clearTimeout(soon); clearInterval(poll); clearInterval(c) }
   }, [token, onExpired, tick])
 
   const setScope = useCallback((s: Scope) => {
@@ -85,9 +106,9 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
       ready: snap.at > 0, at: snap.at, agents, allAgents: all, pending, inbox, hiddenInbox: fullInbox.length - inbox.length,
       usage: snap.usage, events: snap.events.filter((e) => inScopeAgent(e.agent)),
       projects: allProjects.filter(inScopeRepo), allProjects, scope: eff, setScope, inScopeRepo, inScopeAgent, mine, admin,
-      conn, failedSince: last.since, reload, now,
+      conn, live, failedSince: last.since, reload, now,
     }
-  }, [snap, scope, mine, admin, last, now, setScope, reload])
+  }, [snap, scope, mine, admin, last, live, now, setScope, reload])
 
   return <Ctx.Provider value={data}>{children}</Ctx.Provider>
 }

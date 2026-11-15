@@ -3,7 +3,8 @@
 // /config.json and the /api calls the console uses, with fictional example data. Never used in the image.
 // Usage: node scripts/mock-api.mjs [port] [--large]   then open http://localhost:<port>/#agents
 // State switches for connection tests (#339): GET /mock/starting (HTML 502 as from the ingress), /mock/down (no answer),
-// /mock/expire (401), /mock/up. /mock/member and /mock/admin switch the caller (member: no agentdev-admins, so the
+// /mock/expire (401), /mock/up. Live stream (#345): /mock/nostream ends the stream and answers 503 (the console
+// polls), /mock/stream allows it again, /mock/new-approval adds an approval and sends it on the stream. /mock/member and /mock/admin switch the caller (member: no agentdev-admins, so the
 // Audit and Platform calls answer 403).
 import { createServer } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
@@ -93,6 +94,7 @@ function api(req, res, url) {
   if (req.method === 'GET' && p.startsWith('/api/agents/')) return detail(res, decodeURIComponent(p.split('/')[3]))
   if (req.method === 'GET' && p === '/api/platform') return admin ? send(res, 200, platform()) : send(res, 403, { error: 'needs admin access' })
   if (req.method === 'GET' && p === '/api/audit') return admin ? send(res, 200, audit(url)) : send(res, 403, { error: 'only agentdev-admins may read the audit trail' })
+  if (req.method === 'GET' && p === '/api/stream') return stream(req, res)
   if (req.method === 'GET' && p === '/api/jobs') return send(res, 200, jobsPage(url))
   if (req.method === 'GET' && p === '/api/approvals') {
     const st = url.searchParams.get('state')
@@ -122,6 +124,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 
 createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
+  if (url.pathname === '/mock/nostream' || url.pathname === '/mock/stream') { streamOn = url.pathname === '/mock/stream'; if (!streamOn) for (const c of clients) c.destroy(); return send(res, 200, { streamOn }) }
+  if (url.pathname === '/mock/new-approval') { newApproval(); return send(res, 200, { approvals: D.approvals.length }) }
   if (url.pathname === '/mock/member' || url.pathname === '/mock/admin') { admin = url.pathname === '/mock/admin'; return send(res, 200, { admin }) }
   if (url.pathname.startsWith('/mock/')) { mode = url.pathname.slice(6); return send(res, 200, { mode }) }
   if (url.pathname === '/config.json') return send(res, 200, { oidcIssuer: `http://localhost:${port}/oidc/`, oidcClientId: 'agentdev' })
@@ -214,4 +218,26 @@ const AUDIT = (() => {
 function audit(url) {
   const ag = url.searchParams.get('agent'), r = url.searchParams.get('result')
   return { entries: AUDIT.filter(({ entry: e }) => (!ag || e.agent === ag) && (!r || e.result === r)) }
+}
+
+// ---- #345: live stream (SSE, envelope of images/api/stream.go) ----
+let streamOn = true
+const clients = new Set()
+let seq = 0
+function sse(res, type, data) { res.write(`event: ${type}\nid: ${++seq}\ndata: ${JSON.stringify({ type, time: iso(Date.now()), data })}\n\n`) }
+function stream(req, res) {
+  if (!streamOn) return send(res, 503, { error: 'stream off (mock)' })
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
+  sse(res, 'hello', { heartbeatSeconds: 5 })
+  const t = setInterval(() => sse(res, 'heartbeat', null), 5000)
+  const c = { res, destroy: () => { clearInterval(t); req.socket.destroy() } }
+  clients.add(c)
+  req.on('close', () => { clearInterval(t); clients.delete(c) })
+}
+let nNew = 0
+function newApproval() {
+  nNew += 1
+  const a = { ...D.approvals[0], name: `apr-live${nNew}`, id: `live${nNew}`, agent: 'erin', job: `issue-${400 + nNew}`, tool: 'Bash(npm publish)', created: iso(Date.now()), expires: iso(Date.now() + 30 * min) }
+  D.approvals.push(a)
+  for (const c of clients) sse(c.res, 'approval', a)
 }

@@ -126,15 +126,33 @@ this time.
 
 ## See the work of all agents
 
-If your instance has botboard, open botboard. Botboard shows one card for each issue. Each card shows:
+Open the page **Work** in the web UI. It replaces botboard for people who can sign in to the web UI. Instances
+without the web UI login (authentik) keep botboard: it shows one card for each issue, with the phase and a link.
 
-- The phase of the work: plan, build, review, done or blocked.
-- A link to the issue or to the pull request.
+The page **Work** shows the jobs of the agents in the projects of the project scope (see "Show the work of some
+projects only"):
+
+- **Board** (one project, or 20 jobs or fewer): the columns Plan, Build, Review and Done. **Review** is your turn: a
+  pull request waits for your review. Each card shows the project, the issue and pull request numbers, the agent, the
+  phase, links to the issue and the pull request, and for a finished job the outcome: merged, closed without merge, or
+  closed with no change. A red card is a job of an agent that is stopped (guardrail or blocked).
+- **Matrix** (more than one project and more than 20 jobs): one row for each project, one column for each phase. A
+  number is a link: click it to open the board of that project. Under the matrix, **Your turn** lists the pull requests
+  to review, the oldest first.
+- **List**: all jobs in one table.
+
+1. Open the web UI and click **Work** (on a phone, **Work** is in the bottom bar).
+2. To see the jobs of one agent or one project, select it in **Agent** or **Project**. The address keeps the filter
+   (for example `#work?agent=alice`), so you can send a link. Click **Clear filters** to see all again.
+3. On a phone, swipe left and right to move between the columns.
+
+The Done column shows the jobs of the last 7 days. Job titles show as plain text. If the forge does not answer for a
+project, the page says that the jobs of that project can be missing.
 
 ## Control agents in the web UI
 
-The web UI has a left menu with the pages **Today**, **Projects**, **Agents**, **Approvals**, **Security** and
-**Usage**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
+The web UI has a left menu with the pages **Today**, **Projects**, **Work**, **Agents**, **Approvals**, **Security**
+and **Usage**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
 requests that wait for a decision. The top bar shows the project scope, the connection state, your name, **Sign out**
 and the theme button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
 browser. If you do not select a theme, the web UI uses the theme of your system.
@@ -181,7 +199,8 @@ shows a banner with the cause:
 
 | State | Meaning | What to do |
 |---|---|---|
-| Live | The data is current. | Nothing. |
+| Live | The live stream is open. A change (for example a new approval request) shows in a few seconds. | Nothing. |
+| Polling | The live stream is not open. The web UI reads the data each 15 seconds and connects the stream again. | Nothing. If it stays, tell an administrator. |
 | Updated N min ago | The last updates failed. The data is from that time. | Wait. The web UI tries again each 15 seconds. |
 | Starting | The platform scaled to zero and starts. This can take 1 to 2 minutes. | Wait. The banner goes away when the API answers. |
 | Unavailable | The API did not answer for 5 minutes. Actions can fail. | Click **Try again**. If the banner stays, tell an administrator. |
@@ -191,8 +210,9 @@ shows a banner with the cause:
 ### Use the web UI on a phone
 
 On a screen that is narrower than 760 px, the left menu changes to a bottom bar. The bottom bar has **Today**,
-**Projects**, **Agents**, **Approvals** and **More**. **More** opens a sheet with **Security**, **Usage**, the theme
-and **Sign out**. The approval panel fills the screen. The decision buttons are at the bottom, in reach of your thumb.
+**Work**, **Agents**, **Approvals** and **More**. **More** opens a sheet with **Projects**, **Security**, **Usage**,
+**Settings**, the **Admin** pages (for administrators), the theme and **Sign out**. The approval panel fills the
+screen. The decision buttons are at the bottom, in reach of your thumb.
 
 To install the web UI on the home screen:
 
