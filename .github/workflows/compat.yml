@@ -1,0 +1,52 @@
+name: compat
+
+# Compatibility e2e (#178, ADR 0006): the previous release's worker and forge images against the PR head's router,
+# operator and Claude proxy, on kind, with a stubbed Claude (tools/claude-stub). No secret on pull_request runs.
+# The real model runs only nightly or by hand, with the repository secret COMPAT_ANTHROPIC_API_KEY.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      real_model: {description: "Use the real Claude model (secret COMPAT_ANTHROPIC_API_KEY)", type: boolean, default: false}
+      prev_tag: {description: "Image tag of the previous release (default: newest v* tag)", type: string, default: ""}
+
+concurrency:
+  group: compat-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}   # tags: the previous release
+      - uses: helm/kind-action@v1
+        with: {install_only: true}
+      - name: tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq gettext-base
+          pipx install --include-deps ansible-core
+          ansible-galaxy collection install -r infra/ansible/requirements.yml
+          pipx inject ansible-core kubernetes
+      - name: e2e (stubbed Claude)
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.real_model)
+        env:
+          PREV_TAG: ${{ inputs.prev_tag }}
+        run: scripts/e2e-compat.sh
+      - name: e2e (real model)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_model)
+        env:
+          PREV_TAG: ${{ inputs.prev_tag }}
+          CLAUDE_REAL: "1"
+          ANTHROPIC_API_KEY: ${{ secrets.COMPAT_ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "::notice::secret COMPAT_ANTHROPIC_API_KEY not set: real-model run skipped"; exit 0; fi
+          scripts/e2e-compat.sh
