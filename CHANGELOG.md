@@ -8,8 +8,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ### Added
 - Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
-  adversarial review, 46 attack paths with the risk register entries that answer them, and 20 candidate questions
-  (`TM-nn`) for the code review. ADR 0008 records the review method and the severity scale. Documentation only.
+  adversarial review, 66 attack paths with the risk register entries that answer them, and 33 candidate questions
+  (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
+  ingress, another OIDC provider, self-hosting loop) and the effect on a project that adopts agents (its CI, its
+  releases and their consumers). ADR 0008 records the review method and the severity scale. Documentation only.
 - Workload identity for agents at the Claude proxy (#352). The operator creates a ServiceAccount `agent-<name>` per
   agent and mounts a projected token (audience `claude-proxy`, 10 minutes) only in the agent container. The 1.1
   worker sends it through Claude Code's `apiKeyHelper`. `claude-proxy` checks it with TokenReview (own ServiceAccount

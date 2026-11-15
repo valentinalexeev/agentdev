@@ -14,7 +14,7 @@ How this page relates to the other security pages:
 | [e2e-security.md](e2e-security.md) | the scripted checks that prove the controls on a cluster |
 
 An attack path without a control has a candidate number `TM-nn`. A candidate is a **question for the code
-review**, not a confirmed finding. Three of them were checked in the tree and are marked "seen in the tree".
+review**, not a confirmed finding. Those that were checked in the tree are marked "seen in the tree".
 [Candidates](#candidates-for-the-code-review) lists them all.
 
 Reviewed commit: `d38148d` (`main`, 2026-11-15).
@@ -29,7 +29,11 @@ In scope:
   authentik, External Secrets Operator, the in-cluster Gitea of the kind setup;
 - the deployment code: `manifests/`, `infra/ansible`, `infra/terraform`, `examples/deployment/gcp-gke`;
 - the build and delivery of agentdev itself: workflows, images, release process, the bot process of `CLAUDE.md`;
-- the people and roles of an instance, and the process pack that agents and people follow.
+- the people and roles of an instance, and the process pack that agents and people follow;
+- the ways an instance differs from the defaults ([Instance shapes](#instance-shapes)), taken from the deployment
+  template and from the options the manuals describe;
+- what changes for a project that moves its development to agents ([Adopting projects](#adopting-projects)): its
+  CI, its releases and the people and systems that consume them.
 
 Out of scope, taken as given:
 
@@ -121,6 +125,7 @@ flowchart LR
 | Z6 forge sidecar | the second container of the agent pod | trusted; shares the pod and `/state` with Z5 |
 | Z7 executors | plan Jobs (run code of an unreviewed PR), apply Jobs (hold write credentials) | plan: untrusted; apply: trusted input only (approved plan of a merge commit) |
 | Z8 cluster and cloud | Kubernetes API, nodes, the cloud project, the secret store, the image registry of the instance | trusted; the root of every other zone |
+| Z10 adopting project | the CI of a project the agents work on, its secrets, its release artifacts, and the people and systems that install them | trusted by the project's consumers; it receives agent-written code **before** a person reviews it |
 | Z9 build and delivery | this repository, its CI, the published images and modules, the deployment repository and its CI | trusted by every instance that installs a release |
 
 ### Trust boundaries
@@ -141,6 +146,9 @@ flowchart LR
 | B12 | instance to evidence store | events database, hash chain, export to the SIEM |
 | B13 | source to running image | commit, CI, registry, tag, deployment pin, admission |
 | B14 | deployment repository to cloud project | deployment CI, workload identity federation, the automation service account |
+| B15 | agent branch to the project's CI | a push to `agent/<name>/*` and its pull request start the project's workflows |
+| B16 | project release to its consumers | tags, published images and modules, repositories that pin the project |
+| B17 | project back to the instance | an agent works on agentdev, on the instance's deployment repository, or on a component the instance runs on |
 
 ## Assets
 
@@ -160,6 +168,9 @@ flowchart LR
 | A12 | model budget, cloud spend, availability of agents and of the shared subscription | Claude proxy, node pools, router | denial of service, cost |
 | A13 | identities and group membership (`agentdev-admins`, forge logins) | authentik, IdP, forge | every role-based control depends on it |
 | A14 | agentdev release artifacts: images, Terraform modules, Ansible roles, process pack | this repository, the image registry | reach every instance at once |
+| A16 | CI identity and secrets of an adopting project | the project's forge settings and workflows | publish packages, deploy, reach the project's cloud; outside every agentdev control |
+| A17 | release artifacts of an adopting project and the systems that install them | the project's registry and tags | one merged change reaches every consumer |
+| A18 | confidentiality rules of an adopting project: what must never appear in its public repository | the project's contributors and local checks | a public push cannot be taken back |
 | A15 | topology: component names, addresses, versions, agent and repository lists | status endpoints, error messages, the harness guide | prepare the next step |
 
 ## Attackers
@@ -278,18 +289,57 @@ Every path here continues as a V4 path once the model follows the text. This tab
 | P45 | Text that makes the agent waste: long runs, loops with another agent or bot, large pushes, disk | T3 | budgets, usage pause, push size limit (R45, R61, R65) | partly (TM-09) |
 | P46 | Text that makes the agent write a PR that deceives the reviewer: a description that does not match the diff, a change hidden in generated files | T5 | review by a person; the user guide | gap: the reviewing person is the last control and has no support (TM-12) |
 
+### Instance shapes
+
+The paths above assume the defaults. A real instance differs. These paths come from the options that the manuals
+describe and from the deployment template (`examples/deployment/gcp-gke`). They hold for every instance of that
+shape; values of one instance are not in this repository (`CLAUDE.md`, "Bootstrapping on GCP").
+
+| Path | Shape and attack | Vectors | Targets | Controls today | Coverage |
+|---|---|---|---|---|---|
+| P47 | **One forge App for many repositories.** The App key in one sidecar or in the API reaches every repository the App is installed on, public and private together | V4, V5 | T1 | key only in sidecar and API (R48, R93) | partly: no guidance to split Apps by sensitivity (TM-21) |
+| P48 | **One model subscription for all agents and people.** The waste of one agent stops every project | V7 | T3 | budgets and usage pause (R45) | covered |
+| P49 | **One owner.** The same person is the only writer, reviewer, approver and administrator. Collusion (V3) needs nobody else, and the number of agent PRs grows with the number of projects while the reviewer does not | V2, V7 | T5 | review gate | gap: nothing limits or shows the review load (TM-22); joins TM-03 and TM-12 |
+| P50 | **External ingress** (`ingress.mode: external`). TLS ends at a proxy outside the cluster and outside the product. The proxy sees sessions, tokens and webhook bodies. The route, TLS and flood controls of R66 to R68 are those of the gateway mode | V5 | T1, T2, T4 | the e2e script has `--ingress external` | partly: which gateway control has an equal in this mode (TM-23) |
+| P51 | **Another OIDC provider** (`api.oidc_issuer`). The controls of R84 to R89, R94 and R95 are authentik blueprints. With another provider, the admin group and the forge login claims are set by hand there | V2, V5 | T4 | the API checks issuer, audience and groups | gap: no minimum requirements for the provider (TM-24) |
+| P52 | **Optional controls off.** Approvals, the event export and the flood protection can be off in a live instance, and nothing shows it | all | T5, T6 | manual security checklist | gap (TM-16) |
+| P53 | **Instance additions.** The deployment repository adds its own manifests, Secrets made by hand and third-party images. The deploy pipeline applies them with the same rights as the product | V6 | T4 | review of the deployment repository | gap: the template has no rules for these additions (TM-25) |
+| P54 | **Self-hosting loop.** An agent of the instance works on agentdev, on the instance's deployment repository, or on a component the instance runs on (ingress, sign-in). A merged agent PR then changes the platform that confines the agents. In the deployment repository a merge is an apply, and the pull request shows no plan | V7, V6 | T4, T5 | review gate; the sidecar refuses workflow files | gap (TM-26); joins TM-17 |
+| P55 | **Deploy-time inputs.** The deploy workflow installs tools without a pin and uses actions by tag, then runs with the deployment identity | V6 | T4 | protected `main` of the deployment repository | gap, seen in the tree: `examples/deployment/gcp-gke/.github/workflows` (TM-05) |
+
+### Adopting projects
+
+A project that moves its development to agents gets more than a new contributor. The agent's branch is a branch
+of the project's own repository, the project's CI and release process now act on agent-written code, and rules
+that the project kept by habit must hold without a person at the keyboard. These paths start in agentdev and end
+in the project or in the project's consumers.
+
+| Path | Attack or failure | Vectors | Targets | Controls today | Coverage |
+|---|---|---|---|---|---|
+| P56 | **A push is a publication.** On a public repository the agent's branch, PR text and comments are public before any review. Text from a private source (an issue with site details, tool output) cannot be taken back: the forge keeps pull request refs | V7, V2 | T2 | the sidecar redacts common credential shapes (R76); the project's CI scans after the push | gap (TM-27) |
+| P57 | **The project's CI runs agent code outside the sandbox.** A pull request from a branch of the same repository gets the token permissions and secrets that a fork does not get, on a runner with open egress. The sidecar refuses changes to workflow files, but workflows call scripts, Makefiles, Dockerfiles and tests of the repository | V4, V7 | T1, T2, T4 | `PROTECTED_PATHS` | gap, seen in the tree: the default list has only the workflow directories (TM-28) |
+| P58 | **Local safeguards do not run.** Git hooks, local scanners and other checks that the project's people run on their machines do not run for an agent | V7 | T2, T5 | CI checks of the project | gap, seen in the tree: the loop's git sets `core.hooksPath=/dev/null` (TM-29) |
+| P59 | **Instruction files become control files.** The run contract tells the agent to follow `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` of the repository. Files written for an older process conflict with it, and a change to them steers every later run | V7, V2 | T5 | review gate | gap, seen in the tree: `images/worker/agent-loop.sh` (TM-11) |
+| P60 | **The release chain.** The project publishes images, modules or charts that others pin. A merged agent change reaches each consumer with the next release | V7 | T5 at the consumers | agents cannot push tags or protected branches; review gate | partly: no stronger gate for the paths where a defect costs most (TM-30); joins TM-12 |
+| P61 | **Infrastructure repositories.** A private site repository holds topology, inventories and encrypted state. Its content goes to the model provider and stays on the agent's volume. A merged change is applied by an operator or by the project's CI, not by an executor, so the approval gate of phase 5 does not see it | V7 | T2, T5 | R14 (accepted); no decryption keys in the pod | gap (TM-31) |
+| P62 | **Public comments.** Anyone can comment on a public agent PR. The agent's questions and approval texts are public and show how the instance works | V1 | T2, T5 | work starts only from a writer (R12); request text is filtered (R76) | partly (TM-19) |
+| P63 | **The gate is the project's.** The review gate is the branch rule of each repository. Bootstrap keeps a rule that exists already, as it is. A repository without required review, or with a bypass, has no gate | V2, V7 | T5 | bootstrap sets a rule where none exists; manual checklist | gap: no check for each repository that the gate is on (TM-32) |
+| P64 | **Two processes during the switch.** The older way of working (a bot account, personal tokens, sessions on a person's machine) stays active beside the agents. Its credentials and rules stay valid | V2, V4 | T1, T5 | none found | gap (TM-33) |
+| P65 | **Dependencies and licences.** The agent adds a dependency or copies code. The project's pins and third-party record drift | V6, V7 | T5 at the consumers | the run contract forbids unrelated dependency changes | partly |
+| P66 | **Availability.** The project's delivery now depends on the instance, on one model subscription and, in a loop (P54), on components the project itself builds | V5 | T3 | agents poll when webhooks fail | partly (TM-26) |
+
 ### Targets by attacker
 
 Paths for each pair. An empty cell means that no path was found, which is a statement to test, not a proof.
 
 | | V1 | V2 | V3 | V4 | V5 | V6 | V7 |
 |---|---|---|---|---|---|---|---|
-| T1 access | P2 | P6, P9, P10 | | P17, P18, P20, P22 | P26, P28 to P32 | P34, P36 | |
-| T2 disclosure | P3, P5 | P6, P7, P10, P12 | P15 | P21, P24 | P25, P30 | P37 | P40 to P42, P44 |
-| T3 denial, cost | P1, P4 | P9, P12 | | P19, P24 | P27 | | P45 |
-| T4 escalation | P2 | P8, P10, P11 | P14 | P20, P22, P23 | P26, P29, P31, P32 | P33 to P36, P39 | |
-| T5 destructive change | P5 | P8, P9 | P13, P14 | P18, P21, P23, P24 | P25, P26, P28, P29, P32 | P33, P37, P38 | P40 to P43, P46 |
-| T6 evidence | | P10 | P16 | | P28 | | |
+| T1 access | P2 | P6, P9, P10, P64 | | P17, P18, P20, P22, P47, P57, P64 | P26, P28 to P32, P47, P50 | P34, P36 | P57 |
+| T2 disclosure | P3, P5, P62 | P6, P7, P10, P12, P56 | P15 | P21, P24, P57 | P25, P30, P50 | P37 | P40 to P42, P44, P56 to P58, P61 |
+| T3 denial, cost | P1, P4 | P9, P12 | | P19, P24 | P27, P66 | | P45, P48 |
+| T4 escalation | P2 | P8, P10, P11, P51 | P14 | P20, P22, P23, P57 | P26, P29, P31, P32, P50, P51 | P33 to P36, P39, P53 to P55 | P54, P57 |
+| T5 destructive change | P5, P62 | P8, P9, P49, P59, P63, P64 | P13, P14 | P18, P21, P23, P24 | P25, P26, P28, P29, P32 | P33, P37, P38, P54, P65 | P40 to P43, P46, P49, P52, P54, P58 to P61, P63, P65 |
+| T6 evidence | | P10 | P16 | | P28 | | P52 |
 
 ## Administrator outcomes
 
@@ -310,7 +360,8 @@ guidance.
 1. gVisor, the Kubernetes API server and the cloud provider's identity system have no unknown defect. P22 says what
    is lost when this is false.
 2. NetworkPolicies are enforced. On a cluster without enforcement the egress proxy is advisory only.
-3. The forge enforces branch protection, and at least one person who reviews is honest and reads the diff.
+3. The forge enforces branch protection, and at least one person who reviews is honest and reads the diff. P49 and
+   P63 say when this is weakest: one reviewer for many agents, and a repository whose own rule has no gate.
 4. The people in `agentdev-admins`, the cluster administrators and the cloud project administrators are trusted.
    P9 and P10 say what one of them can do alone.
 5. The model provider handles prompts and code under its terms (R14, accepted).
@@ -319,7 +370,8 @@ guidance.
 ## Candidates for the code review
 
 Order: evidence and containment first (they limit every other finding), then paths that reach all instances,
-then paths that need only untrusted text.
+then paths that need only untrusted text or that leave the instance for an adopting project, then the rest by
+number.
 
 | ID | Question | Paths | Basis |
 |---|---|---|---|
@@ -332,7 +384,11 @@ then paths that need only untrusted text.
 | TM-17 | Which identity runs a plan for a pull request in the deployment repository, and what can it change? | P39 | #291 is open |
 | TM-18 | Who learns of a security advisory for an installed component, and how fast does a pin change reach an instance? | P36 | question |
 | TM-10 | Can a job leave files on the state volume that change the behaviour of a later job of the same agent? | P21 | question |
-| TM-11 | Which files of a repository does the agent load as instructions, and can an unmerged branch change them? | P41, P42 | question |
+| TM-11 | Which files of a repository does the agent follow as instructions, who can change them, and can an unmerged branch change them? Should they be protected paths? | P41, P42, P59 | seen in the tree: the run contract in `images/worker/agent-loop.sh` names `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md` |
+| TM-28 | Which paths of a repository run in its CI on an agent's pull request, and with which token and secrets? What must the adoption steps require from the project's workflows? | P57 | seen in the tree: `PROTECTED_PATHS` default in `images/forge/main.go` |
+| TM-27 | What stops private text from reaching a public branch, PR or comment before a person sees it? | P56 | question |
+| TM-26 | Which agents of an instance work on the instance's own inputs, and which extra gate do those repositories need? | P54, P66 | question |
+| TM-32 | Can the instance check, for each repository, that required review is on and that no agent identity can bypass it? | P63 | seen in the tree: `scripts/bootstrap-project.sh` keeps an existing rule |
 | TM-19 | Does a comment by a person without write access on an agent's PR reach the feedback prompt? | P5 | question |
 | TM-07 | How much can leave through each host of the default allow-list, and which hosts accept uploads with a credential the attacker brings? | P15, P37 | known residual of R10 |
 | TM-12 | What helps a reviewer see that an agent's PR does more than its description says? | P46 | question |
@@ -343,6 +399,15 @@ then paths that need only untrusted text.
 | TM-03 | Can one person label the issue, approve and merge the PR, and approve the apply? Should a profile require two? | P13, P14 | question |
 | TM-09 | Cost and availability: replayed webhooks, wake storms, the shared rate limit of one GitHub App, full state volumes, loops between agents | P1, P45 | question |
 | TM-20 | How long does a person's session last, and does a decision on an approval need a fresh sign-in? | P23 | question |
+| TM-21 | When should an instance use more than one forge App (public and private, product and infrastructure)? | P47 | question |
+| TM-22 | Should the instance limit or show the number of agent PRs that wait for one reviewer? | P49 | question |
+| TM-23 | For each control of the gateway mode (routes, TLS policy, HSTS, flood limits): what gives it with an external ingress, and what does the external proxy see? | P50 | question |
+| TM-24 | What must an OIDC provider guarantee before it can replace authentik (who writes the forge login claim and the admin group, second factor, sign-up)? | P51 | question |
+| TM-25 | Which rules apply to manifests, Secrets and images that a deployment repository adds itself (namespaces, NetworkPolicies, pins, the secret store)? | P53 | question |
+| TM-29 | Which of a project's safeguards run only on a person's machine, and how does the adoption find them? | P58 | seen in the tree: `lgit` in `images/worker/agent-loop.sh` |
+| TM-30 | Can a project name paths that need a stronger gate (a second reviewer, an approval before the push)? | P60 | question |
+| TM-31 | How does a change to an infrastructure repository that is applied outside an executor get the same gate as an apply? | P61 | question |
+| TM-33 | What must be switched off when a project moves from an older agent process: accounts, tokens, instruction files? | P64 | question |
 
 ## Keeping this page current
 
