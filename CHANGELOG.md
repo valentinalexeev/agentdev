@@ -7,6 +7,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Fixed
+- Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
+  the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
 - Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
   engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
   the agents.
