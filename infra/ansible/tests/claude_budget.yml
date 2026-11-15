@@ -1,0 +1,15 @@
+# Deprecation check (#196, owner decision option 2): claude_budget_tokens still works in 1.x.
+# Run: ansible-playbook infra/ansible/tests/claude_budget.yml
+- name: "Claude budget: units, deprecated tokens, both"
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run the deploy.yml task file for each case
+      ansible.builtin.include_tasks: cases/claude_budget_case.yml
+      loop:
+        - {units: null, tokens: null, want: 0, warn: ""}
+        - {units: 500, tokens: null, want: 500, warn: ""}
+        - {units: null, tokens: 700, want: 700, warn: "1 token = 1 unit"}
+        - {units: 500, tokens: 700, want: 500, warn: "ignored"}
+        - {units: 0, tokens: 700, want: 0, warn: "ignored"}
+      loop_control: {loop_var: case}

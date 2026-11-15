@@ -29,7 +29,7 @@ export function ProjectsPage() {
         <div className="ad-table-wrap">
           <table className="ad-table ad-table-2l">
             <thead><tr><th>Project</th><th>Agents</th><th className="ad-num">Waiting for you</th><th className="ad-num">Stopped</th>
-              <th className="ad-num ad-hide-phone">Working</th><th className="ad-num ad-hide-phone">Tokens 24 h</th><th className="ad-num ad-hide-phone">Events 7 d</th></tr></thead>
+              <th className="ad-num ad-hide-phone">Working</th><th className="ad-num ad-hide-phone">Claude units 24 h</th><th className="ad-num ad-hide-phone">Events 7 d</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.p} aria-selected={d.scope === `p:${r.p}`}>

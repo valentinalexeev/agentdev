@@ -3,7 +3,8 @@
 FROM --platform=$BUILDPLATFORM golang:1.25.14-alpine AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download   # OpenTelemetry (#196): a cached layer for the dependencies
 COPY *.go ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=-s -o /credproxy .
 
