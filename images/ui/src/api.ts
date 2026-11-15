@@ -220,3 +220,32 @@ interface Me { preferred_username?: string; email?: string; groups?: string[]; r
 export async function getMe(token: string): Promise<Me> {
   return (await call(token, 'GET', '/api/me')).json()
 }
+
+// Notifications (#347): Web Push subscriptions of this user and the settings per type and project.
+export type NotifyType = 'approvals' | 'stopped' | 'usage'
+export interface NotifyMute { project: string; type: NotifyType | '*' }
+export interface NotifySettings {
+  channels: string[] // on for this instance; empty: notifications are off
+  types: Record<NotifyType, boolean>
+  mutes: NotifyMute[]
+  projects: string[] // projects the user may mute
+  subscriptions: string[] // endpoints of the user's devices
+  snoozeMinutes: number
+  vapidPublicKey?: string
+}
+
+export async function getNotifySettings(token: string): Promise<NotifySettings> {
+  return (await call(token, 'GET', '/api/notify/settings')).json()
+}
+
+export async function putNotifySettings(token: string, s: { types: Partial<Record<NotifyType, boolean>>; mutes: NotifyMute[] }): Promise<NotifySettings> {
+  return (await call(token, 'PUT', '/api/notify/settings', s)).json()
+}
+
+export async function addPushSubscription(token: string, sub: PushSubscriptionJSON): Promise<void> {
+  await call(token, 'POST', '/api/push/subscriptions', { endpoint: sub.endpoint, keys: sub.keys })
+}
+
+export async function removePushSubscription(token: string, endpoint: string): Promise<void> {
+  await call(token, 'DELETE', `/api/push/subscriptions?endpoint=${encodeURIComponent(endpoint)}`)
+}

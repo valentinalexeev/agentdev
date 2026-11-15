@@ -97,6 +97,9 @@ function api(req, res, url) {
     return send(res, 200, { events: D.events.filter((e) => (!ag || e.agent === ag) && (!sev || e.severity === sev)) })
   }
   if (req.method === 'GET' && p === '/api/usage') return send(res, 200, D.usage)
+  // notifications (#347): settings only; a subscription needs a real push service
+  if (req.method === 'GET' && p === '/api/notify/settings') return send(res, 200, notify())
+  if (req.method === 'PUT' && p === '/api/notify/settings') return body(req).then((b) => { N.types = { ...N.types, ...b.types }; N.mutes = b.mutes ?? []; send(res, 200, notify()) })
   if (req.method === 'PATCH' && p.startsWith('/api/agents/')) {
     return body(req).then((b) => { const a = D.agents.find((x) => x.name === decodeURIComponent(p.split('/')[3])); if (a) { Object.assign(a, b); if ('paused' in b) a.phase = b.paused ? 'paused' : 'stopped' } send(res, 200, a ?? {}) })
   }
@@ -121,3 +124,10 @@ createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': TYPES[extname(f)] ?? 'application/octet-stream' })
   res.end(readFileSync(f))
 }).listen(port, () => console.log(`mock API on http://localhost:${port} (${large ? 'large' : 'small'} example)`))
+
+const N = { types: { approvals: true, stopped: true, usage: true }, mutes: [{ project: 'acme/docs', type: '*' }, { project: 'acme/web', type: 'usage' }] }
+function notify() {
+  const projects = [...new Set(D.agents.flatMap((a) => a.repos ?? []))].sort()
+  return { channels: ['webpush'], types: N.types, mutes: N.mutes, projects, subscriptions: [], snoozeMinutes: 15,
+    vapidPublicKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U' }
+}
