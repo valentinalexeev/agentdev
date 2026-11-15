@@ -45,6 +45,10 @@
 - name: Secrets agentdev-api-db, agentdev-api-forge, agentdev-api-siem and the chat Secrets
   ansible.builtin.include_tasks: secrets_k8s.yml
 
+# Web Push (#347): VAPID key pair, Secret agentdev-api-vapid and the NotificationChannel object
+- name: Notification channels
+  ansible.builtin.include_tasks: notify.yml
+
 # kind.yml --tags api may run before steps 06 and 12 (#357)
 - name: Agents namespace with the cost labels
   kubernetes.core.k8s:
@@ -82,6 +86,7 @@
         CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
         CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
         CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+        NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
       replace: []
   register: api_applied
 

@@ -7,6 +7,7 @@ import { useData, type Conn } from './useData'
 import { ago, short } from './format'
 import { ProjectsPage } from './Projects'
 import { SecurityPage } from './Security'
+import { SettingsPage } from './Settings'
 import { TodayPage } from './Today'
 import { UsagePage } from './Usage'
 import { Banner, Icon, Mark, type IconName } from './ui'
@@ -92,6 +93,7 @@ function useTheme(): [boolean, () => void] {
 const NAV: [string, string, IconName][] = [
   ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['agents', 'Agents', 'agents'],
   ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+  ['settings', 'Settings', 'bell'],
 ]
 
 function Console({ user, token, onExpired, onLogout, onSignIn }: {
@@ -160,12 +162,13 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
       </header>
       <ConnBanner onSignIn={onSignIn} />
       <main className="ad-main" id="main" tabIndex={-1}>
-        {page === 'approvals' ? <Approvals token={token} onExpired={onExpired} />
+        {page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
             : page === 'security' ? <SecurityPage key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
               : page === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />
                 : page === 'projects' ? <ProjectsPage />
-                  : <TodayPage token={token} onExpired={onExpired} />}
+                  : page === 'settings' ? <SettingsPage token={token} onExpired={onExpired} />
+                    : <TodayPage token={token} onExpired={onExpired} />}
       </main>
       <nav className="ad-bottombar" aria-label="Main">
         {BOTTOM.map((id) => {

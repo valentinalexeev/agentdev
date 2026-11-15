@@ -26,6 +26,16 @@ api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
 # agent caps (#27) for POST /api/agents (MAX_AGENTS, MAX_AGENTS_PER_USER on kind); 0 = no cap. Checked in tasks/main.yml.
 api_max_agents: "{{ api.max_agents | default(0) }}"
 api_max_agents_per_user: "{{ api.max_agents_per_user | default(0) }}"
+# notifications (#347): channels on for the instance (webpush; Bark: #402), the VAPID contact and the push services the
+# API may send to (subscription endpoints on other hosts are refused). VAPID key pair: Secret Manager api_sm_vapid
+# (GKE) or .secrets/platform/notify-vapid (kind), generated once by tasks/notify.yml.
+api_notify: "{{ notifications | default({}) }}"
+api_notify_channels: "{{ api_notify.channels | default([]) }}"
+api_notify_subject: "{{ api_notify.subject | default('') }}"
+api_notify_push_hosts: >-
+  {{ api_notify.push_hosts | default(['fcm.googleapis.com', 'updates.push.services.mozilla.com', '*.push.apple.com',
+     '*.notify.windows.com']) }}
+api_sm_vapid: "{{ platform_sm_prefix }}notify-vapid"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
 # Where secrets come from: gcp (Secret Manager, deploy.yml) or files (kind.yml, #106: api_secrets_dir).
 api_secret_source: gcp

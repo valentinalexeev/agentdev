@@ -12,6 +12,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
   Off by default. The API and the worker must run the same `image_tag` (ADR 0006). Admission policies hold the
   API's chat Jobs (create and delete); `scripts/e2e-gke-security.sh --only chat` checks them (R101, R104).
+- Web Push notifications (#347). People subscribe a device in the console **Settings** and get a notification for a
+  new approval, an agent stopped by a guardrail or blocked, and a usage pause. The notification has the agent,
+  repository, request type and expiry only, never text from the model. **Deny** and **Snooze** work from the
+  notification with a signed single-use token; **Approve** opens the approval drawer. Each person switches types and
+  mutes projects in **Settings** (stored in the API database). New `NotificationChannel` resource (cluster admin:
+  type `webpush`, VAPID Secret, allowed push hosts) and instance value `notifications.channels` (`kind`:
+  `NOTIFY_CHANNELS`), off by default. Re-run: Ansible role `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`)
+  for the CRD, the VAPID key pair, the database tables and the API RBAC; new API and UI images. Bark: #402.
 - Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
   adversarial review, 72 attack paths with the risk register entries that answer them, and 35 candidate questions
   (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
@@ -37,6 +45,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   the agents.
 
 ### Security
+- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
+  payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
 - R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
   a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
   audience. `scripts/e2e-gke-security.sh` checks a token of another audience (401) and, in mode `token`, the HMAC key

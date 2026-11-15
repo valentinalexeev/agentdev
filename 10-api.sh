@@ -23,7 +23,9 @@ vars=$(jq -nc --arg ap "${APPROVALS:-false}" --arg deny "${APPROVAL_DENY_ACCOUNT
   --arg u5 "${USAGE_FIVE_HOUR:-80}" --arg uw "${USAGE_WEEKLY:-90}" \
   --arg chat "${CHAT_SESSIONS:-false}" --arg ci "${CHAT_IDLE_MINUTES:-30}" --arg cr "${CHAT_RETENTION_DAYS:-30}" \
   --arg cm "${CHAT_MAX_SESSIONS:-0}" --arg cu "${CHAT_MAX_SESSIONS_PER_USER:-0}" \
+  --arg nc "${NOTIFY_CHANNELS:-}" --arg ns "${NOTIFY_SUBJECT:-mailto:admin@agentdev.local}" \
   '{approvals: {enabled: ($ap == "true")}, usage: {five_hour: $u5, weekly: $uw},
+    notifications: {channels: ($nc | split(",") | map(select(length > 0))), subject: $ns},
     api_approval_deny_accounts: ($deny | split(",") | map(select(length > 0))),
     api: {chat: {enabled: ($chat == "true"), idle_minutes: $ci, retention_days: $cr, max_sessions: $cm,
                  max_sessions_per_user: $cu}}}')

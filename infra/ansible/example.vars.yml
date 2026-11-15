@@ -20,6 +20,12 @@ agentdev_labels: {environment: prod}   # #184: namespaces, agent and executor po
 #     retention_days: 30                  #   transcripts, readable with read access to the repository
 #     max_sessions: 0                     #   running sessions on the instance; 0 = no cap
 #     max_sessions_per_user: 0
+# Notifications for each user (#347): channels on for the instance. Users subscribe and mute in the console Settings.
+# The VAPID key pair is made once (Secret Manager platform-notify-vapid). push_hosts: the push services the API may call.
+# notifications:
+#   channels: [webpush]                   # Bark: #402
+#   subject: mailto:ops@example.com       # VAPID contact for the push services (mailto: or https://)
+#   push_hosts: [fcm.googleapis.com, updates.push.services.mozilla.com, "*.push.apple.com", "*.notify.windows.com"]
 # Optional public HTTPS entry point (#120): values from `terraform output ingress` (Terraform public_hosts).
 # ingress:
 #   mode: gateway                           # default; external (#160): your own reverse proxy, no Gateway/certificate

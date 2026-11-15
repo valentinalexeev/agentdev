@@ -20,3 +20,5 @@ GRANT USAGE ON SEQUENCE chat_events_id_seq TO agentdev_api;
 GRANT SELECT, INSERT ON chat_sessions TO agentdev_api;
 GRANT UPDATE (ended_at, ended_reason, last_seq) ON chat_sessions TO agentdev_api;
 GRANT EXECUTE ON FUNCTION chat_prune() TO agentdev_api;
+-- notifications for each user (#347): per-user data the API owns and changes (not an audit trail)
+GRANT SELECT, INSERT, UPDATE, DELETE ON notify_users, push_subscriptions, notify_settings, push_action_nonces TO agentdev_api;
