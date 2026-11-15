@@ -227,6 +227,36 @@ security event.
 NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
 `usd_per_million_units` only when the instance bills by API key. Without it, the web UI shows units only.
 
+### Limit the cost of one job
+
+A job is the work of an agent on one issue or one pull request. The proxy can stop a job that uses too many cost
+units (#196, #310). There are two limits per job:
+
+- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent writes
+  a comment "waiting for approval" with the source `cost` on its issue or pull request. One approval gives the job
+  one more step of units (`CLAUDE_JOB_APPROVAL_STEP_UNITS`). Then the agent continues in the same Claude session.
+- The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
+
+1. On `kind`: set `CLAUDE_JOB_APPROVAL_UNITS`, `CLAUDE_JOB_APPROVAL_STEP_UNITS` and `CLAUDE_JOB_BUDGET_UNITS` in
+   `config.env`. On GKE: set `claude_job_approval_units`, `claude_job_approval_step_units` and
+   `claude_job_budget_units` in `instance.yml`.
+2. On `kind`, set `APPROVALS=true`. On GKE, approvals are on by default.
+3. Deploy again: `./run.sh 06` and `./run.sh 12`, or a pull request in the deployment repository.
+
+NOTE: The value 0 means off. This is the default for all three settings. A step of 0 is the same as the soft limit.
+
+NOTE: The soft limit must be lower than the hard limit when you set both. `./run.sh 06`, the playbook and the proxy
+stop with an error if it is not.
+
+NOTE: A denial, a void request or no answer within the approval timeout (`APPROVAL_TIMEOUT_MINUTES`, default 30)
+ends the job as failed, as at the hard limit.
+
+NOTE: Only the proxy raises the limit. It reads the allowed approvals of the job from the Kubernetes API (Role
+`agentdev-claude-proxy-approvals`: `get` and `list` on `approvals`). The worker and the model cannot raise it.
+
+NOTE: The job id comes from the agent (`X-Agentdev-Job`). Thus the limits per job stop a run that loops. They are
+not a security limit. The budget of the agent (24 hours) is the security limit.
+
 ### Look at the spend
 
 1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.

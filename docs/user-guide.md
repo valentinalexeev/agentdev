@@ -318,6 +318,23 @@ all secrets.
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
 requests that have no decision.
 
+### Answer a cost request
+
+The administrator can set a cost limit for each job (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and
+writes a comment "waiting for approval `<id>`" with the source `cost` and the tool `step-<n>`. The comment shows the
+units that the job used, the limit and the units of one more step. The proxy supplies these numbers, not the agent.
+
+1. Read the numbers in the comment.
+2. Write a new comment with one of these lines:
+   - `/approve <id>`: the job can use one more step of units. The agent continues in the same session.
+   - `/deny <id>`: the job stops as failed.
+
+NOTE: `/approve-job` has the same effect as `/approve` for a cost request. Each step needs a new approval.
+
+NOTE: If nobody answers within the approval timeout (default 30 minutes), the job stops as failed.
+
+NOTE: The administrator can also set a hard limit for each job. An approval cannot go above it.
+
 ### Set a lower usage limit for your project
 
 The agents of your project start no new runs when the subscription is at the usage limit. Runs in progress continue.

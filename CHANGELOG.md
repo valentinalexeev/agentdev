@@ -7,6 +7,20 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Soft cost limit per job with an approval before the hard stop (#310). `claude-proxy` gets
+  `CLAUDE_JOB_APPROVAL_UNITS` (soft limit, 0 = off) and `CLAUDE_JOB_APPROVAL_STEP_UNITS` (units per approval,
+  default the soft limit); Ansible `claude_job_approval_units`, `claude_job_approval_step_units`. At the soft limit
+  the proxy answers 429 with the marker `agentdev:job_approval` and writes the event `job-approval-needed` once per
+  job and step. The agent keeps the job and its Claude session and asks through the approval flow of #67 with the new
+  source `cost` (forge comment, web UI). The forge sidecar files the request with the numbers from the proxy, never
+  with model text. Only an allowed Approval raises the limit: the proxy reads it from the Kubernetes API (new Role
+  `agentdev-claude-proxy-approvals`, `get` and `list` on `approvals`). A denial or a timeout ends the job as failed.
+  This change also lands the hard limit per job `CLAUDE_JOB_BUDGET_UNITS` / `claude_job_budget_units` (#196 D6),
+  which was merged into a stacked branch and never reached `main`. The soft limit must be lower than the hard limit:
+  `./run.sh 06`, `deploy.yml` and the proxy check it. Mixed versions (ADR 0006): with the soft limit off nothing
+  changes; a 1.0 worker or forge sidecar does not ask, so its job stops at the soft limit like at a hard limit. Re-run:
+  `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE (claude-proxy Role, approvals CRD, new
+  images).
 - Threat model (`docs/threat-model.md`, #401): assets, trust boundaries, the attackers and attack targets of the
   adversarial review, 72 attack paths with the risk register entries that answer them, and 35 candidate questions
   (`TM-nn`) for the code review. The paths include the shapes of a real instance (one owner, one forge App, external
