@@ -16,6 +16,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   (operator RBAC, claude-proxy, new images).
 
 ### Fixed
+- Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
+  request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
+  compat e2e). New worker image; no `./run.sh` step.
 - Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
   the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
 - Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container

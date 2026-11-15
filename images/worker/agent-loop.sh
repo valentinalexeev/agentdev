@@ -737,7 +737,11 @@ ${summary}"
   fi
   rm -f "${STATE}/seen/issue-${n}.asked"
   if push_step "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
-    local pr
+    local pr opened_at
+    # #394: the feedback cursor starts when the PR is opened, not after the follow-up calls (review request, label,
+    # board): a comment in those seconds was older than the cursor and never answered. A second earlier is safe, the
+    # agent's own comments are filtered out by login.
+    opened_at=$(date -u -d '-1 second' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1S +%Y-%m-%dT%H:%M:%SZ)
     # #175: a restart after the PR was created must not open a second one (the forge refuses it anyway)
     pr=$(open_pr_for "${branch}")
     [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
@@ -757,8 +761,8 @@ _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up.
     [[ -n "${stopped}" ]] && comment "${n}" "🤖 I opened PR #${pr}, but: ${stopped}"
     board_card "issue-${n}" "#${n} ${title}" review "PR #${pr} waits for ${REVIEWER}'s review" "$(pr_url "${pr}")"
     echo "${n} ${title}" > "${STATE}/seen/pr-${pr}.board"   # issue number and title for later card updates
-    # anything already on the PR at this point is ours; start the feedback cursor after it
-    date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${pr}"
+    # feedback by others from the moment the PR was opened is answered (#394)
+    [[ -r "${STATE}/seen/pr-${pr}" ]] || echo "${opened_at}" > "${STATE}/seen/pr-${pr}"
   else
     log "no changes produced for issue #${n}"
     board_card "issue-${n}" "#${n} ${title}" blocked "could not produce a change (see the issue)" "$(web_url "issues/${n}")"
