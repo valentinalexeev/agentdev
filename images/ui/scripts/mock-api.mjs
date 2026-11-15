@@ -3,7 +3,9 @@
 // /config.json and the /api calls the console uses, with fictional example data. Never used in the image.
 // Usage: node scripts/mock-api.mjs [port] [--large]   then open http://localhost:<port>/#agents
 // State switches for connection tests (#339): GET /mock/starting (HTML 502 as from the ingress), /mock/down (no answer),
-// /mock/expire (401), /mock/up.
+// /mock/expire (401), /mock/up. Live stream (#345): /mock/nostream ends the stream and answers 503 (the console
+// polls), /mock/stream allows it again, /mock/new-approval adds an approval and sends it on the stream. /mock/member and /mock/admin switch the caller (member: no agentdev-admins, so the
+// Audit and Platform calls answer 403).
 import { createServer } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
 import { extname, join } from 'node:path'
@@ -80,6 +82,7 @@ const D = large ? largeData() : smallData()
 // "My projects": the small example has every project; the large one only the first six (#342)
 const MINE = large ? ['acme/shop-api', 'acme/web', 'acme/mobile', 'acme/infra-live', 'acme/data-jobs', 'acme/docs'] : [...new Set(D.agents.flatMap((a) => a.repos))]
 let mode = 'up' // up | starting | down | expire
+let admin = true
 
 function api(req, res, url) {
   if (mode === 'starting') { res.writeHead(502, { 'Content-Type': 'text/html' }); return res.end('<html>502 Bad Gateway</html>') }
@@ -87,7 +90,12 @@ function api(req, res, url) {
   if (mode === 'expire') return send(res, 401, { error: 'token expired' })
   const p = url.pathname
   if (req.method === 'GET' && p === '/api/agents') return send(res, 200, { agents: D.agents })
-  if (req.method === 'GET' && p === '/api/me') return send(res, 200, { sub: 'u1', preferred_username: 'valentinalexeev', email: 'v@example.com', groups: ['agentdev-admins'], repos: MINE })
+  if (req.method === 'GET' && p === '/api/me') return send(res, 200, { sub: 'u1', preferred_username: 'valentinalexeev', email: 'v@example.com', groups: admin ? ['agentdev-admins'] : ['developers'], repos: MINE })
+  if (req.method === 'GET' && p.startsWith('/api/agents/')) return detail(res, decodeURIComponent(p.split('/')[3]))
+  if (req.method === 'GET' && p === '/api/platform') return admin ? send(res, 200, platform()) : send(res, 403, { error: 'needs admin access' })
+  if (req.method === 'GET' && p === '/api/audit') return admin ? send(res, 200, audit(url)) : send(res, 403, { error: 'only agentdev-admins may read the audit trail' })
+  if (req.method === 'GET' && p === '/api/stream') return stream(req, res)
+  if (req.method === 'GET' && p === '/api/jobs') return send(res, 200, jobsPage(url))
   if (req.method === 'GET' && p === '/api/approvals') {
     const st = url.searchParams.get('state')
     return send(res, 200, { approvals: st === 'pending' ? D.approvals : st === 'decided' ? D.decided : [...D.approvals, ...D.decided] })
@@ -116,6 +124,9 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/cs
 
 createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
+  if (url.pathname === '/mock/nostream' || url.pathname === '/mock/stream') { streamOn = url.pathname === '/mock/stream'; if (!streamOn) for (const c of clients) c.destroy(); return send(res, 200, { streamOn }) }
+  if (url.pathname === '/mock/new-approval') { newApproval(); return send(res, 200, { approvals: D.approvals.length }) }
+  if (url.pathname === '/mock/member' || url.pathname === '/mock/admin') { admin = url.pathname === '/mock/admin'; return send(res, 200, { admin }) }
   if (url.pathname.startsWith('/mock/')) { mode = url.pathname.slice(6); return send(res, 200, { mode }) }
   if (url.pathname === '/config.json') return send(res, 200, { oidcIssuer: `http://localhost:${port}/oidc/`, oidcClientId: 'agentdev' })
   if (url.pathname.startsWith('/api/')) return api(req, res, url)
@@ -130,4 +141,103 @@ function notify() {
   const projects = [...new Set(D.agents.flatMap((a) => a.repos ?? []))].sort()
   return { channels: ['webpush'], types: N.types, mutes: N.mutes, projects, subscriptions: [], snoozeMinutes: 15,
     vapidPublicKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDzkrxZJjSgSnfckjBJuBkr3qBUYIHBQFLXYp5Nksh8U' }
+}
+
+// ---- #344: agent detail, platform, audit; #345: jobs ----
+const PHASES = ['queued', 'build', 'review', 'done']
+const TITLES = ['Add shellcheck to CI', 'Fix the flaky login test', 'Paginate the orders endpoint', 'Bump the Go toolchain', 'Docs: explain the retry policy',
+  'Remove the unused feature flag', 'Cache the product list', 'Handle a 429 from the payment API', 'Split the import job', 'Add a health check to the worker',
+  '<script>alert(1)</script> is shown as text', 'Rename the config key']
+function makeJobs() {
+  const out = []
+  let n = 300
+  D.agents.forEach((a, i) => {
+    const k = large ? 1 + (i % 3) : 2 + (i % 3)
+    for (let j = 0; j < k; j++) {
+      n += 1
+      const phase = PHASES[(i + j) % 4]
+      const repo = a.repos[0]
+      const pr = phase === 'queued' ? 0 : n + 1000
+      const outcome = phase === 'done' ? ((i + j) % 3 === 0 ? 'closed' : 'merged') : undefined
+      const t = now - ((i * 7 + j * 3) % 50) * hr - j * 13 * min
+      out.push({ id: `${a.name}/${repo}/issue-${n}`, agent: a.name, repo, forge: a.forge, issue: n, pr: pr || undefined, title: TITLES[(i + j) % TITLES.length],
+        url: `https://github.com/${repo}/issues/${n}`, prUrl: pr ? `https://github.com/${repo}/pull/${pr}` : undefined, phase, outcome,
+        created: iso(t - 5 * hr), updated: iso(t), closed: phase === 'done' ? iso(t) : undefined })
+    }
+  })
+  return out.sort((x, y) => Date.parse(y.updated) - Date.parse(x.updated))
+}
+const JOBS = makeJobs()
+function jobsPage(url) {
+  const q = url.searchParams
+  let list = JOBS.filter((j) => (!q.get('agent') || j.agent === q.get('agent')) && (!q.get('repo') || j.repo === q.get('repo'))
+    && (!q.get('phase') || j.phase === q.get('phase')) && (q.get('scope') !== 'mine' || MINE.includes(j.repo)))
+  const limit = Number(q.get('limit') ?? 100), off = Number(q.get('cursor') ?? 0)
+  const page = list.slice(off, off + limit)
+  return { jobs: page, ...(off + limit < list.length ? { next_cursor: String(off + limit) } : {}) }
+}
+function detail(res, name) {
+  const a = D.agents.find((x) => x.name === name)
+  if (!a) return send(res, 404, { error: 'not found' })
+  const waitingOn = []
+  if (a.paused) waitingOn.push({ kind: 'paused', reason: 'paused by a person' })
+  else if (a.phase === 'blocked') waitingOn.push({ kind: 'blocked' })
+  for (const p of D.approvals.filter((x) => x.agent === name)) waitingOn.push({ kind: 'approval', ref: p.name, job: p.job, repo: p.repo, reason: p.tool, since: p.created, until: p.expires })
+  const pz = D.usage.pauses[name]
+  if (pz) waitingOn.push({ kind: 'usage-pause', reason: pz.reason, until: iso(pz.until * 1000) })
+  const pods = a.replicas ? [{ name: `agent-${name}-0`, phase: a.ready ? 'Running' : 'Pending', ready: !!a.ready, restarts: a.phase === 'blocked' ? 3 : 0, started: iso(now - 4 * hr), ...(a.ready ? {} : { reason: 'ContainerCreating' }) }] : []
+  const guide = `# How ${name} works\n\nRepository: ${a.repos[0]} (${a.forge})\nMax. concurrent: ${a.maxConcurrent}\n\n- Assign an issue to the bot user to start a job.\n- Comment on the PR to give feedback; the agent reads new comments.\n- /approve <id> or the console decides an approval request.\n`
+  send(res, 200, { ...a, pods, waitingOn, recentJobs: JOBS.filter((j) => j.agent === name).slice(0, 10), guide })
+}
+function platform() {
+  const c = (name, status, detail, command) => ({ name, status, detail, command })
+  return { version: '1.1.0-rc.1', checked: iso(Date.now()), components: [
+    c('api', 'ok', 'answering', 'kubectl -n agentdev logs deploy/agentdev-api'),
+    c('router', 'ok', '1/1 ready', 'kubectl -n coding-agents describe deploy/webhook-router'),
+    c('operator', 'ok', '1/1 ready', 'kubectl -n agentdev describe deploy/agentdev-operator'),
+    c('claude-proxy', 'degraded', '1/2 ready', 'kubectl -n coding-agents describe deploy/claude-proxy'),
+    c('authentik', 'ok', '1/1 ready', 'kubectl -n agentdev describe deploy/authentik-server'),
+    c('forge-token', 'ok', "the API's forge credential works", 'kubectl -n agentdev logs deploy/agentdev-api | grep -i forge'),
+    c('egress-proxy', 'absent', 'not installed', 'kubectl -n coding-agents describe deploy/egress-proxy'),
+    c('agent-pool', 'down', '2 running, 1 pending, 1 failed', 'kubectl -n coding-agents get pods -l app=coding-agent -o wide'),
+  ] }
+}
+const AUDIT = (() => {
+  const who = (u) => ({ sub: `s-${u}`, username: u, forgeUser: u })
+  const st = (repo, paused, max = 2) => ({ repo, forge: 'github', maxConcurrent: max, scaleToZero: true, paused })
+  const e = (m, u, action, agent, result, extra) => ({ time: iso(now - m * min), who: who(u), action, agent, result, before: null, after: null, ...extra })
+  return [
+    e(55, 'valentinalexeev', 'patch', 'carol', 'ok', { request: { paused: true }, before: st('acme/web', false), after: st('acme/web', true), grant: 'admin-group' }),
+    e(80, 'mia', 'delete', 'gus', 'denied', { reason: 'needs admin access' }),
+    e(140, 'lee', 'patch', 'alice', 'ok', { request: { maxConcurrent: 2 }, before: st('acme/shop-api', false, 1), after: st('acme/shop-api', false, 2), grant: 'repo-write' }),
+    e(300, 'mia', 'patch', 'bob', 'invalid', { request: { maxConcurrent: 12 }, reason: 'maxConcurrent: 1 to 8' }),
+    e(26 * 60, 'valentinalexeev', 'create', 'gus', 'ok', { request: { name: 'gus', repo: 'acme/docs' }, after: st('acme/docs', false, 1), grant: 'admin-group' }),
+    e(30 * 60, 'valentinalexeev', 'patch', 'dave', 'ok', { request: { paused: false }, before: st('acme/mobile', true), after: st('acme/mobile', false), grant: 'repo-admin' }),
+  ].map((entry, i) => ({ id: 100 - i, entry }))
+})()
+function audit(url) {
+  const ag = url.searchParams.get('agent'), r = url.searchParams.get('result')
+  return { entries: AUDIT.filter(({ entry: e }) => (!ag || e.agent === ag) && (!r || e.result === r)) }
+}
+
+// ---- #345: live stream (SSE, envelope of images/api/stream.go) ----
+let streamOn = true
+const clients = new Set()
+let seq = 0
+function sse(res, type, data) { res.write(`event: ${type}\nid: ${++seq}\ndata: ${JSON.stringify({ type, time: iso(Date.now()), data })}\n\n`) }
+function stream(req, res) {
+  if (!streamOn) return send(res, 503, { error: 'stream off (mock)' })
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
+  sse(res, 'hello', { heartbeatSeconds: 5 })
+  const t = setInterval(() => sse(res, 'heartbeat', null), 5000)
+  const c = { res, destroy: () => { clearInterval(t); req.socket.destroy() } }
+  clients.add(c)
+  req.on('close', () => { clearInterval(t); clients.delete(c) })
+}
+let nNew = 0
+function newApproval() {
+  nNew += 1
+  const a = { ...D.approvals[0], name: `apr-live${nNew}`, id: `live${nNew}`, agent: 'erin', job: `issue-${400 + nNew}`, tool: 'Bash(npm publish)', created: iso(Date.now()), expires: iso(Date.now() + 30 * min) }
+  D.approvals.push(a)
+  for (const c of clients) sse(c.res, 'approval', a)
 }

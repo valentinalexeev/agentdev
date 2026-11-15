@@ -23,7 +23,9 @@ export interface Data {
   inScopeRepo: (repo: string) => boolean
   inScopeAgent: (name: string) => boolean
   mine: string[] | null // null: the API does not say which projects are mine
+  admin: boolean // in agentdev-admins: the Admin pages show in the menu (the API checks again: 403)
   conn: Conn
+  live: boolean // the live stream (#345) is open; false: the console polls
   failedSince: number
   reload: () => void
   now: number // the clock of the last render tick (10 s)

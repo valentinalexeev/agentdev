@@ -21,6 +21,22 @@ While the version is `0.x`, breaking changes bump MINOR.
   changes; a 1.0 worker or forge sidecar does not ask, so its job stops at the soft limit like at a hard limit. Re-run:
   `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE (claude-proxy Role, approvals CRD, new
   images).
+- Web console (#345): **Work** page and live updates. The Work page shows the jobs of the agents (`GET /api/jobs`,
+  with the project scope as `scope=mine` or `repo=`) as a board (plan, build, review as the person's turn, done with
+  the outcome), as a phase matrix (one row per project) with "Your turn" when the scope has several projects and more
+  than 20 jobs, or as a list. Filters for agent and project are in the URL (`#work?agent=…&repo=…`). It replaces
+  botboard for people with a console login (#340, decision 1); botboard stays for instances without authentik. The
+  console reads `GET /api/stream` (server-sent events, with fetch and the bearer token): a change shows at once, the
+  poll drops to 60 s while the stream is open, and the stream reconnects with exponential backoff and jitter while
+  the console polls every 15 s ("Polling" in the top bar). **Work** replaces **Projects** in the phone bottom bar.
+  New UI image; no API change.
+- Web console (#344): agent drawer, Audit page and Platform page. A click on an agent name (or `#agents/<name>`) opens
+  a drawer with what the agent waits on, its pods, the recent jobs as a timeline, usage, settings and the harness
+  guide. **Audit** (story view and raw JSON, filters for person, agent, action, result and time) and **Platform**
+  (one health lamp per platform part, the version, a copyable `kubectl` command) show in an **Admin** menu group for
+  `agentdev-admins` only; for other people the page explains the API's 403. All agent and forge text shows as plain
+  text. `scripts/mock-api.mjs` serves the new endpoints (`/mock/member` for a person without admin access). New UI
+  image; no API or RBAC change.
 - Console chat backend (#346): `chat-session-server` in the worker image and the session API
   (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.
   Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.
