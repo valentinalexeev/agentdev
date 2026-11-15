@@ -68,9 +68,23 @@ func (f *fixture) post(path, key, body string, hdr map[string]string) *http.Resp
 	return resp
 }
 
+// logText and logReset touch the shared log buffer under outMu: the reverse proxy may still write a usage line from
+// its response handler while the test reads (race detector, #404 review).
+func logText(buf *bytes.Buffer) string {
+	outMu.Lock()
+	defer outMu.Unlock()
+	return buf.String()
+}
+
+func logReset(buf *bytes.Buffer) {
+	outMu.Lock()
+	defer outMu.Unlock()
+	buf.Reset()
+}
+
 func lines(buf *bytes.Buffer, prefix string) []string {
 	var r []string
-	for _, l := range strings.Split(buf.String(), "\n") {
+	for _, l := range strings.Split(logText(buf), "\n") {
 		if strings.HasPrefix(l, prefix) {
 			r = append(r, strings.TrimPrefix(l, prefix))
 		}
@@ -135,7 +149,7 @@ func TestSwapsCredentialAndMetersJSON(t *testing.T) {
 	if ul.Agent != "alice" || ul.Secret != "claude-shared" || ul.InputTokens != 15 || ul.OutputTokens != 7 || ul.FiveHour == nil || ul.FiveHour.Utilization != 0.42 || ul.FiveHour.ResetsAt != reset5 {
 		t.Errorf("usage %+v", ul)
 	}
-	if strings.Contains(f.logs.String(), "sk-ant") {
+	if strings.Contains(logText(f.logs), "sk-ant") {
 		t.Error("credential printed")
 	}
 }
@@ -215,7 +229,7 @@ func TestRefusals(t *testing.T) {
 		if resp.StatusCode != c.status {
 			t.Errorf("%s: status %d", c.path, resp.StatusCode)
 		}
-		if !strings.Contains(f.logs.String(), `"rule":"`+c.rule+`"`) {
+		if !strings.Contains(logText(f.logs), `"rule":"`+c.rule+`"`) {
 			t.Errorf("%s: no event %s", c.path, c.rule)
 		}
 	}
@@ -245,7 +259,7 @@ func TestBudget(t *testing.T) {
 			t.Errorf("request %d: %d", i, resp.StatusCode)
 		}
 	}
-	if n := strings.Count(f.logs.String(), "budget-exhausted"); n != 1 {
+	if n := strings.Count(logText(f.logs), "budget-exhausted"); n != 1 {
 		t.Errorf("%d budget events, want 1", n)
 	}
 	// another agent has its own budget; a per-agent file raises alice's
