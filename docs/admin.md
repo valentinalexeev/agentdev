@@ -1312,6 +1312,45 @@ source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event.
 change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
 namespace that can only read pods. Without `pod_selector`, the monitor is off.
 
+#### Deployed forwarder
+
+With `ingress.forwarder.deploy`, the playbook also runs the funnel forwarder of headlamp (#316). Before, the
+deployment repository applied its own manifest, and a forwarder that lost its route registration stayed not Ready
+until somebody restarted it (headlamp#95).
+
+1. Put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey` (other name:
+   `ingress.forwarder.deploy.authkey_secret`).
+2. In `ansible/instance.yml`, set the forwarder namespace, the pod selector and `deploy`:
+
+   ```yaml
+   ingress:
+     mode: external
+     forwarder:
+       namespace: agentdev-funnel
+       pod_selector: {app: funnel-forwarder}
+       deploy:
+         image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # a release, a sha tag or a digest
+         control_url: https://headscale.example.com
+   ```
+
+3. Run the playbook. It makes the namespace, the Secret `funnel-sidecar`, a Deployment with one replica, and a
+   NetworkPolicy. The forwarder can reach DNS, the UI, the router's public port, authentik and public addresses.
+   Nothing can connect to it.
+4. Delete the old manifest from the deployment repository (for example `k8s/funnel-forwarder.yaml`). The Deployment
+   name `funnel-forwarder` stays the same, so the playbook takes over the existing Deployment. Kubernetes does not
+   let a run change the selector of a Deployment: when the old selector is not `ingress.forwarder.pod_selector`, the
+   run fails. Then delete the old Deployment
+   (`kubectl -n agentdev-funnel delete deployment funnel-forwarder`) and run the playbook again.
+
+The readiness probe and the liveness probe ask `/readyz`. It answers 200 only while every route is registered. The
+liveness probe restarts the pod after 10 minutes without registration (`liveness_period_seconds` 30 x
+`liveness_failure_threshold` 20). The published Services are, by default, the UI, `/hook` of the router, and authentik
+when the role deploys it (`deploy.services`, format `name=port@host:port`). The router's internal port 8081 is never
+published. The playbook refuses an image tag `main` or `latest`, and a `control_url` that does not use `https`. A new
+key version in Secret Manager restarts the forwarder on the next run. The NetworkPolicy blocks private, CGNAT and
+link-local addresses. When headscale or `funnel-ingress` has such an address, add it in `deploy.egress_cidrs`
+(for example `[100.64.0.0/10]`; no range wider than `/8`).
+
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
