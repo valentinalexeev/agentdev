@@ -97,7 +97,7 @@ func TestTokenAuth(t *testing.T) {
 		{"other namespace", fakeJWT("otherns", exp), 401, ""},
 		{"not an agent SA", fakeJWT("notagent", exp), 401, ""},
 	} {
-		f.logs.Reset()
+		logReset(f.logs)
 		resp := f.post("/v1/messages", c.tok, `{}`, nil)
 		resp.Body.Close()
 		if resp.StatusCode != c.status {
@@ -110,12 +110,12 @@ func TestTokenAuth(t *testing.T) {
 		if c.agent == "alice" && f.got.Header.Get("Authorization") != "Bearer sk-ant-oat-shared" {
 			t.Errorf("%s: not sent as alice", c.name)
 		}
-		if c.status == 401 && !strings.Contains(f.logs.String(), "wrong agent token") {
-			t.Errorf("%s: no token event: %s", c.name, f.logs.String())
+		if c.status == 401 && !strings.Contains(logText(f.logs), "wrong agent token") {
+			t.Errorf("%s: no token event: %s", c.name, logText(f.logs))
 		}
 	}
 	// the x-api-key header (apiKeyHelper) is accepted as well
-	f.logs.Reset()
+	logReset(f.logs)
 	resp := f.post("/v1/messages", "", `{}`, map[string]string{"X-Api-Key": fakeJWT("alice", exp)})
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -137,11 +137,11 @@ func TestAuthModes(t *testing.T) {
 	tok := fakeJWT("alice", time.Now().Add(10*time.Minute))
 
 	withReviewer(f, authToken, api)
-	f.logs.Reset()
+	logReset(f.logs)
 	resp := f.post("/v1/messages", agentKey(testSigning, "alice"), `{}`, nil)
 	resp.Body.Close()
-	if resp.StatusCode != 401 || !strings.Contains(f.logs.String(), "wrong agent key (auth mode token)") {
-		t.Errorf("token mode + key: %d %s", resp.StatusCode, f.logs.String())
+	if resp.StatusCode != 401 || !strings.Contains(logText(f.logs), "wrong agent key (auth mode token)") {
+		t.Errorf("token mode + key: %d %s", resp.StatusCode, logText(f.logs))
 	}
 	resp = f.post("/v1/messages", tok, `{}`, nil)
 	resp.Body.Close()
@@ -211,8 +211,8 @@ func TestTokenReviewDown(t *testing.T) {
 	withReviewer(f, authBoth, api)
 	resp := f.post("/v1/messages", fakeJWT("alice", time.Now().Add(time.Hour)), `{}`, nil)
 	resp.Body.Close()
-	if resp.StatusCode != 401 || !strings.Contains(f.logs.String(), "proxy-tokenreview-error") {
-		t.Errorf("api down: %d %s", resp.StatusCode, f.logs.String())
+	if resp.StatusCode != 401 || !strings.Contains(logText(f.logs), "proxy-tokenreview-error") {
+		t.Errorf("api down: %d %s", resp.StatusCode, logText(f.logs))
 	}
 }
 
