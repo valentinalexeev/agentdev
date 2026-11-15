@@ -160,6 +160,10 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
 | Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
+| Agent container ephemeral-storage request (#251) | `AGENT_EPHEMERAL_REQUEST` (default `1Gi`) | `agent_ephemeral_request` (default `1Gi`) |
+| Agent container ephemeral-storage limit | `AGENT_EPHEMERAL_LIMIT` (default `8Gi`) | `agent_ephemeral_limit` (default `8Gi`) |
+| Forge sidecar git mirror size limit | `FORGE_MIRROR_LIMIT` (default `4Gi`) | `forge_mirror_limit` (default `4Gi`) |
+| Forge sidecar ephemeral-storage limit (at least the mirror limit) | `FORGE_EPHEMERAL_LIMIT` (default `5Gi`) | `forge_ephemeral_limit` (default `5Gi`) |
 
 ## Claude proxy and token budget
 

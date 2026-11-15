@@ -92,7 +92,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	// sidecar's /proc/<pid>/environ, which is the point of the sidecar (#64, R4)
 	p.ShareProcessNamespace = ptr.To(false)
 	// the sidecar's own git mirror: only the sidecar mounts it, so nothing the agent writes is read by its git
-	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(r.D.qty(r.D.ForgeMirrorLimit, defForgeMirrorLimit))}}},
 		// usage pauses (#93): written by the operator, read by the loop before it starts a job; optional (no pauses yet)
 		{Name: "usage", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}},
@@ -134,8 +134,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("16Mi")},
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}},
 	}}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
@@ -158,8 +160,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralRequest, defAgentEphemeralRequest)},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
+				// writable layer (/tmp, caches outside /state): a runaway build is evicted, not the node's disk (#251)
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralLimit, defAgentEphemeralLimit),
 				// 3Gi fits 2 parallel items; ~1Gi per extra slot
 				corev1.ResourceMemory: *resource.NewQuantity(int64(1+maxc)*(1<<30), resource.BinarySI)},
 		},
@@ -184,10 +189,32 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			RunAsNonRoot: ptr.To(true), AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("256Mi")},
+			// the git mirror emptyDir counts here too: limit = mirror + a little writable layer
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.ForgeEphemeralLimit, defForgeEphemeralLimit)},
 		},
 	}}
+}
+
+// ephemeral-storage bounds (#251 part 3): the work tree lives on the state PVC, so node-local disk is only the
+// writable layers and the sidecar's mirror. Past a limit the kubelet evicts the pod and the StatefulSet recreates it.
+// Defaults; the operator env (AGENT_EPHEMERAL_REQUEST, AGENT_EPHEMERAL_LIMIT, FORGE_MIRROR_LIMIT,
+// FORGE_EPHEMERAL_LIMIT) overrides them.
+const (
+	defAgentEphemeralRequest = "1Gi"
+	defAgentEphemeralLimit   = "8Gi"
+	defForgeMirrorLimit      = "4Gi"
+	defForgeEphemeralLimit   = "5Gi"
+)
+
+// qty parses a configured quantity; an empty, invalid or non-positive value gives the default.
+func (d Defaults) qty(v, def string) resource.Quantity {
+	if q, err := resource.ParseQuantity(v); err == nil && q.Sign() > 0 {
+		return q
+	}
+	return resource.MustParse(def)
 }
 
 // graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.

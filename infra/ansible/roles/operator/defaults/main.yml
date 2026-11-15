@@ -23,6 +23,11 @@ operator_poll_seconds: 20
 operator_idle_seconds: 900
 operator_agent_storage_class: ""
 operator_agent_state_storage: 10Gi
+# ephemeral-storage of agent pods (#251), as deploy.yml's agent_ephemeral_* and forge_*_limit
+operator_agent_ephemeral_request: 1Gi
+operator_agent_ephemeral_limit: 8Gi
+operator_forge_mirror_limit: 4Gi
+operator_forge_ephemeral_limit: 5Gi    # at least operator_forge_mirror_limit
 operator_security: {pause_after: 5, retention_days: 30, max_per_agent: 500, rate_per_min: 10, rate_burst: 20}
 operator_approvals: {enabled: false, timeout_minutes: 30, retention_days: 90}
 operator_executor: {poll_seconds: 60, retention_days: 30, apply_start_minutes: 30}

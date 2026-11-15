@@ -82,6 +82,10 @@
         IDLE_SECONDS: "{{ operator_idle_seconds }}"
         AGENT_STORAGE_CLASS: "{{ operator_agent_storage_class }}"
         AGENT_STATE_STORAGE: "{{ operator_agent_state_storage }}"
+        AGENT_EPHEMERAL_REQUEST: "{{ operator_agent_ephemeral_request }}"   # #251
+        AGENT_EPHEMERAL_LIMIT: "{{ operator_agent_ephemeral_limit }}"
+        FORGE_MIRROR_LIMIT: "{{ operator_forge_mirror_limit }}"
+        FORGE_EPHEMERAL_LIMIT: "{{ operator_forge_ephemeral_limit }}"
         EGRESS_PROXY: http://egress-proxy.{{ operator_agents_ns }}.svc.cluster.local:3128
         # harness guide (#206): the agents' egress list as step 06 builds it, for the text only
         AGENT_EGRESS_HOSTS: >-
