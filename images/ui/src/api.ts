@@ -325,3 +325,21 @@ export async function listAudit(token: string, f: AuditFilter): Promise<{ entrie
 export function statusOf(e: unknown): number {
   return e instanceof ApiError ? e.status : 0
 }
+
+// GET /api/jobs with the scope filters. Reads every page (500 per page, at most 10 pages).
+export async function listJobs(token: string, f: { agent?: string; repo?: string; scope?: string; phase?: JobPhase }): Promise<{ jobs: Job[]; unavailable?: string[] }> {
+  const jobs: Job[] = []
+  let unavailable: string[] | undefined
+  let cursor = ''
+  for (let i = 0; i < 10; i++) {
+    const q = new URLSearchParams({ limit: '500' })
+    for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+    if (cursor) q.set('cursor', cursor)
+    const r = await (await call(token, 'GET', `/api/jobs?${q}`)).json()
+    jobs.push(...(r.jobs ?? []))
+    unavailable = r.unavailable ?? unavailable
+    if (!r.next_cursor) break
+    cursor = r.next_cursor
+  }
+  return { jobs, unavailable }
+}

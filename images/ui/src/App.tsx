@@ -13,6 +13,7 @@ import { SecurityPage } from './Security'
 import { SettingsPage } from './Settings'
 import { TodayPage } from './Today'
 import { UsagePage } from './Usage'
+import { WorkPage } from './Work'
 import { Banner, Icon, Mark, type IconName } from './ui'
 
 export function App({ um }: { um: UserManager }) {
@@ -94,7 +95,7 @@ function useTheme(): [boolean, () => void] {
 }
 
 const NAV: [string, string, IconName][] = [
-  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['agents', 'Agents', 'agents'],
+  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'board'], ['agents', 'Agents', 'agents'],
   ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
   ['settings', 'Settings', 'bell'],
 ]
@@ -180,6 +181,7 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
         {page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
             : page === 'security' ? <SecurityPage key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
+              : page === 'work' ? <WorkPage token={token} onExpired={onExpired} agent={params.get('agent') ?? ''} repo={params.get('repo') ?? ''} />
               : base === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />
                 : page === 'projects' ? <ProjectsPage />
                   : page === 'settings' ? <SettingsPage token={token} onExpired={onExpired} />
@@ -209,7 +211,7 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
 
 // Phone (#343): below 760 px the rail is a bottom bar with the 4 most used pages and More. More is a bottom sheet
 // with the other pages, the theme and sign out.
-const BOTTOM = ['today', 'projects', 'agents', 'approvals']
+const BOTTOM = ['today', 'work', 'agents', 'approvals']
 const MORE = NAV.map(([id]) => id).filter((id) => !BOTTOM.includes(id))
 
 function MoreSheet({ page, admin, name, dark, onTheme, onLogout, onClose }: {
@@ -275,8 +277,10 @@ const CONN: Record<Conn, [string, string]> = {
 function ConnState() {
   const d = useData()
   const [cls, label] = CONN[d.conn]
-  const text = d.conn === 'stale' && d.at ? `Updated ${ago(d.at, d.now)}` : label
-  return <span className={`ad-conn ${cls}`} role="status" title={d.at ? `Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
+  // live: the stream (#345) is open; without it the console polls every 15 s and says so
+  const text = d.conn === 'stale' && d.at ? `Updated ${ago(d.at, d.now)}` : d.conn === 'live' && !d.live ? 'Polling' : label
+  const why = d.conn === 'live' && !d.live ? 'The live stream is not open. The console reads the data every 15 s and connects again. ' : ''
+  return <span className={`ad-conn ${cls}`} role="status" title={d.at ? `${why}Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
     <span className="ad-conn-dot" /><span className="ad-hide-phone">{text}</span></span>
 }
 

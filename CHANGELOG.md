@@ -7,6 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Web console (#345): **Work** page and live updates. The Work page shows the jobs of the agents (`GET /api/jobs`,
+  with the project scope as `scope=mine` or `repo=`) as a board (plan, build, review as the person's turn, done with
+  the outcome), as a phase matrix (one row per project) with "Your turn" when the scope has several projects and more
+  than 20 jobs, or as a list. Filters for agent and project are in the URL (`#work?agent=…&repo=…`). It replaces
+  botboard for people with a console login (#340, decision 1); botboard stays for instances without authentik. The
+  console reads `GET /api/stream` (server-sent events, with fetch and the bearer token): a change shows at once, the
+  poll drops to 60 s while the stream is open, and the stream reconnects with exponential backoff and jitter while
+  the console polls every 15 s ("Polling" in the top bar). **Work** replaces **Projects** in the phone bottom bar.
+  New UI image; no API change.
 - Web console (#344): agent drawer, Audit page and Platform page. A click on an agent name (or `#agents/<name>`) opens
   a drawer with what the agent waits on, its pods, the recent jobs as a timeline, usage, settings and the harness
   guide. **Audit** (story view and raw JSON, filters for person, agent, action, result and time) and **Platform**
