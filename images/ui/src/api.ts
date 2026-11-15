@@ -249,3 +249,56 @@ export async function addPushSubscription(token: string, sub: PushSubscriptionJS
 export async function removePushSubscription(token: string, endpoint: string): Promise<void> {
   await call(token, 'DELETE', `/api/push/subscriptions?endpoint=${encodeURIComponent(endpoint)}`)
 }
+
+// Chat sessions (#346, images/api/chat.go). Everything the session writes (assistant text, tool input and output,
+// drafts) is model output: the Chat page shows it as plain text only.
+export interface ChatSession {
+  id: string
+  agent: string
+  repo: string
+  forge: string
+  startedBy: string
+  startedAt: string
+  endedAt?: string
+  endedReason?: string
+  lastSeq: number
+  access: 'read' | 'write' | 'admin' | 'none'
+  viewers: string[]
+  state?: { tokens?: { input: number; output: number }; idleEndsAt?: string | null; pendingPermissions?: string[] }
+}
+
+// One transcript event as stored by the API. seq 0: written by the API itself (start, issue-created).
+export interface ChatEvent {
+  id: number
+  session: string
+  seq: number
+  time: string
+  type: string
+  author?: string
+  data: Record<string, unknown>
+}
+
+export async function listSessions(token: string): Promise<ChatSession[]> {
+  return (await (await call(token, 'GET', '/api/sessions')).json()).sessions
+}
+
+export async function startSession(token: string, agent: string, context: string): Promise<ChatSession> {
+  return (await call(token, 'POST', '/api/sessions', context ? { agent, context } : { agent })).json()
+}
+
+export async function endSession(token: string, id: string): Promise<void> {
+  await call(token, 'DELETE', `/api/sessions/${encodeURIComponent(id)}`)
+}
+
+export async function sendMessage(token: string, id: string, text: string): Promise<void> {
+  await call(token, 'POST', `/api/sessions/${encodeURIComponent(id)}/messages`, { text })
+}
+
+export async function answerPermission(token: string, id: string, pid: string, behavior: 'allow' | 'deny'): Promise<void> {
+  await call(token, 'POST', `/api/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(pid)}`, { behavior })
+}
+
+// edit: only the fields the person changed; without them the API builds the issue from the draft
+export async function createDraftIssue(token: string, id: string, did: string, edit: { title?: string; body?: string }): Promise<{ number: number; url: string }> {
+  return (await call(token, 'POST', `/api/sessions/${encodeURIComponent(id)}/drafts/${encodeURIComponent(did)}/create`, edit)).json()
+}

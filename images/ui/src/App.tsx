@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UserManager, User } from './auth'
 import { Approvals } from './Approvals'
 import { AgentsPage } from './Agents'
+import { ChatPage } from './Chat'
 import { DataProvider } from './data'
 import { useData, type Conn } from './useData'
 import { ago, short } from './format'
@@ -92,7 +93,7 @@ function useTheme(): [boolean, () => void] {
 
 const NAV: [string, string, IconName][] = [
   ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['agents', 'Agents', 'agents'],
-  ['approvals', 'Approvals', 'approval'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+  ['approvals', 'Approvals', 'approval'], ['chat', 'Chat', 'chat'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
   ['settings', 'Settings', 'bell'],
 ]
 
@@ -134,7 +135,7 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
     return () => window.removeEventListener('keydown', on)
   }, [])
   return (
-    <div className="ad-shell">
+    <div className={`ad-shell ${page === 'chat' ? 'ad-shell-fill' : ''}`}>
       <a className="ad-btn ad-skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
       <aside className="ad-rail" aria-label="Main">
         <a className="ad-brand" href="#today" aria-label="agentdev, Today"><Mark />agentdev</a>
@@ -162,7 +163,8 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
       </header>
       <ConnBanner onSignIn={onSignIn} />
       <main className="ad-main" id="main" tabIndex={-1}>
-        {page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
+        {page === 'chat' ? <ChatPage key={params.get('s') ?? ''} token={token} onExpired={onExpired} sid={params.get('s') ?? ''} agent={params.get('agent') ?? ''} context={params.get('context') ?? ''} />
+          : page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
             : page === 'security' ? <SecurityPage key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
               : page === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />
@@ -188,9 +190,10 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
   )
 }
 
-// Phone (#343): below 760 px the rail is a bottom bar with the 4 most used pages and More. More is a bottom sheet
+// Phone (#343, #346): below 760 px the rail is a bottom bar with the 4 most used pages and More; Chat is one of them
+// (docs/console-ux.md §10). More is a bottom sheet
 // with the other pages, the theme and sign out.
-const BOTTOM = ['today', 'projects', 'agents', 'approvals']
+const BOTTOM = ['today', 'agents', 'approvals', 'chat']
 const MORE = NAV.map(([id]) => id).filter((id) => !BOTTOM.includes(id))
 
 function MoreSheet({ page, name, dark, onTheme, onLogout, onClose }: {
