@@ -2398,6 +2398,32 @@ when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, 
 The API can start sessions for the console Chat page (#346). These sessions are Jobs that run
 `chat-session-server`. Only the API connects to the session pod (NetworkPolicy and a token for each session).
 
+A session pod is the pod of its agent (#424). The API copies the pod template of the StatefulSet `agent-<name>` that
+the operator makes, and changes only the parts that make it interactive:
+
+- The `agent` container becomes the `chat` container. It runs `agent-chat-session` (`chat-session-server`) on port
+  7681 with the session's control token, not the autonomous loop.
+- The `forge` sidecar is the agent's sidecar: the same image, forge credential, egress proxy key and security context.
+  It does not register with the router and does not listen for wakes (no `WAKE_TOKEN`, `REGISTER_TOKEN` or
+  `SELF_URL`), and it does not file approval requests (`APPROVALS=false`).
+- `/state` is an empty volume, not the agent's disk. The pod labels are `app=agent-chat`, so the pod is not in the
+  agent's Service and the operator does not take it for the agent.
+
+So the session uses the agent's paths: the repository comes through the sidecar (`agentdev-forge sync`, the same git
+bundle as the loop), forge calls and pushes go through the sidecar and its rules (`agentdev-forge api`,
+`agentdev-forge push agent/<name>/...`), and Claude uses the agent's identity at `claude-proxy`, its MCP Secret
+`agent-<name>-mcp` and its egress allow-list. This works on GitHub too: the forge hosts are reached only by the
+sidecar with its egress key. The `chat` container holds no forge token and no egress key.
+
+Tool permissions: the session asks in the console (**Allow once** or **Deny**), not through the agent's approval
+comments. The agent's approval path needs an issue or a pull request of the agent to comment on, and a session has
+none. A push to a protected path is refused by the sidecar at once (as for an agent with approvals off).
+
+The admission policy `agentdev-api-chat-jobs` allows only this shape: the containers `chat` (worker image) and
+`forge` (forge image), the init container `state-init`, the service account `agent-<name>`, and only the Secrets of
+the agent in the Job label, each in the container that has it in the agent pod. The API reads no Secret; its Role is
+not changed. A session can start only after the operator has made the agent's StatefulSet.
+
 1. Set `api.chat.enabled: true` in `ansible/instance.yml`.
 2. Run the Ansible `deploy.yml`.
    On GKE, Ansible makes the Secret Manager entry `agentdev-api-chat-token-key` once.
@@ -2411,8 +2437,9 @@ The API can start sessions for the console Chat page (#346). These sessions are 
 | `max_sessions_per_user` | `CHAT_MAX_SESSIONS_PER_USER` | 0 (no limit) | Maximum sessions of one person. |
 | | `CHAT_MAX_SECONDS` | 28800 | Maximum time of one session. |
 
-Optional secrets: `agentdev-chat-clone-token` (read-only clone token) and, on Gitea, `agentdev-chat-issue-token`
-(site admin, `write:issue`, used with `Sudo`, so the issue author is the person).
+Optional secret, on Gitea: `agentdev-chat-issue-token` (site admin, `write:issue`, used with `Sudo`, so the issue
+author is the person). Since #424 there is no clone token: the Secret Manager entry `agentdev-chat-clone-token` is
+not read any more (you can delete it), and the playbook removes the Secret `agentdev-chat-clone`.
 
 Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
 
@@ -2425,9 +2452,6 @@ Notes:
   could fake a terminal client; only console presence, reported by the API, renews the session without limit.
 - The terminal view renders `/state/chat/events.jsonl`, which Claude can also write. It is display only; the console
   reads the events from the session server's memory.
-- On kind, the clone token is `agentdev-api`'s read-only Gitea token, copied into the Secret `agentdev-chat-clone`
-  in the agents namespace. Only the clone initContainer of a chat pod reads it (admission policy
-  `agentdev-api-chat-jobs`).
 - On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
   **Create issue**, and the audit log records them.
 

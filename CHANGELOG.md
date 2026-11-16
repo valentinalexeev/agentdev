@@ -31,6 +31,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
 
 - The UI CSS classes are renamed from `ad-*` to `agd-*` (#423). Custom CSS or browser userstyles that target
   `ad-*` classes must change to `agd-*`.
+- Chat (#424): the playbook removes the Secret `agentdev-chat-clone`; the Secret Manager entry
+  `agentdev-chat-clone-token` is no longer read and can be deleted. `manifests/api.yaml.tmpl` has the new value
+  `CHAT_FORGE_IMAGE` (the playbook sets it from `forge_image`; on kind from `FORGE_IMAGE`); the API no longer reads
+  `CHAT_FORGE_URL`, `CHAT_IMAGE_PULL_POLICY`, `CHAT_CLAUDE_PROXY_URL` and `CHAT_EGRESS_PROXY`. The API, worker and forge images must run the same
+  `image_tag` (ADR 0006). A session starts only after the operator has rendered the agent's StatefulSet.
 
 - **Run log of jobs (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`); the
   playbook (and `./run.sh 10`) applies them, nothing to do by hand. The API's internal listener (port 8081) now runs
@@ -49,6 +54,14 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
   `docs/design-system`), and `npm run lint` and the build fail on any class that starts with `ad-`, `ads-` or
   `advert`. The UI CSP also allows `font-src 'self' data:` for the small font subsets Vite inlines, which removes
   four CSP errors on every load.
+- Console chat sessions now run as the agent's own pod (#424): the API copies the pod template the operator renders
+  for `agent-<name>` and changes only the interactive entry point (`chat-session-server`, the session port and
+  control token, an empty `/state`, no router registration or wakes in the sidecar). The repository and every forge
+  action go through the agent's `forge` sidecar (`agentdev-forge sync|push|api`), so chat works on GitHub (the clone
+  initContainer had no egress proxy credential and got 403) and acts with the agent's identity, push rules
+  (`agent/<name>/*`), MCP tools, Claude identity and egress rules. Tool permissions stay the console's Allow/Deny.
+  The admission policy `agentdev-api-chat-jobs` allows exactly this shape and only the agent's Secrets, each in its
+  container; the chat container still holds no forge token and no egress key. The API's Role is unchanged.
 - **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
   agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
   turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge

@@ -378,11 +378,12 @@ func chatFromEnv(ctx context.Context, wr *writer, agents *kubeAgents, events eve
 	if len(key) < 32 {
 		log.Fatal("CHAT_SESSIONS=true needs CHAT_TOKEN_KEY (Secret agentdev-api-chat, 32 characters or more)")
 	}
-	jc := chatJobConfig{Namespace: agents.ns, WorkerImage: os.Getenv("CHAT_WORKER_IMAGE"), PullPolicy: env("CHAT_IMAGE_PULL_POLICY", "IfNotPresent"),
-		ForgeURL: os.Getenv("CHAT_FORGE_URL"), ClaudeProxyURL: os.Getenv("CHAT_CLAUDE_PROXY_URL"), EgressProxy: os.Getenv("CHAT_EGRESS_PROXY"),
+	// #424: the session pod is the agent's pod (its StatefulSet's template), so images, forge, Claude and egress
+	// settings come from the operator; the API needs only the session limits
+	jc := chatJobConfig{Namespace: agents.ns, WorkerImage: os.Getenv("CHAT_WORKER_IMAGE"),
 		IdleSeconds: envInt("CHAT_IDLE_SECONDS", 1800), MaxSeconds: int64(envInt("CHAT_MAX_SECONDS", 28800))}
-	if jc.WorkerImage == "" || jc.ForgeURL == "" || jc.ClaudeProxyURL == "" || jc.EgressProxy == "" {
-		log.Fatal("CHAT_SESSIONS=true needs CHAT_WORKER_IMAGE, CHAT_FORGE_URL, CHAT_CLAUDE_PROXY_URL and CHAT_EGRESS_PROXY")
+	if jc.WorkerImage == "" {
+		log.Fatal("CHAT_SESSIONS=true needs CHAT_WORKER_IMAGE")
 	}
 	days := envInt("CHAT_RETENTION_DAYS", 30)
 	chatRetentionDays = days
