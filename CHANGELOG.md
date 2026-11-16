@@ -6,6 +6,19 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+- **Run log of jobs (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`); the
+  playbook (and `./run.sh 10`) applies them, nothing to do by hand. The API's internal listener (port 8081) now runs
+  also with approvals off. Worker, forge, API and UI images change together: pin the same `image_tag`. A 1.1.0-rc.1
+  worker sends no run log; a 1.1.0-rc.1 API answers 404 to the sidecar, which drops the events.
+
+### Fixed
+- **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
+  agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
+  turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge
+  sidecar (`POST /run-events`) to the API (`GET /api/jobs/{agent}/{job}/events`, SSE `.../events/stream`, visibility
+  of the job, R35); kept 30 days. Never posted on the forge or in notifications (security.md R118).
+
 ## [1.1.0-rc.1] - 2026-11-16
 
 ### Upgrade

@@ -995,6 +995,29 @@ Do this task after run.sh step 09.
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
+### Run log of jobs (#425)
+
+The agents send the run log of each job (what Claude writes, its tool calls and their results) to the API. The console
+shows it in the **Run** tab of a job. The path is: the worker reads Claude's output while it runs, the forge sidecar
+(`POST /run-events`, localhost only) checks and forwards it, and the API's internal listener
+(`agentdev-api-internal:8081`, `POST /internal/run-events/<agent>`) stores it. The API accepts a batch only from a
+running pod of that agent (`app=coding-agent,agent=<name>`), so an agent cannot write the run log of another agent.
+
+| Limit | Value | Where |
+|---|---|---|
+| One text (assistant text, tool input, tool output) | 2 KB, then `[clipped]` | worker (`RUN_EVENT_CLIP`); the sidecar clips at 4 KB |
+| One job | 2 MB, then one "truncated" step | worker (`RUN_LOG_MAX`); the API refuses more than 3 MB |
+| One batch | 100 steps, 256 KB | sidecar and API |
+| Retention | 30 days | Postgres table `job_events`, removed daily by `job_events_prune()` |
+
+The worker and the sidecar replace credential shapes (GitHub, GitLab, Slack, AWS and OpenAI style keys, private keys,
+`password=`/`token:` values) and the values of token variables in their environment with `[redacted]`. Without a
+database (`DATABASE_URL` empty) the API keeps the run log in memory: it is lost on restart.
+
+If the API or the sidecar does not answer, the run log of that moment is lost; the job continues. The run log is never
+in a container log: to read it, use the console or `GET /api/jobs/<agent>/<job>/events?repo=<owner/name>` with a
+bearer token.
+
 ### Deploy the API on GKE
 
 The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
