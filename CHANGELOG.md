@@ -318,6 +318,14 @@ While the version is `0.x`, breaking changes bump MINOR.
   query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 
 ### Deprecated
+- Steps 00, 04 and 99 (#106, last part; owner decisions A to D on #106). `00-prereqs.sh` is now a wrapper for
+  `ansible-playbook infra/ansible/kind.yml --tags prereqs` (new `roles/kind_cluster/tasks/prereqs.yml`, read-only:
+  tools with install hints, engine daemon, kind v0.24 or later, engine VM memory warning; `--tags cluster` runs the
+  same checks first). `99-teardown.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags teardown`
+  (deletes the kind cluster and `.coder`); the play is also tagged `never`, so a plain run or any other tag never
+  deletes. `04-coder.sh` (Coder spike) is not ported: it prints a `DEPRECATED` warning. `run.sh`, `04-coder.sh` and
+  all step wrappers are removed in 1.2.0. Migration: use `ansible-playbook infra/ansible/kind.yml --tags <tag>` (the
+  table in `docs/admin.md`, "Reference: run.sh steps and the GKE playbook"). GKE does not change.
 - `CLAUDE_BUDGET_TOKENS` (env, `config.env`) and `claude_budget_tokens` (Ansible instance var) are deprecated and will
   be removed in 2.0.0 (#196, owner decision on #196). Replacement: `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (cost
   units). Until 2.0.0 both are accepted: when only the old one is set, its value is used as units (1 token = 1 unit);

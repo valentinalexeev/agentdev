@@ -147,7 +147,7 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   on but the type is not served; with `egress_fqdn_policy: false` (and on kind) `egress-proxy-web` lets the proxy reach
   any address on 80/443 and Squid alone enforces the list. GKE patterns match one subdomain level only, so `.x.org`
   allows `a.x.org` but not `a.b.x.org` there.
-- kind: kindnet enforces NetworkPolicy since kind v0.24 (`00-prereqs.sh` checks it). On older kind the proxy is
+- kind: kindnet enforces NetworkPolicy since kind v0.24 (`kind.yml --tags prereqs` checks it). On older kind the proxy is
   advisory: a tool that ignores `HTTPS_PROXY` gets out directly.
 - GKE e2e checklist (before R10 counts as mitigated on GKE): from both containers of an agent pod,
   `curl -m3 http://169.254.169.254/` and `env -u HTTPS_PROXY -u https_proxy curl -m5 https://example.com` fail,

@@ -137,10 +137,11 @@ ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --skip-tags preflig
 The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
 with a kind e2e that proves parity (two runs on a fresh kind cluster, the second must report `changed=0`; run by
 hand and reported in the pull request until a CI job does it); the old step stays as a wrapper that prints a
-deprecation notice and calls the playbook, for one MINOR release. Ported so far:
+deprecation notice and calls the playbook, for one MINOR release. All steps apart from 04 are ported:
 
 | run.sh step | `kind.yml` tag | Role |
 |---|---|---|
+| 00 | `prereqs` | `kind_cluster` (`tasks/prereqs.yml`) |
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
@@ -151,6 +152,11 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
 | 13 | `secrets` | `secrets_store`, then `operator` |
+| 99 (`99-teardown.sh`) | `teardown` (also `never`) | `kind_cluster` (`tasks/teardown.yml`) |
+
+Step 04 (Coder spike) is not ported: it is deprecated and removed together with `run.sh` and all wrappers in 1.2.0.
+`--tags prereqs` only checks the host (tools, engine VM, kind v0.24 or later); `--tags cluster` runs the same checks
+first. `--tags teardown` deletes the kind cluster and `.coder`; as it is tagged `never`, a plain run never deletes.
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test

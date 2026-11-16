@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
+# DEPRECATED (#106): not ported to Ansible (owner decision B on #106). This spike layer is removed together with
+# run.sh in 1.2.0. The spike result stays in the docs.
 # Coder as the interactive front end: Postgres + Coder via Helm, a gVisor workspace template,
 # then the scale-to-zero check (stop → no pod, PVC kept; start → same home dir).
 source "$(dirname "$0")/lib.sh"
+warn "DEPRECATED: run.sh step 04 (Coder spike) is not ported to Ansible and is removed with run.sh in 1.2.0 (#106)."
 need coder "brew install coder"
 NS="${CODER_NS}"
 URL="http://localhost:${CODER_HOST_PORT}"

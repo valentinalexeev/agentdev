@@ -78,7 +78,8 @@ Do only the run.sh steps that you need. Some run.sh steps are necessary before o
 
 CAUTION: This procedure deletes the cluster and all data in it.
 
-1. Run `./99-teardown.sh`.
+1. Run `ansible-playbook infra/ansible/kind.yml --tags teardown` (or the deprecated `./99-teardown.sh`).
+   The tag `teardown` is also tagged `never`: no other run of `kind.yml` deletes the cluster.
 
 ## Install agentdev for production (GCP/GKE)
 

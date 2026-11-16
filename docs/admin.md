@@ -1829,7 +1829,7 @@ for the rows in Postgres. The API cannot change the database retention.
 The agents can connect to the internet only through the egress proxy (`egress-proxy`, #65). The proxy lets an agent
 connect only to the hosts on the allow-list. The default list contains the Claude API, GitHub, npm, PyPI, the Go
 module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods. On `kind`, this
-NetworkPolicy operates only with kind v0.24 or later. `./run.sh 00` makes sure of this.
+NetworkPolicy operates only with kind v0.24 or later. `kind.yml --tags prereqs` (and `--tags cluster`) makes sure of this.
 
 ### Add a host to the allow-list
 
@@ -2512,7 +2512,9 @@ a run.sh step or a manual `kubectl` command on GKE.
 
 | Component | `kind` (run.sh step) | GKE (playbook) |
 |---|---|---|
+| Host prerequisites (tools, engine, kind version) | 00 (`kind.yml --tags prereqs`) | not used |
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
+| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.2.0) | not used |
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
@@ -2527,6 +2529,10 @@ a run.sh step or a manual `kubectl` command on GKE.
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
+| Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
+
+NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
+`99-teardown.sh` are removed in 1.2.0. Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.
@@ -2538,7 +2544,8 @@ a run.sh step or a manual `kubectl` command on GKE.
 
 CAUTION: This procedure deletes the cluster and all data in it.
 
-1. Run `./99-teardown.sh`.
+1. Run `ansible-playbook infra/ansible/kind.yml --tags teardown` (or the deprecated `./99-teardown.sh`).
+   The tag `teardown` is also tagged `never`: no other run of `kind.yml` deletes the cluster.
 
 ### Remove a GKE instance
 
