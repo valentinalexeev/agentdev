@@ -32,6 +32,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
 - The UI CSS classes are renamed from `ad-*` to `agd-*` (#423). Custom CSS or browser userstyles that target
   `ad-*` classes must change to `agd-*`.
 
+- **Run log of jobs (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`); the
+  playbook (and `./run.sh 10`) applies them, nothing to do by hand. The API's internal listener (port 8081) now runs
+  also with approvals off. Worker, forge, API and UI images change together: pin the same `image_tag`. A 1.1.0-rc.1
+  worker sends no run log; a 1.1.0-rc.1 API answers 404 to the sidecar, which drops the events.
+
 ### Fixed
 - Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
   account cannot create the read-only plan identity (#421). `create_plan_identity` now defaults to `false`. The
@@ -44,6 +49,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
   `docs/design-system`), and `npm run lint` and the build fail on any class that starts with `ad-`, `ads-` or
   `advert`. The UI CSP also allows `font-src 'self' data:` for the small font subsets Vite inlines, which removes
   four CSP errors on every load.
+- **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
+  agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
+  turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge
+  sidecar (`POST /run-events`) to the API (`GET /api/jobs/{agent}/{job}/events`, SSE `.../events/stream`, visibility
+  of the job, R35); kept 30 days. Never posted on the forge or in notifications (security.md R118).
 
 ## [1.1.0-rc.1] - 2026-11-16
 

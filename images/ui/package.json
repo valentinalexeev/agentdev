@@ -11,7 +11,8 @@
     "lint": "oxlint && node scripts/check-class-prefix.mjs",
     "preview": "vite preview",
     "mock-api": "node scripts/mock-api.mjs",
-    "postbuild": "node scripts/check-class-prefix.mjs --dist"
+    "postbuild": "node scripts/check-class-prefix.mjs --dist",
+    "xss-runlog": "node scripts/xss-runlog.mjs"
   },
   "dependencies": {
     "@fontsource/archivo": "^5.3.0",

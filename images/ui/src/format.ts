@@ -53,3 +53,11 @@ export function verb(e: AuditEntry): string {
   }
   return e.action
 }
+
+// runLogHash (#425): the hash that opens the job drawer on its Run tab. The job name is the last part of the job id
+// (<agent>/<owner>/<repo>/issue-N or pr-N).
+export function runLogHash(j: { id: string; agent: string; repo: string }): string {
+  const name = j.id.split('/').pop() ?? ''
+  const q = new URLSearchParams({ job: `${j.agent}/${name}`, jrepo: j.repo })
+  return `#work?${q}`
+}

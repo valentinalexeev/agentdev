@@ -6,7 +6,7 @@
 // Job titles are written on the forge by people or agents: plain text only.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listJobs, Unauthorized, type Job, type JobPhase } from './api'
-import { ago, outcomeText, short } from './format'
+import { ago, outcomeText, runLogHash, short } from './format'
 import { AgentTag, Empty, PageHead } from './ui'
 import { useData } from './useData'
 
@@ -46,6 +46,7 @@ function Card({ j, blocked, now }: { j: Job; blocked: string; now: number }) {
         {j.url && <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">Issue</a>}
         {j.url && j.prUrl && ' · '}
         {j.prUrl && <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">Pull request</a>}
+        {' · '}<a className="agd-link" href={runLogHash(j)}>Run log</a>
         {' · '}updated {ago(Date.parse(j.updated), now)}
       </p>
     </article>
@@ -139,7 +140,8 @@ function List({ jobs, blockedOf, now }: { jobs: Job[]; blockedOf: (j: Job) => st
           {jobs.map((j) => (
             <tr key={j.id}>
               <td>{j.url ? <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">#{j.issue ?? j.pr}</a> : `#${j.issue ?? j.pr}`} {j.title}
-                {j.prUrl && <> · <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a></>}</td>
+                {j.prUrl && <> · <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a></>}
+                {' · '}<a className="agd-link" href={runLogHash(j)}>Run log</a></td>
               <td><AgentTag name={j.agent} /></td>
               <td>{blockedOf(j) ? <span className="agd-error">blocked</span> : STEP[j.phase]}{outcomeText(j) && <div className="agd-muted" style={{ fontSize: 13 }}>{outcomeText(j)}</div>}</td>
               <td className="agd-hide-phone agd-code">{short(j.repo)}</td>

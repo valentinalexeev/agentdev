@@ -154,6 +154,7 @@ type writer struct {
 	jobs       *jobCache        // GET /api/jobs (#345), forge-backed; nil: no jobs
 	createMu   sync.Mutex       // one create at a time, so two requests cannot both pass the caps (one API replica)
 	notify     *notifyAPI       // notifications for each user (#347, notify.go); nil: not served
+	runlog     jobEventStore    // run log of jobs (#425, runlog.go); nil: not served
 }
 
 // agentLimits (#27): caps on the number of Agent objects that POST /api/agents may reach. 0 = no cap.

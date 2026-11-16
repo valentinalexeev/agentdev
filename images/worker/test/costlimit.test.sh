@@ -78,7 +78,8 @@ check "a bad answer counts as pending" "[[ \$(cat '${tmp}/rc') == 1 ]] && grep -
 
 # ---- 5. without the proxy or without approvals the sidecar is not asked
 APPROVALS=false run allowed 1
-check "approvals off: no cost request, no resume" "[[ ! -s '${tmp}/curl' ]] && ! grep -q -- '--resume' '${CALLS}'"
+check "approvals off: no cost request, no resume" "! grep -q 'cost-approval' '${tmp}/curl' && ! grep -q -- '--resume' '${CALLS}'"
+check "approvals off: the run log still goes to the sidecar (#425), never elsewhere" "! grep -v '127.0.0.1:7070/run-events' '${tmp}/curl' | grep -q ."
 
 # ---- 6. never more than COST_RESUME_MAX resumes
 COST_RESUME_MAX=3; run allowed 10

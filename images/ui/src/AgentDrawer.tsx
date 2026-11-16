@@ -8,7 +8,7 @@ import {
 } from './api'
 import { ATTN_LABEL } from './model'
 import { useData } from './useData'
-import { ago, left, outcomeText } from './format'
+import { ago, left, outcomeText, runLogHash } from './format'
 import { AgentTag, Attention, Drawer, Empty, Icon, Lamp } from './ui'
 
 type Tab = 'overview' | 'jobs' | 'usage' | 'settings' | 'guide'
@@ -154,6 +154,7 @@ function Jobs({ jobs, now, name }: { jobs: Job[]; now: number; name: string }) {
                 {PHASE_LABEL[j.phase] ?? j.phase}{outcomeText(j) && `: ${outcomeText(j)}`}
                 {j.issue ? <> · {j.url ? <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">issue #{j.issue}</a> : `issue #${j.issue}`}</> : null}
                 {j.pr ? <> · {j.prUrl ? <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a> : `PR #${j.pr}`}</> : null}
+                {' · '}<a className="agd-link" href={runLogHash(j)}>{j.phase === 'build' || j.phase === 'queued' ? 'Watch the run' : 'Run log'}</a>
               </div>
             </div>
           </li>

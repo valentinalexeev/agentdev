@@ -176,3 +176,39 @@ CREATE TABLE IF NOT EXISTS push_action_nonces (
 	nonce   text        PRIMARY KEY CHECK (length(nonce) = 32),
 	expires timestamptz NOT NULL
 );
+-- Run log of agent jobs (#425): redacted, clipped run events (model output, untrusted) sent by the agents' forge
+-- sidecars to the internal listener. Append-only for the API login (INSERT, SELECT); rows older than 30 days go only
+-- through job_events_prune(). The size per job is capped by the worker (2 MB) and checked again by the API.
+CREATE TABLE IF NOT EXISTS job_events (
+	id     bigserial   PRIMARY KEY,
+	agent  text        NOT NULL CHECK (length(agent) <= 63),
+	repo   text        NOT NULL CHECK (length(repo) <= 201),
+	job    text        NOT NULL CHECK (length(job) <= 64),
+	time   timestamptz NOT NULL,
+	kind   text        NOT NULL CHECK (kind IN ('text','tool_use','tool_result','result','truncated')),
+	data   jsonb       NOT NULL CHECK (octet_length(data::text) <= 16384),
+	stored timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS job_events_job_id ON job_events (agent, repo, job, id);
+CREATE INDEX IF NOT EXISTS job_events_stored ON job_events (stored);
+
+CREATE OR REPLACE FUNCTION job_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' THEN
+		RAISE EXCEPTION 'job_events is append-only';
+	END IF;
+	IF OLD.stored > now() - interval '30 days' THEN
+		RAISE EXCEPTION 'job_events: row is inside the retention period';
+	END IF;
+	RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS job_events_append_only ON job_events;
+CREATE TRIGGER job_events_append_only BEFORE UPDATE OR DELETE ON job_events
+	FOR EACH ROW EXECUTE FUNCTION job_events_append_only();
+
+CREATE OR REPLACE FUNCTION job_events_prune() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, public AS $$
+	WITH d AS (DELETE FROM public.job_events WHERE stored < now() - interval '30 days' RETURNING 1)
+	SELECT count(*) FROM d
+$$;
+REVOKE ALL ON FUNCTION job_events_prune() FROM PUBLIC;
