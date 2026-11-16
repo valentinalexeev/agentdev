@@ -3,6 +3,9 @@ import type { UserManager, User } from './auth'
 import { Approvals } from './Approvals'
 import { AgentsPage } from './Agents'
 import { ChatPage } from './Chat'
+import { AgentDrawer } from './AgentDrawer'
+import { AuditPage } from './Audit'
+import { PlatformPage } from './Platform'
 import { DataProvider } from './data'
 import { useData, type Conn } from './useData'
 import { ago, short } from './format'
@@ -11,6 +14,7 @@ import { SecurityPage } from './Security'
 import { SettingsPage } from './Settings'
 import { TodayPage } from './Today'
 import { UsagePage } from './Usage'
+import { WorkPage } from './Work'
 import { Banner, Icon, Mark, type IconName } from './ui'
 
 export function App({ um }: { um: UserManager }) {
@@ -92,10 +96,12 @@ function useTheme(): [boolean, () => void] {
 }
 
 const NAV: [string, string, IconName][] = [
-  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['agents', 'Agents', 'agents'],
+  ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'board'], ['agents', 'Agents', 'agents'],
   ['approvals', 'Approvals', 'approval'], ['chat', 'Chat', 'chat'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
   ['settings', 'Settings', 'bell'],
 ]
+// Admin pages (#344): shown to agentdev-admins only; the API refuses everyone else with 403.
+const ADMIN_NAV: [string, string, IconName][] = [['audit', 'Audit', 'list'], ['platform', 'Platform', 'server']]
 
 function Console({ user, token, onExpired, onLogout, onSignIn }: {
   user: User; token: string; onExpired: () => void; onLogout: () => void; onSignIn: () => void
@@ -120,7 +126,9 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
   const [picking, setPicking] = useState(false)
   const [more, setMore] = useState(false)
   const name = String(user.profile.preferred_username ?? user.profile.email ?? '')
-  const title = NAV.find(([id]) => id === page)?.[1] ?? 'Today'
+  // #agents/<name> opens the agent drawer over the Agents page
+  const [base, sub] = page.split('/') as [string, string | undefined]
+  const title = [...NAV, ...ADMIN_NAV].find(([id]) => id === base)?.[1] ?? 'Today'
   const count = (id: string) => id === 'today' ? (d.inbox.length > 0 && <span className="ad-count" aria-label={`${d.inbox.length} waiting for you`}>{d.inbox.length}</span>)
     : id === 'approvals' ? (d.pending.length > 0 && <span className="ad-count" aria-label={`${d.pending.length} pending`}>{d.pending.length}</span>)
       : id === 'agents' ? <span className="ad-nav-agentcount">{d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length}/{d.agents.length}</span>
@@ -141,11 +149,19 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
         <a className="ad-brand" href="#today" aria-label="agentdev, Today"><Mark />agentdev</a>
         <nav className="ad-rail-group">
           {NAV.map(([id, label, icon]) => (
-            <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined}>
+            <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
               <Icon name={icon} /><span>{label}</span>{count(id)}
             </a>
           ))}
         </nav>
+        {d.admin && (
+          <nav className="ad-rail-group" aria-label="Administration">
+            <span className="ad-rail-head ad-label">Admin</span>
+            {ADMIN_NAV.map(([id, label, icon]) => (
+              <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}><Icon name={icon} /><span>{label}</span></a>
+            ))}
+          </nav>
+        )}
       </aside>
       <header className="ad-topbar">
         <button className="ad-scope" type="button" aria-haspopup="dialog" onClick={() => setPicking(true)}
@@ -167,24 +183,29 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
           : page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
             : page === 'security' ? <SecurityPage key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
-              : page === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />
+              : page === 'work' ? <WorkPage token={token} onExpired={onExpired} agent={params.get('agent') ?? ''} repo={params.get('repo') ?? ''} />
+              : base === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />
                 : page === 'projects' ? <ProjectsPage />
                   : page === 'settings' ? <SettingsPage token={token} onExpired={onExpired} />
+                    : page === 'audit' ? <AuditPage token={token} onExpired={onExpired} />
+                      : page === 'platform' ? <PlatformPage token={token} onExpired={onExpired} />
                     : <TodayPage token={token} onExpired={onExpired} />}
       </main>
       <nav className="ad-bottombar" aria-label="Main">
         {BOTTOM.map((id) => {
           const [, label, icon] = NAV.find(([n]) => n === id)!
           return (
-            <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined}>
+            <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
               <Icon name={icon} /><span>{label}</span>{id === 'today' || id === 'approvals' ? count(id) : null}
             </a>
           )
         })}
-        <button className="ad-nav" type="button" aria-haspopup="dialog" aria-current={MORE.includes(page) ? 'page' : undefined}
+        <button className="ad-nav" type="button" aria-haspopup="dialog" aria-current={MORE.includes(base) || ADMIN_NAV.some(([n]) => n === base) ? 'page' : undefined}
           onClick={() => setMore(true)}><Icon name="more" /><span>More</span></button>
       </nav>
-      {more && <MoreSheet page={page} name={name} dark={dark} onTheme={toggleTheme} onLogout={onLogout} onClose={() => setMore(false)} />}
+      {base === 'agents' && sub && <AgentDrawer key={sub} name={decodeURIComponent(sub)} token={token} onExpired={onExpired}
+        onClose={() => { window.location.hash = 'agents' }} />}
+      {more && <MoreSheet page={base} admin={d.admin} name={name} dark={dark} onTheme={toggleTheme} onLogout={onLogout} onClose={() => setMore(false)} />}
       {picking && <ScopePicker onClose={() => setPicking(false)} />}
     </div>
   )
@@ -193,11 +214,11 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
 // Phone (#343, #346): below 760 px the rail is a bottom bar with the 4 most used pages and More; Chat is one of them
 // (docs/console-ux.md §10). More is a bottom sheet
 // with the other pages, the theme and sign out.
-const BOTTOM = ['today', 'agents', 'approvals', 'chat']
+const BOTTOM = ['today', 'work', 'approvals', 'chat']
 const MORE = NAV.map(([id]) => id).filter((id) => !BOTTOM.includes(id))
 
-function MoreSheet({ page, name, dark, onTheme, onLogout, onClose }: {
-  page: string; name: string; dark: boolean; onTheme: () => void; onLogout: () => void; onClose: () => void
+function MoreSheet({ page, admin, name, dark, onTheme, onLogout, onClose }: {
+  page: string; admin: boolean; name: string; dark: boolean; onTheme: () => void; onLogout: () => void; onClose: () => void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => { const el = ref.current; if (el && !el.open) el.showModal(); return () => el?.close() }, [])
@@ -207,6 +228,10 @@ function MoreSheet({ page, name, dark, onTheme, onLogout, onClose }: {
       <span className="ad-sheet-grip" aria-hidden="true" />
       <nav className="ad-rail-group">
         {NAV.filter(([id]) => MORE.includes(id)).map(([id, label, icon]) => (
+          <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
+            <Icon name={icon} /><span>{label}</span></a>
+        ))}
+        {admin && ADMIN_NAV.map(([id, label, icon]) => (
           <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
             <Icon name={icon} /><span>{label}</span></a>
         ))}
@@ -255,8 +280,10 @@ const CONN: Record<Conn, [string, string]> = {
 function ConnState() {
   const d = useData()
   const [cls, label] = CONN[d.conn]
-  const text = d.conn === 'stale' && d.at ? `Updated ${ago(d.at, d.now)}` : label
-  return <span className={`ad-conn ${cls}`} role="status" title={d.at ? `Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
+  // live: the stream (#345) is open; without it the console polls every 15 s and says so
+  const text = d.conn === 'stale' && d.at ? `Updated ${ago(d.at, d.now)}` : d.conn === 'live' && !d.live ? 'Polling' : label
+  const why = d.conn === 'live' && !d.live ? 'The live stream is not open. The console reads the data every 15 s and connects again. ' : ''
+  return <span className={`ad-conn ${cls}`} role="status" title={d.at ? `${why}Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
     <span className="ad-conn-dot" /><span className="ad-hide-phone">{text}</span></span>
 }
 

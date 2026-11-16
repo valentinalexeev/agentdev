@@ -104,6 +104,11 @@ github_app:
 # and the prices ConfigMap. Set usd_per_million_units to show an estimated USD spend in the web UI.
 # claude_budget_units: 2000000
 # claude_prices: {usd_per_million_units: 3}
+# Optional (#196, #310): cost units per job. At claude_job_approval_units the agent asks a person on the issue or PR
+# (needs approvals); each approval adds claude_job_approval_step_units. claude_job_budget_units is the hard stop.
+# claude_job_approval_units: 300000
+# claude_job_approval_step_units: 300000
+# claude_job_budget_units: 1200000
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
 # Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
 # security:

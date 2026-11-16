@@ -123,7 +123,7 @@ export function ApprovalDrawer({ token, a, onClose, onDecided, onExpired }: {
       else setNotice((e as Error).message) // keep the drawer open: the message shows where the user acted
     } finally { setBusy(false) }
   }
-  const allowed = (['deny', 'approve', 'approve-job'] as Decision[]).filter((d) => !(d === 'approve-job' && a.source === 'executor'))
+  const allowed = (['deny', 'approve', 'approve-job'] as Decision[]).filter((d) => !(d === 'approve-job' && (a.source === 'executor' || a.source === 'cost')))
   const foot = a.state !== 'pending'
     ? <button className="ad-btn" type="button" onClick={onClose}>Close</button>
     : confirm

@@ -12,6 +12,8 @@
 #   agentdev-claude-proxy-tokenreview (tokenreviews create, nothing else) and egress to the API server (KUBE_API_EGRESS, the
 #   ClusterIP and endpoint addresses of Service default/kubernetes, rendered by the caller). CLAUDE_PROXY_AUTH: key,
 #   both (default) or token (docs/admin.md).
+# - Per job (#196, #310): CLAUDE_JOB_BUDGET_UNITS is the hard limit of one job id; CLAUDE_JOB_APPROVAL_UNITS is a soft
+#   limit below it that a person can raise by CLAUDE_JOB_APPROVAL_STEP_UNITS with an approval (source cost).
 # - CLAUDE_SECRET_SOURCES is a list of projected-volume Secret sources, one per Claude Secret, rendered by the caller.
 apiVersion: v1
 kind: ConfigMap
@@ -43,6 +45,20 @@ metadata: {name: agentdev-claude-proxy-tokenreview}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: agentdev-claude-proxy-tokenreview}
 subjects: [{kind: ServiceAccount, name: claude-proxy, namespace: ${AGENTS_NS}}]
 ---
+# #310: the soft job limit (CLAUDE_JOB_APPROVAL_UNITS) is raised only by an allowed Approval of source cost. The proxy
+# reads them itself (get and list in the agents namespace, nothing else); agents have no rights on Approvals, and only
+# agentdev-api writes their status after a person decided.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-claude-proxy-approvals, namespace: ${AGENTS_NS}}
+rules: [{apiGroups: [agentdev.dev], resources: [approvals], verbs: [get, list]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-claude-proxy-approvals, namespace: ${AGENTS_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-claude-proxy-approvals}
+subjects: [{kind: ServiceAccount, name: claude-proxy, namespace: ${AGENTS_NS}}]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: claude-proxy, namespace: ${AGENTS_NS}, labels: {app: claude-proxy}}
@@ -64,6 +80,9 @@ spec:
         env:
         - {name: CLAUDE_BUDGET_UNITS, value: "${CLAUDE_BUDGET_UNITS}"}
         - {name: PRICES_DIR, value: /etc/claude-proxy/prices}
+        - {name: CLAUDE_JOB_BUDGET_UNITS, value: "${CLAUDE_JOB_BUDGET_UNITS}"}   # #196: hard limit per job id; 0 = off
+        - {name: CLAUDE_JOB_APPROVAL_UNITS, value: "${CLAUDE_JOB_APPROVAL_UNITS}"}   # #310: soft limit per job; 0 = off
+        - {name: CLAUDE_JOB_APPROVAL_STEP_UNITS, value: "${CLAUDE_JOB_APPROVAL_STEP_UNITS}"}   # #310: units per approval; 0 = the soft limit
         - {name: TELEMETRY_INSTANCE, value: "${TELEMETRY_INSTANCE}"}   # #278: label agentdev_instance on every metric
         - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         - {name: BUDGET_DIR, value: /etc/claude-proxy/budgets}

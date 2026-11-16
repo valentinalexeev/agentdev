@@ -429,6 +429,7 @@ new_session_id() {
 stopped_note() {
   local hint=""
   [[ "$2" == max-turns ]] && hint=" The run used all ${MAX_TURNS} turns (\`max_turns\`). A larger value in \`instance.yml\` can help."
+  [[ "$2" == cost-* ]] && hint=" The job reached its cost limit (\`CLAUDE_JOB_APPROVAL_UNITS\`) and more was not approved (${2#cost-})."
   printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`).${hint} Review the diff with care."
 }
 
@@ -443,12 +444,53 @@ run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns clau
       out=$(run_claude_once "${dir}" "${RESUME_PROMPT}" --resume "${sid}") || rc=$?
       # 75 (rate limited) is final for this attempt; anything else that is not a result: start over below
       if (( rc == 0 || rc == 75 )); then printf '%s' "${out}"; return ${rc}; fi
+      if (( rc == 76 )); then cost_resume "${dir}" "${sid}"; return; fi   # #310: an approved cost step
       log "could not resume Claude session of ${JOB} (exit ${rc}): starting a new run"
     fi
     sid=$(new_session_id) && echo "${sid}" > "${sf}" && sess=(--session-id "${sid}")
   fi
-  run_claude_once "${dir}" "${prompt}" "${sess[@]}"
+  local o r=0
+  o=$(run_claude_once "${dir}" "${prompt}" "${sess[@]}") || r=$?
+  if (( r == 76 )); then cost_resume "${dir}" "${sid}"; return; fi
+  printf '%s' "${o}"; return ${r}
 }
+# cost_resume <dir> <session id>: #310, exit 76 = the job hit the soft cost limit and a person allowed one more step.
+# Resume the same session (#175) while each step is allowed; without a session, or after COST_RESUME_MAX steps, the job
+# fails as before.
+cost_resume() {
+  local dir=$1 sid=$2 o="" r=76 steps=0
+  while (( r == 76 )) && [[ -n "${sid}" ]] && (( ++steps <= COST_RESUME_MAX )); do
+    log "${JOB}: cost approval allowed, resuming the Claude session" >&2
+    r=0; o=$(run_claude_once "${dir}" "${COST_RESUME_PROMPT}" --resume "${sid}") || r=$?
+  done
+  (( r == 76 )) && r=1
+  printf '%s' "${o}"; return ${r}
+}
+# ---------- soft job cost limit (#310) ----------
+# With the Claude credential proxy and approvals on, a failed run asks the forge sidecar (POST /cost-approval) whether
+# the job waits at the proxy's soft limit (CLAUDE_JOB_APPROVAL_UNITS). The sidecar asks claude-proxy itself and files
+# the approval with the proxy's numbers; the loop sends only its job id. Claude's output is never read for this: a run
+# that only claims a cost limit gets "none" and fails as before. Answers: allowed (the proxy raises the limit itself
+# when it reads the allowed Approval; the loop resumes the session), denied, void, pending (timeout) or none.
+COST_RESUME_MAX=20
+COST_RESUME_PROMPT="Your previous run of this task stopped at the cost limit of the job, and a person allowed more.
+Your earlier changes and local commits are still in the working tree. Continue the task from where you stopped; do not
+start over. The rules of the task still apply, including the STATUS line at the end."
+cost_gate() {  # prints allowed|denied|void|pending|none
+  [[ -n "${ANTHROPIC_BASE_URL:-}" && "${APPROVALS:-false}" == true && "${JOB:-}" =~ ^(issue|pr)-[0-9]{1,10}$ ]] || { echo none; return 0; }
+  local m=${APPROVAL_TIMEOUT_MINUTES:-30} st
+  [[ "${m}" =~ ^[0-9]{1,4}$ ]] && (( 10#${m} > 0 && 10#${m} <= 1440 )) || m=30
+  st=$(curl -fsS -m $(( 10#${m} * 60 + 120 )) -X POST -H "X-Agentdev-Job: ${JOB}" "${FORGE_API}/cost-approval?job=${JOB}" 2>/dev/null \
+       | jq -r '.state // empty | strings' 2>/dev/null)
+  case "${st}" in allowed|denied|void|pending|none) echo "${st}";; *) echo pending;; esac
+}
+# job_header_env: the job id for claude-proxy (X-Agentdev-Job through ANTHROPIC_CUSTOM_HEADERS, appended to an existing
+# value), so the per-job limits and totals apply (#196, #310). The proxy strips the header before the request leaves.
+job_header_env() {
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 0
+  printf '%s\n' "ANTHROPIC_CUSTOM_HEADERS=${ANTHROPIC_CUSTOM_HEADERS:+${ANTHROPIC_CUSTOM_HEADERS}$'\n'}X-Agentdev-Job: ${JOB}"
+}
+# ---------- end soft job cost limit ----------
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   local dir=$1 out rc err mcp=() prompt=$2; shift 2
   err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
@@ -463,8 +505,9 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
     mode=(--permission-mode default --permission-prompt-tool mcp__agentdev__approve)
   fi
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
+  local jenv=(); [[ -n "$(job_header_env)" ]] && jenv=("$(job_header_env)")
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
-          GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+          GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${jenv[@]}" \
           claude "${CLAUDE_AUTH[@]}" -p "${prompt}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
@@ -481,6 +524,15 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   # The class goes to stderr: stdout of run_claude is the result text that becomes a PR body or comment (#336).
   # The caller gets "<rc> <class>" in ${CLAUDE_EXIT_FILE}, because result=$(run_claude ...) runs in a subshell.
   if [[ ${rc} -ne 0 ]]; then
+    # #310: first ask whether the job waits at the soft cost limit (answered from claude-proxy, never from this output)
+    local cost; cost=$(cost_gate 2>/dev/null)
+    if [[ "${cost}" =~ ^(allowed|denied|void|pending)$ ]]; then
+      rm -f "${err}"
+      if [[ "${cost}" == allowed ]]; then return 76; fi
+      log "claude exited ${rc} (cost limit of the job, approval ${cost})" >&2
+      [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s\n' "${rc}" "cost-${cost}" > "${CLAUDE_EXIT_FILE}"
+      return 1   # denied, void or no decision in time: the job ends as failed (not a usage limit, no pause)
+    fi
     local why=error
     grep -qiE 'usage limit|rate limit|limit reached' "${err}" 2>/dev/null && why=rate-limit
     # max turns: read only the subtype field of the result event, never its text (#336)

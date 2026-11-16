@@ -7,11 +7,41 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- Soft cost limit per job with an approval before the hard stop (#310). `claude-proxy` gets
+  `CLAUDE_JOB_APPROVAL_UNITS` (soft limit, 0 = off) and `CLAUDE_JOB_APPROVAL_STEP_UNITS` (units per approval,
+  default the soft limit); Ansible `claude_job_approval_units`, `claude_job_approval_step_units`. At the soft limit
+  the proxy answers 429 with the marker `agentdev:job_approval` and writes the event `job-approval-needed` once per
+  job and step. The agent keeps the job and its Claude session and asks through the approval flow of #67 with the new
+  source `cost` (forge comment, web UI). The forge sidecar files the request with the numbers from the proxy, never
+  with model text. Only an allowed Approval raises the limit: the proxy reads it from the Kubernetes API (new Role
+  `agentdev-claude-proxy-approvals`, `get` and `list` on `approvals`). A denial or a timeout ends the job as failed.
+  This change also lands the hard limit per job `CLAUDE_JOB_BUDGET_UNITS` / `claude_job_budget_units` (#196 D6),
+  which was merged into a stacked branch and never reached `main`. The soft limit must be lower than the hard limit:
+  `./run.sh 06`, `deploy.yml` and the proxy check it. Mixed versions (ADR 0006): with the soft limit off nothing
+  changes; a 1.0 worker or forge sidecar does not ask, so its job stops at the soft limit like at a hard limit. Re-run:
+  `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE (claude-proxy Role, approvals CRD, new
+  images).
+- Web console (#345): **Work** page and live updates. The Work page shows the jobs of the agents (`GET /api/jobs`,
+  with the project scope as `scope=mine` or `repo=`) as a board (plan, build, review as the person's turn, done with
+  the outcome), as a phase matrix (one row per project) with "Your turn" when the scope has several projects and more
+  than 20 jobs, or as a list. Filters for agent and project are in the URL (`#work?agent=…&repo=…`). It replaces
+  botboard for people with a console login (#340, decision 1); botboard stays for instances without authentik. The
+  console reads `GET /api/stream` (server-sent events, with fetch and the bearer token): a change shows at once, the
+  poll drops to 60 s while the stream is open, and the stream reconnects with exponential backoff and jitter while
+  the console polls every 15 s ("Polling" in the top bar). **Work** replaces **Projects** in the phone bottom bar.
+  New UI image; no API change.
+- Web console (#344): agent drawer, Audit page and Platform page. A click on an agent name (or `#agents/<name>`) opens
+  a drawer with what the agent waits on, its pods, the recent jobs as a timeline, usage, settings and the harness
+  guide. **Audit** (story view and raw JSON, filters for person, agent, action, result and time) and **Platform**
+  (one health lamp per platform part, the version, a copyable `kubectl` command) show in an **Admin** menu group for
+  `agentdev-admins` only; for other people the page explains the API's 403. All agent and forge text shows as plain
+  text. `scripts/mock-api.mjs` serves the new endpoints (`/mock/member` for a person without admin access). New UI
+  image; no API or RBAC change.
 - Console **Chat** page (#346, phase 6 of #340): session list, thread, folded tool steps, permission cards with
   **Allow once** and **Deny**, issue drafts that a person edits and files with **Create issue**, presence (who is
   here, joined and left), and the idle end time. Model text, tool input and output show as plain text only. The
   event stream uses a bearer fetch with reconnect and backoff and resumes after the last event. A person with read
-  access sees a read-only view. Chat replaces Projects in the phone bottom bar (Projects moves to **More**). New UI
+  access sees a read-only view. Chat replaces Agents in the phone bottom bar (Today, Work, Approvals, Chat; Agents moves to **More**). New UI
   image only; it needs the chat backend (`api.chat.enabled: true`).
 - Console chat backend (#346): `chat-session-server` in the worker image and the session API
   (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.

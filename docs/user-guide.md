@@ -182,15 +182,33 @@ The console keeps the transcript for 30 days.
 
 ## See the work of all agents
 
-If your instance has botboard, open botboard. Botboard shows one card for each issue. Each card shows:
+Open the page **Work** in the web UI. It replaces botboard for people who can sign in to the web UI. Instances
+without the web UI login (authentik) keep botboard: it shows one card for each issue, with the phase and a link.
 
-- The phase of the work: plan, build, review, done or blocked.
-- A link to the issue or to the pull request.
+The page **Work** shows the jobs of the agents in the projects of the project scope (see "Show the work of some
+projects only"):
+
+- **Board** (one project, or 20 jobs or fewer): the columns Plan, Build, Review and Done. **Review** is your turn: a
+  pull request waits for your review. Each card shows the project, the issue and pull request numbers, the agent, the
+  phase, links to the issue and the pull request, and for a finished job the outcome: merged, closed without merge, or
+  closed with no change. A red card is a job of an agent that is stopped (guardrail or blocked).
+- **Matrix** (more than one project and more than 20 jobs): one row for each project, one column for each phase. A
+  number is a link: click it to open the board of that project. Under the matrix, **Your turn** lists the pull requests
+  to review, the oldest first.
+- **List**: all jobs in one table.
+
+1. Open the web UI and click **Work** (on a phone, **Work** is in the bottom bar).
+2. To see the jobs of one agent or one project, select it in **Agent** or **Project**. The address keeps the filter
+   (for example `#work?agent=alice`), so you can send a link. Click **Clear filters** to see all again.
+3. On a phone, swipe left and right to move between the columns.
+
+The Done column shows the jobs of the last 7 days. Job titles show as plain text. If the forge does not answer for a
+project, the page says that the jobs of that project can be missing.
 
 ## Control agents in the web UI
 
-The web UI has a left menu with the pages **Today**, **Projects**, **Agents**, **Approvals**, **Chat**, **Security**,
-**Usage** and **Settings**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
+The web UI has a left menu with the pages **Today**, **Projects**, **Work**, **Agents**, **Approvals**, **Chat**,
+**Security**, **Usage** and **Settings**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
 requests that wait for a decision. The top bar shows the project scope, the connection state, your name, **Sign out**
 and the theme button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
 browser. If you do not select a theme, the web UI uses the theme of your system.
@@ -237,7 +255,8 @@ shows a banner with the cause:
 
 | State | Meaning | What to do |
 |---|---|---|
-| Live | The data is current. | Nothing. |
+| Live | The live stream is open. A change (for example a new approval request) shows in a few seconds. | Nothing. |
+| Polling | The live stream is not open. The web UI reads the data each 15 seconds and connects the stream again. | Nothing. If it stays, tell an administrator. |
 | Updated N min ago | The last updates failed. The data is from that time. | Wait. The web UI tries again each 15 seconds. |
 | Starting | The platform scaled to zero and starts. This can take 1 to 2 minutes. | Wait. The banner goes away when the API answers. |
 | Unavailable | The API did not answer for 5 minutes. Actions can fail. | Click **Try again**. If the banner stays, tell an administrator. |
@@ -247,8 +266,9 @@ shows a banner with the cause:
 ### Use the web UI on a phone
 
 On a screen that is narrower than 760 px, the left menu changes to a bottom bar. The bottom bar has **Today**,
-**Agents**, **Approvals**, **Chat** and **More**. **More** opens a sheet with **Projects**, **Security**, **Usage**,
-**Settings**, the theme and **Sign out**. The approval panel fills the screen. The decision buttons are at the bottom, in reach of your thumb.
+**Work**, **Approvals**, **Chat** and **More**. **More** opens a sheet with **Projects**, **Agents**, **Security**,
+**Usage**, **Settings**, the **Admin** pages (for administrators), the theme and **Sign out**. The approval panel fills
+the screen. The decision buttons are at the bottom, in reach of your thumb.
 
 To install the web UI on the home screen:
 
@@ -277,6 +297,55 @@ The web UI shows all agents on the page **Agents**. The buttons are always avail
 check at the time of each change (see "Reference: who can change an agent" in `admin.md`). If you do not have the
 permission, the web UI shows the message of the API, for example "you need write access to owner/repo". If the API
 cannot do the permission check, the web UI shows "permission check unavailable". Try again later.
+
+### See the details of an agent
+
+1. On the page **Agents**, click the name of the agent.
+   A panel opens on the right side (on a phone, it fills the screen). The address `#agents/<name>` opens the same
+   panel, so you can send a link to one agent.
+2. Use the tabs, or push the left and right arrow keys on a tab:
+   - **Overview**: what the agent waits on (your decision, a usage limit, a pause, a block), its pods and its
+     settings. Click **Decide** to open the approval request.
+   - **Jobs**: the last 10 issues and pull requests of the agent, newest first, with the phase and the outcome
+     (merged, closed without merge, closed with no change).
+   - **Usage**: the Claude units of the last 24 hours against the budget, and a usage pause.
+   - **Settings**: **Pause** or **Resume**, **Max. concurrent** and **Scale to zero**.
+   - **Guide**: the harness guide that the operator writes for this agent.
+3. To close the panel, click the close button or push Escape.
+
+You see the details only of agents with a repository where you have write access. For other agents, the panel shows
+"Agent not found". Titles of issues and pull requests show as plain text.
+
+### Find who changed an agent (administrators)
+
+The page **Audit** is in the **Admin** part of the menu. Only members of `agentdev-admins` see it. For other people,
+the API refuses the request and the page tells you to ask an administrator.
+
+1. Click **Audit**.
+   Each row tells one change in words, for example "valentinalexeev paused carol: ok" or "mia tried to delete gus:
+   denied (needs admin access)". A change that the API allowed also shows the old and the new values and the reason
+   it was allowed.
+2. To find an entry, type a **Person** or an **Agent**, select an **Action** (pause, resume, change, create,
+   delete), and click a result and a time.
+3. To see the full entry, click **Raw**. Each row then shows the JSON of the entry.
+4. Click **Load older entries** to see more.
+
+### Check the platform (administrators)
+
+The page **Platform** is in the **Admin** part of the menu, for members of `agentdev-admins` only.
+
+1. Click **Platform**.
+   The page shows the version of the instance and one health lamp for each part: API, webhook router, operator,
+   Claude credential proxy, authentik, forge credential, egress proxy and agent pool. The parts with a problem are at
+   the top. The page checks again every 30 seconds. Click **Check again** to check now.
+2. To look deeper, click **Copy** next to the command of the part, and run the command in a terminal with `kubectl`.
+
+| Health lamp | Meaning |
+|---|---|
+| green dot, ok | The part works. |
+| amber square, degraded | The part works with fewer pods than it needs, or some agent pods do not start. |
+| red square, down | The part does not work. |
+| empty ring, not installed or unknown | The instance does not use the part, or the API cannot read it. |
 
 ### Pause an agent
 
@@ -373,6 +442,23 @@ all secrets.
 
 NOTE: To see all requests of your projects, open the web UI and click **Approvals**. The number on the tab shows the
 requests that have no decision.
+
+### Answer a cost request
+
+The administrator can set a cost limit for each job (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and
+writes a comment "waiting for approval `<id>`" with the source `cost` and the tool `step-<n>`. The comment shows the
+units that the job used, the limit and the units of one more step. The proxy supplies these numbers, not the agent.
+
+1. Read the numbers in the comment.
+2. Write a new comment with one of these lines:
+   - `/approve <id>`: the job can use one more step of units. The agent continues in the same session.
+   - `/deny <id>`: the job stops as failed.
+
+NOTE: `/approve-job` has the same effect as `/approve` for a cost request. Each step needs a new approval.
+
+NOTE: If nobody answers within the approval timeout (default 30 minutes), the job stops as failed.
+
+NOTE: The administrator can also set a hard limit for each job. An approval cannot go above it.
 
 ### Get notifications on your phone or computer
 
