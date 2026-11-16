@@ -638,6 +638,12 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 - Step 11 (#106): `11-ui.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags ui`: the web UI
   tasks of the role `api` (moved to `roles/api/tasks/ui.yml`, same tasks on GKE), with the image built and loaded into
   kind. Changed: the UI restarts only after a new image, so a second run changes nothing. GKE does not change.
+- Step 06 (#106): `06-agents.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags agents` (new role
+  `kind_agents`, the same manifests as `deploy.yml`). Same result (local worker, forge, router and credproxy images;
+  router, Claude proxy, egress proxy; Secrets and one Agent object per agent; the Gitea webhook). The secret files in
+  `.secrets` are kept. Changed: the router, the proxy and the agents restart only after a new image or Secret, so a
+  second run changes nothing; the webhook is created again only when it is missing. The operator must run first (the
+  wrapper still installs it when it is missing). Ported with it: the one-platform pull of published images (#378) and the pod replacement and readiness wait for the OnDelete strategy (#174), the router's wake poll secret (#181), and the Claude proxy settings of 1.2.0 with the same checks and templates as `deploy.yml`: `CLAUDE_BUDGET_UNITS` (the deprecated `CLAUDE_BUDGET_TOKENS` through `tasks/claude_budget.yml`), `CLAUDE_PRICES`, telemetry (#196), `CLAUDE_PROXY_AUTH` with the API server egress from `templates/kube-api-egress.j2` (#352) and the per-job limits (#310). GKE does not change: `deploy.yml` is not edited.
 - Step 13 (#106): `13-secrets.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags secrets` (new
   role `secrets_store`: External Secrets Operator with the same Helm settings, the CEL policies and the Kubernetes
   SecretStore). The tag then runs the role `operator` again, as the old step ran step 12. GKE does not change.
