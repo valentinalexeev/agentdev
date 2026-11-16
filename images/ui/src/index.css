@@ -6,6 +6,12 @@
 
 .ad-main:focus { outline: none; }
 .ad-nowrap { white-space: nowrap; }
+/* model text in the Chat page (#346): shown as typed, never parsed as Markdown or HTML */
+.ad-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* the session list button: only where the list folds away (below 1000 px, console.css) */
+.ad-chat-back { display: none; }
+@media (max-width: 1000px) { .ad-chat-back { display: inline-flex; } }
+.ad-chat-here { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
 .ad-guide { display: block; margin: 0; padding: var(--space-3); background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ad-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 18px; color: var(--ink); }
 .ad-cmd { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }

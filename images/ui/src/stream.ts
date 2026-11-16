@@ -39,7 +39,8 @@ function parseSSE(buf: string): [StreamMsg[], string] {
 
 // openStream runs until stop() is called. Heartbeats come every `heartbeatSeconds`; a stream without any message for
 // three heartbeats is treated as dead (a proxy can hold a broken connection open).
-export function openStream(token: string, h: StreamHandlers): () => void {
+// path: the stream URL, read again on each try (a chat stream resumes with ?after=<last event id>, #346).
+export function openStream(token: string, h: StreamHandlers, path: string | (() => string) = '/api/stream'): () => void {
   let stopped = false
   let failures = 0
   let ctrl: AbortController | null = null
@@ -60,7 +61,7 @@ export function openStream(token: string, h: StreamHandlers): () => void {
     let quietMs = 45000
     const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => ctrl?.abort(), quietMs) }
     try {
-      const r = await fetch('/api/stream', { headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' }, signal: ctrl.signal, cache: 'no-store' })
+      const r = await fetch(typeof path === 'string' ? path : path(), { headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' }, signal: ctrl.signal, cache: 'no-store' })
       if (r.status === 401) { stopped = true; h.onUnauthorized(); return }
       if (!r.ok || !r.body || !(r.headers.get('content-type') ?? '').includes('text/event-stream')) throw new Error(`stream: ${r.status}`)
       const reader = r.body.pipeThrough(new TextDecoderStream()).getReader()

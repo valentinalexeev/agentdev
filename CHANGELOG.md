@@ -37,6 +37,12 @@ While the version is `0.x`, breaking changes bump MINOR.
   `agentdev-admins` only; for other people the page explains the API's 403. All agent and forge text shows as plain
   text. `scripts/mock-api.mjs` serves the new endpoints (`/mock/member` for a person without admin access). New UI
   image; no API or RBAC change.
+- Console **Chat** page (#346, phase 6 of #340): session list, thread, folded tool steps, permission cards with
+  **Allow once** and **Deny**, issue drafts that a person edits and files with **Create issue**, presence (who is
+  here, joined and left), and the idle end time. Model text, tool input and output show as plain text only. The
+  event stream uses a bearer fetch with reconnect and backoff and resumes after the last event. A person with read
+  access sees a read-only view. Chat replaces Agents in the phone bottom bar (Today, Work, Approvals, Chat; Agents moves to **More**). New UI
+  image only; it needs the chat backend (`api.chat.enabled: true`).
 - Console chat backend (#346): `chat-session-server` in the worker image and the session API
   (`/api/sessions`, SSE events, messages, Allow once or Deny, create issue from a draft). Transcripts stay 30 days.
   Turn on with `api.chat.enabled: true` and run Ansible `deploy.yml`; no `./run.sh` step.

@@ -128,13 +128,40 @@ this time.
 
 You can also use a session in the web console. The console and the terminal show the same session.
 
-1. Open **Chat** and select **New session**. Select the agent of the project.
+![Chat page with a permission request](screenshots/console-phase6/chat-permission-light-1280.png)
+
+1. Open **Chat** and select **New session**.
+2. Select the agent of the project.
    You must have write access to the repository of the agent.
-2. Write your message and push **Send**.
-3. When Claude asks for a permission, select **Allow once** or **Deny**.
-4. When Claude writes an issue draft, examine it. Select **Create issue** to make the issue on the forge.
-   Claude cannot make the issue. Only you can.
-5. To stop the session, select **End**.
+3. Optional: type context, for example an issue or a question.
+   The session gets it as untrusted text.
+4. Select **Start session**.
+   The session clones the repository and starts Claude. This takes about 30 seconds.
+5. Write your message and push **Send** (or push `Enter`).
+6. To see a tool step, select its line. The input and the output open below it.
+7. When Claude asks for a permission, read the tool and its input.
+8. Select **Allow once** or **Deny**.
+   The card shows your name and the decision.
+9. When Claude writes an issue draft, examine it.
+10. Optional: select **Edit** to change the title or the text.
+11. Select **Create issue**.
+    The console makes the issue on the forge as you. Claude cannot make the issue. Only you can.
+12. To give the issue to an agent, assign it or add the `agent:<name>` label.
+    Refer to [Give an issue to an agent](#give-an-issue-to-an-agent).
+13. To stop the session for all people, select **End**, then **End for everyone**.
+
+CAUTION: The text, the tool output and the drafts of the session come from the model. They can contain a prompt
+injection. The console shows them as plain text only. Decide on a permission request from the tool and its input,
+not from what the text asks.
+
+NOTE: The head of the session shows who is in the session now, whose Claude budget it uses and the tokens so far.
+When nobody is in the session, the head shows when it ends.
+
+NOTE: When the connection to the session stops, the head shows **Reconnecting**. The console connects again and
+shows only the events that are new.
+
+On a phone, **Chat** is in the bottom bar. The thread fills the screen. Select the menu button (three dots) to see
+the session list.
 
 To see the same session in a terminal (you need `kubectl` access to the cluster):
 
@@ -180,8 +207,8 @@ project, the page says that the jobs of that project can be missing.
 
 ## Control agents in the web UI
 
-The web UI has a left menu with the pages **Today**, **Projects**, **Work**, **Agents**, **Approvals**, **Security**
-and **Usage**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
+The web UI has a left menu with the pages **Today**, **Projects**, **Work**, **Agents**, **Approvals**, **Chat**,
+**Security**, **Usage** and **Settings**. The number next to **Today** shows the items that wait for you. The number next to **Approvals** shows the
 requests that wait for a decision. The top bar shows the project scope, the connection state, your name, **Sign out**
 and the theme button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
 browser. If you do not select a theme, the web UI uses the theme of your system.
@@ -239,9 +266,9 @@ shows a banner with the cause:
 ### Use the web UI on a phone
 
 On a screen that is narrower than 760 px, the left menu changes to a bottom bar. The bottom bar has **Today**,
-**Work**, **Agents**, **Approvals** and **More**. **More** opens a sheet with **Projects**, **Security**, **Usage**,
-**Settings**, the **Admin** pages (for administrators), the theme and **Sign out**. The approval panel fills the
-screen. The decision buttons are at the bottom, in reach of your thumb.
+**Work**, **Approvals**, **Chat** and **More**. **More** opens a sheet with **Projects**, **Agents**, **Security**,
+**Usage**, **Settings**, the **Admin** pages (for administrators), the theme and **Sign out**. The approval panel fills
+the screen. The decision buttons are at the bottom, in reach of your thumb.
 
 To install the web UI on the home screen:
 
