@@ -29,6 +29,9 @@ on later:
 Deployments that already applied rc.1 with the identity (all grants present) keep it only with
 `create_plan_identity = true`; without it the next apply removes the identity.
 
+- The UI CSS classes are renamed from `ad-*` to `agd-*` (#423). Custom CSS or browser userstyles that target
+  `ad-*` classes must change to `agd-*`.
+
 ### Fixed
 - Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
   account cannot create the read-only plan identity (#421). `create_plan_identity` now defaults to `false`. The
@@ -36,6 +39,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
   apply account for `iam.workloadIdentityPools.create`, `storage.buckets.getIamPolicy`/`setIamPolicy` on the state
   bucket and `billing.accounts.setIamPolicy` (with `plan_identity_billing_account`), and stops with the owner grant
   commands. The deployment template has a commented `create_plan_identity` line.
+- UI: the console showed a blank page with an ad or content blocker, because every UI class started with `ad-`
+  and cosmetic filters hid `<main class="ad-main">` (#423). The class prefix is now `agd-` (also in
+  `docs/design-system`), and `npm run lint` and the build fail on any class that starts with `ad-`, `ads-` or
+  `advert`. The UI CSP also allows `font-src 'self' data:` for the small font subsets Vite inlines, which removes
+  four CSP errors on every load.
 
 ## [1.1.0-rc.1] - 2026-11-16
 

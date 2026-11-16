@@ -52,11 +52,11 @@ export function Mark() {
 }
 
 export function AgentTag({ name }: { name: string }) {
-  return <span className={`ad-agent ad-lane-${lane(name)}`}><span className="ad-agent-mark" /><span className="ad-agent-name">{name}</span></span>
+  return <span className={`agd-agent agd-lane-${lane(name)}`}><span className="agd-agent-mark" /><span className="agd-agent-name">{name}</span></span>
 }
 
 export function PersonTag({ name }: { name: string }) {
-  return <span className="ad-agent ad-person"><span className="ad-agent-mark" /><span className="ad-agent-name">{name}</span></span>
+  return <span className="agd-agent agd-person"><span className="agd-agent-mark" /><span className="agd-agent-name">{name}</span></span>
 }
 
 // The lifecycle lamp. The API's `stopped` (zero pods) is the normal idle state: an empty ring, the word "idle".
@@ -65,18 +65,18 @@ const LIFE: Record<Lifecycle, string> = {
   running: 'running', starting: 'starting', stopped: 'idle', paused: 'paused', blocked: 'blocked', invalid: 'invalid', 'usage-paused': 'usage paused',
 }
 export function Lamp({ phase }: { phase: Lifecycle }) {
-  return <span className={`ad-lamp ad-lamp-${phase}`}><span className="ad-lamp-dot" /><span className="ad-label">{LIFE[phase]}</span></span>
+  return <span className={`agd-lamp agd-lamp-${phase}`}><span className="agd-lamp-dot" /><span className="agd-label">{LIFE[phase]}</span></span>
 }
 
 export function SevTag({ severity }: { severity: Severity }) {
-  return <span className={`ad-tag ad-sev-${severity}`}><span className="ad-label">{severity}</span></span>
+  return <span className={`agd-tag agd-sev-${severity}`}><span className="agd-label">{severity}</span></span>
 }
 
 export function Banner({ kind, icon, children, action }: {
   kind?: 'warn' | 'down' | 'paused'; icon: IconName; children: React.ReactNode; action?: React.ReactNode
 }) {
   return (
-    <div className={`ad-banner ${kind ? `ad-banner-${kind}` : ''}`} role={kind === 'down' ? 'alert' : 'status'}>
+    <div className={`agd-banner ${kind ? `agd-banner-${kind}` : ''}`} role={kind === 'down' ? 'alert' : 'status'}>
       <Icon name={icon} /><span>{children}</span>{action}
     </div>
   )
@@ -84,28 +84,28 @@ export function Banner({ kind, icon, children, action }: {
 
 export function PageHead({ title, sub, actions }: { title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <div className="ad-page-head">
-      <div><h1 className="ad-page-title">{title}</h1>{sub && <p className="ad-page-sub">{sub}</p>}</div>
-      {actions && <div className="ad-row-actions">{actions}</div>}
+    <div className="agd-page-head">
+      <div><h1 className="agd-page-title">{title}</h1>{sub && <p className="agd-page-sub">{sub}</p>}</div>
+      {actions && <div className="agd-row-actions">{actions}</div>}
     </div>
   )
 }
 
 export function Empty({ title, children }: { title: string; children?: React.ReactNode }) {
-  return <div className="ad-empty"><strong>{title}</strong>{children}</div>
+  return <div className="agd-empty"><strong>{title}</strong>{children}</div>
 }
 
 // One subscription window: amber fill, a tick at the limit; at or over the limit the meter says "paused".
 export function Meter({ label, pct, limit, foot }: { label: string; pct: number | null; limit: number; foot: string }) {
   const over = pct !== null && pct >= limit
   return (
-    <div className={`ad-meter ${over ? 'ad-meter-over' : ''}`}>
-      <div className="ad-meter-head"><span className="ad-label">{label}</span><span className="ad-data">{pct === null ? '–' : `${pct}%`}{over ? ' · paused' : ''}</span></div>
-      <div className="ad-meter-track" role="meter" aria-valuenow={pct ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
-        <div className="ad-meter-fill" style={{ width: `${Math.min(pct ?? 0, 100)}%` }} />
-        <div className="ad-meter-limit" style={{ left: `${limit}%` }} />
+    <div className={`agd-meter ${over ? 'agd-meter-over' : ''}`}>
+      <div className="agd-meter-head"><span className="agd-label">{label}</span><span className="agd-data">{pct === null ? '–' : `${pct}%`}{over ? ' · paused' : ''}</span></div>
+      <div className="agd-meter-track" role="meter" aria-valuenow={pct ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+        <div className="agd-meter-fill" style={{ width: `${Math.min(pct ?? 0, 100)}%` }} />
+        <div className="agd-meter-limit" style={{ left: `${limit}%` }} />
       </div>
-      <div className="ad-meter-foot">{foot}</div>
+      <div className="agd-meter-foot">{foot}</div>
     </div>
   )
 }
@@ -121,15 +121,15 @@ export function Drawer({ title, onClose, gate, children, foot }: {
     return () => d?.close()
   }, [])
   return (
-    <dialog ref={ref} className={`ad-drawer ${gate ? 'ad-drawer-gate' : ''}`} aria-labelledby="drawer-title"
+    <dialog ref={ref} className={`agd-drawer ${gate ? 'agd-drawer-gate' : ''}`} aria-labelledby="drawer-title"
       onCancel={(e) => { e.preventDefault(); onClose() }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="ad-drawer-head">
-        <h2 className="ad-drawer-title" id="drawer-title">{title}</h2>
-        <button className="ad-iconbtn" type="button" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
+      <div className="agd-drawer-head">
+        <h2 className="agd-drawer-title" id="drawer-title">{title}</h2>
+        <button className="agd-iconbtn" type="button" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
       </div>
-      <div className="ad-drawer-body">{children}</div>
-      {foot && <div className="ad-drawer-foot">{foot}</div>}
+      <div className="agd-drawer-body">{children}</div>
+      {foot && <div className="agd-drawer-foot">{foot}</div>}
     </dialog>
   )
 }
@@ -138,26 +138,26 @@ export function Drawer({ title, onClose, gate, children, foot }: {
 export function Untrusted({ text, note }: { text: string; note?: string }) {
   return (
     <div>
-      <div className="ad-untrusted-head ad-label"><Icon name="alert" />Written by the agent · not checked</div>
-      {note && <p className="ad-muted" style={{ fontSize: 13, margin: '4px 0 8px' }}>{note}</p>}
-      <pre className="ad-untrusted">{text}</pre>
+      <div className="agd-untrusted-head agd-label"><Icon name="alert" />Written by the agent · not checked</div>
+      {note && <p className="agd-muted" style={{ fontSize: 13, margin: '4px 0 8px' }}>{note}</p>}
+      <pre className="agd-untrusted">{text}</pre>
     </div>
   )
 }
 
 // The second axis of agent state: what the agent waits for. Always a word.
 export function Attention({ attn, label }: { attn: string; label: string }) {
-  return <span className={`ad-attn ad-attn-${attn}`}>{label}</span>
+  return <span className={`agd-attn agd-attn-${attn}`}>{label}</span>
 }
 
 // One dot per agent of a project: round = lifecycle, square = attention (console.css, "Agent dots")
 export function Dots({ agents }: { agents: { name: string; life: string; attn: string }[] }) {
   return (
-    <span className="ad-dots">
+    <span className="agd-dots">
       {agents.map((a) => (
         <i key={a.name} title={`${a.name}: ${a.life === 'stopped' ? 'idle' : a.life}, ${a.attn}`}
-          className={a.attn === 'you' ? 'ad-d-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'ad-d-alert'
-            : a.life === 'paused' || a.life === 'usage-paused' ? 'ad-d-paused' : a.life === 'running' || a.life === 'starting' ? 'ad-d-run' : ''} />
+          className={a.attn === 'you' ? 'agd-d-you' : a.attn === 'blocked' || a.attn === 'guardrail' ? 'agd-d-alert'
+            : a.life === 'paused' || a.life === 'usage-paused' ? 'agd-d-paused' : a.life === 'running' || a.life === 'starting' ? 'agd-d-run' : ''} />
       ))}
     </span>
   )
