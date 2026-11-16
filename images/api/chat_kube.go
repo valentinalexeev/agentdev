@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +38,8 @@ const (
 	chatProxyTokenAudience = "claude-proxy"
 	chatProxyTokenSeconds  = 600
 	chatProxyTokenDir      = "/var/run/secrets/agentdev/proxy"
+	// chatForgeProxySecret: the forge proxy credential (operator render.go forgeProxySecret), clone step only (#424)
+	chatForgeProxySecret = "egress-forge-proxy"
 )
 
 // chatJobConfig is read from the environment (CHAT_* in manifests/api.yaml.tmpl).
@@ -70,6 +73,17 @@ func (k *kubeChat) job(s chatSession, tokenSHA256 string) *batchv1.Job {
 	noProxy := "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
 	proxyEnv := []corev1.EnvVar{env("HTTPS_PROXY", k.cfg.EgressProxy), env("HTTP_PROXY", k.cfg.EgressProxy),
 		env("https_proxy", k.cfg.EgressProxy), env("http_proxy", k.cfg.EgressProxy), env("NO_PROXY", noProxy), env("no_proxy", noProxy)}
+	// #424: on GitHub the egress proxy allows the forge hosts only with the forge proxy credential (Secret
+	// egress-forge-proxy, key password). Only the clone step gets it, in its proxy URL expanded by the kubelet from the
+	// Secret env var (never in clear text in the Pod spec); the chat container never sees it (admission policy).
+	cloneProxy := k.cfg.EgressProxy
+	var cloneProxyEnv []corev1.EnvVar
+	if cloneProxy != "" {
+		cloneProxyEnv = append(cloneProxyEnv, secret("EGRESS_FORGE_KEY", chatForgeProxySecret, "password", false))
+		cloneProxy = strings.Replace(cloneProxy, "://", "://forge:$(EGRESS_FORGE_KEY)@", 1)
+	}
+	cloneProxyEnv = append(cloneProxyEnv, env("HTTPS_PROXY", cloneProxy), env("HTTP_PROXY", cloneProxy),
+		env("https_proxy", cloneProxy), env("http_proxy", cloneProxy), env("NO_PROXY", noProxy), env("no_proxy", noProxy))
 	sc := &corev1.SecurityContext{AllowPrivilegeEscalation: ptr(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}
 	mounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}}
 	// clone: the token comes from the Secret through git's credential helper, never on the command line or in .git/config
@@ -79,7 +93,7 @@ git -c credential.helper='!f() { echo "username=${FORGE_USER:-x-access-token}"; 
   clone -q --depth 50 "${FORGE_URL%/}/${REPO}.git" /state/repo`},
 		Env: append([]corev1.EnvVar{env("FORGE_URL", k.cfg.ForgeURL), env("REPO", s.Repo),
 			secret("FORGE_USER", "agentdev-chat-clone", "FORGE_USER", true),
-			secret("FORGE_TOKEN", "agentdev-chat-clone", "FORGE_TOKEN", true)}, proxyEnv...),
+			secret("FORGE_TOKEN", "agentdev-chat-clone", "FORGE_TOKEN", true)}, cloneProxyEnv...),
 		VolumeMounts: mounts, SecurityContext: sc,
 		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}}}

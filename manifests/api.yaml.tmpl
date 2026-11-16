@@ -21,7 +21,7 @@ rules:
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
 # console chat sessions (#346): the API starts and ends chat-* Jobs and reads their pods' addresses. The Job shape is
 # held by the ValidatingAdmissionPolicy agentdev-api-chat-jobs below (no Secrets other than the chat clone token and
-# the agent's proxy key, gVisor, the service account agent-<agent> with only its projected claude-proxy token, #400). Created even with chat off, so turning it on needs no RBAC change.
+# the agent's proxy key; the clone step also egress-forge-proxy/password, #424; gVisor, the service account agent-<agent> with only its projected claude-proxy token, #400). Created even with chat off, so turning it on needs no RBAC change.
 # delete cannot be narrowed by label in RBAC: the ValidatingAdmissionPolicy agentdev-api-chat-jobs-delete allows only chat-* console Jobs
 - {apiGroups: [batch], resources: [jobs], verbs: [get, list, create, delete]}
 - {apiGroups: [""], resources: [pods], verbs: [get]}
@@ -234,8 +234,8 @@ spec:
   # (one projection item holds exactly one source type: API validation, so no Secret can hide next to the token)
   - expression: "variables.all.all(c, c.name == 'chat' || !has(c.volumeMounts) || c.volumeMounts.all(m, m.name != 'proxy-token'))"
     message: "only the chat container mounts the projected claude-proxy token"
-  - expression: "variables.all.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && (e.valueFrom.secretKeyRef.name == 'agent-' + variables.agent + '-proxy' || (c.name == 'clone' && e.valueFrom.secretKeyRef.name == 'agentdev-chat-clone'))))))"
-    message: "chat pods read only the agent's proxy key, and the clone step only agentdev-chat-clone"
+  - expression: "variables.all.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && (e.valueFrom.secretKeyRef.name == 'agent-' + variables.agent + '-proxy' || (c.name == 'clone' && (e.valueFrom.secretKeyRef.name == 'agentdev-chat-clone' || (e.valueFrom.secretKeyRef.name == 'egress-forge-proxy' && e.valueFrom.secretKeyRef.key == 'password')))))))"
+    message: "chat pods read only the agent's proxy key, and the clone step only agentdev-chat-clone and the forge proxy credential egress-forge-proxy/password (#424)"
   - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"
     message: "no privileged chat containers"
   - expression: "variables.all.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
