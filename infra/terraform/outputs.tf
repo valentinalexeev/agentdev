@@ -21,10 +21,13 @@ output "automation_service_account" {
 }
 
 output "github_actions_auth" {
-  description = "Values for google-github-actions/auth in a workflow."
+  description = "Values for google-github-actions/auth in a workflow: the apply identity (main) and the read-only plan identity (pull_request, #291)."
   value = {
     workload_identity_provider = google_iam_workload_identity_pool_provider.github.name
     service_account            = google_service_account.automation.email
+    # read-only plan identity for pull_request runs (#291); null when create_plan_identity is false
+    plan_workload_identity_provider = one(google_iam_workload_identity_pool_provider.github_pr[*].name)
+    plan_service_account            = one(google_service_account.plan[*].email)
   }
 }
 

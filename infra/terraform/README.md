@@ -18,6 +18,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending). Optional: `create_budget = false` skips the budget, its notification channels and the billing IAM (#199) |
 | Billing IAM | with `create_budget` (default): `roles/billing.costsManager` on `billing_account_id` for the automation SA, so CI can read and update the budget (#199). It is the smallest predefined role with `billing.budgets.update`. The identity of the first apply needs `billing.accounts.setIamPolicy` on the billing account (normally the owner); CI cannot grant this role to itself |
 | Labels | `labels` (#184) merged over `service = "agentdev"` on every resource: provider `default_labels`, cluster and node pool `resource_labels`, notification channel `user_labels`. Set `environment` to `dev`, `stage` or `prod` |
+| Plan SA | `agentdev-plan` (`create_plan_identity`, default on): read-only roles for `terraform plan` on deployment PRs (#291) |
 | Automation SA | `agentdev-automation`, least-privilege roles; GitHub Actions on `main` reach it through Workload Identity Federation (no key) |
 
 ## First run (owner, once)
@@ -48,6 +49,7 @@ Another region: change `region`/`zone` in the deployment's `instance.tfvars`.
 ## Automation credentials
 
 - **GitHub Actions (preferred, no key):** use `google-github-actions/auth` with the values from `terraform output github_actions_auth`. Only workflows on `main` of the **deployment repository** (`github_repository`) can impersonate the account.
+- **Pull requests (read only, #291):** `plan_workload_identity_provider` and `plan_service_account` in the same output. Only `pull_request` runs of the deployment repository get the account `agentdev-plan` (own pool `github-pr`). It reads resources, IAM policies and the state bucket, and runs `terraform plan -lock=false`; it cannot write. `create_plan_identity = false` removes it; `plan_state_bucket` sets another state bucket.
 - **Local fallback (key file):** only if needed, kept outside the repo:
   ```bash
   gcloud iam service-accounts keys create ~/.config/agentdev/automation-key.json \

@@ -39,14 +39,14 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
    Summarize the plan for the owner (resources, rough monthly cost per `infra/terraform/README.md`), then the
    owner runs `terraform apply plan.bin`. This also creates the Workload Identity setup the deployment CI uses.
 6. **Wire the deployment CI:** set repository variables `GCP_WIF_PROVIDER` and `GCP_SERVICE_ACCOUNT`
-   (from `terraform output github_actions_auth`) and `GCP_PROJECT`; ask the owner to protect `main`.
+   (from `terraform output github_actions_auth`) and `GCP_PROJECT`; for PR plans also `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT`; ask the owner to protect `main`.
 7. **Images:** nothing to build. Deployments pull `ghcr.io/valentinalexeev/agentdev-worker` and
    `agentdev-router` at `image_tag` (#28).
 8. **Secret values** (the owner, or you with the owner's values; never echo them): fill the Secret Manager
    entries listed in `infra/ansible/README.md` (`claude-shared`, `router-register-token`,
    `github-app-webhook-secret`, `agent-<name>-forge-token`).
 9. **Install agentdev:** open a PR in the deployment repo; its CI runs `terraform fmt`/`validate` and
-   `ansible-playbook --syntax-check` (no cloud credentials, no plan). After the owner approves and merges, plan,
+   `ansible-playbook --syntax-check` (no cloud credentials), and with the read-only plan identity (#291) a `terraform plan` comment. After the owner approves and merges, plan,
    apply and the playbook run for real. Before the merge, do the dry run manually from the deployment repo:
    ```bash
    ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff

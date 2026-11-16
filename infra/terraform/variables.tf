@@ -139,6 +139,18 @@ variable "github_repository" {
   type        = string
 }
 
+variable "create_plan_identity" {
+  description = "Create the read-only plan identity for deployment PRs (#291): service account agentdev-plan, Workload Identity pool github-pr for pull_request runs of github_repository, read access to the state bucket. false = none of these."
+  type        = bool
+  default     = true
+}
+
+variable "plan_state_bucket" {
+  description = "State bucket the plan identity may read; null = \"<project_id>-tfstate\" (the bucket bootstrap/ creates)."
+  type        = string
+  default     = null
+}
+
 variable "public_hosts" {
   description = "DNS names of the public HTTPS entry point (#120): the webhook host and the UI host (can be the same). Each needs a DNS A record to webhook_ip. Empty: no certificate, no public entry point."
   type        = list(string)
