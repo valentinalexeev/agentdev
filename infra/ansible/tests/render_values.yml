@@ -78,9 +78,10 @@
             == [(api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
                 | map(attribute='expression') | select('search', 'agentdev-chat-clone') | first]
           - >-
-            (api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
-            | map(attribute='expression') | select('search', 'egress-forge-proxy') | first
-            is search("\(c\.name == 'clone' && \(e\.valueFrom\.secretKeyRef\.name == 'agentdev-chat-clone' \|\| \(e\.valueFrom\.secretKeyRef\.name == 'egress-forge-proxy' && e\.valueFrom\.secretKeyRef\.key == 'password'\)\)\)")
+            "(c.name == 'clone' && (e.valueFrom.secretKeyRef.name == 'agentdev-chat-clone' || (e.valueFrom.secretKeyRef.name
+            == 'egress-forge-proxy' && e.valueFrom.secretKeyRef.key == 'password')))"
+            in ((api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
+                | map(attribute='expression') | select('search', 'egress-forge-proxy') | first)
           - (api_docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'chat-session-server') | list | length) == 1
           - env.PLATFORM_NS == platform_ns   # GET /api/platform (#344)
           - env.API_IMAGE == api_image
