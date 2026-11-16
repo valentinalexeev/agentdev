@@ -512,7 +512,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
           "${mode[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
-          "${mcp[@]}" 2>"${err}"); rc=$?
+          "${mcp[@]}" 2>"${err}" | tee >(run_events)); rc=$?   # pipefail: rc is claude's; #425 run log
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
@@ -545,6 +545,78 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   rm -f "${err}"
   return ${rc}
 }
+
+# ---------- run log (#425) ----------
+# While Claude runs, its stream-json goes line by line through run_events (tee, not only at the end) and becomes run
+# events for the console: assistant text, tool calls (name, input), tool results (ok or error, size, output) and the
+# final result (turns, tokens). Each text field is redacted (the credential shapes of the forge sidecar, plus the
+# values of the tokens in this environment) before it leaves this process, then clipped to RUN_EVENT_CLIP bytes. A job
+# sends at most RUN_LOG_MAX bytes, then one "truncated" event and nothing more. The events go in batches to the forge
+# sidecar (POST /run-events, localhost), which checks them again and forwards them to the API. They are never written
+# to stdout or stderr (review #102: model output stays out of the container log) and never posted on the forge. When
+# the sidecar or the API is down, the events are dropped: the job goes on.
+RUN_EVENT_CLIP="${RUN_EVENT_CLIP:-2048}"
+RUN_LOG_MAX="${RUN_LOG_MAX:-2097152}"
+# jq: one stream-json line in, zero or more run events out (compact). The regex is the forge sidecar's secretRe.
+RUN_EVENTS_JQ='
+def redact: gsub("(?<s>(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----))"; "[redacted]")
+  | gsub("(?<k>(?i)(password|passwd|secret|token|api[_-]?key|authorization)[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?(bearer\\s+|token\\s+)?)[^\\s\"'"'"',}]{6,}"; "\(.k)[redacted]")
+  | reduce ($secrets[] | select(length >= 8)) as $t (.; split($t) | join("[redacted]"));
+def clip: if (utf8bytelength) > $clip then .[0:$clip] + " [clipped]" else . end;
+def txt: if type == "string" then . elif type == "array" then [.[] | objects | .text? // empty | strings] | join("\n") else tojson end;
+def now_s: now | todate;
+fromjson? // empty | objects
+| if .type == "assistant" then
+    (.message.content // [])[]? | objects
+    | if .type == "text" and ((.text // "") | length) > 0 then {kind: "text", time: now_s, text: (.text | redact | clip)}
+      elif .type == "tool_use" then {kind: "tool_use", time: now_s, tool: ((.name // "") | tostring | .[0:128]),
+        input: ((.input // {}) | (if type == "string" then . else tojson end) | redact | clip)}
+      else empty end
+  elif .type == "user" then
+    (.message.content // [])[]? | objects | select(.type == "tool_result")
+    | ((.content // "") | txt) as $o
+    | {kind: "tool_result", time: now_s, ok: (.is_error != true), size: ($o | utf8bytelength), text: ($o | redact | clip)}
+  elif .type == "result" then
+    {kind: "result", time: now_s, ok: (.is_error != true), subtype: ((.subtype // "") | tostring | .[0:64]),
+     turns: ((.num_turns // 0) | if type == "number" then floor else 0 end),
+     input_tokens: ([.usage.input_tokens, .usage.cache_creation_input_tokens, .usage.cache_read_input_tokens] | map(numbers) | add // 0 | floor),
+     output_tokens: ((.usage.output_tokens // 0) | if type == "number" then floor else 0 end)}
+  else empty end'
+# run_events_post <json array>: one batch to the sidecar; best effort, short timeout, never fails the job
+run_events_post() {
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 0
+  jq -cn --arg r "${REPO:-}" --arg j "${JOB}" --argjson e "$1" '{repo: $r, job: $j, events: $e}' 2>/dev/null \
+    | curl -fsS -m 5 -X POST -H 'Content-Type: application/json' -H "X-Agentdev-Job: ${JOB}" --data-binary @- \
+        "${FORGE_API}/run-events?job=${JOB}" >/dev/null 2>&1 || true
+}
+# run_events: reads stream-json on stdin, sends run events. Prints nothing. The bytes already sent for this job are kept
+# in ${STATE}/jobs/<job>.runlog, so a resumed or cost-approved run counts on (one cap per job).
+run_events() {
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || { cat >/dev/null; return 0; }
+  local cf="${STATE}/jobs/${JOB}.runlog" sent=0 batch=() line ev n
+  [[ -r "${cf}" ]] && read -r sent < "${cf}"
+  [[ "${sent}" =~ ^[0-9]{1,12}$ ]] || sent=0
+  local secrets; secrets=$(jq -cn '[env | to_entries[] | select(.key | test("TOKEN|SECRET|KEY|PASSWORD")) | .value | strings]' 2>/dev/null) || secrets='[]'
+  flush() { (( ${#batch[@]} )) || return 0; local IFS=,; run_events_post "[${batch[*]}]"; batch=(); echo "${sent}" > "${cf}" 2>/dev/null; }
+  while IFS= read -r line; do
+    (( sent > RUN_LOG_MAX )) && continue   # truncated: read the rest, send nothing
+    while IFS= read -r ev; do
+      [[ -n "${ev}" ]] || continue
+      n=${#ev}
+      if (( sent + n > RUN_LOG_MAX )); then
+        batch+=("{\"kind\":\"truncated\",\"time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"size\":${sent}}")
+        sent=$(( RUN_LOG_MAX + 1 )); break
+      fi
+      batch+=("${ev}"); sent=$(( sent + n ))
+    done < <(jq -c --arg clip "${RUN_EVENT_CLIP}" --argjson secrets "${secrets}" -R \
+               "(\$clip | tonumber) as \$clip | ${RUN_EVENTS_JQ#$'\n'}" <<<"${line}" 2>/dev/null)
+    # one batch per stream-json line: steps show up within seconds
+    (( ${#batch[@]} )) && flush
+  done
+  flush
+  return 0
+}
+# ---------- end run log ----------
 
 # ---------- subscription usage (#93) ----------
 # After each run the loop sends one usage report (tokens, and the rate-limit windows from the CLI's rate_limit_event
