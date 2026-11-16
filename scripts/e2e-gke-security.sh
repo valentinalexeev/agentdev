@@ -455,7 +455,35 @@ if section chat; then
       check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
       out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","projected":{"sources":[{"secret":{"name":"agentdev-api-forge"}}]}}]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
+      # #424 (GitHub): the clone step may hold the forge proxy credential (egress-forge-proxy/password), the chat
+      # container and any other container may not
+      withcred() { # withcred <container name> <key>: the base shape plus container <name> reading the credential
+        job "$img" "$p" '[]' | jq --arg n "$1" --arg key "$2" '
+          {name:"EGRESS_FORGE_KEY",valueFrom:{secretKeyRef:{name:"egress-forge-proxy",key:$key}}} as $e
+          | if $n == "chat" then .spec.template.spec.containers[0].env += [$e]
+            else .spec.template.spec.initContainers = [{name:$n,image:.spec.template.spec.containers[0].image,command:["true"],
+              env:[$e,{name:"HTTPS_PROXY",value:"http://forge:$(EGRESS_FORGE_KEY)@egress-proxy:3128"}],
+              securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]}}}] end' \
+          | k create --dry-run=server --as="$sa" -f - -o name 2>&1; }
+      out=$(withcred clone password); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: the clone step may read the forge proxy credential egress-forge-proxy/password (GitHub clone, #424)" "$(echo "$out" | head -1)"
+      out=$(withcred chat password); denied "$out"
+      check $? "admission: the chat container cannot read the forge proxy credential" "$(echo "$out" | head -1)"
+      out=$(withcred fetch password); denied "$out"
+      check $? "admission: no container other than clone can read the forge proxy credential" "$(echo "$out" | head -1)"
+      out=$(withcred clone auth); denied "$out"
+      check $? "admission: the clone step reads only the key password of egress-forge-proxy" "$(echo "$out" | head -1)"
     fi
+    # #424: a console chat session: the clone step completed (on GitHub through the egress proxy), and the chat
+    # container holds no forge proxy credential
+    cs=$(k -n "$AGENTS_NS" get pods -l app=agent-chat,agentdev/console=true -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$cs" ]; then
+      cj=$(k -n "$AGENTS_NS" get pod "$cs" -o json)
+      leak=$(echo "$cj" | jq -r '.spec.containers[]|select(.name=="chat")|.env[]?|select(.name=="EGRESS_FORGE_KEY" or ((.value // "")|test("forge:")) or (.valueFrom.secretKeyRef.name? == "egress-forge-proxy"))|.name')
+      [ -z "$leak" ]; check $? "chat session $cs: the chat container has no forge proxy credential" "$leak"
+      st=$(echo "$cj" | jq -r '.status.initContainerStatuses[]?|select(.name=="clone")|.state.terminated.reason // "not finished"')
+      [ "$st" = Completed ]; check $? "chat session $cs: the clone step completed (on GitHub through the egress proxy, #424)" "clone: $st"
+    else manual "no console chat session: start one in the console (on GitHub: a GitHub repository) and re-run --only chat (#424)"; fi
     # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
     # the operator of this script, so the check runs on every cluster (#389 review)
     other=e2e-sec-nonconsole-$$

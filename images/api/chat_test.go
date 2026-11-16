@@ -485,6 +485,54 @@ func TestChatJobShape(t *testing.T) {
 	}
 }
 
+// #424: on GitHub the clone goes through the egress proxy with the forge proxy credential; only the clone step holds
+// it (from Secret egress-forge-proxy, expanded by the kubelet), the chat container never does.
+func TestChatJobCloneProxyCredential(t *testing.T) {
+	k := &kubeChat{cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: "w:1", ForgeURL: "https://github.com",
+		ClaudeProxyURL: "http://proxy", EgressProxy: "http://egress-proxy.coding-agents.svc.cluster.local:3128"}}
+	p := k.job(chatSession{ID: "chat-bob-0000abcd", Agent: "bob", Repo: "owner/x"}, strings.Repeat("a", 64)).Spec.Template.Spec
+	envs := func(c corev1.Container) map[string]corev1.EnvVar {
+		m := map[string]corev1.EnvVar{}
+		for _, e := range c.Env {
+			m[e.Name] = e
+		}
+		return m
+	}
+	if len(p.InitContainers) != 1 || p.InitContainers[0].Name != "clone" {
+		t.Fatalf("init containers: %+v", p.InitContainers)
+	}
+	ce := envs(p.InitContainers[0])
+	key, ok := ce["EGRESS_FORGE_KEY"]
+	if !ok || key.ValueFrom == nil || key.ValueFrom.SecretKeyRef == nil || key.ValueFrom.SecretKeyRef.Name != "egress-forge-proxy" ||
+		key.ValueFrom.SecretKeyRef.Key != "password" || key.Value != "" {
+		t.Fatalf("clone EGRESS_FORGE_KEY: %+v", key)
+	}
+	want := "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+	for _, n := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
+		if ce[n].Value != want {
+			t.Errorf("clone %s = %q", n, ce[n].Value)
+		}
+	}
+	// the Secret env var precedes the proxy URL, else the kubelet does not expand $(EGRESS_FORGE_KEY)
+	for _, e := range p.InitContainers[0].Env {
+		if e.Name == "HTTPS_PROXY" {
+			t.Fatal("HTTPS_PROXY before EGRESS_FORGE_KEY")
+		}
+		if e.Name == "EGRESS_FORGE_KEY" {
+			break
+		}
+	}
+	for _, e := range p.Containers[0].Env {
+		if e.Name == "EGRESS_FORGE_KEY" || strings.Contains(e.Value, "EGRESS_FORGE_KEY") || strings.Contains(e.Value, "forge:") ||
+			(e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == "egress-forge-proxy") {
+			t.Errorf("chat container holds the forge proxy credential: %+v", e)
+		}
+	}
+	if envs(p.Containers[0])["HTTPS_PROXY"].Value != "http://egress-proxy.coding-agents.svc.cluster.local:3128" {
+		t.Errorf("chat HTTPS_PROXY: %q", envs(p.Containers[0])["HTTPS_PROXY"].Value)
+	}
+}
+
 // #400: the agent's service account, no API token, and exactly one projected token (audience claude-proxy, 600 s)
 // mounted only in the chat container; the HMAC key stays for mixed versions.
 func TestChatJobProjectedToken(t *testing.T) {

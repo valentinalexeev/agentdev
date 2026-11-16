@@ -2405,6 +2405,12 @@ Notes:
 - On kind, the clone token is `agentdev-api`'s read-only Gitea token, copied into the Secret `agentdev-chat-clone`
   in the agents namespace. Only the clone initContainer of a chat pod reads it (admission policy
   `agentdev-api-chat-jobs`).
+- On GitHub, the clone goes through the egress proxy, which allows GitHub only with the forge proxy credential
+  (Secret `egress-forge-proxy` in the agents namespace, made by the playbook with the egress proxy, #424). The
+  `clone` initContainer gets it in its proxy URL, the `chat` container never does (admission policy
+  `agentdev-api-chat-jobs`). For a private repository the clone also needs the read-only token in
+  `agentdev-chat-clone` (Secret Manager `agentdev-chat-clone-token`); without it the clone runs without a password
+  and the session fails. Check: `scripts/e2e-gke-security.sh --only chat`.
 - On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
   **Create issue**, and the audit log records them.
 

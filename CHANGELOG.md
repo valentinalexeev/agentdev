@@ -6,6 +6,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Fixed
+- Console chat on GitHub: a session never started because the `clone` initContainer got `CONNECT 403` from the
+  egress proxy, which allows the forge hosts only with the forge proxy credential (#424). The `clone` step now sends
+  it in its proxy URL (`forge:$(EGRESS_FORGE_KEY)@`, from the Secret `egress-forge-proxy`, key `password`, expanded
+  by the kubelet), like the forge sidecar of agent pods. The `chat` container never gets it: the admission policy
+  `agentdev-api-chat-jobs` allows `egress-forge-proxy/password` only on the container named `clone`. No new Secret:
+  the playbook already makes `egress-forge-proxy` in the agents namespace on kind and GKE.
+
 ## [1.1.0-rc.1] - 2026-11-16
 
 ### Upgrade
