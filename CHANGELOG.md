@@ -6,6 +6,76 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.1.0-rc.1] - 2026-11-16
+
+### Upgrade
+From 1.0.x (1.0.0 or 1.0.1). Do the steps in this order. Only step 3 changes behaviour of an existing instance
+without an opt-in (the lean cluster, **BREAKING** for Terraform defaults); every other new feature is off or
+backwards compatible by default.
+1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.1.0-rc.1` in
+   `terraform/main.tf` and `agentdev_ref: v1.1.0-rc.1` and `image_tag: "1.1.0-rc.1"` in `ansible/instance.yml`, in
+   one PR. Images and manifests must move together: the 1.1 playbook renders new Roles, CRDs and admission policies
+   that the 1.1 images expect, and the API and the worker must run the same `image_tag` for chat (#346). New or
+   changed images: worker, forge, router, operator (also serves `obs-mcp`), claude-proxy, API and UI.
+2. **Copy the template workflow** `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment
+   repository. It adds the preflight before `terraform apply` (#314), the PR `plan` job (#291) and the
+   `template-drift` job (#317). Check the rest of the template with
+   `scripts/template-drift.sh <deployment repo dir>`.
+3. **Terraform (#208, #291), owner.** Run `terraform plan` and read it before `terraform apply`.
+   - **BREAKING** lean cluster (#208, a SemVer exception accepted by the owner: ADR 0009): Managed Prometheus and the Filestore CSI driver go off, `monitoring_components`
+     becomes `["SYSTEM_COMPONENTS"]`, and the load balancer and Gateway API are on only with `public_hosts`. The plan
+     shows in-place cluster updates, no node pool replacement. To keep the old cluster, set
+     `enable_managed_prometheus = true`, `enable_filestore_csi = true`, `monitoring_components = null` and
+     `gateway_enabled = true`.
+   - Read-only plan identity (#291): new service account `agentdev-plan` and Workload Identity pool `github-pr`
+     (new inputs `create_plan_identity`, default `true`, and `plan_state_bucket`). After the apply,
+     `terraform output github_actions_auth` has `plan_workload_identity_provider` and `plan_service_account`: set
+     them as the repository variables `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT`. Until they are set,
+     the `plan` job is skipped. Docs: admin.md "Show the plan on deployment pull requests".
+4. **Run the preflight (#314)** from a checkout at `v1.1.0-rc.1`:
+   `bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml` (or `deploy.yml --tags preflight`). It
+   only reads. It stops on a malformed Claude secret, a checkout tag other than `v<image_tag>`, a missing CRD
+   (Gateway API, FQDNNetworkPolicy) or an image that is not on ghcr.io at `image_tag`. Fix every finding first.
+5. **Claude budget in cost units (#196, #275).** Rename `claude_budget_tokens` to `claude_budget_units` in
+   `instance.yml` (`CLAUDE_BUDGET_TOKENS` to `CLAUDE_BUDGET_UNITS` on kind). The old name still works until 2.0.0
+   (1 token = 1 unit) and logs a warning. The same number now allows more traffic: consider dividing it by 4, or
+   start at 0 and set it after a day of `GET /status`. Per-agent values in ConfigMap `claude-proxy-budgets` are read
+   as units. Spend counted before the upgrade resets with the new proxy pod. Optional: `claude_prices` (new
+   ConfigMap `claude-proxy-prices`) for weights and a USD price.
+6. **Job limits (#310, #196 D6), optional.** `claude_job_budget_units` (hard limit per job) and
+   `claude_job_approval_units` / `claude_job_approval_step_units` (soft limit with an approval). The soft limit must
+   be lower than the hard limit; the playbook checks it. Keep the soft limit at 0 until every agent runs the 1.1
+   worker and forge: a 1.0 sidecar does not ask, so its job stops at the soft limit. The playbook adds the Role
+   `agentdev-claude-proxy-approvals`.
+7. **Claude proxy auth (#352).** Keep `claude_proxy_auth: both` (the default) during the upgrade: 1.0 workers keep
+   using the HMAC key, 1.1 workers send the projected token. The playbook adds a ServiceAccount `agent-<name>` per
+   agent and the ClusterRole `agentdev-claude-proxy-tokenreview`. Set `token` only after every agent pod and chat
+   Job runs the 1.1 worker (check `kubectl -n coding-agents get pods -o yaml | grep image:`), then run `deploy.yml`
+   again. `scripts/e2e-gke-security.sh` then checks that the HMAC key gives 401.
+8. **New optional settings**, all off or unchanged by default: `rollout.grace_seconds`, `rollout.drain_max_minutes`
+   (#174), `api.max_agents`, `api.max_agents_per_user` (#27), `ingress.smoke` (default `true`),
+   `ingress.smoke_timeout` (#213), `ingress.forwarder.namespace` / `pod_selector` /
+   `ingress.forwarder_not_ready_minutes` (#213), `telemetry.*` (#196 D4), `obs_mcp.enabled` (#205). This upgrade
+   itself still replaces agent pods at once; later upgrades drain (#174).
+9. **Web Push notifications (#347), optional.** Set `notifications.channels` in `instance.yml` (see the example).
+   The playbook installs the `NotificationChannel` CRD, makes the VAPID key pair once in Secret Manager
+   (`platform-notify-vapid`), copies it to the Secret `agentdev-api-vapid` and adds the API tables and RBAC. The CRD
+   and RBAC are applied even when notifications are off.
+10. **Console chat sessions (#346, #400), optional.** Set `api.chat.enabled: true`. The playbook makes the Secret
+    Manager entry `agentdev-api-chat-token-key` once. Optional secrets: `agentdev-chat-clone-token` and, on Gitea,
+    `agentdev-chat-issue-token`. The API and the worker must run the same `image_tag`.
+11. **Funnel forwarder (#316), optional.** To let the playbook run the forwarder, set `ingress.forwarder.deploy`,
+    put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey`, and remove the old forwarder
+    manifest from the deployment repository (admin.md, "Deployed forwarder").
+12. **Run the playbook** `deploy.yml` (the deployment CI does it on merge). It applies, among others: the CRDs
+    `Approval` (cost source), `NotificationChannel` and `ProjectSecret`, the operator Role (`patch`/`delete` on pods,
+    `agentdev-guides`), the API Role (`agentdev-guides`, platform Deployments) and the chat admission policy. Then
+    do `AGENTS.md` step 10 (pods, router `/status`, `scripts/e2e-gke-security.sh`).
+13. **kind only (#106).** `./run.sh` steps are now wrappers for `ansible-playbook infra/ansible/kind.yml --tags
+    <tag>` and are deprecated; `run.sh`, `04-coder.sh` and the step wrappers are removed in 1.2.0. Move scripts to
+    the table in admin.md, "Reference: run.sh steps and the GKE playbook". To apply this release on kind:
+    `./run.sh 05 06 09 10 12 13`. GKE does not change.
+
 ### Added
 - Soft cost limit per job with an approval before the hard stop (#310). `claude-proxy` gets
   `CLAUDE_JOB_APPROVAL_UNITS` (soft limit, 0 = off) and `CLAUDE_JOB_APPROVAL_STEP_UNITS` (units per approval,
@@ -69,90 +139,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`kind`) / `claude_proxy_auth` (Ansible): `key`, `both` (default) or `token`. Mixed versions: with `both` a 1.0
   worker keeps using its HMAC key. Re-run: `./run.sh 06` and `./run.sh 12` on `kind`; Ansible `deploy.yml` on GKE
   (operator RBAC, claude-proxy, new images).
-
-### Fixed
-- Console chat sessions with `claude_proxy_auth: token` (#400). The API's chat Job runs as the agent's service
-  account `agent-<agent>` (no automounted API token) with the projected token (audience `claude-proxy`, 10 min) in
-  the `chat` container only, like the agent pod (#352). The worker uses the token when the proxy takes it, else the
-  HMAC key, which stays mounted for mixed versions. The admission policy `agentdev-api-chat-jobs` now allows exactly
-  the service account `agent-<agent>` of the Job's `agentdev/chat-agent` label and that one projected volume. It
-  still refuses another service account, another audience or lifetime, and Secret volumes. Re-run: Ansible role
-  `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`) for the policy; new API and worker images (the same
-  `image_tag`). `scripts/e2e-gke-security.sh --only chat` checks the new shape.
-- Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
-  request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
-  compat e2e). New worker image; no `./run.sh` step.
-- Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
-  the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
-- Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
-  engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
-  the agents.
-
-### Security
-- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
-  payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
-- R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
-  a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
-  audience. `scripts/e2e-gke-security.sh` checks a token of another audience (401) and, in mode `token`, the HMAC key
-  (401).
-- R106 fixed (#380): `GET /api/agents` (Agents page, Today counts) lists for an `agentdev-admins` member every
-  agent, for other users only the agents with a repository where they have write access on the forge (R35 rule).
-  Before, each signed-in user saw every agent and its repositories. Re-run: Ansible `deploy.yml` with the new API
-  image; no `./run.sh` step.
-- R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
-  Other users see only the events of agents with a repository where they have write access on the forge. Before,
-  each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
-  `deploy.yml` with the new API image; no `./run.sh` step.
-### Fixed
-- kind step 09 (#304): the SSO stand-in check no longer fails on a new cluster. The step restarts authentik just
-  before the check, and the source `agentdev-sso` is not usable for a short time. `scripts/sso-check.py` now tries
-  the first redirect again for up to 60 seconds. Re-run: `./run.sh 09`. GKE does not change.
-- `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
-  `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
-- Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
-  The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
-  Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.
-- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
-  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
-  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
-  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
-- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
-  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
-  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
-  Merged or closed PRs keep their last checks (no false `anomaly`).
-- Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
-  because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
-  neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
-  a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
-  with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
-  Gitea already routed comments by the PR author; a router test now covers it.
-
-### Changed
-- Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
-  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
-  Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
-  Each `AGENTDEV_USAGE` line has `tokens` by type and `multiplier`, and `GET /status` has `weights`, so a check can
-  calculate the units again exactly.
-  The budget variables are `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (the old token variables are deprecated,
-  see Deprecated). Weights, model multipliers and an
-  optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
-  pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
-  stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
-  `model`, `job`, `units` and cache token counts. Defaults do not change (0 = no limit). A budget that was set keeps
-  its number but now counts units, so the same number allows more traffic (units are usually less than raw tokens);
-  per-agent values in ConfigMap `claude-proxy-budgets` are read as units too. Re-run `./run.sh 06` on kind, or the
-  playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
-  tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
-  (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
-- **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
-  `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
-  API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
-  system node when all agents are idle. Cloud Logging is unchanged. The next `terraform plan` of an existing instance
-  shows in-place cluster updates (no node pool is replaced). To keep the old cluster, set `enable_managed_prometheus
-  = true`, `enable_filestore_csi = true`, `monitoring_components = null` and `gateway_enabled = true`. Re-run:
-  Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
-
-### Added
 - API for the console (#345): `GET /api/jobs` gives the jobs of the agents (issue, PR, phase, outcome, times) from the
   forge and the pending approvals, never from agent output. `GET /api/stream` sends live updates as server-sent events
   (agents, approvals, security events, usage, heartbeat), only for items the caller may see. The lists take `repo` and
@@ -187,7 +173,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   minutes), the pre-auth key from the Secret Manager secret `funnel-sidecar-authkey`, and a NetworkPolicy. Opt-in;
   remove the old manifest from the deployment repository (docs/admin.md, Deployed forwarder). Re-run: Ansible
   `deploy.yml`; no `./run.sh` step.
-
 - Gitea parity, part 2 (#241, 1.4.0). P5: the agent labels its own PR `agent:<name>` on Gitea too (forge sidecar:
   the same check as on GitHub, only that label, only on a PR from its own branch). Gitea does not make a missing
   label, so the Ansible role `gitea_forge` and `lib-forge.sh` make `agent:<name>` for each agent. P7: on Gitea the
@@ -321,9 +306,30 @@ While the version is `0.x`, breaking changes bump MINOR.
   `FEEDBACK_CONTEXT_ITEMS` (default 20 thread items) and `FEEDBACK_CONTEXT_CHARS` (default 12000 characters, `0`
   turns it off). From round 2 on an agent no longer loses the original requirement or earlier review decisions.
 
-### Security
-- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
-  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
+### Changed
+- Claude budget in cost units (#196, ADR 0002 D2). `claude-proxy` now weights tokens by type (input 1,
+  cache write 1.25 / 2, cache read 0.1, output 5) and by the model named in the upstream response (input price / 3 USD:
+  Opus 5.5 1.33, Opus 4.5 to 5 1.67, Sonnet 5.x 0.67, Haiku 4.5 0.33; unknown family = highest), so cache reads no longer dominate the budget.
+  Each `AGENTDEV_USAGE` line has `tokens` by type and `multiplier`, and `GET /status` has `weights`, so a check can
+  calculate the units again exactly.
+  The budget variables are `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (the old token variables are deprecated,
+  see Deprecated). Weights, model multipliers and an
+  optional USD price go into the new ConfigMap `claude-proxy-prices` (`CLAUDE_PRICES` / `claude_prices`, values
+  pattern-checked; USD shown only when `usd_per_million_units` is set). The worker's job id (`X-Agentdev-Job`,
+  stripped before the upstream, reporting only) gives per-job totals on `GET /status` (`jobs`); usage lines carry
+  `model`, `job`, `units` and cache token counts. Defaults do not change (0 = no limit). A budget that was set keeps
+  its number but now counts units, so the same number allows more traffic (units are usually less than raw tokens);
+  per-agent values in ConfigMap `claude-proxy-budgets` are read as units too. Re-run `./run.sh 06` on kind, or the
+  playbook `deploy.yml` (proxy tasks) on GKE. Spend counted before the upgrade is in
+  tokens and resets with the new proxy pod. The proxy's spend file now carries `"unit": "units"`; a file without it
+  (token counts) is ignored. Past 200 jobs per agent the cheapest job is folded into `other`.
+- **BREAKING** Lean cluster by default (#208): Managed Prometheus and the Filestore CSI driver are off,
+  `monitoring_components` is `["SYSTEM_COMPONENTS"]` (no `kube-state-metrics`), and the GKE load balancer and Gateway
+  API are on only when `public_hosts` is set (`gateway_enabled = null`). The platform then fits on one `e2-medium`
+  system node when all agents are idle. Cloud Logging is unchanged. The next `terraform plan` of an existing instance
+  shows in-place cluster updates (no node pool is replaced). To keep the old cluster, set `enable_managed_prometheus
+  = true`, `enable_filestore_csi = true`, `monitoring_components = null` and `gateway_enabled = true`. Re-run:
+  Terraform module only (`infra/terraform`); no Ansible role or `./run.sh` step.
 
 ### Deprecated
 - Steps 00, 04 and 99 (#106, last part; owner decisions A to D on #106). `00-prereqs.sh` is now a wrapper for
@@ -363,6 +369,64 @@ While the version is `0.x`, breaking changes bump MINOR.
   operator, executor egress; secrets store on only with External Secrets Operator). A first run over a cluster from the
   old step changes nothing. Changed: the operator restarts only after a new image or a manifest change, so a second
   run changes nothing. GKE does not change.
+
+### Fixed
+- Console chat sessions with `claude_proxy_auth: token` (#400). The API's chat Job runs as the agent's service
+  account `agent-<agent>` (no automounted API token) with the projected token (audience `claude-proxy`, 10 min) in
+  the `chat` container only, like the agent pod (#352). The worker uses the token when the proxy takes it, else the
+  HMAC key, which stays mounted for mixed versions. The admission policy `agentdev-api-chat-jobs` now allows exactly
+  the service account `agent-<agent>` of the Job's `agentdev/chat-agent` label and that one projected volume. It
+  still refuses another service account, another audience or lifetime, and Secret volumes. Re-run: Ansible role
+  `api` (`deploy.yml`, or `kind.yml --tags api`, `./run.sh 10`) for the policy; new API and worker images (the same
+  `image_tag`). `scripts/e2e-gke-security.sh --only chat` checks the new shape.
+- Worker (#394): the PR feedback cursor starts when the agent opens the PR. Before, it started after the review
+  request, label and board calls, so a comment in those seconds was never answered (flaky `reply` check in the
+  compat e2e). New worker image; no `./run.sh` step.
+- Ansible (#357): the role `api` creates the agents namespace `coding-agents` (cost labels, #184) before it applies
+  the API manifest, so `kind.yml --tags api` works on a cluster where steps 06 and 12 have not run yet.
+- Compatibility e2e (#378): `06-agents.sh` pulls a published image for one platform (the platform of the container
+  engine). Before, `kind load` failed on the multi-arch GHCR index, so the compat run on a GitHub runner never started
+  the agents.
+- kind step 09 (#304): the SSO stand-in check no longer fails on a new cluster. The step restarts authentik just
+  before the check, and the source `agentdev-sso` is not usable for a short time. `scripts/sso-check.py` now tries
+  the first redirect again for up to 60 seconds. Re-run: `./run.sh 09`. GKE does not change.
+- `scripts/watch-github.sh` (#242): with `WATCH_POLL_SECONDS` of 5 minutes or more, every poll reported a false
+  `gap` ("monitor was down"). The gap threshold is now twice the poll interval, at least 5 minutes.
+- Step 05 (#106): a `.secrets/<agent>.token` file from an older kind cluster no longer gives forge 401 to the agent.
+  The role `gitea_forge` checks that the file logs in as its agent. If not, it mints a new token and shows a message.
+  Run `./run.sh 06` (or `kind.yml --tags agents`) after that, so the agent gets the new token. GKE does not change.
+- An interrupted job continues instead of starting over (#175). After a pod restart, the job keeps its worktree
+  (local commits and uncommitted changes), starts from its pushed branch, resumes the Claude session (`--resume`),
+  and skips the steps it already did: the "picked this up" comment, the push, the pull request (an open one is
+  used) and a posted feedback reply. State in `/state/jobs/<job>.*`; a failed job's retry continues the same way.
+- `tools/ghwatch` lost owner events while the monitor was down or its output was missed (#242). Every event now goes
+  to an outbox (`<state>.events.jsonl`) before the state is saved; `-pending` / `-pending -ack` replay unhandled owner
+  events, `scripts/watch-github.sh` prints them on start, and a poll after a long pause starts with a `gap` event.
+  Merged or closed PRs keep their last checks (no false `anomaly`).
+- Comment wake-ups on GitHub (#227): a top-level comment on an agent's PR (`issue_comment`) did not wake the agent,
+  because the router routes GitHub events by `agent:<name>` labels and the PR head branch, and a comment payload has
+  neither. The loop now labels each PR it opens `agent:<name>`; the forge sidecar allows exactly that label, only on
+  a PR from the agent's own branch (checked on GitHub). For older PRs without the label the router reads the PR head
+  with its read-only App credential (`FORGE_POLL_DIR`, as the wake poll). A stopped agent is started the same way.
+  Gitea already routed comments by the PR author; a router test now covers it.
+
+### Security
+- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
+  payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
+- R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
+  a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
+  audience. `scripts/e2e-gke-security.sh` checks a token of another audience (401) and, in mode `token`, the HMAC key
+  (401).
+- R106 fixed (#380): `GET /api/agents` (Agents page, Today counts) lists for an `agentdev-admins` member every
+  agent, for other users only the agents with a repository where they have write access on the forge (R35 rule).
+  Before, each signed-in user saw every agent and its repositories. Re-run: Ansible `deploy.yml` with the new API
+  image; no `./run.sh` step.
+- R35 fixed (#308): `GET /api/security-events` (and the Security page) shows an `agentdev-admins` member every event.
+  Other users see only the events of agents with a repository where they have write access on the forge. Before,
+  each signed-in user saw every event. `GET /api/usage` was already filtered (review #102). Re-run: Ansible
+  `deploy.yml` with the new API image; no `./run.sh` step.
+- Forge sidecar hardening (#250): Gitea path numbers are bounded to `[1-9][0-9]{0,15}` like the GitHub driver, and the
+  query check (`page`, `per_page`) now runs before every body, path and serve-rule check.
 
 ## [1.0.1] - 2026-11-14
 
