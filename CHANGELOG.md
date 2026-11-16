@@ -37,6 +37,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
   `CHAT_FORGE_URL`, `CHAT_IMAGE_PULL_POLICY`, `CHAT_CLAUDE_PROXY_URL` and `CHAT_EGRESS_PROXY`. The API, worker and forge images must run the same
   `image_tag` (ADR 0006). A session starts only after the operator has rendered the agent's StatefulSet.
 
+- **Run log of jobs (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`); the
+  playbook (and `./run.sh 10`) applies them, nothing to do by hand. The API's internal listener (port 8081) now runs
+  also with approvals off. Worker, forge, API and UI images change together: pin the same `image_tag`. A 1.1.0-rc.1
+  worker sends no run log; a 1.1.0-rc.1 API answers 404 to the sidecar, which drops the events.
+
 ### Fixed
 - Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
   account cannot create the read-only plan identity (#421). `create_plan_identity` now defaults to `false`. The
@@ -57,6 +62,11 @@ Deployments that already applied rc.1 with the identity (all grants present) kee
   (`agent/<name>/*`), MCP tools, Claude identity and egress rules. Tool permissions stay the console's Allow/Deny.
   The admission policy `agentdev-api-chat-jobs` allows exactly this shape and only the agent's Secrets, each in its
   container; the chat container still holds no forge token and no egress key. The API's Role is unchanged.
+- **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
+  agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
+  turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge
+  sidecar (`POST /run-events`) to the API (`GET /api/jobs/{agent}/{job}/events`, SSE `.../events/stream`, visibility
+  of the job, R35); kept 30 days. Never posted on the forge or in notifications (security.md R118).
 
 ## [1.1.0-rc.1] - 2026-11-16
 
