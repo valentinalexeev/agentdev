@@ -7,9 +7,15 @@
   vars:
     teardown_task: Delete the kind cluster (was 99-teardown.sh)
   tasks:
+    # ansible-playbook from PATH (CI: pip puts it next to its own python, not next to ansible_playbook_python)
+    - name: Find ansible-playbook
+      ansible.builtin.command: {argv: [sh, -c, command -v ansible-playbook]}
+      register: teardown_ap
+      changed_when: false
+
     - name: List the tasks of kind.yml
       ansible.builtin.command:
-        argv: "{{ [ansible_playbook_python | dirname ~ '/ansible-playbook', playbook_dir ~ '/../kind.yml', '--list-tasks'] + item }}"
+        argv: "{{ [teardown_ap.stdout, playbook_dir ~ '/../kind.yml', '--list-tasks'] + item }}"
       loop: [[], [--tags, cluster], [--tags, prereqs], [--tags, "all"], [--tags, teardown]]
       register: teardown_lists
       changed_when: false
@@ -34,7 +40,7 @@
     - name: Run --tags teardown against the stub
       ansible.builtin.command:
         argv:
-          - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+          - "{{ teardown_ap.stdout }}"
           - "{{ playbook_dir }}/../kind.yml"
           - --tags
           - teardown
@@ -43,7 +49,7 @@
           - -e
           - kind_cluster_repo_root={{ teardown_tmp.path }}/repo
       environment:
-        PATH: "{{ teardown_tmp.path }}:/usr/bin:/bin"
+        PATH: "{{ teardown_tmp.path }}:{{ teardown_ap.stdout | dirname }}:/usr/bin:/bin"
         STUB_KIND_CLUSTERS: agentdev
         STUB_LOG: "{{ teardown_tmp.path }}/log"
       changed_when: false
