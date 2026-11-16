@@ -77,6 +77,10 @@ type Collector struct {
 	Usage *Usage
 	// ProxyUsage (#66): the Claude credential proxy is on and the only usage source (proxyusage.go).
 	ProxyUsage bool
+	// Drains receives AGENTDEV_DRAINED lines of forge containers (#174); Requeue asks the agent controller to look
+	// again at once. Both optional.
+	Drains  *DrainSignals
+	Requeue func(agent string)
 
 	mu      sync.Mutex
 	forged  map[string]bool // pod UID/container with a usage line outside the forge container already reported
@@ -383,6 +387,15 @@ func (c *Collector) consume(ctx context.Context, r io.Reader, p *corev1.Pod, con
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
+		// drain (#174): only the forge sidecar prints it, from the loop's POST /drained; the agent container's log is
+		// never taken (Claude can print the same text there)
+		if p.Labels["agent"] != "" && container == forgeContainer && isDrainedLine(sc.Text()) {
+			c.Drains.Mark(p.UID, c.Now())
+			if c.Requeue != nil {
+				c.Requeue(p.Labels["agent"])
+			}
+			continue
+		}
 		if handled, err := c.recordApproval(ctx, sc.Text(), p, container); handled { // approvals.go (#67)
 			if err != nil {
 				return fmt.Errorf("record approval: %w", err)

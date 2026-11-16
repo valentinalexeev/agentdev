@@ -36,6 +36,7 @@
       SET ROLE agentdev_owner;
       {{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql') }}
       UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};
+      UPDATE chat_settings SET retention_days = {{ api_chat_retention_days | int }};
       RESET ROLE;
       {{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql') }}
   changed_when: false

@@ -208,10 +208,12 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
 	if s.appr != nil {
-		mux.HandleFunc("/mcp", s.appr.mcp)               // Claude's permission prompt tool (approvals.go)
-		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
+		mux.HandleFunc("/mcp", s.appr.mcp)                         // Claude's permission prompt tool (approvals.go)
+		mux.HandleFunc("POST /job-done", s.appr.jobDone)           // the loop: a job ended, its open requests become void
+		mux.HandleFunc("POST /cost-approval", s.appr.costApproval) // #310: the job hit the soft cost limit of claude-proxy
 	}
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("POST /drained", s.drained) // drain before replace (#174, drain.go)
 	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }

@@ -185,20 +185,34 @@ cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decision
   mount as a deprecated rollback).
 - **Agent identity:** `<agent>.<hex HMAC-SHA256(signing key, "agentdev-claude-proxy/v1:" + agent)>`. The signing key
   (`claude-proxy-signing`) is only in the proxy pod and the deploy. The model can read its agent's key, but the key
-  is worth nothing outside the cluster and cannot name another agent. A projected ServiceAccount token was the
-  alternative; it is no stronger here (also readable by the model) and needs a TokenReview per request.
+  is worth nothing outside the cluster and cannot name another agent.
+- **Workload identity (#352, 1.1):** each agent has its own ServiceAccount `agent-<name>` (operator-owned, no
+  automounted API token). The agent container gets a projected token of it with audience `claude-proxy` and a
+  10-minute expiry at `/var/run/secrets/agentdev/proxy/token`; the kubelet renews it. The worker hands it to Claude
+  Code through `apiKeyHelper` (re-read each minute), which sends it as `Authorization: Bearer` and `x-api-key`. The
+  proxy checks a JWT-shaped credential with the TokenReview API (audience `claude-proxy`, username
+  `system:serviceaccount:<agents ns>:agent-<name>`) and caches a positive result for at most 5 minutes (and never past
+  the token's `exp`), a negative one for 10 seconds. `CLAUDE_PROXY_AUTH` selects `key` (HMAC only), `both` (default,
+  for mixed 1.0 and 1.1 workers) or `token` (HMAC refused). The model can still read the token, but a copy is useless
+  after its expiry and for any other audience, and no long-lived shared value stays in the pod once the mode is
+  `token` and the key Secret is removed.
 - **Forwarding:** only `POST /v1/messages` and `/v1/messages/count_tokens`. The caller's `Authorization`,
   `x-api-key`, `Cookie` and `Proxy-Authorization` are dropped; the agent's credential is added (`x-api-key` for an API
   key, `Authorization: Bearer` plus the `oauth-2025-04-20` beta for a subscription token). Streaming responses are
-  passed through unbuffered. Any other path, and a missing or wrong key, is refused with a security event
-  (`proxy-path`, `proxy-key-invalid`).
+  passed through unbuffered. Any other path, and a missing or wrong key or token, is refused with a security event
+  (`proxy-path`, `proxy-key-invalid`; the event text says whether a key or a token was refused, and the auth mode). A
+  failed TokenReview call gives `proxy-tokenreview-error` and a 401.
 - **Usage observed by the proxy:** the `anthropic-ratelimit-unified-5h-*` / `-7d-*` / `-status` / `-reset` headers and
   `retry-after`, and the token counts of the body (JSON `usage`, or SSE `message_start` / `message_delta`). One
   `AGENTDEV_USAGE` line per response on the proxy's stdout, with the schema of #93 plus `agent` (from the verified
   key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47: the operator
   reads them, see below).
-- **Budget:** tokens per agent in a rolling 24 h window (hourly buckets), `CLAUDE_BUDGET_TOKENS` for all agents (0 =
-  none), a per-agent value in ConfigMap `claude-proxy-budgets`. Checked before a request is forwarded, so a response
+- **Budget:** cost units per agent (#196, ADR 0002 D2: tokens weighted by type and by the model named in the
+  upstream response, never the request; unknown model = highest multiplier) in a rolling 24 h window (hourly
+  buckets), `CLAUDE_BUDGET_UNITS` for all agents (0 = none), a per-agent value in ConfigMap `claude-proxy-budgets`.
+  Weights in ConfigMap `claude-proxy-prices`, each value pattern-checked (bad value: default kept, event
+  `proxy-price-invalid`). The job header `X-Agentdev-Job` comes from the agent: pattern-checked, stripped before the
+  upstream, used for the per-job report on `GET /status` only. Checked before a request is forwarded, so a response
   in flight can go over by itself. When used up: HTTP 429 `rate_limit_error` (Claude Code stops the run cleanly) and
   one `budget-exhausted` event per exhaustion. Spend is kept on an emptyDir: a new proxy pod starts at zero (a
   restart can grant at most one more budget). `GET /status` lists spend and limits (no secrets); the API adds them to

@@ -24,6 +24,17 @@ parts, both fenced as untrusted data (#223):
   (GitHub check runs, and commit statuses on both forges, so Gitea Actions results count too, #237). The reply to
   the reviewers covers these items only.
 
+**Upgrades while agents work** (#174). An upgrade changes the pod template of every agent (new image, new
+operator). The agent StatefulSets use `updateStrategy: OnDelete`, so Kubernetes does not replace a pod by itself. The
+operator replaces each outdated pod: it sets the pod annotation `agentdev/drain`, which the loop reads from a downward
+API file, and the loop starts no new job. When no job runs, the loop tells its forge sidecar, which prints
+`AGENTDEV_DRAINED`; the operator takes this line only from the forge container and then deletes the pod, and the new
+pod starts from the new template. A pod that does not run is replaced at once; a pod whose jobs run longer than
+`DRAIN_MAX_MINUTES` (default 60) is replaced anyway. On SIGTERM (a replaced pod, a node drain, a Spot preemption) the
+loop stops its jobs and saves their work in progress as a local commit on the job branch within
+`AGENT_GRACE_SECONDS` (default 300); nothing is pushed then, and the job continues on the next pod as below. The
+Agent's condition `Updated` shows the state: `Current`, `Draining`, `Drained`, `Forced`, `NotRunning` or `Replacing`.
+
 **An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
 started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
 (`/state/jobs/<job>.*`). When the pod starts again, the job:
@@ -98,6 +109,13 @@ flowchart LR
   a1 -- poll, push, PR, reply --> forge
   a2 -- poll, push, PR, reply --> forge
 ```
+
+## Job
+
+A **job** is one issue handed to an agent (assigned on Gitea, label `agent:<name>` on GitHub) and the PR the agent
+opens for it on its branch `agent/<name>/issue-<n>`. The console shows its phase: `queued` (no PR yet), `build` (the
+agent waits on an approval), `review` (PR open) and `done` (PR merged or closed). The phase comes from the forge and
+from the Approval objects, the records people and the operator write. It never comes from what the agent says (#345).
 
 ## Project
 
@@ -210,7 +228,7 @@ runner can start any program. So the security boundary is the pod, not the list 
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
   the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
-  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a budget per agent in cost units (tokens weighted by type and model, #196)
   for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
   come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.

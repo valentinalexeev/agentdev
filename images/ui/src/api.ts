@@ -11,8 +11,8 @@ export interface Agent {
   scaleToZero?: boolean
   paused?: boolean
   securityEvents?: number // last 7 days (#70)
-  budgetUsed?: number // Claude tokens in the last 24 h, counted by the credential proxy (#66)
-  budgetLimit?: number // tokens per 24 h; 0 = no limit
+  budgetUsed?: number // Claude cost units in the last 24 h, counted by the credential proxy (#66, #196)
+  budgetLimit?: number // units per 24 h; 0 = no limit
 }
 
 // "12.3k / 100k" or "12.3k" when there is no limit; "" when the proxy reports nothing (#66)
@@ -65,11 +65,33 @@ class ApiError extends Error {
   }
 }
 
+// Connection state (#339): every call reports its result, so the console can show live, starting, unavailable or
+// signed out without a separate health check. 'starting': the ingress answers 502, 503 or 404 for the API while the
+// platform scales up from zero. 'offline': the browser has no network.
+export type CallResult = 'ok' | 'starting' | 'down' | 'offline' | 'unauthorized'
+const listeners = new Set<(r: CallResult) => void>()
+export function onCallResult(f: (r: CallResult) => void): () => void {
+  listeners.add(f)
+  return () => { listeners.delete(f) }
+}
+const report = (r: CallResult) => listeners.forEach((f) => f(r))
+
 async function call(token: string, method: string, path: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  const r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
-  if (r.status === 401) throw new Unauthorized('login expired')
+  let r: Response
+  try {
+    r = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+  } catch (e) {
+    report(navigator.onLine === false ? 'offline' : 'down')
+    throw e
+  }
+  if (r.status === 401) { report('unauthorized'); throw new Unauthorized('login expired') }
+  // a JSON error from the API itself is an answer; an HTML 502/503/404 is the ingress while the API is away
+  const fromApi = (r.headers.get('content-type') ?? '').includes('json')
+  if (!fromApi && [404, 502, 503, 504].includes(r.status)) report('starting')
+  else if (r.status >= 500 && !fromApi) report('down')
+  else report('ok')
   if (!r.ok) {
     let msg = ''
     try { msg = (await r.json()).error ?? '' } catch { /* not JSON */ }
@@ -131,7 +153,7 @@ export interface Approval {
   repo: string
   forge: string
   job: string
-  source: 'claude' | 'push' | 'executor'
+  source: 'claude' | 'push' | 'executor' | 'cost'   // cost: soft job limit (#310)
   tool: string
   input: string // written by the agent: untrusted, shown as text only
   untrusted: boolean
@@ -189,4 +211,135 @@ export async function setProjectLimits(token: string, repo: string, t: { fiveHou
 
 export function pctError(n: number): string {
   return Number.isInteger(n) && n >= 1 && n <= 100 ? '' : 'limit: 1 to 100 %'
+}
+
+// The caller (#57). `repos` (repositories with write access) is the proposal on #342 for "My projects"; an API
+// without it leaves the scope at all projects or one project.
+interface Me { preferred_username?: string; email?: string; groups?: string[]; repos?: string[] }
+
+export async function getMe(token: string): Promise<Me> {
+  return (await call(token, 'GET', '/api/me')).json()
+}
+
+// Notifications (#347): Web Push subscriptions of this user and the settings per type and project.
+export type NotifyType = 'approvals' | 'stopped' | 'usage'
+export interface NotifyMute { project: string; type: NotifyType | '*' }
+export interface NotifySettings {
+  channels: string[] // on for this instance; empty: notifications are off
+  types: Record<NotifyType, boolean>
+  mutes: NotifyMute[]
+  projects: string[] // projects the user may mute
+  subscriptions: string[] // endpoints of the user's devices
+  snoozeMinutes: number
+  vapidPublicKey?: string
+}
+
+export async function getNotifySettings(token: string): Promise<NotifySettings> {
+  return (await call(token, 'GET', '/api/notify/settings')).json()
+}
+
+export async function putNotifySettings(token: string, s: { types: Partial<Record<NotifyType, boolean>>; mutes: NotifyMute[] }): Promise<NotifySettings> {
+  return (await call(token, 'PUT', '/api/notify/settings', s)).json()
+}
+
+export async function addPushSubscription(token: string, sub: PushSubscriptionJSON): Promise<void> {
+  await call(token, 'POST', '/api/push/subscriptions', { endpoint: sub.endpoint, keys: sub.keys })
+}
+
+export async function removePushSubscription(token: string, endpoint: string): Promise<void> {
+  await call(token, 'DELETE', `/api/push/subscriptions?endpoint=${encodeURIComponent(endpoint)}`)
+}
+
+// Jobs (#345): one issue or pull request of an agent, from the forge and the approvals, never from agent output.
+// `title` is written by people or the agent on the forge: untrusted, render as text.
+export type JobPhase = 'queued' | 'build' | 'review' | 'done'
+export interface Job {
+  id: string
+  agent: string
+  repo: string
+  forge: string
+  issue?: number
+  pr?: number
+  title: string
+  url?: string
+  prUrl?: string
+  phase: JobPhase
+  outcome?: 'merged' | 'closed' | string
+  created: string
+  updated: string
+  closed?: string
+}
+
+// Agent detail (#344): the drawer. 404 when the person may not see the agent.
+export interface PodView { name: string; phase: string; ready: boolean; restarts: number; started?: string; reason?: string }
+export interface WaitingItem {
+  kind: 'approval' | 'usage-pause' | 'paused' | 'blocked' | 'invalid' | string
+  ref?: string; job?: string; repo?: string; reason?: string; since?: string; until?: string
+}
+export interface AgentDetail extends Agent {
+  pods: PodView[]
+  waitingOn: WaitingItem[]
+  recentJobs: Job[]
+  guide?: string // the harness guide, written by the operator
+}
+
+export async function getAgentDetail(token: string, name: string): Promise<AgentDetail> {
+  return (await call(token, 'GET', `/api/agents/${encodeURIComponent(name)}`)).json()
+}
+
+// Platform health (#344), agentdev-admins only: 403 for everyone else.
+export type Health = 'ok' | 'degraded' | 'down' | 'absent' | 'unknown'
+export interface PlatformComponent { name: string; status: Health; detail: string; command: string }
+export interface Platform { version: string; checked: string; components: PlatformComponent[] }
+
+export async function getPlatform(token: string): Promise<Platform> {
+  return (await call(token, 'GET', '/api/platform')).json()
+}
+
+// Audit trail of the write API (#91), agentdev-admins only.
+export type AuditResult = 'ok' | 'denied' | 'invalid' | 'error' | 'unauthenticated'
+export interface AuditState { repo: string; forge: string; claudeSecret?: string; maxConcurrent: number; scaleToZero: boolean; paused: boolean }
+export interface AuditEntry {
+  time: string
+  who: { sub: string; username: string; forgeUser: string; groups?: string[] }
+  action: 'patch' | 'create' | 'delete' | string
+  agent: string
+  result: AuditResult
+  reason?: string
+  request?: unknown
+  before: AuditState | null
+  after: AuditState | null
+  grant?: string
+  keepState?: boolean
+  remote?: string
+}
+export interface AuditFilter { agent?: string; result?: AuditResult | ''; since?: string; cursor?: string }
+
+export async function listAudit(token: string, f: AuditFilter): Promise<{ entries: { id: number; entry: AuditEntry }[]; next_cursor?: string }> {
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+  return (await call(token, 'GET', `/api/audit?${q}`)).json()
+}
+
+// The HTTP status of a failed call (403: not allowed, 404: not found or not visible), 0 when it has none.
+export function statusOf(e: unknown): number {
+  return e instanceof ApiError ? e.status : 0
+}
+
+// GET /api/jobs with the scope filters. Reads every page (500 per page, at most 10 pages).
+export async function listJobs(token: string, f: { agent?: string; repo?: string; scope?: string; phase?: JobPhase }): Promise<{ jobs: Job[]; unavailable?: string[] }> {
+  const jobs: Job[] = []
+  let unavailable: string[] | undefined
+  let cursor = ''
+  for (let i = 0; i < 10; i++) {
+    const q = new URLSearchParams({ limit: '500' })
+    for (const [k, v] of Object.entries(f)) if (v) q.set(k, v)
+    if (cursor) q.set('cursor', cursor)
+    const r = await (await call(token, 'GET', `/api/jobs?${q}`)).json()
+    jobs.push(...(r.jobs ?? []))
+    unavailable = r.unavailable ?? unavailable
+    if (!r.next_cursor) break
+    cursor = r.next_cursor
+  }
+  return { jobs, unavailable }
 }

@@ -1,0 +1,49 @@
+# VAPID key pair of the role api (#347), kind source: generated once, kept on the next run, valid base64url P-256.
+# No cluster. Run: ansible-playbook infra/ansible/tests/api_notify_keys.yml
+- name: VAPID key pair from files (#347)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    platform_sm_prefix: platform-
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/api/defaults/main.yml
+
+    - name: Temporary secrets directory
+      ansible.builtin.tempfile: {state: directory}
+      register: tmp
+
+    - name: First run
+      ansible.builtin.include_tasks: ../roles/api/tasks/notify_keys.yml
+      vars: {api_secret_source: files, api_secrets_dir: "{{ tmp.path }}", api_notify_channels: [webpush]}
+
+    - name: Key pair made
+      ansible.builtin.assert:
+        that:
+          - api_vapid_file is changed
+          - api_vapid.publicKey is match('^B[A-Za-z0-9_-]{86}$')
+          - api_vapid.privateKey is match('^[A-Za-z0-9_-]{43}$')
+        quiet: true
+
+    - name: Keep the first key
+      ansible.builtin.set_fact: {first_key: "{{ api_vapid.publicKey }}"}
+
+    - name: Second run
+      ansible.builtin.include_tasks: ../roles/api/tasks/notify_keys.yml
+      vars: {api_secret_source: files, api_secrets_dir: "{{ tmp.path }}", api_notify_channels: [webpush]}
+
+    - name: Key pair kept, file mode 0600
+      ansible.builtin.stat: {path: "{{ tmp.path }}/notify-vapid"}
+      register: f
+
+    - name: Check
+      ansible.builtin.assert:
+        that:
+          - api_vapid_file is not changed
+          - api_vapid.publicKey == first_key
+          - f.stat.mode == '0600'
+        quiet: true
+
+    - name: Remove the directory
+      ansible.builtin.file: {path: "{{ tmp.path }}", state: absent}

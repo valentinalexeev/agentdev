@@ -25,3 +25,5 @@ images/api/api
 images/*/bin/
 images/**/*.test
 images/forge/forge
+images/credproxy/credproxy
+images/operator/operator

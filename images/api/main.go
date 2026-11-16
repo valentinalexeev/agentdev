@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -91,7 +92,10 @@ func main() {
 		log.Printf("github permission checks on %s (%s)", gh.api, map[bool]string{true: "App", false: "token"}[gh.key != nil])
 	}
 	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
-		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}} // #27, 0 = no cap
+		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}, // #27, 0 = no cap
+		events: store}
+	wr.jobs = newJobCache(forgeJobs{gitea: gp, github: gh}, 30*time.Second) // #345, jobs.go
+	wr.platform = newPlatformChecker(agents, forgeProbeFrom(gp, gh), cfg.Namespace, env("PLATFORM_NS", "agentdev-platform"))
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
 	}
@@ -112,6 +116,26 @@ func main() {
 		isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 		go func() { log.Fatal(isrv.ListenAndServe()) }()
+	}
+	if os.Getenv("CHAT_SESSIONS") == "true" { // console chat sessions (#346, chat.go)
+		chatSvc = chatFromEnv(ctx, wr, agents, store, gh)
+	}
+	// notifications for each user (#347): NOTIFY_CHANNELS lists the channels on for this instance (webpush); the
+	// NotificationChannel object in PLATFORM_NS gives the VAPID key and the allowed push hosts
+	if chans := strings.Split(os.Getenv("NOTIFY_CHANNELS"), ","); slices.Contains(chans, "webpush") {
+		ns, _ := store.(notifyStore)
+		if ns == nil {
+			ns = newMemNotify()
+		}
+		cs := &channelSource{k: agents, ns: env("PLATFORM_NS", "agentdev-platform"), enabled: true}
+		go cs.run(ctx)
+		var ar *approvalReader
+		if os.Getenv("APPROVALS") == "true" {
+			ar = &approvalReader{store: agents, w: wr, agents: agents}
+		}
+		p := newPusher(ns, wr, ar, cs.get)
+		wr.notify = &notifyAPI{store: ns, w: wr, channels: cs.get, limit: newRateLimiter(30, time.Minute), push: p}
+		go p.run(ctx)
 	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}
@@ -229,6 +253,24 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cannot read agents"})
 			return
 		}
+		// R35 (#380): an admin sees every agent; any other user only the agents with a repository where the user has
+		// write access on the forge (the rule of GET /api/security-events). wr nil (tests only): no filter.
+		if wr != nil {
+			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+			if names := wr.visibleAgents(r.Context(), id); names != nil {
+				keep := make(map[string]bool, len(names))
+				for _, n := range names {
+					keep[n] = true
+				}
+				vis := make([]agent, 0, len(list))
+				for _, a := range list {
+					if keep[a.Name] {
+						vis = append(vis, a)
+					}
+				}
+				list = vis
+			}
+		}
 		// counter badge on the overview (#70): events of the last 7 days per agent
 		if events != nil {
 			counts, err := events.Counts(r.Context(), time.Now().Add(-7*24*time.Hour))
@@ -240,11 +282,48 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			}
 		}
 		addBudgets(r.Context(), list) // #66
-		writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+		if wr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+			return
+		}
+		// repo, scope=mine, limit and cursor (#345, scope.go); without them the answer is as before
+		q := r.URL.Query()
+		id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+		sc, err := wr.scopeOf(r.Context(), id, q)
+		if err == nil && q.Get("limit") == "" && q.Get("cursor") == "" && q.Get("repo") == "" && !sc.mine {
+			writeJSON(w, http.StatusOK, map[string]any{"agents": list})
+			return
+		}
+		pg, perr := parsePage(q, 1<<20)
+		if err == nil {
+			err = perr
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		kept := list[:0]
+		for _, a := range list {
+			if sc.agent(a) {
+				kept = append(kept, a)
+			}
+		}
+		span, next := pg.slice(len(kept))
+		resp := map[string]any{"agents": kept[span[0]:span[1]]}
+		if next != "" {
+			resp["next_cursor"] = next
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})))
 	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
 	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
+		mux.Handle("GET /api/jobs", auth(verify, http.HandlerFunc(wr.listJobs)))             // #345, jobs.go
+		mux.Handle("GET /api/stream", auth(verify, wr.stream()))                             // #345, stream.go (SSE)
+		mux.Handle("GET /api/agents/{name}", auth(verify, http.HandlerFunc(wr.agentDetail))) // #344, detail.go
+		if wr.platform != nil {
+			mux.Handle("GET /api/platform", auth(verify, wr.platform.handler(wr.adminGroup))) // #344, admins only
+		}
 		mux.Handle("PATCH /api/agents/{name}", auditAuth("patch", auth(verify, http.HandlerFunc(wr.patch))))
 		mux.Handle("POST /api/agents", auditAuth("create", auth(verify, http.HandlerFunc(wr.create))))
 		mux.Handle("GET /api/audit", auth(verify, listAudit(auditDB, wr.adminGroup))) // #91, admins only
@@ -256,13 +335,57 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 			mux.Handle("POST /api/approvals/{name}/decision", auditAuth("approval-decision", auth(verify, http.HandlerFunc(ar.decide))))
 		}
 	}
+	if wr != nil && wr.notify != nil { // notifications for each user (#347), notify.go and push.go
+		n := wr.notify
+		mux.Handle("GET /api/push/vapid-public-key", auth(verify, http.HandlerFunc(n.vapidKey)))
+		mux.Handle("POST /api/push/subscriptions", auth(verify, http.HandlerFunc(n.subscribe)))
+		mux.Handle("DELETE /api/push/subscriptions", auth(verify, http.HandlerFunc(n.unsubscribe)))
+		mux.Handle("GET /api/notify/settings", auth(verify, http.HandlerFunc(n.getSettings)))
+		mux.Handle("PUT /api/notify/settings", auth(verify, http.HandlerFunc(n.putSettings)))
+		// no OIDC token: the service worker has none. The signed, single-use action token is the credential; runAction
+		// audits every outcome itself (auditAuth would log a 401 here as a missing bearer token)
+		mux.Handle("POST /api/push/action", http.HandlerFunc(n.action))
+	}
 	if wr != nil && wr.usage != nil { // subscription usage limits (#93), see usage.go
 		// every signed-in user, filtered by forge write access (review #102, R35 #308); Secret names for admins only
 		mux.Handle("GET /api/usage", auth(verify, http.HandlerFunc(wr.getUsage)))
 		mux.Handle("PUT /api/usage/global", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putGlobal))))
 		mux.Handle("PUT /api/usage/projects/{owner}/{repo}", auditAuth("set-limits", auth(verify, http.HandlerFunc(wr.putProject))))
 	}
+	if chatSvc != nil && wr != nil {
+		chatSvc.routes(mux, verify)
+	}
 	return mux
+}
+
+// chatSvc serves /api/sessions (#346); nil when CHAT_SESSIONS is not true.
+var chatSvc *chatAPI
+
+// chatFromEnv builds the chat service. A missing CHAT_TOKEN_KEY or worker image stops the API (fail closed).
+func chatFromEnv(ctx context.Context, wr *writer, agents *kubeAgents, events eventStore, gh *githubForge) *chatAPI {
+	key := os.Getenv("CHAT_TOKEN_KEY")
+	if len(key) < 32 {
+		log.Fatal("CHAT_SESSIONS=true needs CHAT_TOKEN_KEY (Secret agentdev-api-chat, 32 characters or more)")
+	}
+	jc := chatJobConfig{Namespace: agents.ns, WorkerImage: os.Getenv("CHAT_WORKER_IMAGE"), PullPolicy: env("CHAT_IMAGE_PULL_POLICY", "IfNotPresent"),
+		ForgeURL: os.Getenv("CHAT_FORGE_URL"), ClaudeProxyURL: os.Getenv("CHAT_CLAUDE_PROXY_URL"), EgressProxy: os.Getenv("CHAT_EGRESS_PROXY"),
+		IdleSeconds: envInt("CHAT_IDLE_SECONDS", 1800), MaxSeconds: int64(envInt("CHAT_MAX_SECONDS", 28800))}
+	if jc.WorkerImage == "" || jc.ForgeURL == "" || jc.ClaudeProxyURL == "" || jc.EgressProxy == "" {
+		log.Fatal("CHAT_SESSIONS=true needs CHAT_WORKER_IMAGE, CHAT_FORGE_URL, CHAT_CLAUDE_PROXY_URL and CHAT_EGRESS_PROXY")
+	}
+	days := envInt("CHAT_RETENTION_DAYS", 30)
+	chatRetentionDays = days
+	var store chatStore = newMemChat()
+	if pg, ok := events.(*pgStore); ok {
+		store = pg
+	}
+	c := newChatAPI(ctx, wr, agents, store, &kubeChat{c: agents.c, cfg: jc},
+		newForgeIssues(os.Getenv("FORGE_URL"), os.Getenv("CHAT_ISSUE_TOKEN"), gh),
+		chatConfig{TokenKey: []byte(key), MaxTotal: envCount("CHAT_MAX_SESSIONS"), MaxPerUser: envCount("CHAT_MAX_SESSIONS_PER_USER"),
+			Retention: time.Duration(days) * 24 * time.Hour})
+	c.resume()
+	log.Printf("chat sessions on (idle end %ds, transcripts %d days)", jc.IdleSeconds, days)
+	return c
 }
 
 type ctxIdentity struct{}

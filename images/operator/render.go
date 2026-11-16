@@ -57,6 +57,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	s.Annotations["agentdev/forge"] = forge
 
 	s.Spec.ServiceName = "agent-" + n
+	// #174: the operator replaces outdated pods itself after draining them (drain.go), never the StatefulSet controller
+	s.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 	s.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"agent": n}}
 	// keep the agent's state volume when the Agent is deleted: re-adding the agent resumes its work
 	s.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
@@ -81,7 +83,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		{Key: "agentdev/pool", Operator: corev1.TolerationOpEqual, Value: "sandboxes", Effect: corev1.TaintEffectNoSchedule},
 		{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule},
 	}
+	// #352: own service account per agent, but never its API token: only the projected claude-proxy token below
+	p.ServiceAccountName = "agent-" + n
 	p.AutomountServiceAccountToken = ptr.To(false)
+	// #174: time for the loop's SIGTERM handler to save the work in progress of running jobs
+	p.TerminationGracePeriodSeconds = ptr.To(r.D.graceSeconds())
 	// fsGroup 1000: both containers can write the shared /state (the sidecar appends the wake file there)
 	p.SecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true), FSGroup: ptr.To[int64](1000)}
 	// own process namespace per container (the default, set explicitly): the agent container cannot read the
@@ -96,7 +102,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// blocks the pod (the loop then runs with the security rules only)
 		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
-			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}}}
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}},
+		// drain (#174): the pod's own annotations, where the operator (or an admin) sets agentdev/drain
+		{Name: "podinfo", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0o444),
+			Items: []corev1.DownwardAPIVolumeFile{{Path: "annotations", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations"}}}}}}}
+	p.Volumes = append(p.Volumes, r.proxyTokenVolumes()...)
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -145,10 +155,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
 		), r.claudeProxyEnv(n)...),
+		VolumeMounts: append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
+			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, r.proxyTokenMounts()...),
 		EnvFrom: r.claudeEnvFrom(a),
-		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
-		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
-			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
@@ -166,6 +176,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
+			env("CLAUDE_PROXY_URL", r.D.ClaudeProxyURL), // #310: cost approvals read the job state from GET /status
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more
@@ -180,6 +191,14 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.
+func (d Defaults) graceSeconds() int64 {
+	if n, err := strconv.ParseInt(d.GraceSeconds, 10, 64); err == nil && n >= 30 && n <= 3600 {
+		return n
+	}
+	return 300
 }
 
 // claimTemplates is the agent's volume layout (#173): one claim, state, on the agent StorageClass (empty: the cluster
@@ -264,6 +283,33 @@ func (r *AgentReconciler) claudeProxyEnv(n string) []corev1.EnvVar {
 	return []corev1.EnvVar{{Name: "ANTHROPIC_BASE_URL", Value: r.D.ClaudeProxyURL},
 		{Name: "ANTHROPIC_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN"}}}}
+}
+
+// Workload identity (#352): a projected service account token of the agent's own service account, audience
+// claude-proxy, renewed by the kubelet. Only the agent container mounts it; the worker hands it to Claude Code through
+// apiKeyHelper, and the proxy checks it with TokenReview. Without the credential proxy there is nothing to call.
+const (
+	proxyTokenVolume   = "proxy-token"
+	ProxyTokenDir      = "/var/run/secrets/agentdev/proxy"
+	proxyTokenAudience = "claude-proxy"
+	proxyTokenSeconds  = 600
+)
+
+func (r *AgentReconciler) proxyTokenVolumes() []corev1.Volume {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.Volume{{Name: proxyTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+		DefaultMode: ptr.To[int32](0o444), // fsGroup gives group read; the agent runs as uid 1000
+		Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+			Audience: proxyTokenAudience, ExpirationSeconds: ptr.To[int64](proxyTokenSeconds), Path: "token"}}}}}}}
+}
+
+func (r *AgentReconciler) proxyTokenMounts() []corev1.VolumeMount {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: proxyTokenVolume, MountPath: ProxyTokenDir, ReadOnly: true}}
 }
 
 // usageReports: "off" when the Claude credential proxy reports usage (#66), so the sidecar refuses POST /usage.

@@ -18,7 +18,7 @@
 #   --ingress     gateway (default): the GKE Gateway of the role ingress. external (#160): your own reverse proxy
 #                 publishes the hosts (ingress.mode external); the Gateway-only checks (redirect, SSL policy) are MANUAL
 #   --auth-host   the authentik login host (ingress.auth_host): the sso section checks the issuer it publishes
-#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github
+#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,chat,sso,github
 # Environment (optional):
 #   E2E_READER_TOKEN  OIDC access token of a person WITHOUT write access to the agent's repo (API permission check)
 #   AGENTS_NS, PLATFORM_NS, EXEC_NS  namespaces (defaults as in config.env)
@@ -227,6 +227,27 @@ if section claude; then
     case "$base" in *claude-proxy*) pass "agent uses claude-proxy (ANTHROPIC_BASE_URL)";; *) fail "ANTHROPIC_BASE_URL does not point to claude-proxy";; esac
     code=$(probe forge https://api.anthropic.com/)
     ! reached "$code" && [ "$code" != 404 ]; check $? "forge: api.anthropic.com is refused" "HTTP $code"
+    # workload identity (#352, R107): the proxy refuses a token of the agent's service account for another audience,
+    # and in mode token also the HMAC key. Each request goes from the agent container, with only the header changed.
+    pcall='curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $1" "$ANTHROPIC_BASE_URL/v1/messages"'
+    mode=$(k -n "$AGENTS_NS" get deploy claude-proxy -o json | jq -r '[.spec.template.spec.containers[0].env[]?|select(.name=="CLAUDE_PROXY_AUTH")|.value][0] // "key"')
+    if [ "$mode" = key ]; then skip "claude-proxy token auth is off (CLAUDE_PROXY_AUTH=key or a proxy before 1.1)"
+    else
+      other=$(k -n "$AGENTS_NS" create token "agent-$AGENT" --audience other --duration 10m 2>/dev/null)
+      if [ -n "$other" ]; then
+        code=$(kexec agent sh -c "$pcall" pcall "$other" 2>/dev/null)
+        [ "$code" = 401 ]; check $? "claude-proxy refuses a token of agent-$AGENT for another audience (R107)" "HTTP $code"
+      else fail "cannot create a token for service account agent-$AGENT (operator 1.1 creates it)"; fi
+      kexec agent test -s /var/run/secrets/agentdev/proxy/token 2>/dev/null
+      check $? "agent container has the projected claude-proxy token (#352)"
+      ! kexec forge test -e /var/run/secrets/agentdev/proxy/token 2>/dev/null; check $? "forge container has no claude-proxy token"
+      code=$(kexec agent sh -c 'curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $(cat /var/run/secrets/agentdev/proxy/token)" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" != 401 ] && [ -n "$code" ]; check $? "claude-proxy accepts the agent's projected token (TokenReview reaches the API server)" "HTTP $code"
+    fi
+    if [ "$mode" = token ]; then
+      code=$(kexec agent sh -c 'k="${ANTHROPIC_AUTH_TOKEN:-}"; [ -n "$k" ] || { echo none; exit; }; curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $k" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" = 401 ] || [ "$code" = none ]; check $? "claude-proxy in mode token refuses the HMAC key (R107)" "HTTP $code"
+    else skip "HMAC key refusal (CLAUDE_PROXY_AUTH=$mode, not token)"; fi
     # the Claude Secrets are mounted by claude-proxy only
     users=$(k -n "$AGENTS_NS" get pods -o json | jq -r '.items[]|select(.metadata.labels.app!="claude-proxy")|.metadata.name as $p|
       [(.spec.volumes[]?|.secret.secretName//empty),(.spec.containers[]|(.env[]?|.valueFrom.secretKeyRef.name//empty),(.envFrom[]?|.secretRef.name//empty))]|
@@ -374,6 +395,80 @@ if section api; then
       code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -H "Authorization: Bearer $E2E_READER_TOKEN" "https://$HOST/api/audit")
       [ "$code" = 403 ]; check $? "a person outside agentdev-admins cannot read the audit (403)" "HTTP $code"
     else skip "write permission check (set E2E_READER_TOKEN to a reader's OIDC token)"; fi
+  fi
+fi
+
+# ---------------------------------------------------------------- console chat boundaries (#346, R101)
+if section chat; then
+  if ! k -n "$PLATFORM_NS" get deploy agentdev-api >/dev/null 2>&1; then skip "console chat checks: agentdev-api is not deployed"
+  else
+    # the session server port 7681 accepts only the API (NetworkPolicy chat-session-server)
+    np=$(k -n "$AGENTS_NS" get networkpolicy chat-session-server -o json 2>/dev/null)
+    from=$(echo "$np" | jq -c '[.spec.ingress[]?|select(any(.ports[]?; .port==7681))|.from[]?]' 2>/dev/null)
+    [ "$from" = "[{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"$PLATFORM_NS\"}},\"podSelector\":{\"matchLabels\":{\"app\":\"agentdev-api\"}}}]" ]
+    check $? "NetworkPolicy chat-session-server: only agentdev-api may reach port 7681" "from: ${from:-no policy}"
+    cip=$(k -n "$AGENTS_NS" get pods -l app=agent-chat,agentdev/console=true --field-selector=status.phase=Running -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)
+    if $KIND; then skip "live 7681 probe: kind does not enforce NetworkPolicy (manifests/platform.yaml.tmpl)"
+    elif [ -n "$cip" ]; then
+      code=$(probe agent "http://$cip:7681/state" direct)
+      ! reached "$code" && [ "$code" != 401 ]; check $? "agent pod (not the API) cannot reach a console chat pod on 7681" "HTTP $code"
+    else manual "no console chat session runs: start one in the console and re-run --only chat for the live 7681 probe"; fi
+
+    # the admission policy holds Jobs from the API's service account to the chat shape (server dry run, nothing is created)
+    sa="system:serviceaccount:$PLATFORM_NS:agentdev-api"
+    img=$(k -n "$PLATFORM_NS" get deploy agentdev-api -o json | jq -r '.spec.template.spec.containers[]|select(.name=="api")|.env[]?|select(.name=="CHAT_WORKER_IMAGE")|.value')
+    # job <image> <secret> <caps-add json> [service account] [token audience] [extra volume json]: the shape of
+    # images/api/chat_kube.go, with the agent's service account and its projected claude-proxy token (#400)
+    job() {
+      jq -n --arg ns "$AGENTS_NS" --arg img "$1" --arg sec "$2" --argjson add "$3" --arg a "$AGENT" \
+        --arg sa "${4:-agent-$AGENT}" --arg aud "${5:-claude-proxy}" --argjson xv "${6:-[]}" '{apiVersion:"batch/v1",kind:"Job",
+        metadata:{name:"chat-e2e-admission",namespace:$ns,labels:{app:"agent-chat","agentdev/console":"true","agentdev/chat-agent":$a,session:"chat-e2e-admission"}},
+        spec:{backoffLimit:0,template:{metadata:{labels:{app:"agent-chat","agentdev/console":"true"}},spec:{restartPolicy:"Never",
+          runtimeClassName:"gvisor",serviceAccountName:$sa,automountServiceAccountToken:false,
+          volumes:([{name:"state",emptyDir:{}},
+            {name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:$aud,expirationSeconds:600,path:"token"}}]}}] + $xv),
+          containers:[{name:"chat",image:$img,command:["true"],
+            env:[{name:"ANTHROPIC_AUTH_TOKEN",valueFrom:{secretKeyRef:{name:$sec,key:"ANTHROPIC_AUTH_TOKEN",optional:true}}}],
+            volumeMounts:[{name:"proxy-token",mountPath:"/var/run/secrets/agentdev/proxy",readOnly:true}],
+            securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"],add:$add}}}]}}}}'; }
+    try() { job "$@" | k create --dry-run=server --as="$sa" -f - -o name 2>&1; }
+    denied() { echo "$1" | grep -q 'agentdev-api-chat-jobs'; }
+    if [ -z "$img" ]; then skip "chat admission checks: CHAT_WORKER_IMAGE not set on agentdev-api"
+    else
+      p="agent-$AGENT-proxy"
+      out=$(try "$img" "$p" '[]'); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: the API may create a console chat Job of the expected shape (agent-$AGENT, projected claude-proxy token; control)" "$(echo "$out" | head -1)"
+      out=$(try "busybox:latest" "$p" '[]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job with another image" "$(echo "$out" | head -1)"
+      out=$(try "$img" "agentdev-api-forge" '[]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that reads another Secret" "$(echo "$out" | head -1)"
+      out=$(try "$img" "$p" '["NET_ADMIN"]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that adds capabilities" "$(echo "$out" | head -1)"
+      # #400: only the service account of the Job's own agent, only audience claude-proxy, no Secret volume
+      for other in default agentdev-api agentdev-operator "agent-$AGENT-x"; do
+        out=$(try "$img" "$p" '[]' "$other"); denied "$out"
+        check $? "admission: the API cannot create a chat Job of agent $AGENT with service account $other" "$(echo "$out" | head -1)"
+      done
+      out=$(try "$img" "$p" '[]' "" "kubernetes"); denied "$out"
+      check $? "admission: the API cannot create a chat Job with a projected token for another audience" "$(echo "$out" | head -1)"
+      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","secret":{"secretName":"agentdev-api-forge"}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
+      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","projected":{"sources":[{"secret":{"name":"agentdev-api-forge"}}]}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
+    fi
+    # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
+    # the operator of this script, so the check runs on every cluster (#389 review)
+    other=e2e-sec-nonconsole-$$
+    if k -n "$AGENTS_NS" create -f - >/dev/null 2>&1 <<EOF
+{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"$other","labels":{"app":"e2e-security"}},
+ "spec":{"suspend":true,"ttlSecondsAfterFinished":60,"template":{"spec":{"restartPolicy":"Never",
+ "containers":[{"name":"x","image":"busybox:latest","command":["true"]}]}}}}
+EOF
+    then
+      out=$(k -n "$AGENTS_NS" delete job "$other" --dry-run=server --as="$sa" 2>&1); echo "$out" | grep -q 'agentdev-api-chat-jobs-delete'
+      check $? "admission: the API cannot delete a Job that is not a console chat Job" "$(echo "$out" | head -1)"
+      k -n "$AGENTS_NS" delete job "$other" --wait=false >/dev/null 2>&1 || true
+    else skip "delete check: cannot create the dummy Job $other in $AGENTS_NS"; fi
   fi
 fi
 

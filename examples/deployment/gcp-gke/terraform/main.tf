@@ -10,7 +10,7 @@ terraform {
 }
 
 module "agentdev" {
-  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.0.0"
+  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.0.1"
 
   project_id         = var.project_id
   region             = var.region

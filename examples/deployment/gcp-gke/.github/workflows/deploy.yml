@@ -16,6 +16,22 @@ on:
 concurrency: {group: deploy, cancel-in-progress: false}   # never two applies at once
 permissions: {contents: read}
 jobs:
+  template-drift:   # agentdev #317: warn when this copy of the template is behind the pinned release; no credentials
+    if: github.event_name == 'pull_request'
+    permissions: {contents: read}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare with examples/deployment/gcp-gke of the pinned release (warning in the job summary)
+        run: |
+          ref=$(grep -oE 'agentdev//infra/terraform\?ref=[^"]+' terraform/main.tf | sed 's/.*ref=//')
+          git clone --quiet --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev-drift
+          git -C ../agentdev-drift fetch --quiet --depth 1 origin "refs/tags/$ref:refs/tags/$ref"
+          if [ -x ../agentdev-drift/scripts/template-drift.sh ]; then
+            AGENTDEV_REPO=../agentdev-drift ../agentdev-drift/scripts/template-drift.sh .
+          else
+            echo "::warning title=template drift::agentdev $ref has no scripts/template-drift.sh (added in 1.1.0)"
+          fi
   validate:   # PRs: no GCP auth, so PR code never holds the apply identity
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -31,8 +47,10 @@ jobs:
       - name: ansible syntax-check at the pinned release
         working-directory: ansible
         run: |
-          tag=v$(sed -nE 's/^image_tag:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' instance.yml)   # "1.1.0" -> v1.1.0
-          git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml --syntax-check
@@ -92,7 +110,38 @@ jobs:
         run: |
           echo "terraform plan failed (exit ${{ steps.plan.outputs.rc }})"
           exit 1
+  # agentdev #314: read-only checks before anything changes (Claude secret formats, same release for playbook and
+  # images, required CRDs, image_tag on ghcr.io). Only on main for now: on PRs it needs a read-only identity (#291).
+  preflight:
+    if: github.event_name == 'push'
+    permissions: {contents: read, id-token: write}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ansible}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: gke-gcloud-auth-plugin}
+      - name: agentdev checkout at the pinned release
+        run: |
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+          gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: preflight (read-only)
+        run: |
+          if [ ! -f ../agentdev/scripts/upgrade-check.sh ]; then
+            echo "::notice::the pinned agentdev release has no preflight, skipped"; exit 0
+          fi
+          bash ../agentdev/scripts/upgrade-check.sh instance.yml
   infra:
+    needs: preflight
     if: github.event_name == 'push'
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
@@ -128,8 +177,10 @@ jobs:
         with: {install_components: gke-gcloud-auth-plugin}
       - name: agentdev playbook at the pinned release
         run: |
-          tag=v$(sed -nE 's/^image_tag:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' instance.yml)   # "1.1.0" -> v1.1.0
-          git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"

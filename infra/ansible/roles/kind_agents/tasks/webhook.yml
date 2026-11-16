@@ -1,0 +1,55 @@
+---
+# Gitea webhook (was forge_webhook in lib-forge.sh): one hook per repo to the router. Hooks to another router URL
+# (older per-agent hooks) are removed; the hook is created again only when it is missing or a secret file is new.
+- name: Hooks of {{ kind_agents_repo }}
+  ansible.builtin.uri:
+    url: "{{ kind_agents_forge_url }}/api/v1/repos/{{ kind_agents_repo }}/hooks"
+    user: "{{ kind_agents_forge_admin_user }}"
+    password: "{{ kind_agents_forge_admin_password }}"
+    force_basic_auth: true
+  register: kind_agents_hooks
+  check_mode: false
+  no_log: true
+
+- name: Hook settings
+  ansible.builtin.set_fact:
+    kind_agents_hook_url: http://webhook-router.{{ kind_agents_ns }}.svc.cluster.local:8080/
+    kind_agents_hook_ours: >-
+      {{ kind_agents_hooks.json | selectattr('config.url', 'search', '\.' ~ kind_agents_ns ~ '\.svc\.cluster\.local')
+         | list }}
+
+- name: Remove old or outdated router hooks
+  ansible.builtin.uri:
+    url: "{{ kind_agents_forge_url }}/api/v1/repos/{{ kind_agents_repo }}/hooks/{{ item.id }}"
+    method: DELETE
+    user: "{{ kind_agents_forge_admin_user }}"
+    password: "{{ kind_agents_forge_admin_password }}"
+    force_basic_auth: true
+    status_code: [204, 404]
+  loop: "{{ kind_agents_hook_ours }}"
+  loop_control: {label: "{{ item.id }}"}
+  when: item.config.url != kind_agents_hook_url or kind_agents_secret_new['router-gitea.secret'] | bool
+        or (kind_agents_hook_ours | selectattr('config.url', 'equalto', kind_agents_hook_url) | list | length) > 1
+  changed_when: true
+  no_log: true
+
+- name: Router hook {{ kind_agents_hook_url }}
+  ansible.builtin.uri:
+    url: "{{ kind_agents_forge_url }}/api/v1/repos/{{ kind_agents_repo }}/hooks"
+    method: POST
+    user: "{{ kind_agents_forge_admin_user }}"
+    password: "{{ kind_agents_forge_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      type: gitea
+      active: true
+      events: [issues, issue_assign, issue_comment, pull_request, pull_request_assign, pull_request_comment,
+               pull_request_review_approved, pull_request_review_rejected, pull_request_review_comment]
+      config: {url: "{{ kind_agents_hook_url }}", content_type: json, secret: "{{ kind_agents_secret['router-gitea.secret'] }}"}
+    status_code: 201
+  when: >-
+    kind_agents_secret_new['router-gitea.secret'] | bool or
+    (kind_agents_hook_ours | selectattr('config.url', 'equalto', kind_agents_hook_url) | list | length) != 1
+  changed_when: true
+  no_log: true

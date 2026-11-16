@@ -1,7 +1,11 @@
 # Copy to instance.yml. No secrets here: values live in Secret Manager (see agentdev infra/ansible/README.md).
 gcp_project: my-agentdev
 gcp_zone: europe-west4-a
-image_tag: "1.0.0"                # same release as terraform/main.tf ref=v1.0.0 (image tags drop the v)
+# Two keys pin one agentdev release (change them together with terraform/main.tf ref=):
+#   agentdev_ref: the git tag the CI clones for the playbook (with the v)
+#   image_tag:    the image tag the pods pull (the same version without the v)
+agentdev_ref: v1.0.1
+image_tag: "1.0.1"
 reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
@@ -59,8 +63,15 @@ github_app:
 #   approval_deny_accounts: []            # forge logins that never decide approvals (service accounts, R83)
 #   max_agents: 0                         # agentdev #27: cap on all agents for UI/API creates; 0 = no cap
 #   max_agents_per_user: 0                #   cap per person (agentdev-admins exempt); 0 = no cap
+# Notifications for each user (agentdev #347): channels on for the instance. Users subscribe and mute in the console Settings.
+# The VAPID key pair is made once (Secret Manager platform-notify-vapid). push_hosts: the push services the API may call.
+# notifications:
+#   channels: [webpush]                   # Bark: #402
+#   subject: mailto:ops@example.com       # VAPID contact for the push services (mailto: or https://)
+#   push_hosts: [fcm.googleapis.com, updates.push.services.mozilla.com, "*.push.apple.com", "*.notify.windows.com"]
 # Approvals (agentdev #67) are on by default and need api.oidc_issuer. To turn them off:
 # approvals: {enabled: false}
+# rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174: wait for running jobs before an agent pod is replaced
 # Public HTTPS entry point (agentdev #120): from `terraform output ingress` after terraform public_hosts is set.
 # DNS: an A record for each name -> `terraform output webhook_ip`. github_app.public_url = https://<webhook_host>.
 # ingress:
@@ -80,10 +91,24 @@ github_app:
 #     namespace: tailscale
 #     pod_selector: {app: ts-ingress}       # optional
 #     # cidrs: [100.64.0.0/10]              # a reverse proxy outside the cluster
+#     deploy:                               # optional (#316): the playbook runs the funnel forwarder (headlamp)
+#       image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # pinned: a release, a sha tag or a digest
+#       control_url: https://headscale.example.com
+#       # api_url: http://funnel-ingress:9100  # default
+#       # authkey_secret: funnel-sidecar-authkey   # Secret Manager secret with the pre-auth key (default)
 # The proxy sets Host, X-Forwarded-Proto and X-Forwarded-For; authentik trusts them only from these ranges:
 # authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
 # Optional: default subscription usage limits in percent (#93). Admins change them later in the web UI.
 # usage: {five_hour: 80, weekly: 90}
+# Optional (#196): Claude budget per agent per 24 h in cost units (input-token equivalents of Sonnet; 0 = no limit),
+# and the prices ConfigMap. Set usd_per_million_units to show an estimated USD spend in the web UI.
+# claude_budget_units: 2000000
+# claude_prices: {usd_per_million_units: 3}
+# Optional (#196, #310): cost units per job. At claude_job_approval_units the agent asks a person on the issue or PR
+# (needs approvals); each approval adds claude_job_approval_step_units. claude_job_budget_units is the hard stop.
+# claude_job_approval_units: 300000
+# claude_job_approval_step_units: 300000
+# claude_job_budget_units: 1200000
 # Optional SIEM outputs (#70, #71). Addresses only; secret values go into the Secret Manager secret security-siem.
 # Setting security replaces the whole default dict: repeat pause_after, retention_days, max_per_agent if you set it.
 # security:

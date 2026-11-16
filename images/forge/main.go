@@ -132,6 +132,8 @@ func main() {
 	s.drv, s.rules, s.git.drv = drv, drv.rules(), drv
 	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
 		s.enableApprovals(apiURL, timeout)
+		// #310: cost approvals read the job state from claude-proxy (CLAUDE_PROXY_URL, set by the operator)
+		s.appr.proxyURL = strings.TrimRight(os.Getenv("CLAUDE_PROXY_URL"), "/")
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
 	}
 	if err := s.git.init(); err != nil {
