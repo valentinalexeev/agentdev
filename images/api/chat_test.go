@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -481,6 +482,57 @@ func TestChatJobShape(t *testing.T) {
 	}
 	if err := k.StopSession(context.Background(), "chat-alice-0000abcd"); err != errChatGone {
 		t.Fatalf("second stop: %v", err)
+	}
+}
+
+// #400: the agent's service account, no API token, and exactly one projected token (audience claude-proxy, 600 s)
+// mounted only in the chat container; the HMAC key stays for mixed versions.
+func TestChatJobProjectedToken(t *testing.T) {
+	k := &kubeChat{cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: "w:1", ClaudeProxyURL: "http://proxy"}}
+	p := k.job(chatSession{ID: "chat-bob-0000abcd", Agent: "bob", Repo: "owner/x"}, strings.Repeat("a", 64)).Spec.Template.Spec
+	if p.ServiceAccountName != "agent-bob" || p.AutomountServiceAccountToken == nil || *p.AutomountServiceAccountToken {
+		t.Fatalf("service account %q automount %v", p.ServiceAccountName, p.AutomountServiceAccountToken)
+	}
+	var proj []corev1.Volume
+	for _, v := range p.Volumes {
+		if v.Projected != nil {
+			proj = append(proj, v)
+		}
+		if v.Secret != nil || v.HostPath != nil {
+			t.Errorf("volume %s: Secret or hostPath", v.Name)
+		}
+	}
+	if len(proj) != 1 || len(proj[0].Projected.Sources) != 1 {
+		t.Fatalf("projected volumes: %+v", proj)
+	}
+	st := proj[0].Projected.Sources[0].ServiceAccountToken
+	if st == nil || st.Audience != "claude-proxy" || st.ExpirationSeconds == nil || *st.ExpirationSeconds != 600 || st.Path != "token" {
+		t.Fatalf("projected source: %+v", proj[0].Projected.Sources[0])
+	}
+	mounted := func(c corev1.Container) bool {
+		for _, m := range c.VolumeMounts {
+			if m.Name == proj[0].Name {
+				return m.MountPath == "/var/run/secrets/agentdev/proxy" && m.ReadOnly
+			}
+		}
+		return false
+	}
+	if !mounted(p.Containers[0]) || p.Containers[0].Name != "chat" {
+		t.Errorf("the chat container does not mount the token read-only at /var/run/secrets/agentdev/proxy")
+	}
+	for _, c := range p.InitContainers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == proj[0].Name {
+				t.Errorf("init container %s mounts the proxy token", c.Name)
+			}
+		}
+	}
+	key := false
+	for _, e := range p.Containers[0].Env {
+		key = key || (e.Name == "ANTHROPIC_AUTH_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef.Name == "agent-bob-proxy")
+	}
+	if !key {
+		t.Error("the HMAC key fallback for mixed versions is gone")
 	}
 }
 

@@ -18,6 +18,23 @@ IDLE_SECONDS="${IDLE_SECONDS:-1800}"
 WORK=/state/repo
 log() { printf '%s [chat %s] %s\n' "$(date -u +%H:%M:%S)" "${REPO}" "$*"; }
 
+# #352: with the projected token, Claude Code reads it through apiKeyHelper (re-read each minute) instead of the HMAC key
+# Mixed versions (#398 review): only when the proxy takes the token (a proxy in mode key answers 401), else the key.
+# The settings go to a file outside /state (the model's working state), read-only after writing. Prints the file path,
+# or nothing when the HMAC key stays in use. Used by the CLI sessions and the console sessions (#400).
+proxy_token_settings() {
+  local tok=/var/run/secrets/agentdev/proxy/token code auth
+  [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${tok}" ]] || return 0
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+     -X POST -H "Authorization: Bearer $(cat "${tok}")" -H 'Content-Type: application/json' \
+     -H 'anthropic-version: 2023-06-01' --data '{}' "${ANTHROPIC_BASE_URL%/}/v1/messages/count_tokens" 2>/dev/null) || return 0
+  [[ "${code}" =~ ^[0-9]{3}$ && "${code}" != 000 && "${code}" != 401 ]] || return 0
+  auth=$(mktemp -d)/claude-auth.json
+  jq -n --arg f "${tok}" '{apiKeyHelper: ("cat " + ($f | @sh))}' > "${auth}"
+  chmod 0444 "${auth}"
+  printf '%s\n' "${auth}"
+}
+
 if [[ "${CHAT_MODE:-}" == console ]]; then
   [[ -d "${WORK}/.git" ]] || { log "no clone in ${WORK} (the initContainer failed)"; exit 1; }
   git -C "${WORK}" remote set-url origin "no-fetch://interactive-session"   # the token stays in the initContainer
@@ -46,6 +63,13 @@ EOF
     > "${cfg}/.claude.json"
   # terminal view (Terminal in the console, or kubectl exec ... tmux attach -t chat): the same session, rendered
   tmux new-session -d -s chat -x 200 -y 50 "chat-session-server render"
+  # #400: the projected claude-proxy token when the proxy takes it; chat-session-server passes the file to Claude
+  auth=$(proxy_token_settings)
+  if [[ -n "${auth}" ]]; then
+    export CHAT_CLAUDE_SETTINGS="${auth}" CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+    unset ANTHROPIC_AUTH_TOKEN
+    log "Claude auth: projected service account token"
+  fi
   cd "${WORK}" || exit 1
   log "console session: chat-session-server (ends ${IDLE_SECONDS}s after the last viewer)"
   exec chat-session-server
@@ -81,17 +105,8 @@ mkdir -p "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 jq -n --arg d "${WORK}" '{hasCompletedOnboarding: true, theme: "dark", projects: {($d): {hasTrustDialogAccepted: true}}}' \
   > "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
 cd "${WORK}" || exit 1
-# #352: with the projected token, Claude Code reads it through apiKeyHelper (re-read each minute) instead of the HMAC key
-# Mixed versions (#398 review): only when the proxy takes the token (a proxy in mode key answers 401), else the key.
-# The settings go to a file outside /state (the model's working state), read-only after writing.
-tok=/var/run/secrets/agentdev/proxy/token
-if [[ -n "${ANTHROPIC_BASE_URL:-}" && -s "${tok}" ]] && code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-     -X POST -H "Authorization: Bearer $(cat "${tok}")" -H 'Content-Type: application/json' \
-     -H 'anthropic-version: 2023-06-01' --data '{}' "${ANTHROPIC_BASE_URL%/}/v1/messages/count_tokens" 2>/dev/null) \
-   && [[ "${code}" =~ ^[0-9]{3}$ && "${code}" != 000 && "${code}" != 401 ]]; then
-  auth=$(mktemp -d)/claude-auth.json
-  jq -n --arg f "${tok}" '{apiKeyHelper: ("cat " + ($f | @sh))}' > "${auth}"
-  chmod 0444 "${auth}"
+auth=$(proxy_token_settings)
+if [[ -n "${auth}" ]]; then
   rc+=(--settings "${auth}")
   export CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
   unset ANTHROPIC_AUTH_TOKEN

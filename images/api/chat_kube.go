@@ -7,8 +7,13 @@ package main
 //   - the container runs chat-session-server on port 7681 with CHAT_CONTROL_SHA256 (the sha256 of the API's
 //     per-session token).
 // The ValidatingAdmissionPolicy agentdev-api-chat-jobs (manifests/api.yaml.tmpl) holds the API's service account to
-// exactly this shape: name chat-*, the worker image, gVisor, no service account token, and only the Secrets
-// agentdev-chat-clone and agent-<agent>-proxy. The API's Role has no access to Secrets.
+// exactly this shape: name chat-*, the worker image, gVisor, and only the Secrets agentdev-chat-clone and
+// agent-<agent>-proxy. The API's Role has no access to Secrets.
+//
+// Claude identity (#400, after #352): the pod runs as the agent's service account agent-<agent> with
+// automountServiceAccountToken false, and gets only a projected token (audience claude-proxy, 600 s) mounted in the
+// chat container at /var/run/secrets/agentdev/proxy. The worker uses it when the proxy takes it, else the HMAC key
+// agent-<agent>-proxy, which stays for mixed versions (proxy mode key or both, ADR 0006).
 
 import (
 	"context"
@@ -25,6 +30,14 @@ import (
 )
 
 const chatPort = 7681
+
+// The projected claude-proxy token (#352): the same audience, lifetime and path as the agent pod (operator render.go).
+const (
+	chatProxyTokenVolume   = "proxy-token"
+	chatProxyTokenAudience = "claude-proxy"
+	chatProxyTokenSeconds  = 600
+	chatProxyTokenDir      = "/var/run/secrets/agentdev/proxy"
+)
 
 // chatJobConfig is read from the environment (CHAT_* in manifests/api.yaml.tmpl).
 type chatJobConfig struct {
@@ -78,9 +91,10 @@ git -c credential.helper='!f() { echo "username=${FORGE_USER:-x-access-token}"; 
 			env("ANTHROPIC_BASE_URL", k.cfg.ClaudeProxyURL),
 			secret("ANTHROPIC_AUTH_TOKEN", "agent-"+s.Agent+"-proxy", "ANTHROPIC_AUTH_TOKEN", false),
 			env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")}, proxyEnv...),
-		Ports:           []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort}},
-		ReadinessProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3},
-		VolumeMounts:    append(mounts, corev1.VolumeMount{Name: "claude", MountPath: "/home/node/.claude"}, corev1.VolumeMount{Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true}),
+		Ports:          []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort}},
+		ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3},
+		VolumeMounts: append(mounts, corev1.VolumeMount{Name: "claude", MountPath: "/home/node/.claude"}, corev1.VolumeMount{Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
+			corev1.VolumeMount{Name: chatProxyTokenVolume, MountPath: chatProxyTokenDir, ReadOnly: true}),
 		SecurityContext: sc,
 		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("2Gi")}}}
@@ -97,7 +111,8 @@ git -c credential.helper='!f() { echo "username=${FORGE_USER:-x-access-token}"; 
 					Tolerations: []corev1.Toleration{
 						{Key: "agentdev/pool", Operator: corev1.TolerationOpEqual, Value: "sandboxes", Effect: corev1.TaintEffectNoSchedule},
 						{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule}},
-					AutomountServiceAccountToken: ptr(false), EnableServiceLinks: ptr(false),
+					// #400: the agent's identity at claude-proxy, but never its API token: only the projected token below
+					ServiceAccountName: "agent-" + s.Agent, AutomountServiceAccountToken: ptr(false), EnableServiceLinks: ptr(false),
 					SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr[int64](1000), RunAsNonRoot: ptr(true), FSGroup: ptr[int64](1000),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
 					InitContainers: []corev1.Container{clone},
@@ -108,6 +123,10 @@ git -c credential.helper='!f() { echo "username=${FORGE_USER:-x-access-token}"; 
 						{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 							LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-guides"}, Optional: ptr(true), DefaultMode: ptr[int32](0o444),
 							Items: []corev1.KeyToPath{{Key: s.Agent, Path: "guide.md"}}}}},
+						{Name: chatProxyTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+							DefaultMode: ptr[int32](0o444),
+							Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Audience: chatProxyTokenAudience, ExpirationSeconds: ptr[int64](chatProxyTokenSeconds), Path: "token"}}}}}},
 					},
 				},
 			},

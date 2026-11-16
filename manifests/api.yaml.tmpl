@@ -21,7 +21,7 @@ rules:
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
 # console chat sessions (#346): the API starts and ends chat-* Jobs and reads their pods' addresses. The Job shape is
 # held by the ValidatingAdmissionPolicy agentdev-api-chat-jobs below (no Secrets other than the chat clone token and
-# the agent's proxy key, gVisor, no service account token). Created even with chat off, so turning it on needs no RBAC change.
+# the agent's proxy key, gVisor, the service account agent-<agent> with only its projected claude-proxy token, #400). Created even with chat off, so turning it on needs no RBAC change.
 # delete cannot be narrowed by label in RBAC: the ValidatingAdmissionPolicy agentdev-api-chat-jobs-delete allows only chat-* console Jobs
 - {apiGroups: [batch], resources: [jobs], verbs: [get, list, create, delete]}
 - {apiGroups: [""], resources: [pods], verbs: [get]}
@@ -223,10 +223,17 @@ spec:
     message: "chat pods keep the labels the egress and ingress policies select"
   - expression: "variables.all.all(c, c.image == '${CHAT_WORKER_IMAGE}')"
     message: "chat Jobs run only the worker image"
-  - expression: "variables.pod.runtimeClassName == 'gvisor' && variables.pod.automountServiceAccountToken == false && (!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName == 'default') && (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC)"
-    message: "chat pods run under gVisor without a service account token or host namespaces"
-  - expression: "variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.configMap) && v.configMap.name == 'agentdev-guides'))"
-    message: "chat pods mount only emptyDir and the guide ConfigMap"
+  - expression: "variables.pod.runtimeClassName == 'gvisor' && variables.pod.automountServiceAccountToken == false && (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC)"
+    message: "chat pods run under gVisor without an automounted service account token or host namespaces"
+  # #400: the agent's own service account (its identity at claude-proxy, #352), nothing else; serviceAccount is the
+  # deprecated alias of serviceAccountName and must not name another account
+  - expression: "has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == 'agent-' + variables.agent && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount == variables.pod.serviceAccountName)"
+    message: "chat pods run as the service account agent-<agent> of their agentdev/chat-agent label"
+  - expression: "variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.configMap) && v.configMap.name == 'agentdev-guides') || (v.name == 'proxy-token' && has(v.projected) && size(v.projected.sources) == 1 && has(v.projected.sources[0].serviceAccountToken) && v.projected.sources[0].serviceAccountToken.audience == 'claude-proxy' && has(v.projected.sources[0].serviceAccountToken.expirationSeconds) && v.projected.sources[0].serviceAccountToken.expirationSeconds == 600))"
+    message: "chat pods mount only emptyDir, the guide ConfigMap and the projected token proxy-token (audience claude-proxy, 600 s)"
+  # (one projection item holds exactly one source type: API validation, so no Secret can hide next to the token)
+  - expression: "variables.all.all(c, c.name == 'chat' || !has(c.volumeMounts) || c.volumeMounts.all(m, m.name != 'proxy-token'))"
+    message: "only the chat container mounts the projected claude-proxy token"
   - expression: "variables.all.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && (e.valueFrom.secretKeyRef.name == 'agent-' + variables.agent + '-proxy' || (c.name == 'clone' && e.valueFrom.secretKeyRef.name == 'agentdev-chat-clone'))))))"
     message: "chat pods read only the agent's proxy key, and the clone step only agentdev-chat-clone"
   - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"

@@ -331,6 +331,8 @@ function main() {
   const s = new Session({ name: process.env.SESSION_NAME || os.hostname(), repo: process.env.REPO || '', agent: process.env.CHAT_AGENT || '', idleSeconds: idle, terminalMaxSeconds: terminalMax, tmuxClients });
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--permission-prompt-tool', 'stdio', '--append-system-prompt', fs.readFileSync(promptFile, 'utf8')];
+  // #400: the apiKeyHelper settings for the projected claude-proxy token (agent-chat-session.sh); absent: the HMAC key
+  if (/^\/[A-Za-z0-9._/-]+\.json$/.test(process.env.CHAT_CLAUDE_SETTINGS || '')) args.push('--settings', process.env.CHAT_CLAUDE_SETTINGS);
   const env = { ...process.env };
   const claude = spawn('claude', args, { cwd: process.env.CHAT_WORKDIR || '/state/repo', env, stdio: ['pipe', 'pipe', 'inherit'] });
   s.claude = claude;
