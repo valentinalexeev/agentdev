@@ -126,6 +126,9 @@ clear message if one is missing. Secret values are read at run time and every ta
 3. CRDs: the Gateway API (with `ingress.mode: gateway`, the default when `ingress` is set) and FQDNNetworkPolicy
    (with `egress_fqdn_policy`).
 4. Images: each agentdev image exists on ghcr.io at `image_tag`.
+5. Plan identity (#421): with `plan_identity: true` (Terraform `create_plan_identity = true`), the gcloud account
+   (the apply account in CI) has the permissions to create it; otherwise it prints the owner grant commands
+   (docs/admin.md "Show the plan on deployment pull requests"). Test: `tests/plan_identity_preflight.yml`.
 ```bash
 bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml                  # preflight only
 ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --tags preflight         # the same

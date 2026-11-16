@@ -18,7 +18,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending). Optional: `create_budget = false` skips the budget, its notification channels and the billing IAM (#199) |
 | Billing IAM | with `create_budget` (default): `roles/billing.costsManager` on `billing_account_id` for the automation SA, so CI can read and update the budget (#199). It is the smallest predefined role with `billing.budgets.update`. The identity of the first apply needs `billing.accounts.setIamPolicy` on the billing account (normally the owner); CI cannot grant this role to itself |
 | Labels | `labels` (#184) merged over `service = "agentdev"` on every resource: provider `default_labels`, cluster and node pool `resource_labels`, notification channel `user_labels`. Set `environment` to `dev`, `stage` or `prod` |
-| Plan SA | `agentdev-plan` (`create_plan_identity`, default on): read-only roles for `terraform plan` on deployment PRs (#291) |
+| Plan SA | `agentdev-plan` (`create_plan_identity`, default off since #421; needs one-time owner grants, docs/admin.md): read-only roles for `terraform plan` on deployment PRs (#291) |
 | Automation SA | `agentdev-automation`, least-privilege roles; GitHub Actions on `main` reach it through Workload Identity Federation (no key) |
 
 ## First run (owner, once)
