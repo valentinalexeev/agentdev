@@ -4,6 +4,7 @@ import { Approvals } from './Approvals'
 import { AgentsPage } from './Agents'
 import { ChatPage } from './Chat'
 import { AgentDrawer } from './AgentDrawer'
+import { JobDrawer } from './JobDrawer'
 import { AuditPage } from './Audit'
 import { PlatformPage } from './Platform'
 import { DataProvider } from './data'
@@ -205,6 +206,12 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
       </nav>
       {base === 'agents' && sub && <AgentDrawer key={sub} name={decodeURIComponent(sub)} token={token} onExpired={onExpired}
         onClose={() => { window.location.hash = 'agents' }} />}
+      {/* #425: #work?job=<agent>/<job>&jrepo=<owner/name> opens the job drawer with its run log */}
+      {page === 'work' && /^[a-z0-9-]{1,63}\/(issue|pr)-[0-9]{1,10}$/.test(params.get('job') ?? '') && (() => {
+        const [ja, jn] = (params.get('job') ?? '').split('/')
+        const close = () => { const q = new URLSearchParams(params); q.delete('job'); q.delete('jrepo'); window.location.hash = q.toString() ? `work?${q}` : 'work' }
+        return <JobDrawer key={params.get('job') ?? ''} agent={ja} job={jn} repo={params.get('jrepo') ?? ''} token={token} onExpired={onExpired} onClose={close} />
+      })()}
       {more && <MoreSheet page={base} admin={d.admin} name={name} dark={dark} onTheme={toggleTheme} onLogout={onLogout} onClose={() => setMore(false)} />}
       {picking && <ScopePicker onClose={() => setPicking(false)} />}
     </div>
