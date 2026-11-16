@@ -114,22 +114,22 @@ Only one thing moves: a `starting` lamp pulses (1.2 s, opacity). Panels and page
 
 All classes are in `components.css`. Markup is plain HTML, so React, Astro or static pages can use it.
 
-**Button.** `ad-btn` plus one of `ad-btn-primary` (gate, at most one per view, for the decision the view exists
-for), `ad-btn-danger` (only inside a confirmation for Delete), `ad-btn-quiet` (in-line actions such as Sign out).
+**Button.** `agd-btn` plus one of `agd-btn-primary` (gate, at most one per view, for the decision the view exists
+for), `agd-btn-danger` (only inside a confirmation for Delete), `agd-btn-quiet` (in-line actions such as Sign out).
 No modifier gives the secondary button.
 
 ```html
-<button class="ad-btn ad-btn-primary" type="button">Approve</button>
-<button class="ad-btn" type="button">Cancel</button>
+<button class="agd-btn agd-btn-primary" type="button">Approve</button>
+<button class="agd-btn" type="button">Cancel</button>
 ```
 
-**Tabs.** The console navigation. The active tab has a gate underline; `ad-count` is a gate badge for things that
+**Tabs.** The console navigation. The active tab has a gate underline; `agd-count` is a gate badge for things that
 wait for a person (pending approvals), never for agent activity.
 
 ```html
-<nav class="ad-tabs" role="tablist">
-  <button class="ad-tab ad-tab-on" role="tab" aria-selected="true">Agents</button>
-  <button class="ad-tab" role="tab">Approvals <span class="ad-count" aria-label="2 waiting for you">2</span></button>
+<nav class="agd-tabs" role="tablist">
+  <button class="agd-tab agd-tab-on" role="tab" aria-selected="true">Agents</button>
+  <button class="agd-tab" role="tab">Approvals <span class="agd-count" aria-label="2 waiting for you">2</span></button>
 </nav>
 ```
 
@@ -138,62 +138,62 @@ wait for a person (pending approvals), never for agent activity.
 error), `blocked` (red square), `paused` and `usage-paused` (pause bars), `invalid` (struck square).
 
 ```html
-<span class="ad-lamp ad-lamp-running"><span class="ad-lamp-dot"></span><span class="ad-label">Running</span></span>
+<span class="agd-lamp agd-lamp-running"><span class="agd-lamp-dot"></span><span class="agd-label">Running</span></span>
 ```
 
-**Severity tag.** The severity of a security event: `ad-sev-high`, `ad-sev-medium`, `ad-sev-low`. The word is always
+**Severity tag.** The severity of a security event: `agd-sev-high`, `agd-sev-medium`, `agd-sev-low`. The word is always
 shown.
 
 ```html
-<span class="ad-tag ad-sev-high"><span class="ad-label">high</span></span>
+<span class="agd-tag agd-sev-high"><span class="agd-label">high</span></span>
 ```
 
 **Agent tag.** Who did something. An agent: a square in its lane hue and a mono name. A person: a gate disc and a
-sans name (`ad-person`).
+sans name (`agd-person`).
 
 ```html
-<span class="ad-agent ad-lane-3"><span class="ad-agent-mark"></span><span class="ad-agent-name">alice</span></span>
-<span class="ad-agent ad-person"><span class="ad-agent-mark"></span><span class="ad-agent-name">valentinalexeev</span></span>
+<span class="agd-agent agd-lane-3"><span class="agd-agent-mark"></span><span class="agd-agent-name">alice</span></span>
+<span class="agd-agent agd-person"><span class="agd-agent-mark"></span><span class="agd-agent-name">valentinalexeev</span></span>
 ```
 
 **Usage meter.** How much of a Claude subscription window is used. Amber fill, a tick at the limit; at or over the
-limit, `ad-meter-over` turns it to `paused` and the text says "paused".
+limit, `agd-meter-over` turns it to `paused` and the text says "paused".
 
 ```html
-<div class="ad-meter">
-  <div class="ad-meter-head"><span class="ad-label">5-hour</span><span class="ad-data">64%</span></div>
-  <div class="ad-meter-track" role="meter" aria-valuenow="64" aria-valuemin="0" aria-valuemax="100" aria-label="5-hour">
-    <div class="ad-meter-fill" style="width:64%"></div><div class="ad-meter-limit" style="left:90%"></div>
+<div class="agd-meter">
+  <div class="agd-meter-head"><span class="agd-label">5-hour</span><span class="agd-data">64%</span></div>
+  <div class="agd-meter-track" role="meter" aria-valuenow="64" aria-valuemin="0" aria-valuemax="100" aria-label="5-hour">
+    <div class="agd-meter-fill" style="width:64%"></div><div class="agd-meter-limit" style="left:90%"></div>
   </div>
-  <div class="ad-meter-foot">Resets 14:00 · limit 90%</div>
+  <div class="agd-meter-foot">Resets 14:00 · limit 90%</div>
 </div>
 ```
 
 **Work card.** One issue as an agent works it, as on botboard: a four-step track (plan, build, review, done). Plan and
-build are amber (the agent's turn), review is gate (your turn, and the card gets a gate edge with `ad-card-review`),
+build are amber (the agent's turn), review is gate (your turn, and the card gets a gate edge with `agd-card-review`),
 done is `ok`. A blocked card shows a red step and a note.
 
 ```html
-<article class="ad-card ad-card-review">
-  <div class="ad-card-top"><span class="ad-data">#173</span><!-- agent tag --></div>
-  <h3 class="ad-card-title">One disk per agent</h3>
-  <ol class="ad-track">
-    <li class="ad-step ad-step-plan ad-step-past"><span class="ad-label">plan</span></li>
-    <li class="ad-step ad-step-build ad-step-past"><span class="ad-label">build</span></li>
-    <li class="ad-step ad-step-review ad-step-now"><span class="ad-label">review</span></li>
-    <li class="ad-step ad-step-done ad-step-next"><span class="ad-label">done</span></li>
+<article class="agd-card agd-card-review">
+  <div class="agd-card-top"><span class="agd-data">#173</span><!-- agent tag --></div>
+  <h3 class="agd-card-title">One disk per agent</h3>
+  <ol class="agd-track">
+    <li class="agd-step agd-step-plan agd-step-past"><span class="agd-label">plan</span></li>
+    <li class="agd-step agd-step-build agd-step-past"><span class="agd-label">build</span></li>
+    <li class="agd-step agd-step-review agd-step-now"><span class="agd-label">review</span></li>
+    <li class="agd-step agd-step-done agd-step-next"><span class="agd-label">done</span></li>
   </ol>
 </article>
 ```
 
 **Loop strip.** The product loop for the website hero and the docs: issue, branch, pull request, review, merge. The
-top rule of each step names the actor (`ad-loop-agent` amber, `ad-loop-person` petrol). Once per page.
+top rule of each step names the actor (`agd-loop-agent` amber, `agd-loop-person` petrol). Once per page.
 
 ```html
-<ol class="ad-loop">
-  <li class="ad-loop-step ad-loop-person"><span class="ad-loop-who ad-label">person</span><span class="ad-loop-k">issue</span>
-    <span class="ad-loop-d">You file it and assign an agent.</span></li>
-  <li class="ad-loop-step ad-loop-agent"><span class="ad-loop-who ad-label">agent</span><span class="ad-loop-k">branch</span></li>
+<ol class="agd-loop">
+  <li class="agd-loop-step agd-loop-person"><span class="agd-loop-who agd-label">person</span><span class="agd-loop-k">issue</span>
+    <span class="agd-loop-d">You file it and assign an agent.</span></li>
+  <li class="agd-loop-step agd-loop-agent"><span class="agd-loop-who agd-label">agent</span><span class="agd-loop-k">branch</span></li>
 </ol>
 ```
 
@@ -217,35 +217,35 @@ with no work, not an error.
 
 | Component | Classes | Rule |
 |---|---|---|
-| App shell | `ad-shell`, `ad-rail`, `ad-topbar`, `ad-main` | Left rail on `panel` with the mark, navigation and counts; top bar with breadcrumbs, search, connection state, theme, user. Below 760px the rail becomes `ad-bottombar`. |
-| Navigation item | `ad-nav`, `aria-current="page"` | Gate tint and a gate edge on the current page. `ad-count` only for things that wait for a person. |
-| Connection state | `ad-conn`, `-stale`, `-waking`, `-down` | Always in the top bar. Not live adds a banner. Keep the last data and say its age (#339). |
-| Banner | `ad-banner`, `-warn`, `-down`, `-paused` | One per cause, under the top bar, with one action. Never more than two. |
-| KPI tile | `ad-kpis`, `ad-kpi`, `-you`, `-alert` | Only numbers a person acts on, each with its unit and a foot line. `-you` (gate) for "waiting for you". |
-| Inbox | `ad-inbox`, `ad-item`, `-alert`, `-agent` | Things that wait for a person. A reason chip, the agent tag, where, and the expiry or age on the right. |
-| Data table | `ad-table-wrap`, `ad-table`, `ad-num` | `sunken` header of `label` text; numbers right-aligned in mono; the first cell is a button that opens the drawer. |
-| Filters | `ad-filters`, `ad-chip`, `ad-seg` | Chips for filters with counts, segmented control for one-of choices (time range, view). |
-| Field | `ad-field`, `ad-input`, `ad-error` | Label above, help below, `aria-invalid` for errors. |
-| Drawer | `ad-drawer`, `-gate`, `ad-scrim` | Detail beside the list so the list keeps its place. `-gate` when the drawer holds a decision. Full screen on phones. |
-| Untrusted text | `ad-untrusted`, `ad-untrusted-head` | Everything the model wrote: plain text only, never HTML or a link, a hatched lamp-ink edge, the words "Written by the agent · not checked". |
-| Timeline | `ad-timeline`, `ad-tl-agent`, `-person`, `-alert` | Square amber mark for the agent, round gate mark for a person, red for a refusal. Newest first. |
-| Board | `ad-board`, `ad-col-plan / build / review / done` | Work cards by phase; the review column is the person's turn. One column per screen on phones. |
-| Empty state | `ad-empty` | Says what will appear and how to make it appear. |
-| Toast | `ad-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
-| Health lamp | `ad-health`, `-ok / -degraded / -down / -zero` | Platform parts only (API, router, operator). Green means healthy. Agents never use it: their lamp is amber because amber is the agent, and a running agent is activity, not health. |
-| Chat layout | `ad-chat`, `ad-chat-list`, `ad-sess`, `ad-thread`, `ad-shell-fill` | Session list and thread; the page is one screen high (`ad-shell-fill` on the shell). The list folds behind a button below 1000px. |
-| Message | `ad-msg`, `ad-msg-person`, `ad-msg-text` | The person: gate-tinted block on the right. The session: full width with the agent tag. Model Markdown with raw HTML off; links print their address. |
-| Tool step | `ad-tool` (`<details>`) | One line per step the session took; the output opens in the untrusted block. |
-| Permission card | `ad-ask`, `-done` | Claude Code asks before a command. Allow once or Deny; the answer and the name stay. |
-| Issue draft | `ad-draft`, `-done` | The only path from a session to work: the session drafts, the person creates and assigns. Gate edge while it waits, ok edge when created. |
-| Composer | `ad-composer`, `ad-ctx`, `ad-working` | Context chips, the text box, Send; while the session works, a pulsing lamp and Stop. |
-| Command palette | `ad-palette`, `ad-kbd` | `Ctrl+K` or `/`. Pages, projects, agents and commands. No one-key approve anywhere. |
-| Project scope | `ad-scope` | Left of the top bar: the projects every page shows and their count. Opens a palette of projects, sorted by what waits. |
-| Group header | `ad-group-head` (lists), `ad-group-row` and `ad-group-btn` (tables) | A list groups itself above about 10 items. The header has the name, the urgency and the count. A table group folds; `aria-expanded` on the button. |
-| Show more | `ad-showmore` | The end of a capped group. Always says how many are hidden. |
-| Agent dots | `ad-dots`, `ad-d-run / -you / -alert / -paused` | One dot per agent of a project, in one line. Round = lifecycle, square = attention. Never the only signal: the row also has the counts. |
-| Wall | `ad-wall`, `ad-tile`, `-you / -alert / -usage` | One tile per agent, attention first. For a fleet glance at 20 and more agents. |
-| Phase matrix | `ad-matrix`, `ad-cell`, `-you / -alert / -agent / -zero` | Projects by work phase. A cell is a count and a link; review cells take the gate tint. Replaces the board when a scope has several projects. |
+| App shell | `agd-shell`, `agd-rail`, `agd-topbar`, `agd-main` | Left rail on `panel` with the mark, navigation and counts; top bar with breadcrumbs, search, connection state, theme, user. Below 760px the rail becomes `agd-bottombar`. |
+| Navigation item | `agd-nav`, `aria-current="page"` | Gate tint and a gate edge on the current page. `agd-count` only for things that wait for a person. |
+| Connection state | `agd-conn`, `-stale`, `-waking`, `-down` | Always in the top bar. Not live adds a banner. Keep the last data and say its age (#339). |
+| Banner | `agd-banner`, `-warn`, `-down`, `-paused` | One per cause, under the top bar, with one action. Never more than two. |
+| KPI tile | `agd-kpis`, `agd-kpi`, `-you`, `-alert` | Only numbers a person acts on, each with its unit and a foot line. `-you` (gate) for "waiting for you". |
+| Inbox | `agd-inbox`, `agd-item`, `-alert`, `-agent` | Things that wait for a person. A reason chip, the agent tag, where, and the expiry or age on the right. |
+| Data table | `agd-table-wrap`, `agd-table`, `agd-num` | `sunken` header of `label` text; numbers right-aligned in mono; the first cell is a button that opens the drawer. |
+| Filters | `agd-filters`, `agd-chip`, `agd-seg` | Chips for filters with counts, segmented control for one-of choices (time range, view). |
+| Field | `agd-field`, `agd-input`, `agd-error` | Label above, help below, `aria-invalid` for errors. |
+| Drawer | `agd-drawer`, `-gate`, `agd-scrim` | Detail beside the list so the list keeps its place. `-gate` when the drawer holds a decision. Full screen on phones. |
+| Untrusted text | `agd-untrusted`, `agd-untrusted-head` | Everything the model wrote: plain text only, never HTML or a link, a hatched lamp-ink edge, the words "Written by the agent · not checked". |
+| Timeline | `agd-timeline`, `agd-tl-agent`, `-person`, `-alert` | Square amber mark for the agent, round gate mark for a person, red for a refusal. Newest first. |
+| Board | `agd-board`, `agd-col-plan / build / review / done` | Work cards by phase; the review column is the person's turn. One column per screen on phones. |
+| Empty state | `agd-empty` | Says what will appear and how to make it appear. |
+| Toast | `agd-toast` | The result of an action in one sentence: "Paused alice. Runs in progress finish." |
+| Health lamp | `agd-health`, `-ok / -degraded / -down / -zero` | Platform parts only (API, router, operator). Green means healthy. Agents never use it: their lamp is amber because amber is the agent, and a running agent is activity, not health. |
+| Chat layout | `agd-chat`, `agd-chat-list`, `agd-sess`, `agd-thread`, `agd-shell-fill` | Session list and thread; the page is one screen high (`agd-shell-fill` on the shell). The list folds behind a button below 1000px. |
+| Message | `agd-msg`, `agd-msg-person`, `agd-msg-text` | The person: gate-tinted block on the right. The session: full width with the agent tag. Model Markdown with raw HTML off; links print their address. |
+| Tool step | `agd-tool` (`<details>`) | One line per step the session took; the output opens in the untrusted block. |
+| Permission card | `agd-ask`, `-done` | Claude Code asks before a command. Allow once or Deny; the answer and the name stay. |
+| Issue draft | `agd-draft`, `-done` | The only path from a session to work: the session drafts, the person creates and assigns. Gate edge while it waits, ok edge when created. |
+| Composer | `agd-composer`, `agd-ctx`, `agd-working` | Context chips, the text box, Send; while the session works, a pulsing lamp and Stop. |
+| Command palette | `agd-palette`, `agd-kbd` | `Ctrl+K` or `/`. Pages, projects, agents and commands. No one-key approve anywhere. |
+| Project scope | `agd-scope` | Left of the top bar: the projects every page shows and their count. Opens a palette of projects, sorted by what waits. |
+| Group header | `agd-group-head` (lists), `agd-group-row` and `agd-group-btn` (tables) | A list groups itself above about 10 items. The header has the name, the urgency and the count. A table group folds; `aria-expanded` on the button. |
+| Show more | `agd-showmore` | The end of a capped group. Always says how many are hidden. |
+| Agent dots | `agd-dots`, `agd-d-run / -you / -alert / -paused` | One dot per agent of a project, in one line. Round = lifecycle, square = attention. Never the only signal: the row also has the counts. |
+| Wall | `agd-wall`, `agd-tile`, `-you / -alert / -usage` | One tile per agent, attention first. For a fleet glance at 20 and more agents. |
+| Phase matrix | `agd-matrix`, `agd-cell`, `-you / -alert / -agent / -zero` | Projects by work phase. A cell is a count and a link; review cells take the gate tint. Replaces the board when a scope has several projects. |
 
 ### Decisions in the console
 
@@ -262,8 +262,8 @@ with no work, not an error.
 `console.css` and `favicon.svg` into `images/ui/src/design-system/` and `images/ui/public/`. The copies are committed,
 because the image build sees only `images/ui`. `npm run build` fails when a copy differs from `docs/design-system`.
 The fonts come from the `@fontsource` packages (self-hosted), because the console CSP allows no third-party styles.
-Classes the console needs beyond the prototype (`ad-attn`, `ad-reason`, `ad-iconbtn`, `ad-user`, `ad-limit-row`,
-`ad-meters`, `ad-sub`, `dialog.ad-drawer`) are at the end of `console.css`.
+Classes the console needs beyond the prototype (`agd-attn`, `agd-reason`, `agd-iconbtn`, `agd-user`, `agd-limit-row`,
+`agd-meters`, `agd-sub`, `dialog.agd-drawer`) are at the end of `console.css`.
 
 ### Moving `images/ui` to the system
 
@@ -272,13 +272,13 @@ Classes the console needs beyond the prototype (`ad-attn`, `ad-reason`, `ad-icon
 | `.phase.running / starting / stopped / blocked / paused / usage-paused / invalid` | status lamp (lifecycle) plus attention chip |
 | `.sev.high / medium / low` | severity tag |
 | agent names in tables | agent tag |
-| `button` (black), `.secondary`, `.danger`, `.link` | `ad-btn-primary`, `ad-btn`, `ad-btn-danger`, `ad-btn-quiet` |
-| `button.tab` and the pending badge | rail navigation with `ad-count` |
+| `button` (black), `.secondary`, `.danger`, `.link` | `agd-btn-primary`, `agd-btn`, `agd-btn-danger`, `agd-btn-quiet` |
+| `button.tab` and the pending badge | rail navigation with `agd-count` |
 | usage percent cells | usage meter |
-| page `h1` | `ad-page-title` (`display-3`) |
-| approval details dialog | `ad-drawer-gate` with `ad-untrusted` |
-| `pre.untrusted` | `ad-untrusted` |
-| `.banner` | `ad-banner` |
+| page `h1` | `agd-page-title` (`display-3`) |
+| approval details dialog | `agd-drawer-gate` with `agd-untrusted` |
+| `pre.untrusted` | `agd-untrusted` |
+| `.banner` | `agd-banner` |
 | Vite default favicon | `favicon.svg` |
 
 ## The website

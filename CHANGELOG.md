@@ -6,6 +6,17 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+- The UI CSS classes are renamed from `ad-*` to `agd-*` (#423). Custom CSS or browser userstyles that target
+  `ad-*` classes must change to `agd-*`.
+
+### Fixed
+- UI: the console showed a blank page with an ad or content blocker, because every UI class started with `ad-`
+  and cosmetic filters hid `<main class="ad-main">` (#423). The class prefix is now `agd-` (also in
+  `docs/design-system`), and `npm run lint` and the build fail on any class that starts with `ad-`, `ads-` or
+  `advert`. The UI CSP also allows `font-src 'self' data:` for the small font subsets Vite inlines, which removes
+  four CSP errors on every load.
+
 ## [1.1.0-rc.1] - 2026-11-16
 
 ### Upgrade

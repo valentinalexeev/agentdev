@@ -83,7 +83,7 @@ export function SettingsPage({ token, onExpired }: { token: string; onExpired: (
   }
 
   const head = <PageHead title="Settings" sub="Notifications for you. They contain the agent, the repository, the request type and the expiry, never text from an agent." />
-  if (!s) return <>{head}{error ? <p className="ad-error" role="alert">{error}</p> : <p className="ad-muted">Loading…</p>}</>
+  if (!s) return <>{head}{error ? <p className="agd-error" role="alert">{error}</p> : <p className="agd-muted">Loading…</p>}</>
   const on = s.channels.includes('webpush')
   const muted = (p: string, t: NotifyType | '*') => s.mutes.some((m) => m.project === p && m.type === t)
   const toggleMute = (p: string, t: NotifyType | '*') => {
@@ -94,43 +94,43 @@ export function SettingsPage({ token, onExpired }: { token: string; onExpired: (
   return (
     <>
       {head}
-      {error && <p className="ad-error" role="alert">{error}</p>}
-      <section className="ad-section">
-        <div className="ad-section-head"><h2 className="ad-section-title">Push notifications on this device</h2></div>
+      {error && <p className="agd-error" role="alert">{error}</p>}
+      <section className="agd-section">
+        <div className="agd-section-head"><h2 className="agd-section-title">Push notifications on this device</h2></div>
         {!on ? <Empty title="Notifications are off on this instance">An instance admin turns them on (notifications.channels: [webpush]).</Empty>
-          : !pushSupported() ? <p className="ad-muted" style={{ margin: 0 }}>This browser cannot receive push notifications. On iPhone and iPad, add the console to the home screen first.</p>
+          : !pushSupported() ? <p className="agd-muted" style={{ margin: 0 }}>This browser cannot receive push notifications. On iPhone and iPad, add the console to the home screen first.</p>
             : (
-              <div className="ad-form" style={{ alignItems: 'flex-start' }}>
+              <div className="agd-form" style={{ alignItems: 'flex-start' }}>
                 <p style={{ margin: 0 }}>{registered ? 'This device gets notifications.' : 'This device gets no notifications.'}
-                  {' '}<span className="ad-muted">{s.subscriptions.length} {s.subscriptions.length === 1 ? 'device' : 'devices'} in total.</span></p>
+                  {' '}<span className="agd-muted">{s.subscriptions.length} {s.subscriptions.length === 1 ? 'device' : 'devices'} in total.</span></p>
                 {registered
-                  ? <button className="ad-btn" type="button" disabled={busy} onClick={unsubscribe}>Stop on this device</button>
-                  : <button className="ad-btn ad-btn-primary" type="button" disabled={busy} onClick={subscribe}>Get notifications on this device</button>}
+                  ? <button className="agd-btn" type="button" disabled={busy} onClick={unsubscribe}>Stop on this device</button>
+                  : <button className="agd-btn agd-btn-primary" type="button" disabled={busy} onClick={subscribe}>Get notifications on this device</button>}
               </div>
             )}
       </section>
-      <section className="ad-section">
-        <div className="ad-section-head"><h2 className="ad-section-title">Types</h2></div>
-        <div className="ad-form">
+      <section className="agd-section">
+        <div className="agd-section-head"><h2 className="agd-section-title">Types</h2></div>
+        <div className="agd-form">
           {TYPES.map(([t, label, note]) => (
             <label key={t} style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'flex-start' }}>
               <input type="checkbox" checked={s.types[t]} disabled={busy}
                 onChange={(e) => save({ ...s.types, [t]: e.target.checked }, s.mutes)} />
-              <span><strong>{label}</strong><br /><span className="ad-muted" style={{ fontSize: 13 }}>{note}</span></span>
+              <span><strong>{label}</strong><br /><span className="agd-muted" style={{ fontSize: 13 }}>{note}</span></span>
             </label>
           ))}
         </div>
       </section>
-      <section className="ad-section">
-        <div className="ad-section-head"><h2 className="ad-section-title">Mute a project</h2><span className="ad-muted">A muted project sends nothing on any channel.</span></div>
-        {s.projects.length === 0 ? <p className="ad-muted" style={{ margin: 0 }}>You have no projects with agents.</p> : (
-          <div className="ad-table-wrap">
-            <table className="ad-table">
+      <section className="agd-section">
+        <div className="agd-section-head"><h2 className="agd-section-title">Mute a project</h2><span className="agd-muted">A muted project sends nothing on any channel.</span></div>
+        {s.projects.length === 0 ? <p className="agd-muted" style={{ margin: 0 }}>You have no projects with agents.</p> : (
+          <div className="agd-table-wrap">
+            <table className="agd-table">
               <thead><tr><th>Project</th><th>All</th>{TYPES.map(([t, label]) => <th key={t}>{label}</th>)}</tr></thead>
               <tbody>
                 {s.projects.map((p) => (
                   <tr key={p}>
-                    <td className="ad-code">{p}</td>
+                    <td className="agd-code">{p}</td>
                     <td><input type="checkbox" aria-label={`Mute all of ${p}`} checked={muted(p, '*')} disabled={busy} onChange={() => toggleMute(p, '*')} /></td>
                     {TYPES.map(([t, label]) => (
                       <td key={t}><input type="checkbox" aria-label={`Mute ${label} of ${p}`} checked={muted(p, '*') || muted(p, t)}
@@ -141,7 +141,7 @@ export function SettingsPage({ token, onExpired }: { token: string; onExpired: (
               </tbody>
             </table>
           </div>)}
-        <p className="ad-muted" style={{ fontSize: 13 }}>A checked box mutes. Snooze in a notification reminds you again after {s.snoozeMinutes} minutes.</p>
+        <p className="agd-muted" style={{ fontSize: 13 }}>A checked box mutes. Snooze in a notification reminds you again after {s.snoozeMinutes} minutes.</p>
       </section>
     </>
   )

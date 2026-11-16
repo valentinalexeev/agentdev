@@ -14,15 +14,15 @@ const NAMES: Record<string, string> = {
 const RANK: Record<Health, number> = { down: 0, degraded: 1, unknown: 2, ok: 3, absent: 4 }
 
 function HealthLamp({ status }: { status: Health }) {
-  const cls = status === 'ok' ? 'ad-health-ok' : status === 'degraded' ? 'ad-health-degraded' : status === 'down' ? 'ad-health-down' : 'ad-health-zero'
+  const cls = status === 'ok' ? 'agd-health-ok' : status === 'degraded' ? 'agd-health-degraded' : status === 'down' ? 'agd-health-down' : 'agd-health-zero'
   const label = status === 'absent' ? 'not installed' : status
-  return <span className={`ad-health ${cls}`}><span className="ad-health-dot" aria-hidden="true" /><span className="ad-label">{label}</span></span>
+  return <span className={`agd-health ${cls}`}><span className="agd-health-dot" aria-hidden="true" /><span className="agd-label">{label}</span></span>
 }
 
 function Copy({ text }: { text: string }) {
   const [done, setDone] = useState(false)
   return (
-    <button className="ad-btn ad-btn-sm ad-btn-quiet" type="button" aria-label={`Copy the command ${text}`}
+    <button className="agd-btn agd-btn-sm agd-btn-quiet" type="button" aria-label={`Copy the command ${text}`}
       onClick={() => navigator.clipboard?.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 2000) }).catch(() => undefined)}>
       {done ? 'Copied' : 'Copy'}
     </button>
@@ -43,37 +43,37 @@ export function PlatformPage({ token, onExpired }: { token: string; onExpired: (
 
   const head = (
     <PageHead title="Platform" sub="The parts of this agentdev instance. Admins only."
-      actions={!(error?.status === 403) && <button className="ad-btn" type="button" disabled={busy} onClick={() => { setBusy(true); load() }}>Check again</button>} />
+      actions={!(error?.status === 403) && <button className="agd-btn" type="button" disabled={busy} onClick={() => { setBusy(true); load() }}>Check again</button>} />
   )
   if (error?.status === 403) return <>{head}<Empty title="Only agentdev-admins can see the platform">Ask an administrator to add you to the group.</Empty></>
-  if (error?.status === 404 && !p) return <>{head}<Empty title="This API has no platform check">Update the API to a version with <code className="ad-code">GET /api/platform</code>.</Empty></>
+  if (error?.status === 404 && !p) return <>{head}<Empty title="This API has no platform check">Update the API to a version with <code className="agd-code">GET /api/platform</code>.</Empty></>
   const comps = p ? [...p.components].sort((a, b) => RANK[a.status] - RANK[b.status]) : []
   const bad = comps.filter((c) => c.status === 'down' || c.status === 'degraded').length
   return (
     <>
       {head}
-      {error && <p className="ad-error" role="alert">Cannot read the platform state: {error.msg}{p ? '. The data below can be old.' : ''}</p>}
-      {!p ? (!error && <p className="ad-muted">Loading…</p>) : (
+      {error && <p className="agd-error" role="alert">Cannot read the platform state: {error.msg}{p ? '. The data below can be old.' : ''}</p>}
+      {!p ? (!error && <p className="agd-muted">Loading…</p>) : (
         <>
-          <div className="ad-kpis" style={{ marginBottom: 'var(--space-5)' }}>
-            <div className={`ad-kpi ${bad ? 'ad-kpi-alert' : ''}`}><span className="ad-kpi-label ad-label">Parts with a problem</span>
-              <span className="ad-kpi-value">{bad}<small>/ {comps.length}</small></span><span className="ad-kpi-foot">down or degraded</span></div>
-            <div className="ad-kpi"><span className="ad-kpi-label ad-label">Version</span>
-              <span className="ad-kpi-value" style={{ fontSize: 24 }}>{p.version || '–'}</span><span className="ad-kpi-foot">image tag of the API</span></div>
-            <div className="ad-kpi"><span className="ad-kpi-label ad-label">Checked</span>
-              <span className="ad-kpi-value" style={{ fontSize: 24 }}>{ago(Date.parse(p.checked), d.now)}</span><span className="ad-kpi-foot">again every 30 s on this page</span></div>
+          <div className="agd-kpis" style={{ marginBottom: 'var(--space-5)' }}>
+            <div className={`agd-kpi ${bad ? 'agd-kpi-alert' : ''}`}><span className="agd-kpi-label agd-label">Parts with a problem</span>
+              <span className="agd-kpi-value">{bad}<small>/ {comps.length}</small></span><span className="agd-kpi-foot">down or degraded</span></div>
+            <div className="agd-kpi"><span className="agd-kpi-label agd-label">Version</span>
+              <span className="agd-kpi-value" style={{ fontSize: 24 }}>{p.version || '–'}</span><span className="agd-kpi-foot">image tag of the API</span></div>
+            <div className="agd-kpi"><span className="agd-kpi-label agd-label">Checked</span>
+              <span className="agd-kpi-value" style={{ fontSize: 24 }}>{ago(Date.parse(p.checked), d.now)}</span><span className="agd-kpi-foot">again every 30 s on this page</span></div>
           </div>
-          <div className="ad-table-wrap">
-            <table className="ad-table ad-table-2l">
-              <thead><tr><th>Part</th><th>Health</th><th>Detail</th><th className="ad-hide-phone">Look deeper</th></tr></thead>
+          <div className="agd-table-wrap">
+            <table className="agd-table agd-table-2l">
+              <thead><tr><th>Part</th><th>Health</th><th>Detail</th><th className="agd-hide-phone">Look deeper</th></tr></thead>
               <tbody>
                 {comps.map((c) => (
                   <tr key={c.name}>
                     <td><strong>{NAMES[c.name] ?? c.name}</strong></td>
-                    <td className="ad-nowrap"><HealthLamp status={c.status} /></td>
-                    <td className="ad-muted">{c.detail}
-                      <div className="ad-phone-only" style={{ marginTop: 4 }}><div className="ad-cmd"><code className="ad-code">{c.command}</code><Copy text={c.command} /></div></div></td>
-                    <td className="ad-hide-phone"><div className="ad-cmd"><code className="ad-code">{c.command}</code><Copy text={c.command} /></div></td>
+                    <td className="agd-nowrap"><HealthLamp status={c.status} /></td>
+                    <td className="agd-muted">{c.detail}
+                      <div className="agd-phone-only" style={{ marginTop: 4 }}><div className="agd-cmd"><code className="agd-code">{c.command}</code><Copy text={c.command} /></div></div></td>
+                    <td className="agd-hide-phone"><div className="agd-cmd"><code className="agd-code">{c.command}</code><Copy text={c.command} /></div></td>
                   </tr>
                 ))}
               </tbody>
