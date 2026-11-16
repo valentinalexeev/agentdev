@@ -6,6 +6,37 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+Corrects step 3 of the 1.1.0-rc.1 upgrade (#421). The read-only plan identity (#291) is now opt-in: an upgrade from
+1.0.x with the 1.0.x apply account roles and no new inputs completes `terraform apply` and the playbook. To turn it
+on later:
+1. The owner gives the apply account `agentdev-automation` these one-time grants (it cannot grant them to itself):
+   ```bash
+   SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+   gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+     --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+   gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+     --role=roles/storage.admin
+   # only with create_budget = true (the default)
+   gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+     --role=roles/billing.admin
+   ```
+2. Set `create_plan_identity = true` in the module block of `terraform/main.tf`, and `plan_identity: true` with
+   `plan_identity_billing_account: <billing_account_id>` (or `""` with `create_budget = false`) in
+   `ansible/instance.yml`. The preflight then checks the grants before `terraform apply`.
+3. Apply, then set `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT` (docs/admin.md "Show the plan on
+   deployment pull requests").
+Deployments that already applied rc.1 with the identity (all grants present) keep it only with
+`create_plan_identity = true`; without it the next apply removes the identity.
+
+### Fixed
+- Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
+  account cannot create the read-only plan identity (#421). `create_plan_identity` now defaults to `false`. The
+  preflight (#314) has a new check `plan_identity`: with the instance value `plan_identity: true` it tests the
+  apply account for `iam.workloadIdentityPools.create`, `storage.buckets.getIamPolicy`/`setIamPolicy` on the state
+  bucket and `billing.accounts.setIamPolicy` (with `plan_identity_billing_account`), and stops with the owner grant
+  commands. The deployment template has a commented `create_plan_identity` line.
+
 ## [1.1.0-rc.1] - 2026-11-16
 
 ### Upgrade

@@ -2481,18 +2481,42 @@ Do this task before maintenance of a node, for example.
 Do this task once per deployment repository on GKE. Then each pull request gets a `terraform plan` comment (#291).
 The plan uses the read-only service account `agentdev-plan`. This account cannot change resources.
 
-1. Use an agentdev release that contains #291 (`ref=` and `image_tag`).
-2. Run `terraform plan`, then apply it. You (the owner) do the apply. The apply makes `agentdev-plan`, the
-   Workload Identity pool `github-pr` and the read grants.
-3. Run `terraform output github_actions_auth`.
-4. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
+The identity is opt-in (`create_plan_identity`, default `false` since #421), because the apply account of the
+bootstrap may not create it.
+
+1. Use an agentdev release that contains #291 and #421 (`ref=` and `image_tag`).
+2. You (the owner) give the apply account these one-time grants. The apply account cannot give them to itself.
+   Without them `terraform apply` stops half way with 403 (#421).
+   ```bash
+   SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+   gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+     --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+   gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+     --role=roles/storage.admin
+   # only with create_budget = true (the default)
+   gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+     --role=roles/billing.admin
+   ```
+   - `roles/iam.workloadIdentityPoolAdmin`: create the pool `github-pr` (`iam.workloadIdentityPools.create`).
+   - `roles/storage.admin` on the state bucket: the read grant for the plan account
+     (`storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`).
+   - `roles/billing.admin` on the billing account: the `roles/billing.viewer` grant for the plan account
+     (`billing.accounts.setIamPolicy`; only with `create_budget`).
+3. In `terraform/main.tf` set `create_plan_identity = true` in the module block. In `ansible/instance.yml` set
+   `plan_identity: true` and `plan_identity_billing_account: <billing_account_id>` (`""` with
+   `create_budget = false`; `plan_identity_state_bucket` if the state is not in `<project_id>-tfstate`).
+   The preflight (`scripts/upgrade-check.sh`) then checks the grants and prints the missing commands.
+4. Run `terraform plan`, then apply it. The apply makes `agentdev-plan`, the Workload Identity pool `github-pr`
+   and the read grants.
+5. Run `terraform output github_actions_auth`.
+6. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
    `plan_workload_identity_provider`.
-5. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
-6. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
-7. In the branch protection of `main`, require the `plan` check.
-8. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
-   repository can read the Terraform state (docs/security.md R115).
-9. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
+7. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
+8. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
+9. In the branch protection of `main`, require the `plan` check.
+10. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
+    repository can read the Terraform state (docs/security.md R115).
+11. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
 
 What the plan identity can do:
 
@@ -2504,7 +2528,8 @@ What the plan identity can do:
 - Only `pull_request` runs of `github_repository` get it. A pull request from a fork gets no token.
 
 To check that the identity cannot apply, run `terraform apply` with it once. The apply must fail with `403`.
-To remove the identity, set `create_plan_identity = false`, then apply.
+To remove the identity, set `create_plan_identity = false` and `plan_identity: false`, then apply. You can then
+remove the three owner grants again.
 
 ### Upgrade the local installation
 

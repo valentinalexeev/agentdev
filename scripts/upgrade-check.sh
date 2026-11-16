@@ -6,7 +6,7 @@
 #   ../agentdev/scripts/upgrade-check.sh ansible/instance.yml
 # Needs gcloud (logged in, Secret Manager read), a kube context for the cluster and network access to ghcr.io.
 # Checks: Claude secret formats (#212), same release for playbook and image_tag (#218), required CRDs, images on
-# ghcr.io. It changes nothing. Exit 0 when all checks pass, non-zero with the reason otherwise.
+# ghcr.io, and with plan_identity: true the apply account permissions for the plan identity (#421). It changes nothing. Exit 0 when all checks pass, non-zero with the reason otherwise.
 set -euo pipefail
 if [ $# -lt 1 ]; then
   sed -n '3,6p' "$0" | sed 's/^# \{0,1\}//' >&2

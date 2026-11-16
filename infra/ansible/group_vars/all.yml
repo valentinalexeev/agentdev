@@ -60,6 +60,11 @@ egress_extra_hosts: []
 # api.anthropic.com in egress_hosts is dropped for agents while claude_proxy is true (docs/security.md R64).
 forge_egress_hosts: [api.github.com, github.com]
 egress_fqdn_policy: true
+# Read-only plan identity (#291, #421): set true together with Terraform create_plan_identity = true. The preflight
+# then checks that the apply account may create it. plan_identity_billing_account: Terraform billing_account_id, or
+# '' with create_budget = false (required with plan_identity). plan_identity_state_bucket: '' = <gcp_project>-tfstate.
+plan_identity: false
+plan_identity_state_bucket: ""
 egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
 
 forge_kind: github

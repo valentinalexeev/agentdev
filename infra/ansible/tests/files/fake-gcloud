@@ -2,7 +2,26 @@
 # Fake gcloud for tests/preflight.yml (#314). Serves secrets from $FAKE_SECRETS_DIR/<name>; no file = no secret.
 #   gcloud secrets describe NAME ...                          exit 0 if the file exists, else 1
 #   gcloud secrets versions access latest --secret NAME ...   print the file
+#   gcloud config get-value account / gcloud auth print-access-token   for the plan identity check (#421)
+# Installed as curl too: answers testIamPermissions with the permissions listed in $FAKE_PERMS (space separated).
 set -euo pipefail
+if [ "$(basename "$0")" = curl ]; then
+  url="${*: -1}"
+  json=""
+  for p in ${FAKE_PERMS:-}; do
+    case "$url" in
+      *cloudresourcemanager*) [[ $p == iam.* ]] || continue ;;
+      *storage.googleapis*) [[ $p == storage.* ]] || continue ;;
+      *cloudbilling*) [[ $p == billing.* ]] || continue ;;
+    esac
+    json="${json:+$json, }\"$p\""
+  done
+  echo "{\"permissions\": [$json]}"
+  echo "$url" >> "${FAKE_CURL_LOG:-/dev/null}"
+  exit 0
+fi
+if [ "${1:-}" = config ]; then echo "${FAKE_ACCOUNT:-agentdev-automation@p.iam.gserviceaccount.com}"; exit 0; fi
+if [ "${1:-}" = auth ]; then echo fake-token; exit 0; fi
 dir="${FAKE_SECRETS_DIR:?}"
 if [ "${1:-}" = secrets ] && [ "${2:-}" = describe ]; then
   [ -f "$dir/${3:-}" ] && exit 0

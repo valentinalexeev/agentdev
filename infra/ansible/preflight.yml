@@ -9,13 +9,16 @@
 #      move together (#218).
 #   3. crds: the cluster serves the CRDs that the instance values need (Gateway API, FQDNNetworkPolicy).
 #   4. images: every agentdev image exists on the registry at image_tag.
+#   5. plan_identity (#421): with plan_identity: true (Terraform create_plan_identity = true, #291), the account that
+#      runs the preflight (the apply account in CI) may create the Workload Identity pool, set IAM on the state bucket
+#      and, with plan_identity_billing_account, on the billing account. Otherwise it stops with the owner grants.
 # preflight_checks selects the checks (default all). Secret values are never logged.
 - name: Preflight (read-only)
   hosts: localhost
   gather_facts: false
   vars:
     repo_root: "{{ playbook_dir }}/../.."
-    preflight_checks: [claude, release, crds, images]
+    preflight_checks: [claude, release, crds, images, plan_identity]
     preflight_images: "{{ [worker_image, forge_image, router_image, operator_image, credproxy_image] }}"
     preflight_ingress_gateway: >-
       {{ ((ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined)
@@ -174,6 +177,76 @@
             preflight_missing: >-
               {{ preflight_manifests.results | rejectattr('status', 'equalto', 200)
                  | map(attribute='item') | map(attribute='item') | list }}
+
+    # 5. Permissions for the read-only plan identity (#291, #421). Terraform-side setting, mirrored by the Ansible var
+    #    plan_identity. testIamPermissions only reads: it answers which of the asked permissions the caller has.
+    - name: Apply account can create the plan identity
+      when: "'plan_identity' in preflight_checks and plan_identity | bool"
+      vars:
+        pi_bucket: "{{ plan_identity_state_bucket | default('', true) or (gcp_project ~ '-tfstate') }}"
+        pi_billing: "{{ plan_identity_billing_account | default('') }}"
+      block:
+        - name: Refuse plan_identity without plan_identity_billing_account
+          ansible.builtin.assert:
+            that: plan_identity_billing_account is defined
+            fail_msg: >-
+              plan_identity is true: set plan_identity_billing_account to the Terraform billing_account_id
+              (create_budget = true, the default), or to '' with create_budget = false.
+            quiet: true
+
+        - name: Test the permissions of the current gcloud account (read-only)
+          ansible.builtin.shell: |
+            set -euo pipefail
+            account=$(gcloud config get-value account 2>/dev/null)
+            token=$(gcloud auth print-access-token)
+            echo "account=$account"
+            auth="Authorization: Bearer $token"
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
+              -d '{"permissions": ["iam.workloadIdentityPools.create"]}' \
+              "https://cloudresourcemanager.googleapis.com/v1/projects/{{ gcp_project }}:testIamPermissions" | tr -d ' \n'
+            echo
+            perms="permissions=storage.buckets.getIamPolicy&permissions=storage.buckets.setIamPolicy"
+            curl -fsS -H "$auth" "https://storage.googleapis.com/storage/v1/b/{{ pi_bucket }}/iam/testPermissions?$perms" | tr -d ' \n'
+            echo
+            {% if pi_billing | length > 0 %}
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' \
+              -d '{"permissions": ["billing.accounts.getIamPolicy", "billing.accounts.setIamPolicy"]}' \
+              "https://cloudbilling.googleapis.com/v1/billingAccounts/{{ pi_billing }}:testIamPermissions" | tr -d ' \n'
+            echo
+            {% endif %}
+          args: {executable: /bin/bash}
+          register: preflight_pi
+          changed_when: false
+          check_mode: false
+
+        - name: Refuse a plan identity that the apply account cannot create (#421)
+          vars:
+            pi_account: "{{ preflight_pi.stdout_lines[0] | regex_replace('^account=', '') }}"
+            pi_member: "{{ ('serviceAccount:' if pi_account is search('gserviceaccount\\.com$') else 'user:') ~ pi_account }}"
+            pi_answers: "{{ preflight_pi.stdout_lines[1:] | join(' ') }}"
+            pi_needed: >-
+              {{ [{'perm': 'iam.workloadIdentityPools.create',
+                   'grant': 'gcloud projects add-iam-policy-binding ' ~ gcp_project ~ ' --member=' ~ pi_member
+                            ~ ' --role=roles/iam.workloadIdentityPoolAdmin --condition=None'},
+                  {'perm': 'storage.buckets.getIamPolicy',
+                   'grant': 'gcloud storage buckets add-iam-policy-binding gs://' ~ pi_bucket ~ ' --member=' ~ pi_member
+                            ~ ' --role=roles/storage.admin'},
+                  {'perm': 'storage.buckets.setIamPolicy',
+                   'grant': 'gcloud storage buckets add-iam-policy-binding gs://' ~ pi_bucket ~ ' --member=' ~ pi_member
+                            ~ ' --role=roles/storage.admin'}]
+                 + ([{'perm': 'billing.accounts.setIamPolicy',
+                      'grant': 'gcloud billing accounts add-iam-policy-binding ' ~ pi_billing ~ ' --member=' ~ pi_member
+                               ~ ' --role=roles/billing.admin'}] if pi_billing | length > 0 else []) }}
+            pi_missing: "{{ pi_needed | rejectattr('perm', 'in', pi_answers) | list }}"
+          ansible.builtin.assert:
+            that: pi_missing | length == 0
+            fail_msg: >-
+              plan_identity is true (Terraform create_plan_identity, #291), but {{ pi_account }} lacks
+              {{ pi_missing | map(attribute='perm') | join(', ') }}. terraform apply would stop half way (#421).
+              The owner runs once: {{ pi_missing | map(attribute='grant') | unique | join(' ; ') }}.
+              Or set create_plan_identity = false and plan_identity: false (docs/admin.md, "Show the plan on
+              deployment pull requests").
+            quiet: true
 
     - name: Preflight passed
       ansible.builtin.debug:

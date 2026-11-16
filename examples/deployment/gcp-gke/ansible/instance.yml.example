@@ -14,6 +14,10 @@ agents:
 # or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
 # scale_to_zero: false
 # wake_poll_seconds: 300
+# read-only plan identity (agentdev #291, #421): with terraform create_plan_identity = true, let the preflight check
+# the owner grants of agentdev docs/admin.md "Show the plan on deployment pull requests":
+# plan_identity: true
+# plan_identity_billing_account: "000000-000000-000000"   # terraform billing_account_id; "" with create_budget = false
 agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels; service: agentdev is added
 # project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
 mcp_projects: []
