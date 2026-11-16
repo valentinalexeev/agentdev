@@ -33,7 +33,7 @@ echo 'ANTHROPIC_API_KEY=...' > .env         # shared Claude credential (gitignor
 open http://localhost:3000                   # login owner / SpikePassw0rd!
 # file an issue in owner/playground, assign it to alice or bob, then review the PR they open
 kubectl --context kind-agentdev -n coding-agents logs -f -l app=coding-agent --prefix
-./99-teardown.sh
+./99-teardown.sh                             # deprecated: ansible-playbook infra/ansible/kind.yml --tags teardown
 ```
 
 **Agents and accounts.** `AGENTS="alice bob"` in `config.env`. Adding a name creates a Gitea user, gives it
@@ -96,11 +96,11 @@ Results land in `results.md`.
 
 | Step | Builds | Checks |
 |---|---|---|
-| 00 | — | tools present, engine VM big enough |
+| 00 | — | tools present, engine VM big enough (`kind.yml --tags prereqs`) |
 | 01 | kind: control plane + `agentdev/pool=sandboxes` worker; gVisor `runsc` copied into nodes; `RuntimeClass gvisor` | busybox under gVisor shows gVisor's kernel in `dmesg` |
 | 02 | agent-sandbox v1.0.8 (core + extensions); `claude-agent` image; SandboxTemplate (gVisor, 2 PVCs) + WarmPool(1) | warm pool reaches 1 ready |
 | 03 | SandboxClaim | claim latency from warm pool · gVisor in sandbox · **suspend** (`operatingMode: Suspended`) drops the pod and keeps PVCs · **resume** restores files + git repo · **warm pool → 0** · optional headless `claude -p` |
-| 04 | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
+| 04 (deprecated, removed in 1.2.0, #106) | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
 
 ## Two layers, two jobs
 

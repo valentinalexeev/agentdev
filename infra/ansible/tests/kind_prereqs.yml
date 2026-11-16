@@ -1,0 +1,58 @@
+# The host checks of the role kind_cluster (#106, was 00-prereqs.sh) fail with a clear message: a missing tool names
+# the tool and its install hint, a stopped engine and an old kind say so. The tools are stubs on a test PATH.
+# Run: ansible-playbook infra/ansible/tests/kind_prereqs.yml
+- name: Kind host prerequisites (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kind_cluster_engine: docker
+    kind_cluster_min_version: "0.24.0"
+    kind_cluster_min_mem_gib: 6
+    kind_cluster_tools:
+      - {name: kind, hint: brew install kind}
+      - {name: kubectl, hint: brew install kubectl}
+      - {name: helm, hint: brew install helm}
+  tasks:
+    - name: Stub directory
+      ansible.builtin.tempfile: {state: directory}
+      register: prereqs_tmp
+
+    - name: Stub tools kind, kubectl, docker (helm is missing)
+      ansible.builtin.file:
+        src: "{{ playbook_dir }}/files/prereqs-stubs/stub"
+        dest: "{{ prereqs_tmp.path }}/{{ item }}"
+        state: link
+      loop: [kind, kubectl, docker]
+
+    - name: Cases
+      environment:
+        PATH: "{{ prereqs_tmp.path }}:/usr/bin:/bin"
+      block:
+        - name: Missing helm fails and names it with the hint
+          ansible.builtin.include_tasks: tasks/kind_prereqs_case.yml
+          vars:
+            prereqs_expect: ["missing host tools: helm", "brew install helm"]
+
+        - name: Add the helm stub
+          ansible.builtin.file:
+            src: "{{ playbook_dir }}/files/prereqs-stubs/stub"
+            dest: "{{ prereqs_tmp.path }}/helm"
+            state: link
+
+        - name: All tools present passes
+          ansible.builtin.include_tasks: ../roles/kind_cluster/tasks/prereqs.yml
+
+        - name: A stopped engine fails with its message
+          ansible.builtin.include_tasks: tasks/kind_prereqs_case.yml
+          vars:
+            prereqs_env: {STUB_ENGINE_DOWN: "1"}
+            prereqs_expect: ["docker daemon is not running"]
+
+        - name: An old kind fails with the version gate
+          ansible.builtin.include_tasks: tasks/kind_prereqs_case.yml
+          vars:
+            prereqs_env: {STUB_KIND_VERSION: kind v0.23.0}
+            prereqs_expect: ["kind v0.24 or later is needed"]
+      always:
+        - name: Remove the stub directory
+          ansible.builtin.file: {path: "{{ prereqs_tmp.path }}", state: absent}

@@ -1,0 +1,67 @@
+# The teardown of kind.yml (#106, was 99-teardown.sh) is tagged never: a plain run and the other tags never list it,
+# only --tags teardown does. Then the teardown runs against a stub kind (no real cluster) and deletes only that name.
+# Run: ansible-playbook infra/ansible/tests/kind_teardown.yml
+- name: Kind teardown is opt-in (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    teardown_task: Delete the kind cluster (was 99-teardown.sh)
+  tasks:
+    - name: List the tasks of kind.yml
+      ansible.builtin.command:
+        argv: "{{ [ansible_playbook_python | dirname ~ '/ansible-playbook', playbook_dir ~ '/../kind.yml', '--list-tasks'] + item }}"
+      loop: [[], [--tags, cluster], [--tags, prereqs], [--tags, "all"], [--tags, teardown]]
+      register: teardown_lists
+      changed_when: false
+
+    - name: Only --tags teardown lists the teardown
+      ansible.builtin.assert:
+        that:
+          - teardown_lists.results[:4] | map(attribute='stdout') | select('search', teardown_task | regex_escape) | list | length == 0
+          - teardown_task in teardown_lists.results[4].stdout
+        quiet: true
+
+    - name: Stub directory
+      ansible.builtin.tempfile: {state: directory}
+      register: teardown_tmp
+
+    - name: Stub kind, a fake repo root with .coder
+      ansible.builtin.shell: |
+        ln -s {{ (playbook_dir ~ '/files/prereqs-stubs/stub') | quote }} {{ teardown_tmp.path | quote }}/kind
+        mkdir -p {{ teardown_tmp.path | quote }}/repo/.coder
+      changed_when: true
+
+    - name: Run --tags teardown against the stub
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+          - "{{ playbook_dir }}/../kind.yml"
+          - --tags
+          - teardown
+          - -e
+          - kind_cluster_name=agentdev
+          - -e
+          - kind_cluster_repo_root={{ teardown_tmp.path }}/repo
+      environment:
+        PATH: "{{ teardown_tmp.path }}:/usr/bin:/bin"
+        STUB_KIND_CLUSTERS: agentdev
+        STUB_LOG: "{{ teardown_tmp.path }}/log"
+      changed_when: false
+
+    - name: Read the stub log
+      ansible.builtin.slurp: {src: "{{ teardown_tmp.path }}/log"}
+      register: teardown_log
+
+    - name: The stub deleted exactly the named cluster and .coder is gone
+      ansible.builtin.stat: {path: "{{ teardown_tmp.path }}/repo/.coder"}
+      register: teardown_coder
+
+    - name: Check the result
+      ansible.builtin.assert:
+        that:
+          - (teardown_log.content | b64decode | trim) == 'kind delete cluster --name agentdev'
+          - not teardown_coder.stat.exists
+        quiet: true
+
+    - name: Remove the stub directory
+      ansible.builtin.file: {path: "{{ teardown_tmp.path }}", state: absent}
