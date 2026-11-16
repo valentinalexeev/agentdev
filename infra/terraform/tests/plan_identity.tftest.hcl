@@ -13,6 +13,8 @@ variables {
   zone               = "europe-west4-a"
   billing_account_id = "000000-000000-000000"
   github_repository  = "example-org/example-deploy"
+  # opt-in since #421; plan_identity_default.tftest.hcl checks the default
+  create_plan_identity = true
 }
 
 run "plan_identity_is_read_only" {
