@@ -417,45 +417,65 @@ if section chat; then
     # the admission policy holds Jobs from the API's service account to the chat shape (server dry run, nothing is created)
     sa="system:serviceaccount:$PLATFORM_NS:agentdev-api"
     img=$(k -n "$PLATFORM_NS" get deploy agentdev-api -o json | jq -r '.spec.template.spec.containers[]|select(.name=="api")|.env[]?|select(.name=="CHAT_WORKER_IMAGE")|.value')
-    # job <image> <secret> <caps-add json> [service account] [token audience] [extra volume json]: the shape of
-    # images/api/chat_kube.go, with the agent's service account and its projected claude-proxy token (#400)
+    # #424: a console chat Job is the agent's pod spec (the template of StatefulSet agent-$AGENT) with the interactive
+    # entry point, as images/api/chat_kube.go builds it: agent -> chat, the forge sidecar without wake/register, the
+    # chat labels, an emptyDir /state. job <jq filter on the pod spec> [jq filter on the Job]: that Job, mutated.
+    tmpl=$(k -n "$AGENTS_NS" get statefulset "agent-$AGENT" -o json 2>/dev/null | jq -c '.spec.template')
     job() {
-      jq -n --arg ns "$AGENTS_NS" --arg img "$1" --arg sec "$2" --argjson add "$3" --arg a "$AGENT" \
-        --arg sa "${4:-agent-$AGENT}" --arg aud "${5:-claude-proxy}" --argjson xv "${6:-[]}" '{apiVersion:"batch/v1",kind:"Job",
+      jq -n --arg ns "$AGENTS_NS" --arg a "$AGENT" --argjson t "$tmpl" '{apiVersion:"batch/v1",kind:"Job",
         metadata:{name:"chat-e2e-admission",namespace:$ns,labels:{app:"agent-chat","agentdev/console":"true","agentdev/chat-agent":$a,session:"chat-e2e-admission"}},
-        spec:{backoffLimit:0,template:{metadata:{labels:{app:"agent-chat","agentdev/console":"true"}},spec:{restartPolicy:"Never",
-          runtimeClassName:"gvisor",serviceAccountName:$sa,automountServiceAccountToken:false,
-          volumes:([{name:"state",emptyDir:{}},
-            {name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:$aud,expirationSeconds:600,path:"token"}}]}}] + $xv),
-          containers:[{name:"chat",image:$img,command:["true"],
-            env:[{name:"ANTHROPIC_AUTH_TOKEN",valueFrom:{secretKeyRef:{name:$sec,key:"ANTHROPIC_AUTH_TOKEN",optional:true}}}],
-            volumeMounts:[{name:"proxy-token",mountPath:"/var/run/secrets/agentdev/proxy",readOnly:true}],
-            securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"],add:$add}}}]}}}}'; }
+        spec:{backoffLimit:0,template:{metadata:{labels:{app:"agent-chat","agentdev/console":"true"}},
+          spec:($t.spec + {restartPolicy:"Never",enableServiceLinks:false}
+            | .volumes = ([{name:"state",emptyDir:{}}] + .volumes)
+            | .containers |= map(if .name=="agent" then .name="chat" | .command=["true"] else
+                (.env |= map(select(.name!="WAKE_TOKEN" and .name!="REGISTER_TOKEN" and .name!="SELF_URL")) | del(.ports)) end))}}}' \
+      | jq "(.spec.template.spec) |= (${1:-.}) | ${2:-.}"; }
     try() { job "$@" | k create --dry-run=server --as="$sa" -f - -o name 2>&1; }
     denied() { echo "$1" | grep -q 'agentdev-api-chat-jobs'; }
     if [ -z "$img" ]; then skip "chat admission checks: CHAT_WORKER_IMAGE not set on agentdev-api"
+    elif [ -z "$tmpl" ] || [ "$tmpl" = null ]; then skip "chat admission checks: no StatefulSet agent-$AGENT"
     else
-      p="agent-$AGENT-proxy"
-      out=$(try "$img" "$p" '[]'); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
-      check $? "admission: the API may create a console chat Job of the expected shape (agent-$AGENT, projected claude-proxy token; control)" "$(echo "$out" | head -1)"
-      out=$(try "busybox:latest" "$p" '[]'); denied "$out"
+      out=$(try); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: the API may create a console chat Job that is agent $AGENT's pod plus the session (control)" "$(echo "$out" | head -1)"
+      sec() { echo "{name:\"$1\",valueFrom:{secretKeyRef:{name:\"$2\",key:\"$3\"}}}"; }
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec FORGE_TOKEN "agent-$AGENT" FORGE_TOKEN)]"); denied "$out"
+      check $? "admission: the chat container cannot hold the agent's forge token" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec EGRESS_FORGE_KEY egress-forge-proxy password)]"); denied "$out"
+      check $? "admission: the chat container cannot hold the egress forge key" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"forge\")|.env) += [$(sec FORGE_TOKEN agent-other-e2e FORGE_TOKEN)]"); denied "$out"
+      check $? "admission: a chat Job of $AGENT cannot read another agent's Secret" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec X agentdev-api-forge FORGE_API_TOKEN)]"); denied "$out"
+      check $? "admission: the API cannot create a chat Job that reads a platform Secret" "$(echo "$out" | head -1)"
+      out=$(try '.containers += [{name:"x",image:"busybox:latest",command:["true"]}]'); denied "$out"
+      check $? "admission: the API cannot add a container to a chat Job" "$(echo "$out" | head -1)"
+      out=$(try '(.containers[]|select(.name=="forge")|.image) = "busybox:latest"'); denied "$out"
       check $? "admission: the API cannot create a chat Job with another image" "$(echo "$out" | head -1)"
-      out=$(try "$img" "agentdev-api-forge" '[]'); denied "$out"
-      check $? "admission: the API cannot create a chat Job that reads another Secret" "$(echo "$out" | head -1)"
-      out=$(try "$img" "$p" '["NET_ADMIN"]'); denied "$out"
+      out=$(try '(.containers[]|select(.name=="chat")|.securityContext) = {capabilities:{add:["NET_ADMIN"]}}'); denied "$out"
       check $? "admission: the API cannot create a chat Job that adds capabilities" "$(echo "$out" | head -1)"
-      # #400: only the service account of the Job's own agent, only audience claude-proxy, no Secret volume
+      # #400: only the service account of the Job's own agent, only audience claude-proxy, no other Secret volume
       for other in default agentdev-api agentdev-operator "agent-$AGENT-x"; do
-        out=$(try "$img" "$p" '[]' "$other"); denied "$out"
+        out=$(try ".serviceAccountName = \"$other\""); denied "$out"
         check $? "admission: the API cannot create a chat Job of agent $AGENT with service account $other" "$(echo "$out" | head -1)"
       done
-      out=$(try "$img" "$p" '[]' "" "kubernetes"); denied "$out"
-      check $? "admission: the API cannot create a chat Job with a projected token for another audience" "$(echo "$out" | head -1)"
-      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","secret":{"secretName":"agentdev-api-forge"}}]'); denied "$out"
+      out=$(try '.volumes += [{name:"x",secret:{secretName:"agentdev-api-forge"}}]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
-      out=$(try "$img" "$p" '[]' "" "" '[{"name":"x","projected":{"sources":[{"secret":{"name":"agentdev-api-forge"}}]}}]'); denied "$out"
+      out=$(try '.volumes += [{name:"x",projected:{sources:[{secret:{name:"agentdev-api-forge"}}]}}]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
+      out=$(try . '.spec.template.metadata.labels.agent = "'"$AGENT"'"'); denied "$out"
+      check $? "admission: a chat pod cannot carry the agent label of agent pods" "$(echo "$out" | head -1)"
     fi
+    # chat on the agent's paths (#424): a running console session got its repository from the forge sidecar (this
+    # works on GitHub only through the sidecar's egress key), and its chat container holds no forge credential
+    cpod=$(k -n "$AGENTS_NS" get pods -l app=agent-chat,agentdev/console=true --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$cpod" ]; then
+      out=$(k -n "$AGENTS_NS" exec "$cpod" -c chat -- git -C /state/repo rev-parse --verify -q HEAD 2>&1)
+      [[ "$out" =~ ^[0-9a-f]{40}$ ]]; check $? "console chat $cpod: the repository is there (synced through the forge sidecar)" "$(echo "$out" | head -1)"
+      envs=$(k -n "$AGENTS_NS" get pod "$cpod" -o json | jq -r '.spec.containers[]|select(.name=="chat")|.env[]?|(.valueFrom.secretKeyRef.name // empty)' | sort -u | tr '\n' ' ')
+      [[ " $envs " != *" egress-forge-proxy "* && " $envs " != *" agent-$AGENT "* ]]
+      check $? "console chat $cpod: the chat container holds no forge token and no egress key" "Secrets: ${envs:-none}"
+      code=$(k -n "$AGENTS_NS" exec "$cpod" -c chat -- curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:7070/healthz 2>/dev/null)
+      [ "$code" = 200 ]; check $? "console chat $cpod: the forge sidecar answers on 127.0.0.1:7070" "HTTP $code"
+    else manual "no console chat session runs: start one in the console (on GitHub too) and re-run --only chat for the repo and sidecar checks"; fi
     # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
     # the operator of this script, so the check runs on every cluster (#389 review)
     other=e2e-sec-nonconsole-$$

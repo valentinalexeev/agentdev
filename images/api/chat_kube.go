@@ -1,29 +1,32 @@
 package main
 
-// Chat session Jobs (#346). The API creates one Job per session in the agents namespace, from the same pod shape as
-// manifests/chat.yaml.tmpl (the kubectl path of scripts/agent-chat.sh), with these differences:
-//   - an initContainer clones the repository with the read-only token of the Secret agentdev-chat-clone; the chat
-//     container never holds a forge token (CHAT_MODE=console);
-//   - the container runs chat-session-server on port 7681 with CHAT_CONTROL_SHA256 (the sha256 of the API's
-//     per-session token).
-// The ValidatingAdmissionPolicy agentdev-api-chat-jobs (manifests/api.yaml.tmpl) holds the API's service account to
-// exactly this shape: name chat-*, the worker image, gVisor, and only the Secrets agentdev-chat-clone and
-// agent-<agent>-proxy. The API's Role has no access to Secrets.
+// Chat session Jobs (#346). The API creates one Job per session in the agents namespace.
 //
-// Claude identity (#400, after #352): the pod runs as the agent's service account agent-<agent> with
-// automountServiceAccountToken false, and gets only a projected token (audience claude-proxy, 600 s) mounted in the
-// chat container at /var/run/secrets/agentdev/proxy. The worker uses it when the proxy takes it, else the HMAC key
-// agent-<agent>-proxy, which stays for mixed versions (proxy mode key or both, ADR 0006).
+// #424: the session pod is the agent's own pod. The API reads the pod template the operator rendered for the
+// StatefulSet agent-<agent> (images/operator/render.go, the only definition of an agent pod) and changes only what makes
+// it interactive (chatPod): the agent container becomes the chat container (agent-chat-session in CHAT_MODE=console,
+// the session port 7681, CHAT_CONTROL_SHA256 = the sha256 of the API's per-session token); the forge sidecar stays as
+// it is (same image, Secrets, egress proxy key, security context) except that it does not register with the router or
+// listen for wakes (no WAKE_TOKEN, REGISTER_TOKEN, SELF_URL, webhook port); /state is an emptyDir instead of the
+// agent's disk; the labels are the chat labels (app=agent-chat), so the pod is not in the agent's Service, not
+// adopted by its StatefulSet and its approval lines are not read as the agent's (approvals stay the console
+// Allow/Deny of the session server, see docs/admin.md). The chat container holds no forge token and no egress key:
+// they stay in the sidecar, as in the agent pod, and every forge action goes through it (agentdev-forge).
+//
+// The ValidatingAdmissionPolicy agentdev-api-chat-jobs (manifests/api.yaml.tmpl) holds the API's service account to
+// exactly this shape: chat + forge containers with the worker and forge images, the state-init initContainer, gVisor,
+// the service account agent-<agent>, and only that agent's Secrets, each in the container the agent pod has it in.
+// The API's Role has no access to Secrets: it reads the StatefulSet (get, as before) and names Secrets in the Job.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -31,24 +34,12 @@ import (
 
 const chatPort = 7681
 
-// The projected claude-proxy token (#352): the same audience, lifetime and path as the agent pod (operator render.go).
-const (
-	chatProxyTokenVolume   = "proxy-token"
-	chatProxyTokenAudience = "claude-proxy"
-	chatProxyTokenSeconds  = 600
-	chatProxyTokenDir      = "/var/run/secrets/agentdev/proxy"
-)
-
 // chatJobConfig is read from the environment (CHAT_* in manifests/api.yaml.tmpl).
 type chatJobConfig struct {
-	Namespace      string
-	WorkerImage    string
-	PullPolicy     string
-	ForgeURL       string // as the session pod reaches it (Gitea in-cluster, or https://github.com)
-	ClaudeProxyURL string
-	EgressProxy    string
-	IdleSeconds    int
-	MaxSeconds     int64
+	Namespace   string
+	WorkerImage string // the admission policy pins it; the pod's images come from the agent's StatefulSet
+	IdleSeconds int
+	MaxSeconds  int64
 }
 
 type kubeChat struct {
@@ -60,82 +51,131 @@ func ptr[T any](v T) *T { return &v }
 
 func intOrStr(n int) intstr.IntOrString { return intstr.FromInt32(int32(n)) }
 
-func (k *kubeChat) job(s chatSession, tokenSHA256 string) *batchv1.Job {
-	labels := map[string]string{"app": "agent-chat", "session": s.ID, "agentdev/chat-agent": s.Agent, "agentdev/console": "true"}
-	env := func(n, v string) corev1.EnvVar { return corev1.EnvVar{Name: n, Value: v} }
-	secret := func(n, name, key string, optional bool) corev1.EnvVar {
-		return corev1.EnvVar{Name: n, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: key, Optional: ptr(optional)}}}
+// errNoAgentPod: the agent has no StatefulSet yet (the operator has not rendered it), so there is no pod to copy.
+var errNoAgentPod = &httpErr{409, "error", "the agent has no pod spec yet (the operator has not rendered it); try again in a minute"}
+
+// chat env vars the sidecar of a chat pod drops: router registration and wakes are the autonomous agent's
+var chatSidecarDrop = map[string]bool{"WAKE_TOKEN": true, "REGISTER_TOKEN": true, "SELF_URL": true}
+
+// chatPod turns the agent's pod template into the interactive session pod. Everything not named here is the agent's.
+func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, idle int) (corev1.PodSpec, error) {
+	p := *agent.Spec.DeepCopy()
+	p.RestartPolicy = corev1.RestartPolicyNever
+	p.EnableServiceLinks = ptr(false)
+	if p.SecurityContext == nil {
+		p.SecurityContext = &corev1.PodSecurityContext{}
 	}
-	noProxy := "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
-	proxyEnv := []corev1.EnvVar{env("HTTPS_PROXY", k.cfg.EgressProxy), env("HTTP_PROXY", k.cfg.EgressProxy),
-		env("https_proxy", k.cfg.EgressProxy), env("http_proxy", k.cfg.EgressProxy), env("NO_PROXY", noProxy), env("no_proxy", noProxy)}
-	sc := &corev1.SecurityContext{AllowPrivilegeEscalation: ptr(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}
-	mounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}}
-	// clone: the token comes from the Secret through git's credential helper, never on the command line or in .git/config
-	clone := corev1.Container{Name: "clone", Image: k.cfg.WorkerImage, ImagePullPolicy: corev1.PullPolicy(k.cfg.PullPolicy),
-		Command: []string{"bash", "-c", `set -euo pipefail
-git -c credential.helper='!f() { echo "username=${FORGE_USER:-x-access-token}"; echo "password=${FORGE_TOKEN:-}"; }; f' \
-  clone -q --depth 50 "${FORGE_URL%/}/${REPO}.git" /state/repo`},
-		Env: append([]corev1.EnvVar{env("FORGE_URL", k.cfg.ForgeURL), env("REPO", s.Repo),
-			secret("FORGE_USER", "agentdev-chat-clone", "FORGE_USER", true),
-			secret("FORGE_TOKEN", "agentdev-chat-clone", "FORGE_TOKEN", true)}, proxyEnv...),
-		VolumeMounts: mounts, SecurityContext: sc,
-		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
-			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}}}
-	chat := corev1.Container{Name: "chat", Image: k.cfg.WorkerImage, ImagePullPolicy: corev1.PullPolicy(k.cfg.PullPolicy),
-		Command: []string{"agent-chat-session"},
-		Env: append([]corev1.EnvVar{env("CHAT_MODE", "console"), env("REPO", s.Repo), env("SESSION_NAME", s.ID),
-			env("CHAT_AGENT", s.Agent), env("IDLE_SECONDS", fmt.Sprint(k.cfg.IdleSeconds)), env("CHAT_CONTROL_SHA256", tokenSHA256),
-			env("CHAT_PORT", fmt.Sprint(chatPort)), env("CLAUDE_CONFIG_DIR", "/home/node/.claude"),
-			env("ANTHROPIC_BASE_URL", k.cfg.ClaudeProxyURL),
-			secret("ANTHROPIC_AUTH_TOKEN", "agent-"+s.Agent+"-proxy", "ANTHROPIC_AUTH_TOKEN", false),
-			env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")}, proxyEnv...),
-		Ports:          []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort}},
-		ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3},
-		VolumeMounts: append(mounts, corev1.VolumeMount{Name: "claude", MountPath: "/home/node/.claude"}, corev1.VolumeMount{Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
-			corev1.VolumeMount{Name: chatProxyTokenVolume, MountPath: chatProxyTokenDir, ReadOnly: true}),
-		SecurityContext: sc,
-		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
-			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("2Gi")}}}
+	p.SecurityContext.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	// the agent's disk is the StatefulSet's claim "state": the session gets its own empty /state
+	hasState := false
+	for _, v := range p.Volumes {
+		hasState = hasState || v.Name == "state"
+	}
+	if !hasState {
+		p.Volumes = append([]corev1.Volume{{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}, p.Volumes...)
+	}
+	env := func(n, v string) corev1.EnvVar { return corev1.EnvVar{Name: n, Value: v} }
+	set := func(list []corev1.EnvVar, add ...corev1.EnvVar) []corev1.EnvVar {
+		for _, a := range add {
+			found := false
+			for i := range list {
+				if list[i].Name == a.Name {
+					list[i], found = a, true
+				}
+			}
+			if !found {
+				list = append(list, a)
+			}
+		}
+		return list
+	}
+	var agentC, forgeC bool
+	for i := range p.Containers {
+		c := &p.Containers[i]
+		switch c.Name {
+		case "agent":
+			agentC = true
+			c.Name = "chat"
+			c.Command, c.Args = []string{"agent-chat-session"}, nil
+			// tool permissions are answered in the console (chat-session-server, --permission-prompt-tool stdio): the
+			// agent's approval path needs an issue or PR job of the agent to comment on, which a session has not
+			c.Env = set(c.Env, env("CHAT_MODE", "console"), env("SESSION_NAME", s.ID), env("CHAT_AGENT", s.Agent),
+				env("IDLE_SECONDS", fmt.Sprint(idle)), env("CHAT_CONTROL_SHA256", tokenSHA256), env("CHAT_PORT", fmt.Sprint(chatPort)),
+				env("CLAUDE_CONFIG_DIR", "/home/node/.claude"))
+			c.Ports = []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort, Protocol: corev1.ProtocolTCP}}
+			c.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3}
+		case "forge":
+			forgeC = true
+			kept := c.Env[:0]
+			for _, e := range c.Env {
+				if !chatSidecarDrop[e.Name] {
+					kept = append(kept, e)
+				}
+			}
+			// no approval requests from a chat pod: the operator reads them only from agent pods, so a push to a
+			// protected path is refused at once instead of waiting for a decision nobody can see
+			c.Env = set(kept, env("APPROVALS", "false"))
+			c.Ports = nil // no webhook listener without the wake token
+		default:
+			return p, fmt.Errorf("agent pod has an unexpected container %q", c.Name)
+		}
+	}
+	if !agentC || !forgeC {
+		return p, errors.New("agent pod has no agent or no forge container")
+	}
+	return p, nil
+}
+
+func (k *kubeChat) agentTemplate(ctx context.Context, agent string) (corev1.PodTemplateSpec, error) {
+	sts, err := k.c.AppsV1().StatefulSets(k.cfg.Namespace).Get(ctx, "agent-"+agent, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return corev1.PodTemplateSpec{}, errNoAgentPod
+	}
+	if err != nil {
+		return corev1.PodTemplateSpec{}, err
+	}
+	if sts.Labels["app"] != "coding-agent" || sts.Spec.Template.Labels["agent"] != agent {
+		return corev1.PodTemplateSpec{}, errNoAgentPod
+	}
+	return sts.Spec.Template, nil
+}
+
+func (k *kubeChat) jobFrom(t corev1.PodTemplateSpec, s chatSession, tokenSHA256 string) (*batchv1.Job, error) {
+	labels := map[string]string{"app": "agent-chat", "session": s.ID, "agentdev/chat-agent": s.Agent, "agentdev/console": "true"}
+	// the agent's other pod labels (cost labels, #184), without the ones that select agent pods
+	podLabels := map[string]string{}
+	for k, v := range t.Labels {
+		if k != "app" && k != "agent" {
+			podLabels[k] = v
+		}
+	}
+	for k, v := range labels {
+		podLabels[k] = v
+	}
+	p, err := chatPod(t, s, tokenSHA256, k.cfg.IdleSeconds)
+	if err != nil {
+		return nil, err
+	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: s.ID, Namespace: k.cfg.Namespace, Labels: labels,
 			Annotations: map[string]string{"agentdev/started-by": s.StartedBy, "agentdev/repo": s.Repo}},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: ptr[int32](0), ActiveDeadlineSeconds: ptr(k.cfg.MaxSeconds), TTLSecondsAfterFinished: ptr[int32](300),
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever, RuntimeClassName: ptr("gvisor"),
-					NodeSelector: map[string]string{"agentdev/pool": "sandboxes"},
-					Tolerations: []corev1.Toleration{
-						{Key: "agentdev/pool", Operator: corev1.TolerationOpEqual, Value: "sandboxes", Effect: corev1.TaintEffectNoSchedule},
-						{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule}},
-					// #400: the agent's identity at claude-proxy, but never its API token: only the projected token below
-					ServiceAccountName: "agent-" + s.Agent, AutomountServiceAccountToken: ptr(false), EnableServiceLinks: ptr(false),
-					SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr[int64](1000), RunAsNonRoot: ptr(true), FSGroup: ptr[int64](1000),
-						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}},
-					InitContainers: []corev1.Container{clone},
-					Containers:     []corev1.Container{chat},
-					Volumes: []corev1.Volume{
-						{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-						{Name: "claude", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-						{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-guides"}, Optional: ptr(true), DefaultMode: ptr[int32](0o444),
-							Items: []corev1.KeyToPath{{Key: s.Agent, Path: "guide.md"}}}}},
-						{Name: chatProxyTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
-							DefaultMode: ptr[int32](0o444),
-							Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
-								Audience: chatProxyTokenAudience, ExpirationSeconds: ptr[int64](chatProxyTokenSeconds), Path: "token"}}}}}},
-					},
-				},
-			},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: podLabels}, Spec: p},
 		},
-	}
+	}, nil
 }
 
 func (k *kubeChat) StartSession(ctx context.Context, s chatSession, tokenSHA256 string) error {
-	_, err := k.c.BatchV1().Jobs(k.cfg.Namespace).Create(ctx, k.job(s, tokenSHA256), metav1.CreateOptions{})
+	t, err := k.agentTemplate(ctx, s.Agent)
+	if err != nil {
+		return err
+	}
+	j, err := k.jobFrom(t, s, tokenSHA256)
+	if err != nil {
+		return err
+	}
+	_, err = k.c.BatchV1().Jobs(k.cfg.Namespace).Create(ctx, j, metav1.CreateOptions{})
 	return err
 }
 

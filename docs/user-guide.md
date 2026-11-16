@@ -136,7 +136,10 @@ You can also use a session in the web console. The console and the terminal show
 3. Optional: type context, for example an issue or a question.
    The session gets it as untrusted text.
 4. Select **Start session**.
-   The session clones the repository and starts Claude. This takes about 30 seconds.
+   The session gets the repository through the agent's forge sidecar and starts Claude. This takes about 30 seconds.
+   The session acts as the agent: it uses the agent's forge identity, its project MCP tools, its Claude budget and
+   its egress rules. Claude can push only to `agent/<agent>/*` branches and can comment on the forge as the agent,
+   with the same limits as the agent.
 5. Write your message and push **Send** (or push `Enter`).
 6. To see a tool step, select its line. The input and the output open below it.
 7. When Claude asks for a permission, read the tool and its input.
