@@ -995,6 +995,29 @@ Do this task after run.sh step 09.
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
+### Run log of jobs (#425)
+
+The agents send the run log of each job (what Claude writes, its tool calls and their results) to the API. The console
+shows it in the **Run** tab of a job. The path is: the worker reads Claude's output while it runs, the forge sidecar
+(`POST /run-events`, localhost only) checks and forwards it, and the API's internal listener
+(`agentdev-api-internal:8081`, `POST /internal/run-events/<agent>`) stores it. The API accepts a batch only from a
+running pod of that agent (`app=coding-agent,agent=<name>`), so an agent cannot write the run log of another agent.
+
+| Limit | Value | Where |
+|---|---|---|
+| One text (assistant text, tool input, tool output) | 2 KB, then `[clipped]` | worker (`RUN_EVENT_CLIP`); the sidecar clips at 4 KB |
+| One job | 2 MB, then one "truncated" step | worker (`RUN_LOG_MAX`); the API refuses more than 3 MB |
+| One batch | 100 steps, 256 KB | sidecar and API |
+| Retention | 30 days | Postgres table `job_events`, removed daily by `job_events_prune()` |
+
+The worker and the sidecar replace credential shapes (GitHub, GitLab, Slack, AWS and OpenAI style keys, private keys,
+`password=`/`token:` values, bare `Bearer` tokens, a private key whose END line was clipped) and the values of token variables in their environment with `[redacted]`. Without a
+database (`DATABASE_URL` empty) the API keeps the run log in memory: it is lost on restart.
+
+If the API or the sidecar does not answer, the run log of that moment is lost; the job continues. The run log is never
+in a container log: to read it, use the console or `GET /api/jobs/<agent>/<job>/events?repo=<owner/name>` with a
+bearer token.
+
 ### Deploy the API on GKE
 
 The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
@@ -2375,6 +2398,32 @@ when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, 
 The API can start sessions for the console Chat page (#346). These sessions are Jobs that run
 `chat-session-server`. Only the API connects to the session pod (NetworkPolicy and a token for each session).
 
+A session pod is the pod of its agent (#424). The API copies the pod template of the StatefulSet `agent-<name>` that
+the operator makes, and changes only the parts that make it interactive:
+
+- The `agent` container becomes the `chat` container. It runs `agent-chat-session` (`chat-session-server`) on port
+  7681 with the session's control token, not the autonomous loop.
+- The `forge` sidecar is the agent's sidecar: the same image, forge credential, egress proxy key and security context.
+  It does not register with the router and does not listen for wakes (no `WAKE_TOKEN`, `REGISTER_TOKEN` or
+  `SELF_URL`), and it does not file approval requests (`APPROVALS=false`).
+- `/state` is an empty volume, not the agent's disk. The pod labels are `app=agent-chat`, so the pod is not in the
+  agent's Service and the operator does not take it for the agent.
+
+So the session uses the agent's paths: the repository comes through the sidecar (`agentdev-forge sync`, the same git
+bundle as the loop), forge calls and pushes go through the sidecar and its rules (`agentdev-forge api`,
+`agentdev-forge push agent/<name>/...`), and Claude uses the agent's identity at `claude-proxy`, its MCP Secret
+`agent-<name>-mcp` and its egress allow-list. This works on GitHub too: the forge hosts are reached only by the
+sidecar with its egress key. The `chat` container holds no forge token and no egress key.
+
+Tool permissions: the session asks in the console (**Allow once** or **Deny**), not through the agent's approval
+comments. The agent's approval path needs an issue or a pull request of the agent to comment on, and a session has
+none. A push to a protected path is refused by the sidecar at once (as for an agent with approvals off).
+
+The admission policy `agentdev-api-chat-jobs` allows only this shape: the containers `chat` (worker image) and
+`forge` (forge image), the init container `state-init`, the service account `agent-<name>`, and only the Secrets of
+the agent in the Job label, each in the container that has it in the agent pod. The API reads no Secret; its Role is
+not changed. A session can start only after the operator has made the agent's StatefulSet.
+
 1. Set `api.chat.enabled: true` in `ansible/instance.yml`.
 2. Run the Ansible `deploy.yml`.
    On GKE, Ansible makes the Secret Manager entry `agentdev-api-chat-token-key` once.
@@ -2388,8 +2437,9 @@ The API can start sessions for the console Chat page (#346). These sessions are 
 | `max_sessions_per_user` | `CHAT_MAX_SESSIONS_PER_USER` | 0 (no limit) | Maximum sessions of one person. |
 | | `CHAT_MAX_SECONDS` | 28800 | Maximum time of one session. |
 
-Optional secrets: `agentdev-chat-clone-token` (read-only clone token) and, on Gitea, `agentdev-chat-issue-token`
-(site admin, `write:issue`, used with `Sudo`, so the issue author is the person).
+Optional secret, on Gitea: `agentdev-chat-issue-token` (site admin, `write:issue`, used with `Sudo`, so the issue
+author is the person). Since #424 there is no clone token: the Secret Manager entry `agentdev-chat-clone-token` is
+not read any more (you can delete it), and the playbook removes the Secret `agentdev-chat-clone`.
 
 Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
 
@@ -2402,9 +2452,6 @@ Notes:
   could fake a terminal client; only console presence, reported by the API, renews the session without limit.
 - The terminal view renders `/state/chat/events.jsonl`, which Claude can also write. It is display only; the console
   reads the events from the session server's memory.
-- On kind, the clone token is `agentdev-api`'s read-only Gitea token, copied into the Secret `agentdev-chat-clone`
-  in the agents namespace. Only the clone initContainer of a chat pod reads it (admission policy
-  `agentdev-api-chat-jobs`).
 - On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
   **Create issue**, and the audit log records them.
 
@@ -2481,18 +2528,42 @@ Do this task before maintenance of a node, for example.
 Do this task once per deployment repository on GKE. Then each pull request gets a `terraform plan` comment (#291).
 The plan uses the read-only service account `agentdev-plan`. This account cannot change resources.
 
-1. Use an agentdev release that contains #291 (`ref=` and `image_tag`).
-2. Run `terraform plan`, then apply it. You (the owner) do the apply. The apply makes `agentdev-plan`, the
-   Workload Identity pool `github-pr` and the read grants.
-3. Run `terraform output github_actions_auth`.
-4. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
+The identity is opt-in (`create_plan_identity`, default `false` since #421), because the apply account of the
+bootstrap may not create it.
+
+1. Use an agentdev release that contains #291 and #421 (`ref=` and `image_tag`).
+2. You (the owner) give the apply account these one-time grants. The apply account cannot give them to itself.
+   Without them `terraform apply` stops half way with 403 (#421).
+   ```bash
+   SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+   gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+     --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+   gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+     --role=roles/storage.admin
+   # only with create_budget = true (the default)
+   gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+     --role=roles/billing.admin
+   ```
+   - `roles/iam.workloadIdentityPoolAdmin`: create the pool `github-pr` (`iam.workloadIdentityPools.create`).
+   - `roles/storage.admin` on the state bucket: the read grant for the plan account
+     (`storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`).
+   - `roles/billing.admin` on the billing account: the `roles/billing.viewer` grant for the plan account
+     (`billing.accounts.setIamPolicy`; only with `create_budget`).
+3. In `terraform/main.tf` set `create_plan_identity = true` in the module block. In `ansible/instance.yml` set
+   `plan_identity: true` and `plan_identity_billing_account: <billing_account_id>` (`""` with
+   `create_budget = false`; `plan_identity_state_bucket` if the state is not in `<project_id>-tfstate`).
+   The preflight (`scripts/upgrade-check.sh`) then checks the grants and prints the missing commands.
+4. Run `terraform plan`, then apply it. The apply makes `agentdev-plan`, the Workload Identity pool `github-pr`
+   and the read grants.
+5. Run `terraform output github_actions_auth`.
+6. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
    `plan_workload_identity_provider`.
-5. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
-6. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
-7. In the branch protection of `main`, require the `plan` check.
-8. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
-   repository can read the Terraform state (docs/security.md R115).
-9. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
+7. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
+8. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
+9. In the branch protection of `main`, require the `plan` check.
+10. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
+    repository can read the Terraform state (docs/security.md R115).
+11. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
 
 What the plan identity can do:
 
@@ -2504,7 +2575,8 @@ What the plan identity can do:
 - Only `pull_request` runs of `github_repository` get it. A pull request from a fork gets no token.
 
 To check that the identity cannot apply, run `terraform apply` with it once. The apply must fail with `403`.
-To remove the identity, set `create_plan_identity = false`, then apply.
+To remove the identity, set `create_plan_identity = false` and `plan_identity: false`, then apply. You can then
+remove the three owner grants again.
 
 ### Upgrade the local installation
 

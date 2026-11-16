@@ -33,32 +33,32 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
   return (
     <>
       <PageHead title="Security" sub="Guardrails that refused an action. High severity, or too many events in one job, pause the agent." />
-      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
-        <label className="ad-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}><span>Agent</span>
-          <input className="ad-input" style={{ width: 160 }} value={filter.agent ?? ''} placeholder="all"
+      <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <label className="agd-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}><span>Agent</span>
+          <input className="agd-input" style={{ width: 160 }} value={filter.agent ?? ''} placeholder="all"
             onChange={(e) => setFilter({ ...filter, agent: e.target.value.trim() })} /></label>
-        <div className="ad-seg" role="group" aria-label="Severity">
+        <div className="agd-seg" role="group" aria-label="Severity">
           {SEV.map(([v, l]) => <button key={l} type="button" aria-pressed={filter.severity === v} onClick={() => setFilter({ ...filter, severity: v })}>{l}</button>)}
         </div>
-        <div className="ad-seg" role="group" aria-label="Time">
+        <div className="agd-seg" role="group" aria-label="Time">
           {SINCE.map(([v, l]) => <button key={l} type="button" aria-pressed={filter.since === v} onClick={() => setFilter({ ...filter, since: v })}>{l}</button>)}
         </div>
       </div>
-      {error && <p className="ad-error" role="alert">{error}</p>}
-      {!events && !error && <p className="ad-muted">Loading events…</p>}
+      {error && <p className="agd-error" role="alert">{error}</p>}
+      {!events && !error && <p className="agd-muted">Loading events…</p>}
       {events && events.length === 0 && <Empty title="No security events for this filter">When a guardrail refuses an action, it shows here.</Empty>}
       {events && events.length > 0 && (
-        <div className="ad-table-wrap">
-          <table className="ad-table ad-table-2l">
+        <div className="agd-table-wrap">
+          <table className="agd-table agd-table-2l">
             <thead><tr><th>Time</th><th>Agent</th><th>Severity</th><th>Source / rule</th><th>Job</th><th>Action</th></tr></thead>
             <tbody>
               {events.map((e) => (
                 <tr key={e.id}>
-                  <td className="ad-num" style={{ textAlign: 'left' }}>{new Date(e.time).toLocaleString()}</td>
+                  <td className="agd-num" style={{ textAlign: 'left' }}>{new Date(e.time).toLocaleString()}</td>
                   <td><AgentTag name={e.agent} /></td>
                   <td><SevTag severity={e.severity} /></td>
-                  <td className="ad-code">{e.source} / {e.rule}</td>
-                  <td className="ad-code">{e.job ?? ''}</td>
+                  <td className="agd-code">{e.source} / {e.rule}</td>
+                  <td className="agd-code">{e.job ?? ''}</td>
                   <td style={{ overflowWrap: 'anywhere' }}>{e.action}</td>
                 </tr>
               ))}
@@ -66,7 +66,7 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
           </table>
         </div>
       )}
-      {next && <p><button className="ad-btn" type="button" onClick={more}>Load more</button></p>}
+      {next && <p><button className="agd-btn" type="button" onClick={more}>Load more</button></p>}
     </>
   )
 }

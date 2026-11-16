@@ -10,7 +10,7 @@ terraform {
 }
 
 module "agentdev" {
-  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.1.0-rc.1"
+  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.1.0-rc.2"
 
   project_id         = var.project_id
   region             = var.region
@@ -46,6 +46,9 @@ module "agentdev" {
   # monitoring_components     = var.monitoring_components
   # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
   # create_budget = var.create_budget
+  # read-only plan identity for PR plans (agentdev #291, opt-in since #421): first the owner grants of docs/admin.md
+  # "Show the plan on deployment pull requests", and plan_identity: true in ansible/instance.yml for the preflight
+  # create_plan_identity = true
 }
 
 # Migration (agentdev #199): if this repository has the workaround resource

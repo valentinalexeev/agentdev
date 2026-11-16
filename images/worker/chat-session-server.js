@@ -333,6 +333,8 @@ function main() {
     '--permission-prompt-tool', 'stdio', '--append-system-prompt', fs.readFileSync(promptFile, 'utf8')];
   // #400: the apiKeyHelper settings for the projected claude-proxy token (agent-chat-session.sh); absent: the HMAC key
   if (/^\/[A-Za-z0-9._/-]+\.json$/.test(process.env.CHAT_CLAUDE_SETTINGS || '')) args.push('--settings', process.env.CHAT_CLAUDE_SETTINGS);
+  // #424: the agent's project MCP tools (Secret agent-<name>-mcp, written by agent-chat-session.sh as agent-loop does)
+  if (/^\/[A-Za-z0-9._/-]+\.json$/.test(process.env.CHAT_MCP_CONFIG || '')) args.push('--mcp-config', process.env.CHAT_MCP_CONFIG);
   const env = { ...process.env };
   const claude = spawn('claude', args, { cwd: process.env.CHAT_WORKDIR || '/state/repo', env, stdio: ['pipe', 'pipe', 'inherit'] });
   s.claude = claude;

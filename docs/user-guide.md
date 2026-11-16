@@ -136,7 +136,10 @@ You can also use a session in the web console. The console and the terminal show
 3. Optional: type context, for example an issue or a question.
    The session gets it as untrusted text.
 4. Select **Start session**.
-   The session clones the repository and starts Claude. This takes about 30 seconds.
+   The session gets the repository through the agent's forge sidecar and starts Claude. This takes about 30 seconds.
+   The session acts as the agent: it uses the agent's forge identity, its project MCP tools, its Claude budget and
+   its egress rules. Claude can push only to `agent/<agent>/*` branches and can comment on the forge as the agent,
+   with the same limits as the agent.
 5. Write your message and push **Send** (or push `Enter`).
 6. To see a tool step, select its line. The input and the output open below it.
 7. When Claude asks for a permission, read the tool and its input.
@@ -204,6 +207,26 @@ projects only"):
 
 The Done column shows the jobs of the last 7 days. Job titles show as plain text. If the forge does not answer for a
 project, the page says that the jobs of that project can be missing.
+
+### Watch a job while it runs
+
+The run log of a job shows what the agent does: the text it writes, each tool it calls (for example `Bash` with the
+command), the result of each call (ok or error, the size, the first 2 KB of the output) and, at the end, the number of
+turns and tokens.
+
+1. Open **Work** and click **Run log** on the card of the job. From an agent, open **Agents**, click the agent, open
+   **Jobs** and click **Watch the run** (a job in plan or build) or **Run log**.
+2. The **Run** tab shows the steps, the newest at the end. While the job runs, new steps show within a few seconds
+   (**Live**). Clear **Follow** to stop the automatic scroll.
+3. Click a folded step to see its full text.
+
+The address (`#work?job=<agent>/issue-<n>&jrepo=<owner/name>`) opens the same run log, so you can send a link. You see
+the run log of a job if you have write access to its repository, or if you are in the admin group.
+
+The run log is written by the agent, and nothing in it is checked: it shows as plain text, never as a link or
+formatted text. Secrets that look like tokens or keys show as `[redacted]`. A job keeps at most 2 MB of run log; after
+that, the log shows "reached its size limit" and no later steps. The run log is kept for 30 days. It is never posted on
+the forge and never sent in a notification.
 
 ## Control agents in the web UI
 

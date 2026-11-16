@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -459,23 +461,20 @@ func TestChatTokenPerSession(t *testing.T) {
 }
 
 func TestChatJobShape(t *testing.T) {
-	k := &kubeChat{c: fake.NewSimpleClientset(), cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: "w:1", PullPolicy: "IfNotPresent",
-		ForgeURL: "http://gitea", ClaudeProxyURL: "http://proxy", EgressProxy: "http://egress", IdleSeconds: 1800, MaxSeconds: 28800}}
-	j := k.job(chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/x", StartedBy: "wendy"}, strings.Repeat("a", 64))
-	p := j.Spec.Template.Spec
-	if *p.RuntimeClassName != "gvisor" || *p.AutomountServiceAccountToken || j.Spec.Template.Labels["app"] != "agent-chat" {
-		t.Fatalf("pod: %+v", p)
-	}
-	for _, e := range p.Containers[0].Env {
-		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "agent-alice-proxy" {
-			t.Errorf("chat container mounts secret %s", e.ValueFrom.SecretKeyRef.Name)
-		}
-		if strings.Contains(e.Name, "FORGE_TOKEN") {
-			t.Errorf("chat container has a forge token")
-		}
-	}
-	if err := k.StartSession(context.Background(), chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/x"}, strings.Repeat("a", 64)); err != nil {
+	tmpl := agentFixture(t, "gitea")
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-alice", Namespace: "coding-agents", Labels: map[string]string{"app": "coding-agent"}},
+		Spec: appsv1.StatefulSetSpec{Template: tmpl}}
+	k := &kubeChat{c: fake.NewSimpleClientset(sts), cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: testWorkerImage, IdleSeconds: 1800, MaxSeconds: 28800}}
+	if err := k.StartSession(context.Background(), chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/repo"}, strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
+	}
+	j, err := k.c.BatchV1().Jobs("coding-agents").Get(context.Background(), "chat-alice-0000abcd", metav1.GetOptions{})
+	if err != nil || j.Spec.Template.Spec.ServiceAccountName != "agent-alice" || len(j.Spec.Template.Spec.Containers) != 2 {
+		t.Fatalf("job: %v %+v", err, j)
+	}
+	// no StatefulSet (operator not done yet): a clear error, no Job
+	if err := k.StartSession(context.Background(), chatSession{ID: "chat-bob-0000abcd", Agent: "bob", Repo: "owner/repo"}, strings.Repeat("a", 64)); err != errNoAgentPod {
+		t.Fatalf("no agent pod: %v", err)
 	}
 	if err := k.StopSession(context.Background(), "chat-alice-0000abcd"); err != nil {
 		t.Fatal(err)
@@ -485,12 +484,11 @@ func TestChatJobShape(t *testing.T) {
 	}
 }
 
-// #400: the agent's service account, no API token, and exactly one projected token (audience claude-proxy, 600 s)
-// mounted only in the chat container; the HMAC key stays for mixed versions.
+// #400: the agent's service account, no API token, and the projected token (audience claude-proxy, 600 s) mounted
+// only in the chat container; #424: exactly as in the agent pod, copied from it.
 func TestChatJobProjectedToken(t *testing.T) {
-	k := &kubeChat{cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: "w:1", ClaudeProxyURL: "http://proxy"}}
-	p := k.job(chatSession{ID: "chat-bob-0000abcd", Agent: "bob", Repo: "owner/x"}, strings.Repeat("a", 64)).Spec.Template.Spec
-	if p.ServiceAccountName != "agent-bob" || p.AutomountServiceAccountToken == nil || *p.AutomountServiceAccountToken {
+	p := chatJobFor(t, "gitea").Spec.Template.Spec
+	if p.ServiceAccountName != "agent-alice" || p.AutomountServiceAccountToken == nil || *p.AutomountServiceAccountToken {
 		t.Fatalf("service account %q automount %v", p.ServiceAccountName, p.AutomountServiceAccountToken)
 	}
 	var proj []corev1.Volume
@@ -498,8 +496,8 @@ func TestChatJobProjectedToken(t *testing.T) {
 		if v.Projected != nil {
 			proj = append(proj, v)
 		}
-		if v.Secret != nil || v.HostPath != nil {
-			t.Errorf("volume %s: Secret or hostPath", v.Name)
+		if v.Secret != nil || v.HostPath != nil || v.PersistentVolumeClaim != nil {
+			t.Errorf("volume %s: Secret, hostPath or claim", v.Name)
 		}
 	}
 	if len(proj) != 1 || len(proj[0].Projected.Sources) != 1 {
@@ -509,30 +507,12 @@ func TestChatJobProjectedToken(t *testing.T) {
 	if st == nil || st.Audience != "claude-proxy" || st.ExpirationSeconds == nil || *st.ExpirationSeconds != 600 || st.Path != "token" {
 		t.Fatalf("projected source: %+v", proj[0].Projected.Sources[0])
 	}
-	mounted := func(c corev1.Container) bool {
+	for _, c := range append(append([]corev1.Container{}, p.Containers...), p.InitContainers...) {
 		for _, m := range c.VolumeMounts {
-			if m.Name == proj[0].Name {
-				return m.MountPath == "/var/run/secrets/agentdev/proxy" && m.ReadOnly
+			if m.Name == proj[0].Name && (c.Name != "chat" || m.MountPath != "/var/run/secrets/agentdev/proxy" || !m.ReadOnly) {
+				t.Errorf("container %s mounts the proxy token at %s", c.Name, m.MountPath)
 			}
 		}
-		return false
-	}
-	if !mounted(p.Containers[0]) || p.Containers[0].Name != "chat" {
-		t.Errorf("the chat container does not mount the token read-only at /var/run/secrets/agentdev/proxy")
-	}
-	for _, c := range p.InitContainers {
-		for _, m := range c.VolumeMounts {
-			if m.Name == proj[0].Name {
-				t.Errorf("init container %s mounts the proxy token", c.Name)
-			}
-		}
-	}
-	key := false
-	for _, e := range p.Containers[0].Env {
-		key = key || (e.Name == "ANTHROPIC_AUTH_TOKEN" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef.Name == "agent-bob-proxy")
-	}
-	if !key {
-		t.Error("the HMAC key fallback for mixed versions is gone")
 	}
 }
 

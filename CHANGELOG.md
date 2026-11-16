@@ -6,6 +6,76 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.1.0-rc.2] - 2026-11-16
+
+### Upgrade
+**From 1.0.x (1.0.0 or 1.0.1):** do the Upgrade steps of the 1.1.0-rc.1 section below (the ADR 0009 lean cluster
+included), with two changes: pin `v1.1.0-rc.2` / `1.1.0-rc.2` instead of rc.1 in step 1, and in step 3 the
+read-only plan identity is **opt-in** (`create_plan_identity` defaults to `false`, #421): with no new inputs and the
+1.0.x apply account roles, `terraform apply` and the playbook complete. Then read the steps below from point 2 on.
+
+**From 1.1.0-rc.1:**
+1. **Pin rc.2 everywhere (ADR 0006).** `ref=v1.1.0-rc.2` in `terraform/main.tf`, `agentdev_ref: v1.1.0-rc.2` and
+   `image_tag: "1.1.0-rc.2"` in `ansible/instance.yml`, in one PR. New images: worker, forge, API and UI change
+   together.
+2. **Plan identity is opt-in (#421).** A deployment that applied rc.1 with the identity keeps it only with
+   `create_plan_identity = true`; without it the next apply removes the leftover `agentdev-plan` account and
+   `github-pr` pool. To keep or turn it on:
+   1. The owner gives the apply account `agentdev-automation` these one-time grants (it cannot grant them to itself):
+      ```bash
+      SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+      gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+        --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+      gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+        --role=roles/storage.admin
+      # only with create_budget = true (the default)
+      gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+        --role=roles/billing.admin
+      ```
+   2. Set `create_plan_identity = true` in the module block of `terraform/main.tf`, and `plan_identity: true` with
+      `plan_identity_billing_account: <billing_account_id>` (or `""` with `create_budget = false`) in
+      `ansible/instance.yml`. The preflight then checks the grants before `terraform apply`.
+   3. Apply, then set `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT` (docs/admin.md "Show the plan on
+      deployment pull requests").
+3. **UI class rename (#423).** The UI CSS classes are renamed from `ad-*` to `agd-*`. Custom CSS or browser
+   userstyles that target `ad-*` classes must change to `agd-*`.
+4. **Chat (#424).** The playbook removes the Secret `agentdev-chat-clone`; the Secret Manager entry
+   `agentdev-chat-clone-token` is no longer read and can be deleted. `manifests/api.yaml.tmpl` has the new value
+   `CHAT_FORGE_IMAGE` (the playbook sets it from `forge_image`; on kind from `FORGE_IMAGE`); the API no longer reads
+   `CHAT_FORGE_URL`, `CHAT_IMAGE_PULL_POLICY`, `CHAT_CLAUDE_PROXY_URL` and `CHAT_EGRESS_PROXY`. A chat session is now
+   the agent's own pod, so it starts only after the operator has rendered the agent's StatefulSet. The API, worker
+   and forge images must run the same `image_tag`.
+5. **Run log (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`): re-run
+   `deploy.yml` (or the role `api`; on kind `./run.sh 10`), nothing to do by hand. The API's internal listener
+   (port 8081) now runs also with approvals off. A 1.1.0-rc.1 worker sends no run log; a 1.1.0-rc.1 API answers 404
+   to the sidecar, which drops the events.
+
+### Fixed
+- Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
+  account cannot create the read-only plan identity (#421). `create_plan_identity` now defaults to `false`. The
+  preflight (#314) has a new check `plan_identity`: with the instance value `plan_identity: true` it tests the
+  apply account for `iam.workloadIdentityPools.create`, `storage.buckets.getIamPolicy`/`setIamPolicy` on the state
+  bucket and `billing.accounts.setIamPolicy` (with `plan_identity_billing_account`), and stops with the owner grant
+  commands. The deployment template has a commented `create_plan_identity` line.
+- UI: the console showed a blank page with an ad or content blocker, because every UI class started with `ad-`
+  and cosmetic filters hid `<main class="ad-main">` (#423). The class prefix is now `agd-` (also in
+  `docs/design-system`), and `npm run lint` and the build fail on any class that starts with `ad-`, `ads-` or
+  `advert`. The UI CSP also allows `font-src 'self' data:` for the small font subsets Vite inlines, which removes
+  four CSP errors on every load.
+- Console chat sessions now run as the agent's own pod (#424): the API copies the pod template the operator renders
+  for `agent-<name>` and changes only the interactive entry point (`chat-session-server`, the session port and
+  control token, an empty `/state`, no router registration or wakes in the sidecar). The repository and every forge
+  action go through the agent's `forge` sidecar (`agentdev-forge sync|push|api`), so chat works on GitHub (the clone
+  initContainer had no egress proxy credential and got 403) and acts with the agent's identity, push rules
+  (`agent/<name>/*`), MCP tools, Claude identity and egress rules. Tool permissions stay the console's Allow/Deny.
+  The admission policy `agentdev-api-chat-jobs` allows exactly this shape and only the agent's Secrets, each in its
+  container; the chat container still holds no forge token and no egress key. The API's Role is unchanged.
+- **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
+  agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
+  turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge
+  sidecar (`POST /run-events`) to the API (`GET /api/jobs/{agent}/{job}/events`, SSE `.../events/stream`, visibility
+  of the job, R35); kept 30 days. Never posted on the forge or in notifications (security.md R118).
+
 ## [1.1.0-rc.1] - 2026-11-16
 
 ### Upgrade

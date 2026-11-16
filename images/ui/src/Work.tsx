@@ -6,7 +6,7 @@
 // Job titles are written on the forge by people or agents: plain text only.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listJobs, Unauthorized, type Job, type JobPhase } from './api'
-import { ago, outcomeText, short } from './format'
+import { ago, outcomeText, runLogHash, short } from './format'
 import { AgentTag, Empty, PageHead } from './ui'
 import { useData } from './useData'
 
@@ -29,23 +29,24 @@ function Card({ j, blocked, now }: { j: Job; blocked: string; now: number }) {
   const out = outcomeText(j)
   const failed = j.phase === 'done' && j.outcome !== 'merged'
   return (
-    <article className={`ad-card ${j.phase === 'review' ? 'ad-card-review' : ''} ${blocked ? 'ad-card-blocked' : ''}`}>
-      <div className="ad-card-top">
-        <span className="ad-data">{short(j.repo)}{j.issue ? ` #${j.issue}` : ''}{j.pr ? ` · PR #${j.pr}` : ''}</span><AgentTag name={j.agent} />
+    <article className={`agd-card ${j.phase === 'review' ? 'agd-card-review' : ''} ${blocked ? 'agd-card-blocked' : ''}`}>
+      <div className="agd-card-top">
+        <span className="agd-data">{short(j.repo)}{j.issue ? ` #${j.issue}` : ''}{j.pr ? ` · PR #${j.pr}` : ''}</span><AgentTag name={j.agent} />
       </div>
-      <h3 className="ad-card-title">{j.title || '(no title)'}</h3>
-      <ol className="ad-track" aria-label={`Phase: ${blocked ? 'blocked in ' : ''}${STEP[j.phase]}`}>
+      <h3 className="agd-card-title">{j.title || '(no title)'}</h3>
+      <ol className="agd-track" aria-label={`Phase: ${blocked ? 'blocked in ' : ''}${STEP[j.phase]}`}>
         {COLS.map(([p], i) => {
-          const cls = blocked && i === ci ? 'ad-step-blocked' : i < ci ? 'ad-step-past' : i === ci ? 'ad-step-now' : 'ad-step-next'
-          return <li key={p} className={`ad-step ad-step-${STEP[p]} ${cls}`}><span className="ad-label">{blocked && i === ci ? 'blocked' : STEP[p]}</span></li>
+          const cls = blocked && i === ci ? 'agd-step-blocked' : i < ci ? 'agd-step-past' : i === ci ? 'agd-step-now' : 'agd-step-next'
+          return <li key={p} className={`agd-step agd-step-${STEP[p]} ${cls}`}><span className="agd-label">{blocked && i === ci ? 'blocked' : STEP[p]}</span></li>
         })}
       </ol>
-      {blocked && <p className="ad-card-note">{blocked}</p>}
-      {out && <p className="ad-card-note" style={failed ? { color: 'var(--danger)' } : undefined}>Outcome: {out}</p>}
-      <p className="ad-card-note">
-        {j.url && <a className="ad-link" href={j.url} target="_blank" rel="noreferrer noopener">Issue</a>}
+      {blocked && <p className="agd-card-note">{blocked}</p>}
+      {out && <p className="agd-card-note" style={failed ? { color: 'var(--danger)' } : undefined}>Outcome: {out}</p>}
+      <p className="agd-card-note">
+        {j.url && <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">Issue</a>}
         {j.url && j.prUrl && ' · '}
-        {j.prUrl && <a className="ad-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">Pull request</a>}
+        {j.prUrl && <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">Pull request</a>}
+        {' · '}<a className="agd-link" href={runLogHash(j)}>Run log</a>
         {' · '}updated {ago(Date.parse(j.updated), now)}
       </p>
     </article>
@@ -55,13 +56,13 @@ function Card({ j, blocked, now }: { j: Job; blocked: string; now: number }) {
 function Board({ jobs, blockedOf, now }: { jobs: Job[]; blockedOf: (j: Job) => string; now: number }) {
   return (
     // focusable, so the arrow keys scroll the columns on a phone
-    <div className="ad-board" tabIndex={0} role="region" aria-label="Board: plan, build, review, done">
+    <div className="agd-board" tabIndex={0} role="region" aria-label="Board: plan, build, review, done">
       {COLS.map(([p, label, who]) => {
         const l = jobs.filter((j) => j.phase === p)
         return (
-          <section key={p} className={`ad-col ad-col-${STEP[p]}`} aria-label={`${label}, ${l.length} ${l.length === 1 ? 'job' : 'jobs'}`}>
-            <div className="ad-col-head"><span className="ad-label">{label} · {who}</span><span className="ad-data">{l.length}</span></div>
-            {l.length === 0 ? <p className="ad-muted" style={{ fontSize: 13, margin: 0 }}>Nothing here.</p>
+          <section key={p} className={`agd-col agd-col-${STEP[p]}`} aria-label={`${label}, ${l.length} ${l.length === 1 ? 'job' : 'jobs'}`}>
+            <div className="agd-col-head"><span className="agd-label">{label} · {who}</span><span className="agd-data">{l.length}</span></div>
+            {l.length === 0 ? <p className="agd-muted" style={{ fontSize: 13, margin: 0 }}>Nothing here.</p>
               : l.map((j) => <Card key={j.id} j={j} blocked={blockedOf(j)} now={now} />)}
           </section>
         )
@@ -81,47 +82,47 @@ function Matrix({ jobs, blockedOf, now }: { jobs: Job[]; blockedOf: (j: Job) => 
   const review = jobs.filter((j) => j.phase === 'review').sort((a, b) => Date.parse(a.updated) - Date.parse(b.updated))
   const cell = (r: typeof rows[number], ph: JobPhase, label: string) => {
     const n = r.c[ph]
-    const cls = !n ? 'ad-cell-zero' : ph === 'review' ? 'ad-cell-you' : ph === 'build' && r.blocked ? 'ad-cell-alert' : ph === 'done' ? '' : 'ad-cell-agent'
+    const cls = !n ? 'agd-cell-zero' : ph === 'review' ? 'agd-cell-you' : ph === 'build' && r.blocked ? 'agd-cell-alert' : ph === 'done' ? '' : 'agd-cell-agent'
     return (
-      <td key={ph} className={`ad-cell ${cls}`}>
+      <td key={ph} className={`agd-cell ${cls}`}>
         {n ? <button type="button" onClick={() => setHash('', r.p)} aria-label={`${n} in ${label}${ph === 'build' && r.blocked ? `, ${r.blocked} blocked` : ''} in ${r.p}, open the board`}>
-          {n}{ph === 'build' && r.blocked ? <span className="ad-hide-phone"> · {r.blocked} blocked</span> : ''}</button> : '·'}
+          {n}{ph === 'build' && r.blocked ? <span className="agd-hide-phone"> · {r.blocked} blocked</span> : ''}</button> : '·'}
       </td>
     )
   }
   return (
     <>
-      <div className="ad-table-wrap">
-        <table className="ad-table ad-matrix">
-          <thead><tr><th>Project</th>{COLS.map(([ph, label]) => <th key={ph} className="ad-cell">{ph === 'done' ? `Done ${DONE_DAYS} d` : label}<span className="ad-hide-phone"> · {tot(ph)}</span></th>)}</tr></thead>
+      <div className="agd-table-wrap">
+        <table className="agd-table agd-matrix">
+          <thead><tr><th>Project</th>{COLS.map(([ph, label]) => <th key={ph} className="agd-cell">{ph === 'done' ? `Done ${DONE_DAYS} d` : label}<span className="agd-hide-phone"> · {tot(ph)}</span></th>)}</tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.p}>
-                <td><button className="ad-row-btn" type="button" title={r.p} onClick={() => setHash('', r.p)}>{short(r.p)}</button></td>
+                <td><button className="agd-row-btn" type="button" title={r.p} onClick={() => setHash('', r.p)}>{short(r.p)}</button></td>
                 {COLS.map(([ph, label]) => cell(r, ph, label))}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <section className="ad-section" style={{ marginTop: 'var(--space-5)' }}>
-        <div className="ad-section-head"><h2 className="ad-section-title">Your turn: {review.length} pull {review.length === 1 ? 'request' : 'requests'}, oldest first</h2></div>
-        {review.length === 0 ? <p className="ad-muted" style={{ margin: 0 }}>No pull request waits for a review.</p> : (
-          <div className="ad-table-wrap">
-            <table className="ad-table ad-table-2l">
-              <thead><tr><th>Pull request</th><th>Agent</th><th className="ad-hide-phone">Project</th><th className="ad-num">Waiting</th></tr></thead>
+      <section className="agd-section" style={{ marginTop: 'var(--space-5)' }}>
+        <div className="agd-section-head"><h2 className="agd-section-title">Your turn: {review.length} pull {review.length === 1 ? 'request' : 'requests'}, oldest first</h2></div>
+        {review.length === 0 ? <p className="agd-muted" style={{ margin: 0 }}>No pull request waits for a review.</p> : (
+          <div className="agd-table-wrap">
+            <table className="agd-table agd-table-2l">
+              <thead><tr><th>Pull request</th><th>Agent</th><th className="agd-hide-phone">Project</th><th className="agd-num">Waiting</th></tr></thead>
               <tbody>
                 {review.slice(0, all ? undefined : 8).map((j) => (
                   <tr key={j.id}>
-                    <td>{j.prUrl ? <a className="ad-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a> : `PR #${j.pr ?? '?'}`} {j.title}</td>
+                    <td>{j.prUrl ? <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a> : `PR #${j.pr ?? '?'}`} {j.title}</td>
                     <td><AgentTag name={j.agent} /></td>
-                    <td className="ad-hide-phone ad-code">{short(j.repo)}</td>
-                    <td className="ad-num">{ago(Date.parse(j.updated), now).replace(' ago', '')}</td>
+                    <td className="agd-hide-phone agd-code">{short(j.repo)}</td>
+                    <td className="agd-num">{ago(Date.parse(j.updated), now).replace(' ago', '')}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {review.length > 8 && <button className="ad-showmore" type="button" aria-expanded={all} style={{ paddingLeft: 'var(--space-3)' }}
+            {review.length > 8 && <button className="agd-showmore" type="button" aria-expanded={all} style={{ paddingLeft: 'var(--space-3)' }}
               onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show ${review.length - 8} more`}</button>}
           </div>
         )}
@@ -132,18 +133,19 @@ function Matrix({ jobs, blockedOf, now }: { jobs: Job[]; blockedOf: (j: Job) => 
 
 function List({ jobs, blockedOf, now }: { jobs: Job[]; blockedOf: (j: Job) => string; now: number }) {
   return (
-    <div className="ad-table-wrap">
-      <table className="ad-table ad-table-2l">
-        <thead><tr><th>Job</th><th>Agent</th><th>Phase</th><th className="ad-hide-phone">Project</th><th className="ad-num ad-hide-phone">Updated</th></tr></thead>
+    <div className="agd-table-wrap">
+      <table className="agd-table agd-table-2l">
+        <thead><tr><th>Job</th><th>Agent</th><th>Phase</th><th className="agd-hide-phone">Project</th><th className="agd-num agd-hide-phone">Updated</th></tr></thead>
         <tbody>
           {jobs.map((j) => (
             <tr key={j.id}>
-              <td>{j.url ? <a className="ad-link" href={j.url} target="_blank" rel="noreferrer noopener">#{j.issue ?? j.pr}</a> : `#${j.issue ?? j.pr}`} {j.title}
-                {j.prUrl && <> · <a className="ad-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a></>}</td>
+              <td>{j.url ? <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">#{j.issue ?? j.pr}</a> : `#${j.issue ?? j.pr}`} {j.title}
+                {j.prUrl && <> · <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a></>}
+                {' · '}<a className="agd-link" href={runLogHash(j)}>Run log</a></td>
               <td><AgentTag name={j.agent} /></td>
-              <td>{blockedOf(j) ? <span className="ad-error">blocked</span> : STEP[j.phase]}{outcomeText(j) && <div className="ad-muted" style={{ fontSize: 13 }}>{outcomeText(j)}</div>}</td>
-              <td className="ad-hide-phone ad-code">{short(j.repo)}</td>
-              <td className="ad-num ad-hide-phone">{ago(Date.parse(j.updated), now).replace(' ago', '')}</td>
+              <td>{blockedOf(j) ? <span className="agd-error">blocked</span> : STEP[j.phase]}{outcomeText(j) && <div className="agd-muted" style={{ fontSize: 13 }}>{outcomeText(j)}</div>}</td>
+              <td className="agd-hide-phone agd-code">{short(j.repo)}</td>
+              <td className="agd-num agd-hide-phone">{ago(Date.parse(j.updated), now).replace(' ago', '')}</td>
             </tr>
           ))}
         </tbody>
@@ -207,29 +209,29 @@ export function WorkPage({ token, onExpired, agent, repo }: { token: string; onE
       <PageHead title="Work" sub={fresh
         ? `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'} in ${projects.size} ${projects.size === 1 ? 'project' : 'projects'}: ${n('queued')} plan, ${n('build')} build, ${n('review')} review, ${n('done')} done in ${DONE_DAYS} days. The review column is your turn.`
         : 'Every issue an agent works on, by phase. The review column is your turn.'}
-        actions={<button className="ad-btn" type="button" onClick={() => setTick((t) => t + 1)}>Refresh</button>} />
-      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
-        <label className="ad-field ad-field-inline"><span>Agent</span>
-          <select className="ad-input" value={agent} onChange={(e) => setHash(e.target.value, repo)}>
+        actions={<button className="agd-btn" type="button" onClick={() => setTick((t) => t + 1)}>Refresh</button>} />
+      <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <label className="agd-field agd-field-inline"><span>Agent</span>
+          <select className="agd-input" value={agent} onChange={(e) => setHash(e.target.value, repo)}>
             <option value="">all</option>
             {[...new Set([...agentsHere, ...(agent ? [agent] : [])])].map((a) => <option key={a} value={a}>{a}</option>)}
           </select></label>
-        <label className="ad-field ad-field-inline"><span>Project</span>
-          <select className="ad-input" value={repo} onChange={(e) => setHash(agent, e.target.value)}>
+        <label className="agd-field agd-field-inline"><span>Project</span>
+          <select className="agd-input" value={repo} onChange={(e) => setHash(agent, e.target.value)}>
             <option value="">all in scope</option>
             {[...new Set([...reposHere, ...(repo ? [repo] : [])])].map((r) => <option key={r} value={r}>{r}</option>)}
           </select></label>
-        <div className="ad-seg" role="group" aria-label="View">
+        <div className="agd-seg" role="group" aria-label="View">
           <button type="button" aria-pressed={view === 'auto'} onClick={() => setView('auto')}>{multi ? 'Matrix' : 'Board'}</button>
           <button type="button" aria-pressed={view === 'list'} onClick={() => setView('list')}>List</button>
         </div>
-        {(agent || repo) && <button className="ad-btn ad-btn-quiet" type="button" onClick={() => setHash('', '')}>Clear filters</button>}
+        {(agent || repo) && <button className="agd-btn agd-btn-quiet" type="button" onClick={() => setHash('', '')}>Clear filters</button>}
       </div>
-      {error && <p className="ad-error" role="alert">Cannot read the jobs: {error}{fresh ? '. The data below can be old.' : ''}</p>}
+      {error && <p className="agd-error" role="alert">Cannot read the jobs: {error}{fresh ? '. The data below can be old.' : ''}</p>}
       {fresh && fresh.unavailable.length > 0 && (
-        <p className="ad-muted" role="status" style={{ fontSize: 13 }}>The forge did not answer for {fresh.unavailable.join(', ')}. Jobs of {fresh.unavailable.length === 1 ? 'this project' : 'these projects'} can be missing.</p>
+        <p className="agd-muted" role="status" style={{ fontSize: 13 }}>The forge did not answer for {fresh.unavailable.join(', ')}. Jobs of {fresh.unavailable.length === 1 ? 'this project' : 'these projects'} can be missing.</p>
       )}
-      {!fresh ? (!error && <p className="ad-muted">Loading jobs…</p>)
+      {!fresh ? (!error && <p className="agd-muted">Loading jobs…</p>)
         : jobs.length === 0 ? <Empty title="No jobs">Assign an issue to an agent on the forge. The job shows here in its phase.</Empty>
           : view === 'list' ? <List jobs={jobs} blockedOf={blockedOf} now={now} />
             : matrix ? <Matrix jobs={jobs} blockedOf={blockedOf} now={now} />
