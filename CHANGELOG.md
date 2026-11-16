@@ -22,7 +22,7 @@ backwards compatible by default.
    `template-drift` job (#317). Check the rest of the template with
    `scripts/template-drift.sh <deployment repo dir>`.
 3. **Terraform (#208, #291), owner.** Run `terraform plan` and read it before `terraform apply`.
-   - **BREAKING** lean cluster (#208): Managed Prometheus and the Filestore CSI driver go off, `monitoring_components`
+   - **BREAKING** lean cluster (#208, a SemVer exception accepted by the owner: ADR 0009): Managed Prometheus and the Filestore CSI driver go off, `monitoring_components`
      becomes `["SYSTEM_COMPONENTS"]`, and the load balancer and Gateway API are on only with `public_hosts`. The plan
      shows in-place cluster updates, no node pool replacement. To keep the old cluster, set
      `enable_managed_prometheus = true`, `enable_filestore_csi = true`, `monitoring_components = null` and
