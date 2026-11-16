@@ -7,6 +7,7 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
+cd "${tmp}" || exit 1   # anything written to a relative path stays in the temporary directory
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs"; export FORGE_USER=a1 JOB=issue-7
 FORGE_API="http://127.0.0.1:9"   # nothing listens: the post fails
 log() { :; }
@@ -46,6 +47,12 @@ check "cap: under the limit" "(( \$(events | jq -s 'map(select(.kind!=\"truncate
 printf '%s\n' "${stream}" | run_events
 check "cap holds for a resumed run of the same job" "[[ ! -s \"\${posted}\" ]]"
 RUN_LOG_MAX=2097152
+
+# bare bearer tokens and a private key without its END line (clipped output) are redacted
+: > "${posted}"; rm -f "${STATE}/jobs/issue-7.runlog"
+jq -cn '{type:"user", message:{content:[{type:"tool_result", content:"curl -H \"X: Bearer abcdefghijklmnop123\" ok\n-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretkeymaterial\nmore"}]}}' | run_events
+check "bare Bearer token redacted" "events | jq -e '.text | (contains(\"abcdefghijklmnop123\") | not) and contains(\"Bearer [redacted]\")' >/dev/null"
+check "private key without END redacted to the end" "events | jq -e '.text | (contains(\"MIIEsecret\") | not) and (contains(\"more\") | not) and contains(\"[redacted]\")' >/dev/null"
 
 # garbage and an invalid job id
 : > "${posted}"; rm -f "${STATE}/jobs/issue-7.runlog"

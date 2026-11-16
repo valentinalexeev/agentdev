@@ -98,3 +98,17 @@ func TestRunEventsAPIDown(t *testing.T) {
 		t.Fatalf("no api: %d", rec.Code)
 	}
 }
+
+func TestRunEventsRedactBearerAndKeyTail(t *testing.T) {
+	s := newServer(&Config{ForgeUser: "alice", AgentName: "alice", Repos: []string{"o/r"}})
+	got := s.redactText("curl -H \"X: Bearer abcdefghijklmnop123\" ok\n-----BEGIN RSA PRIVATE KEY-----\nMIIEsecret\nmore")
+	if strings.Contains(got, "abcdefghijklmnop123") || !strings.Contains(got, "Bearer [redacted]") {
+		t.Fatalf("bearer: %q", got)
+	}
+	if strings.Contains(got, "MIIEsecret") || strings.Contains(got, "more") {
+		t.Fatalf("key tail: %q", got)
+	}
+	if got := s.redactText("Bearer short"); got != "Bearer short" {
+		t.Fatalf("short word redacted: %q", got)
+	}
+}

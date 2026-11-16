@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -80,17 +81,27 @@ func (g *runEventGate) allow(now time.Time) bool {
 	return true
 }
 
-// redactText: the credential shapes (secretRe) and the sidecar's forge token, as for approval requests.
+// runBearerRe: a bare bearer token (an Authorization header in a command or an output); runKeyTailRe: a private key
+// whose END line was cut off (a clipped output), redacted to the end of the text.
+var (
+	runBearerRe  = regexp.MustCompile(`(?i)(bearer\s+)[^\s"',}]{12,}`)
+	runKeyTailRe = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$`)
+)
+
+// redactText: the credential shapes (secretRe), bare bearer tokens, an unterminated private key and the sidecar's
+// forge token, as for approval requests.
 func (s *server) redactText(v string) string {
 	if t := s.c.Token; len(t) >= 8 {
 		v = strings.ReplaceAll(v, t, "[redacted]")
 	}
-	return secretRe.ReplaceAllStringFunc(v, func(m string) string {
+	v = secretRe.ReplaceAllStringFunc(v, func(m string) string {
 		if sm := secretRe.FindStringSubmatch(m); sm[2] != "" {
 			return sm[2] + "[redacted]"
 		}
 		return "[redacted]"
 	})
+	v = runBearerRe.ReplaceAllString(v, "${1}[redacted]")
+	return runKeyTailRe.ReplaceAllString(v, "[redacted]")
 }
 
 func clipUTF8(v string, n int) string {

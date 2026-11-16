@@ -38,9 +38,9 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
 
   const head = (
     <PageHead title="Agents" sub="Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work. This is normal."
-      actions={<button className="ad-btn ad-btn-primary" type="button" onClick={() => { setNotice(''); setCreating(true) }}><Icon name="plus" />Add agent</button>} />
+      actions={<button className="agd-btn agd-btn-primary" type="button" onClick={() => { setNotice(''); setCreating(true) }}><Icon name="plus" />Add agent</button>} />
   )
-  if (!d.ready) return <>{head}<p className="ad-muted">Loading agents…</p></>
+  if (!d.ready) return <>{head}<p className="agd-muted">Loading agents…</p></>
   const usagePaused = d.agents.filter((a) => a.life === 'usage-paused')
   const nAttn = d.agents.filter((a) => a.attn !== 'ok').length
   const nWork = d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length
@@ -49,32 +49,32 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
   const modal = deleting || creating || editing
   const row = (a: AgentView) => (
     <tr key={a.name}>
-      <td><a className="ad-row-link" href={`#agents/${encodeURIComponent(a.name)}`} aria-label={`Open agent ${a.name}`}><AgentTag name={a.name} /></a></td>
-      <td className="ad-nowrap"><Lamp phase={a.life} /></td>
-      <td><Attention attn={a.attn} label={ATTN_LABEL[a.attn]} />{a.why && <div className="ad-muted" style={{ fontSize: 12, lineHeight: '16px', marginTop: 2 }}>{a.why}</div>}</td>
-      <td className="ad-code ad-nowrap ad-hide-phone">{(a.repos ?? []).join(', ')}</td>
-      <td className="ad-num ad-hide-phone">
+      <td><a className="agd-row-link" href={`#agents/${encodeURIComponent(a.name)}`} aria-label={`Open agent ${a.name}`}><AgentTag name={a.name} /></a></td>
+      <td className="agd-nowrap"><Lamp phase={a.life} /></td>
+      <td><Attention attn={a.attn} label={ATTN_LABEL[a.attn]} />{a.why && <div className="agd-muted" style={{ fontSize: 12, lineHeight: '16px', marginTop: 2 }}>{a.why}</div>}</td>
+      <td className="agd-code agd-nowrap agd-hide-phone">{(a.repos ?? []).join(', ')}</td>
+      <td className="agd-num agd-hide-phone">
         {a.securityEvents
-          ? <a className="ad-link" href={`#security?agent=${encodeURIComponent(a.name)}`} aria-label={`${a.securityEvents} security events of ${a.name}`}>{a.securityEvents}</a>
-          : <span className="ad-muted">0</span>}
+          ? <a className="agd-link" href={`#security?agent=${encodeURIComponent(a.name)}`} aria-label={`${a.securityEvents} security events of ${a.name}`}>{a.securityEvents}</a>
+          : <span className="agd-muted">0</span>}
       </td>
-      <td className="ad-num ad-hide-phone" style={a.budgetLimit && (a.budgetUsed ?? 0) >= a.budgetLimit ? { color: 'var(--danger)' } : undefined}>
-        {formatBudget(a) || <span className="ad-muted">–</span>}
+      <td className="agd-num agd-hide-phone" style={a.budgetLimit && (a.budgetUsed ?? 0) >= a.budgetLimit ? { color: 'var(--danger)' } : undefined}>
+        {formatBudget(a) || <span className="agd-muted">–</span>}
       </td>
-      <td className="ad-muted ad-hide-phone ad-hide-narrow">
+      <td className="agd-muted agd-hide-phone agd-hide-narrow">
         {a.managed === false ? 'no Agent object' : <>max. {a.maxConcurrent ?? 2}{a.scaleToZero ? ', scale to zero' : ''}</>}
       </td>
       <td>
         {a.managed !== false && (
-          <div className="ad-row-actions" style={{ flexWrap: 'nowrap' }}>
+          <div className="agd-row-actions" style={{ flexWrap: 'nowrap' }}>
             {a.paused
-              ? <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Resume agent ${a.name}`}
+              ? <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Resume agent ${a.name}`}
                 onClick={() => act(`Resume ${a.name}`, () => patchAgent(token, a.name, { paused: false }))}><Icon name="play" />Resume</button>
-              : <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Pause agent ${a.name}`}
+              : <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Pause agent ${a.name}`}
                 onClick={() => act(`Pause ${a.name}`, () => patchAgent(token, a.name, { paused: true }))}><Icon name="pause" />Pause</button>}
-            <button className="ad-btn ad-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
+            <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
               onClick={() => { setNotice(''); setEditing(a) }}>Edit</button>
-            <button className="ad-btn ad-btn-sm ad-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
+            <button className="agd-btn agd-btn-sm agd-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
               onClick={() => { setNotice(''); setDeleting(a.name) }}>Delete</button>
           </div>
         )}
@@ -94,10 +94,10 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
         const open = fold[p] ?? bad > 0
         const working = ag.filter((a) => a.life === 'running' || a.life === 'starting').length
         return [
-          <tr key={`g${p}`} className="ad-group-row"><td colSpan={8}>
-            <button className="ad-group-btn" type="button" aria-expanded={open} onClick={() => setFold({ ...fold, [p]: !open })}>
-              <Icon name="down" /><strong className="ad-code">{short(p)}</strong><Dots agents={ag} />
-              <span className="ad-muted">{ag.length} {ag.length === 1 ? 'agent' : 'agents'} · {working} working{bad ? ` · ${bad} ${bad === 1 ? 'needs' : 'need'} attention` : ' · all ok'}</span>
+          <tr key={`g${p}`} className="agd-group-row"><td colSpan={8}>
+            <button className="agd-group-btn" type="button" aria-expanded={open} onClick={() => setFold({ ...fold, [p]: !open })}>
+              <Icon name="down" /><strong className="agd-code">{short(p)}</strong><Dots agents={ag} />
+              <span className="agd-muted">{ag.length} {ag.length === 1 ? 'agent' : 'agents'} · {working} working{bad ? ` · ${bad} ${bad === 1 ? 'needs' : 'need'} attention` : ' · all ok'}</span>
             </button></td></tr>,
           ...(open ? ag.map(row) : ag.filter((a) => a.attn !== 'ok').map(row)),
         ]
@@ -106,29 +106,29 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
   return (
     <>
       {head}
-      {notice && !modal && <p className="ad-error" role="alert">{notice}</p>}
+      {notice && !modal && <p className="agd-error" role="alert">{notice}</p>}
       {usagePaused.length > 0 && (
         <div style={{ marginBottom: 'var(--space-4)' }}>
-          <Banner kind="paused" icon="pause" action={<a className="ad-btn" href="#usage">Usage</a>}>
+          <Banner kind="paused" icon="pause" action={<a className="agd-btn" href="#usage">Usage</a>}>
             Usage limit: {usagePaused.map((a) => `${a.name} (${a.why})`).join(', ')} {usagePaused.length === 1 ? 'starts' : 'start'} no new runs.
           </Banner>
         </div>
       )}
-      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
-        <button className="ad-chip" type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All <span className="ad-data">{d.agents.length}</span></button>
-        <button className="ad-chip" type="button" aria-pressed={filter === 'attn'} onClick={() => setFilter('attn')}>Needs attention <span className="ad-data">{nAttn}</span></button>
-        <button className="ad-chip" type="button" aria-pressed={filter === 'working'} onClick={() => setFilter('working')}>Working <span className="ad-data">{nWork}</span></button>
+      <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <button className="agd-chip" type="button" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All <span className="agd-data">{d.agents.length}</span></button>
+        <button className="agd-chip" type="button" aria-pressed={filter === 'attn'} onClick={() => setFilter('attn')}>Needs attention <span className="agd-data">{nAttn}</span></button>
+        <button className="agd-chip" type="button" aria-pressed={filter === 'working'} onClick={() => setFilter('working')}>Working <span className="agd-data">{nWork}</span></button>
       </div>
       {shown.length === 0
         ? (d.agents.length === 0
-          ? <Empty title="No agents yet">Add one, or connect a project with <code className="ad-code">scripts/bootstrap-project.sh</code>.</Empty>
+          ? <Empty title="No agents yet">Add one, or connect a project with <code className="agd-code">scripts/bootstrap-project.sh</code>.</Empty>
           : <Empty title="No agent matches this filter" />)
         : (
-          <div className="ad-table-wrap">
-            <table className="ad-table ad-table-2l">
+          <div className="agd-table-wrap">
+            <table className="agd-table agd-table-2l">
               <thead>
-                <tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th className="ad-hide-phone">Repositories</th><th className="ad-num ad-hide-phone">Events 7 d</th>
-                  <th className="ad-num ad-hide-phone">Claude units 24 h</th><th className="ad-hide-phone ad-hide-narrow">Settings</th><th><span className="ad-sr">Actions</span></th></tr>
+                <tr><th>Agent</th><th>Lifecycle</th><th>Attention</th><th className="agd-hide-phone">Repositories</th><th className="agd-num agd-hide-phone">Events 7 d</th>
+                  <th className="agd-num agd-hide-phone">Claude units 24 h</th><th className="agd-hide-phone agd-hide-narrow">Settings</th><th><span className="agd-sr">Actions</span></th></tr>
               </thead>
               <tbody>{body}</tbody>
             </table>
@@ -141,15 +141,15 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
       {deleting && (
         <Drawer title={`Delete agent ${deleting}?`} onClose={() => setDeleting(null)}
           foot={<>
-            <button className="ad-btn" type="button" onClick={() => setDeleting(null)}>Cancel</button>
-            <button className="ad-btn ad-btn-danger" type="button" disabled={busy} onClick={async () => {
+            <button className="agd-btn" type="button" onClick={() => setDeleting(null)}>Cancel</button>
+            <button className="agd-btn agd-btn-danger" type="button" disabled={busy} onClick={async () => {
               const n = deleting
               // keep the drawer open on an error, so the message shows where the user acted
               if (await act(`Delete ${n}`, () => deleteAgent(token, n))) setDeleting(null)
             }}>Delete {deleting}</button>
           </>}>
           <p style={{ margin: 0 }}>The agent <strong>{deleting}</strong> stops. Its volumes stay; an administrator removes them with kubectl.</p>
-          {notice && <p className="ad-error" role="alert">{notice}</p>}
+          {notice && <p className="agd-error" role="alert">{notice}</p>}
         </Drawer>
       )}
       {creating && (
@@ -169,18 +169,18 @@ function EditDrawer({ agent, busy, notice, onSave, onClose }: {
   return (
     <Drawer title={<>Settings of <AgentTag name={agent.name} /></>} onClose={onClose}
       foot={<>
-        <button className="ad-btn" type="button" onClick={onClose}>Cancel</button>
-        <button className="ad-btn ad-btn-primary" type="submit" form="edit-agent" disabled={busy || !!err}>Save</button>
+        <button className="agd-btn" type="button" onClick={onClose}>Cancel</button>
+        <button className="agd-btn agd-btn-primary" type="submit" form="edit-agent" disabled={busy || !!err}>Save</button>
       </>}>
-      <form id="edit-agent" className="ad-form" onSubmit={(e) => { e.preventDefault(); if (!err) onSave({ maxConcurrent: Number(max), scaleToZero: stz }) }}>
-        <label className="ad-field"><span>Max. concurrent</span>
-          <input className="ad-input" type="number" min={1} max={8} required value={max} aria-invalid={!!err}
+      <form id="edit-agent" className="agd-form" onSubmit={(e) => { e.preventDefault(); if (!err) onSave({ maxConcurrent: Number(max), scaleToZero: stz }) }}>
+        <label className="agd-field"><span>Max. concurrent</span>
+          <input className="agd-input" type="number" min={1} max={8} required value={max} aria-invalid={!!err}
             aria-label={`Maximum concurrent items of agent ${agent.name}`} onChange={(e) => setMax(e.target.value)} />
           <small>Issues and pull requests the agent works on at the same time, 1 to 8.</small></label>
-        <label className="ad-check"><input type="checkbox" checked={stz} aria-label={`Scale agent ${agent.name} to zero`}
+        <label className="agd-check"><input type="checkbox" checked={stz} aria-label={`Scale agent ${agent.name} to zero`}
           onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
-        {err && <span className="ad-error">{err}</span>}
-        {notice && <p className="ad-error" role="alert">{notice}</p>}
+        {err && <span className="agd-error">{err}</span>}
+        {notice && <p className="agd-error" role="alert">{notice}</p>}
       </form>
     </Drawer>
   )
@@ -193,23 +193,23 @@ function CreateDrawer({ busy, notice, onCreate, onClose }: { busy: boolean; noti
   return (
     <Drawer title="Add an agent" onClose={onClose}
       foot={<>
-        <button type="button" className="ad-btn" onClick={onClose}>Cancel</button>
-        <button type="submit" form="add-agent" className="ad-btn ad-btn-primary" disabled={busy}>Add agent</button>
+        <button type="button" className="agd-btn" onClick={onClose}>Cancel</button>
+        <button type="submit" form="add-agent" className="agd-btn agd-btn-primary" disabled={busy}>Add agent</button>
       </>}>
-      <form id="add-agent" className="ad-form" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (errors.length === 0) onCreate(a) }}>
-        <label className="ad-field"><span>Name</span><input className="ad-input" required autoFocus value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} /></label>
-        <label className="ad-field"><span>Repository (owner/name)</span><input className="ad-input" required value={a.repo} onChange={(e) => setA({ ...a, repo: e.target.value })} /></label>
-        <label className="ad-field"><span>Forge</span>
-          <select className="ad-input" value={a.forge} onChange={(e) => setA({ ...a, forge: e.target.value as NewAgent['forge'] })}>
+      <form id="add-agent" className="agd-form" onSubmit={(e) => { e.preventDefault(); setTouched(true); if (errors.length === 0) onCreate(a) }}>
+        <label className="agd-field"><span>Name</span><input className="agd-input" required autoFocus value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} /></label>
+        <label className="agd-field"><span>Repository (owner/name)</span><input className="agd-input" required value={a.repo} onChange={(e) => setA({ ...a, repo: e.target.value })} /></label>
+        <label className="agd-field"><span>Forge</span>
+          <select className="agd-input" value={a.forge} onChange={(e) => setA({ ...a, forge: e.target.value as NewAgent['forge'] })}>
             <option value="gitea">gitea</option>
             <option value="github">github</option>
           </select>
         </label>
-        <label className="ad-field"><span>Max. concurrent</span><input className="ad-input" type="number" min={1} max={8} required value={a.maxConcurrent}
+        <label className="agd-field"><span>Max. concurrent</span><input className="agd-input" type="number" min={1} max={8} required value={a.maxConcurrent}
           onChange={(e) => setA({ ...a, maxConcurrent: Number(e.target.value) })} /></label>
-        <label className="ad-check"><input type="checkbox" checked={a.scaleToZero} onChange={(e) => setA({ ...a, scaleToZero: e.target.checked })} /> Scale to zero</label>
-        {touched && errors.map((m) => <p key={m} className="ad-error">{m}</p>)}
-        {notice && <p className="ad-error" role="alert">{notice}</p>}
+        <label className="agd-check"><input type="checkbox" checked={a.scaleToZero} onChange={(e) => setA({ ...a, scaleToZero: e.target.checked })} /> Scale to zero</label>
+        {touched && errors.map((m) => <p key={m} className="agd-error">{m}</p>)}
+        {notice && <p className="agd-error" role="alert">{notice}</p>}
       </form>
     </Drawer>
   )

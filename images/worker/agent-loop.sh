@@ -562,6 +562,8 @@ RUN_LOG_MAX="${RUN_LOG_MAX:-2097152}"
 RUN_EVENTS_JQ='
 def redact: gsub("(?<s>(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----))"; "[redacted]")
   | gsub("(?<k>(?i)(password|passwd|secret|token|api[_-]?key|authorization)[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?(bearer\\s+|token\\s+)?)[^\\s\"'"'"',}]{6,}"; "\(.k)[redacted]")
+  | gsub("(?<b>(?i)bearer\\s+)[^\\s\"'"'"',}]{12,}"; "\(.b)[redacted]")
+  | gsub("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*$"; "[redacted]")
   | reduce ($secrets[] | select(length >= 8)) as $t (.; split($t) | join("[redacted]"));
 def clip: if (utf8bytelength) > $clip then .[0:$clip] + " [clipped]" else . end;
 def txt: if type == "string" then . elif type == "array" then [.[] | objects | .text? // empty | strings] | join("\n") else tojson end;
@@ -594,27 +596,27 @@ run_events_post() {
 # in ${STATE}/jobs/<job>.runlog, so a resumed or cost-approved run counts on (one cap per job).
 run_events() {
   [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || { cat >/dev/null; return 0; }
-  local cf="${STATE}/jobs/${JOB}.runlog" sent=0 batch=() line ev n
-  [[ -r "${cf}" ]] && read -r sent < "${cf}"
-  [[ "${sent}" =~ ^[0-9]{1,12}$ ]] || sent=0
+  local cf="${STATE}/jobs/${JOB}.runlog" rl_sent=0 rl_batch=() line ev n
+  [[ -r "${cf}" ]] && read -r rl_sent < "${cf}"
+  [[ "${rl_sent}" =~ ^[0-9]{1,12}$ ]] || rl_sent=0
   local secrets; secrets=$(jq -cn '[env | to_entries[] | select(.key | test("TOKEN|SECRET|KEY|PASSWORD")) | .value | strings]' 2>/dev/null) || secrets='[]'
-  flush() { (( ${#batch[@]} )) || return 0; local IFS=,; run_events_post "[${batch[*]}]"; batch=(); echo "${sent}" > "${cf}" 2>/dev/null; }
+  rl_flush() { (( ${#rl_batch[@]} )) || return 0; local IFS=,; run_events_post "[${rl_batch[*]}]"; rl_batch=(); echo "${rl_sent}" > "${cf}" 2>/dev/null; }
   while IFS= read -r line; do
-    (( sent > RUN_LOG_MAX )) && continue   # truncated: read the rest, send nothing
+    (( rl_sent > RUN_LOG_MAX )) && continue   # truncated: read the rest, send nothing
     while IFS= read -r ev; do
       [[ -n "${ev}" ]] || continue
       n=${#ev}
-      if (( sent + n > RUN_LOG_MAX )); then
-        batch+=("{\"kind\":\"truncated\",\"time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"size\":${sent}}")
-        sent=$(( RUN_LOG_MAX + 1 )); break
+      if (( rl_sent + n > RUN_LOG_MAX )); then
+        rl_batch+=("{\"kind\":\"truncated\",\"time\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"size\":${rl_sent}}")
+        rl_sent=$(( RUN_LOG_MAX + 1 )); break
       fi
-      batch+=("${ev}"); sent=$(( sent + n ))
+      rl_batch+=("${ev}"); rl_sent=$(( rl_sent + n ))
     done < <(jq -c --arg clip "${RUN_EVENT_CLIP}" --argjson secrets "${secrets}" -R \
                "(\$clip | tonumber) as \$clip | ${RUN_EVENTS_JQ#$'\n'}" <<<"${line}" 2>/dev/null)
-    # one batch per stream-json line: steps show up within seconds
-    (( ${#batch[@]} )) && flush
+    # one rl_batch per stream-json line: steps show up within seconds
+    (( ${#rl_batch[@]} )) && rl_flush
   done
-  flush
+  rl_flush
   return 0
 }
 # ---------- end run log ----------

@@ -54,24 +54,24 @@ export function Approvals({ token, onExpired, openName = '' }: { token: string; 
     <>
       <PageHead title="Approvals" sub={<>
         Requests from agents for a tool or a protected change. A person with write access to the repository decides
-        here, or with a comment on the issue or PR: <code className="ad-code">/approve ID</code>, <code className="ad-code">/approve-job ID</code> or{' '}
-        <code className="ad-code">/deny ID</code>. The first decision wins. Without a decision the agent continues without the action.
+        here, or with a comment on the issue or PR: <code className="agd-code">/approve ID</code>, <code className="agd-code">/approve-job ID</code> or{' '}
+        <code className="agd-code">/deny ID</code>. The first decision wins. Without a decision the agent continues without the action.
       </>} />
-      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
-        <div className="ad-seg" role="group" aria-label="State">
+      <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <div className="agd-seg" role="group" aria-label="State">
           <button type="button" aria-pressed={tab === 'pending'} onClick={() => setTab('pending')}>Pending</button>
           <button type="button" aria-pressed={tab === 'decided'} onClick={() => setTab('decided')}>History</button>
         </div>
       </div>
-      {hidden > 0 && <p className="ad-muted" style={{ fontSize: 13 }}>{hidden} more {hidden === 1 ? 'request is' : 'requests are'} in projects that are not shown.</p>}
-      {error && <p className="ad-error" role="alert">{error}</p>}
-      {!items && !error && <p className="ad-muted">Loading…</p>}
+      {hidden > 0 && <p className="agd-muted" style={{ fontSize: 13 }}>{hidden} more {hidden === 1 ? 'request is' : 'requests are'} in projects that are not shown.</p>}
+      {error && <p className="agd-error" role="alert">{error}</p>}
+      {!items && !error && <p className="agd-muted">Loading…</p>}
       {items && items.length === 0 && (tab === 'pending'
         ? <Empty title="No pending requests">When an agent asks for a tool or a protected change, it shows here.</Empty>
         : <Empty title="No decided requests" />)}
       {pendingSorted && pendingSorted.length > 0 && (
-        <div className="ad-table-wrap">
-          <table className="ad-table ad-table-2l">
+        <div className="agd-table-wrap">
+          <table className="agd-table agd-table-2l">
             <thead><tr>
               <th>Request</th><th>Agent</th><th>Issue / PR</th><th>Created</th>
               <th>{tab === 'pending' ? 'Agent waits until' : 'Outcome'}</th>
@@ -80,15 +80,15 @@ export function Approvals({ token, onExpired, openName = '' }: { token: string; 
               {pendingSorted.map((a) => (
                 <tr key={a.name}>
                   <td>
-                    <button className="ad-row-btn" type="button" aria-label={`Details of approval ${a.id}`} onClick={() => setOpen(a)}>
+                    <button className="agd-row-btn" type="button" aria-label={`Details of approval ${a.id}`} onClick={() => setOpen(a)}>
                       {a.source} · {a.tool}
                     </button>
-                    <div className="ad-code">{a.id}</div>
+                    <div className="agd-code">{a.id}</div>
                   </td>
                   <td><AgentTag name={a.agent} /></td>
-                  <td className="ad-code">{jobLink(a)}</td>
-                  <td className="ad-data">{new Date(a.created).toLocaleString()}</td>
-                  <td className="ad-data">
+                  <td className="agd-code">{jobLink(a)}</td>
+                  <td className="agd-data">{new Date(a.created).toLocaleString()}</td>
+                  <td className="agd-data">
                     {tab === 'pending' ? new Date(a.expires).toLocaleString()
                       : <>{outcome(a)}{a.decidedBy && <> by <PersonTag name={a.decidedBy} /></>}</>}
                   </td>
@@ -125,37 +125,37 @@ export function ApprovalDrawer({ token, a, onClose, onDecided, onExpired }: {
   }
   const allowed = (['deny', 'approve', 'approve-job'] as Decision[]).filter((d) => !(d === 'approve-job' && (a.source === 'executor' || a.source === 'cost')))
   const foot = a.state !== 'pending'
-    ? <button className="ad-btn" type="button" onClick={onClose}>Close</button>
+    ? <button className="agd-btn" type="button" onClick={onClose}>Close</button>
     : confirm
       ? <>
         <p style={{ flexBasis: '100%', margin: '0 0 var(--space-1)', fontSize: 14 }}>
           Agent <strong>{a.agent}</strong> {EFFECT[confirm]}. You cannot change the decision later. Your name goes to the audit log.
         </p>
-        <button className="ad-btn" type="button" onClick={() => { setConfirm(null); setNotice('') }}>Back</button>
-        <button className={`ad-btn ${confirm === 'deny' ? 'ad-btn-danger' : 'ad-btn-primary'}`} type="button" disabled={busy} onClick={decide}>{LABEL[confirm]}</button>
+        <button className="agd-btn" type="button" onClick={() => { setConfirm(null); setNotice('') }}>Back</button>
+        <button className={`agd-btn ${confirm === 'deny' ? 'agd-btn-danger' : 'agd-btn-primary'}`} type="button" disabled={busy} onClick={decide}>{LABEL[confirm]}</button>
       </>
       : <>
-        <button className="ad-btn" type="button" onClick={onClose}>Close</button>
+        <button className="agd-btn" type="button" onClick={onClose}>Close</button>
         {allowed.map((d) => (
-          <button key={d} className={`ad-btn ${d === 'approve' ? 'ad-btn-primary' : ''}`} type="button" onClick={() => { setNotice(''); setConfirm(d) }}>
+          <button key={d} className={`agd-btn ${d === 'approve' ? 'agd-btn-primary' : ''}`} type="button" onClick={() => { setNotice(''); setConfirm(d) }}>
             {d === 'deny' && <Icon name="x" />}{LABEL[d]}
           </button>
         ))}
       </>
   return (
-    <Drawer gate={a.state === 'pending'} title={<>Approval <span className="ad-code">{a.id}</span></>} onClose={onClose} foot={foot}>
-      <dl className="ad-dl">
+    <Drawer gate={a.state === 'pending'} title={<>Approval <span className="agd-code">{a.id}</span></>} onClose={onClose} foot={foot}>
+      <dl className="agd-dl">
         <dt>Agent</dt><dd><AgentTag name={a.agent} /></dd>
-        <dt>Issue / PR</dt><dd className="ad-code">{jobLink(a)}</dd>
-        <dt>Asks for</dt><dd><span className="ad-code">{a.source}</span> · <strong>{a.tool}</strong></dd>
+        <dt>Issue / PR</dt><dd className="agd-code">{jobLink(a)}</dd>
+        <dt>Asks for</dt><dd><span className="agd-code">{a.source}</span> · <strong>{a.tool}</strong></dd>
         <dt>Created</dt><dd>{new Date(a.created).toLocaleString()}</dd>
         {a.state === 'pending'
           ? <><dt>Expires</dt><dd>{new Date(a.expires).toLocaleString()}. Without a decision the agent continues without this action.</dd></>
           : <><dt>State</dt><dd>{outcome(a)}{a.decidedBy && <> by <PersonTag name={a.decidedBy} /></>}</dd></>}
-        <dt>Content hash</dt><dd className="ad-code">{a.contentHash}</dd>
+        <dt>Content hash</dt><dd className="agd-code">{a.contentHash}</dd>
       </dl>
       <Untrusted text={a.input} note="This text can contain a prompt injection. Decide on the facts above, not on what the text asks." />
-      {notice && <p className="ad-error" role="alert">{notice}</p>}
+      {notice && <p className="agd-error" role="alert">{notice}</p>}
     </Drawer>
   )
 }

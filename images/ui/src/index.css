@@ -4,19 +4,19 @@
 @import './design-system/components.css';
 @import './design-system/console.css';
 
-.ad-main:focus { outline: none; }
-.ad-nowrap { white-space: nowrap; }
+.agd-main:focus { outline: none; }
+.agd-nowrap { white-space: nowrap; }
 /* model text in the Chat page (#346): shown as typed, never parsed as Markdown or HTML */
-.ad-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agd-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* the session list button: only where the list folds away (below 1000 px, console.css) */
-.ad-chat-back { display: none; }
-@media (max-width: 1000px) { .ad-chat-back { display: inline-flex; } }
-.ad-chat-here { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
-.ad-guide { display: block; margin: 0; padding: var(--space-3); background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
-.ad-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 18px; color: var(--ink); }
-.ad-cmd { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }
-.ad-cmd code { overflow-wrap: anywhere; min-width: 0; }
-.ad-field-inline { flex-direction: row; align-items: center; gap: var(--space-2); }
-.ad-row-link { color: inherit; text-decoration: none; border-radius: var(--radius-sm); }
-.ad-row-link:hover .ad-agent-name { text-decoration: underline; }
-.ad-row-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.agd-chat-back { display: none; }
+@media (max-width: 1000px) { .agd-chat-back { display: inline-flex; } }
+.agd-chat-here { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.agd-guide { display: block; margin: 0; padding: var(--space-3); background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agd-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 18px; color: var(--ink); }
+.agd-cmd { display: flex; gap: var(--space-2); align-items: center; min-width: 0; }
+.agd-cmd code { overflow-wrap: anywhere; min-width: 0; }
+.agd-field-inline { flex-direction: row; align-items: center; gap: var(--space-2); }
+.agd-row-link { color: inherit; text-decoration: none; border-radius: var(--radius-sm); }
+.agd-row-link:hover .agd-agent-name { text-decoration: underline; }
+.agd-row-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

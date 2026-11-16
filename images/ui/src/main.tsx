@@ -16,11 +16,11 @@ import { userManager } from './auth'
 
 // the theme the person chose (light or dark); without one the system setting applies
 try {
-  const t = localStorage.getItem('ad-theme')
+  const t = localStorage.getItem('agd-theme')
   if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t
 } catch { /* storage blocked */ }
 
 const root = createRoot(document.getElementById('root')!)
 loadConfig()
   .then((cfg) => root.render(<StrictMode><App um={userManager(cfg)} /></StrictMode>))
-  .catch((e) => root.render(<p className="ad-error" style={{ padding: 16 }}>agentdev UI cannot start: {String(e.message ?? e)}</p>))
+  .catch((e) => root.render(<p className="agd-error" style={{ padding: 16 }}>agentdev UI cannot start: {String(e.message ?? e)}</p>))

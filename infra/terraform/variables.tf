@@ -140,9 +140,9 @@ variable "github_repository" {
 }
 
 variable "create_plan_identity" {
-  description = "Create the read-only plan identity for deployment PRs (#291): service account agentdev-plan, Workload Identity pool github-pr for pull_request runs of github_repository, read access to the state bucket. false = none of these."
+  description = "Create the read-only plan identity for deployment PRs (#291): service account agentdev-plan, Workload Identity pool github-pr for pull_request runs of github_repository, read access to the state bucket. Opt-in (#421): the apply account needs one-time owner grants first (docs/admin.md \"Show the plan on deployment pull requests\")."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "plan_state_bucket" {

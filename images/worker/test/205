@@ -1,1 +1,0 @@
-[{"kind":"text","time":"2026-11-16T18:36:12Z","text":"Looking at <img src=x onerror=alert(1)> now"},{"kind":"tool_use","time":"2026-11-16T18:36:12Z","tool":"Bash","input":"{\"command\":\"echo [redacted]\"}"}]

@@ -52,20 +52,20 @@ export function AgentDrawer({ name, token, onExpired, onClose }: { name: string;
       {error === 'not-found'
         ? <Empty title="Agent not found">The agent does not exist, or you have no write access to one of its repositories.</Empty>
         : error && !detail
-          ? <p className="ad-error" role="alert">Cannot read the agent: {error}</p>
-          : !detail ? <p className="ad-muted">Loading…</p> : (
+          ? <p className="agd-error" role="alert">Cannot read the agent: {error}</p>
+          : !detail ? <p className="agd-muted">Loading…</p> : (
             <>
-              <div className="ad-filters" style={{ gap: 'var(--space-3)' }}>
+              <div className="agd-filters" style={{ gap: 'var(--space-3)' }}>
                 {view ? <Lamp phase={view.life} /> : <Lamp phase={detail.phase} />}
                 {view && <Attention attn={view.attn} label={ATTN_LABEL[view.attn]} />}
-                <span className="ad-code">{(detail.repos ?? []).join(', ')}</span>
+                <span className="agd-code">{(detail.repos ?? []).join(', ')}</span>
               </div>
-              {error && <p className="ad-error" role="alert">Cannot update: {error}. The data below can be old.</p>}
-              <div role="tablist" aria-label={`Details of ${name}`} className="ad-tabs" style={{ padding: 0, background: 'none', overflowX: 'auto' }} onKeyDown={onTabKey}>
+              {error && <p className="agd-error" role="alert">Cannot update: {error}. The data below can be old.</p>}
+              <div role="tablist" aria-label={`Details of ${name}`} className="agd-tabs" style={{ padding: 0, background: 'none', overflowX: 'auto' }} onKeyDown={onTabKey}>
                 {TABS.map(([t, label]) => (
                   <button key={t} id={`agent-tab-${t}`} role="tab" type="button" aria-selected={tab === t} aria-controls={`agent-panel-${t}`}
-                    tabIndex={tab === t ? 0 : -1} className={`ad-tab ${tab === t ? 'ad-tab-on' : ''}`} onClick={() => setTab(t)}>
-                    {label}{t === 'overview' && detail.waitingOn.length > 0 && <span className="ad-count">{detail.waitingOn.length}</span>}
+                    tabIndex={tab === t ? 0 : -1} className={`agd-tab ${tab === t ? 'agd-tab-on' : ''}`} onClick={() => setTab(t)}>
+                    {label}{t === 'overview' && detail.waitingOn.length > 0 && <span className="agd-count">{detail.waitingOn.length}</span>}
                   </button>
                 ))}
               </div>
@@ -75,8 +75,8 @@ export function AgentDrawer({ name, token, onExpired, onClose }: { name: string;
                 {tab === 'usage' && <UsageTab a={detail} pause={d.usage?.pauses?.[name]} now={d.now} />}
                 {tab === 'settings' && <Settings a={detail} token={token} onExpired={onExpired} onDone={reload} />}
                 {tab === 'guide' && (detail.guide
-                  ? <><p className="ad-muted" style={{ margin: 0, fontSize: 13 }}>The operator writes this guide from the Agent object and the harness. Copy it into an issue or a review to tell the agent how to work.</p>
-                    <pre className="ad-code ad-guide">{detail.guide}</pre></>
+                  ? <><p className="agd-muted" style={{ margin: 0, fontSize: 13 }}>The operator writes this guide from the Agent object and the harness. Copy it into an issue or a review to tell the agent how to work.</p>
+                    <pre className="agd-code agd-guide">{detail.guide}</pre></>
                   : <Empty title="No guide yet">The operator writes the guide when it reconciles the agent.</Empty>)}
               </div>
             </>)}
@@ -91,29 +91,29 @@ const WAIT: Record<string, string> = {
 function Overview({ a, now }: { a: AgentDetail; now: number }) {
   return (
     <>
-      <section className="ad-section" aria-labelledby="ag-wait">
-        <h3 className="ad-section-title" id="ag-wait">Waiting on</h3>
+      <section className="agd-section" aria-labelledby="ag-wait">
+        <h3 className="agd-section-title" id="ag-wait">Waiting on</h3>
         {a.waitingOn.length === 0
-          ? <p className="ad-muted" style={{ margin: 0 }}>Nothing. The agent works or waits for new issues.</p>
-          : <ul className="ad-inbox">{a.waitingOn.map((w, i) => <WaitRow key={`${w.kind}${w.ref ?? i}`} w={w} now={now} />)}</ul>}
+          ? <p className="agd-muted" style={{ margin: 0 }}>Nothing. The agent works or waits for new issues.</p>
+          : <ul className="agd-inbox">{a.waitingOn.map((w, i) => <WaitRow key={`${w.kind}${w.ref ?? i}`} w={w} now={now} />)}</ul>}
       </section>
-      <section className="ad-section" aria-labelledby="ag-pods">
-        <h3 className="ad-section-title" id="ag-pods">Pods</h3>
+      <section className="agd-section" aria-labelledby="ag-pods">
+        <h3 className="agd-section-title" id="ag-pods">Pods</h3>
         {a.pods.length === 0
-          ? <p className="ad-muted" style={{ margin: 0 }}>No pods. The agent is idle (scaled to zero) and wakes on new work. This is normal.</p>
-          : <dl className="ad-dl">{a.pods.map((p) => (
+          ? <p className="agd-muted" style={{ margin: 0 }}>No pods. The agent is idle (scaled to zero) and wakes on new work. This is normal.</p>
+          : <dl className="agd-dl">{a.pods.map((p) => (
             <div key={p.name} style={{ display: 'contents' }}>
-              <dt className="ad-code">{p.name}</dt>
+              <dt className="agd-code">{p.name}</dt>
               <dd>{p.phase}{p.ready ? ', ready' : ', not ready'}{p.reason ? ` (${p.reason})` : ''}{p.restarts ? `, ${p.restarts} restarts` : ''}
-                {p.started && <span className="ad-muted">, started {ago(Date.parse(p.started), now)}</span>}</dd>
+                {p.started && <span className="agd-muted">, started {ago(Date.parse(p.started), now)}</span>}</dd>
             </div>))}</dl>}
       </section>
-      <dl className="ad-dl">
+      <dl className="agd-dl">
         <dt>Forge</dt><dd>{a.forge ?? '–'}</dd>
         <dt>Max. concurrent</dt><dd>{a.maxConcurrent ?? 2}</dd>
         <dt>Scale to zero</dt><dd>{a.scaleToZero ? 'yes' : 'no'}</dd>
         <dt>Events 7 d</dt><dd>{a.securityEvents
-          ? <a className="ad-link" href={`#security?agent=${encodeURIComponent(a.name)}`}>{a.securityEvents} security events</a> : '0'}</dd>
+          ? <a className="agd-link" href={`#security?agent=${encodeURIComponent(a.name)}`}>{a.securityEvents} security events</a> : '0'}</dd>
       </dl>
     </>
   )
@@ -122,15 +122,15 @@ function Overview({ a, now }: { a: AgentDetail; now: number }) {
 function WaitRow({ w, now }: { w: WaitingItem; now: number }) {
   const until = w.until ? Date.parse(w.until) : 0
   return (
-    <li className="ad-item" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2) var(--space-3)' }}>
+    <li className="agd-item" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2) var(--space-3)' }}>
       <div style={{ minWidth: 0, flex: '1 1 200px' }}>
         <strong>{WAIT[w.kind] ?? w.kind}</strong>
-        {(w.reason || w.job) && <div className="ad-muted" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{[w.kind === 'paused' ? '' : w.reason, w.job && `job ${w.job}`, w.repo].filter(Boolean).join(' · ')}</div>}
+        {(w.reason || w.job) && <div className="agd-muted" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{[w.kind === 'paused' ? '' : w.reason, w.job && `job ${w.job}`, w.repo].filter(Boolean).join(' · ')}</div>}
       </div>
-      <div className="ad-row-actions" style={{ alignItems: 'center' }}>
-        {w.kind === 'approval' && w.ref && <a className="ad-btn ad-btn-sm" href={`#approvals?open=${encodeURIComponent(w.ref)}`}>Decide</a>}
-        {w.kind === 'usage-pause' && <a className="ad-btn ad-btn-sm" href="#usage">Usage</a>}
-        {until > 0 && <span className="ad-data">{left(until, now)}</span>}
+      <div className="agd-row-actions" style={{ alignItems: 'center' }}>
+        {w.kind === 'approval' && w.ref && <a className="agd-btn agd-btn-sm" href={`#approvals?open=${encodeURIComponent(w.ref)}`}>Decide</a>}
+        {w.kind === 'usage-pause' && <a className="agd-btn agd-btn-sm" href="#usage">Usage</a>}
+        {until > 0 && <span className="agd-data">{left(until, now)}</span>}
       </div>
     </li>
   )
@@ -141,20 +141,20 @@ const PHASE_LABEL: Record<string, string> = { queued: 'plan', build: 'build', re
 function Jobs({ jobs, now, name }: { jobs: Job[]; now: number; name: string }) {
   if (jobs.length === 0) return <Empty title="No recent jobs">Assign an issue to {name} on the forge. The job shows here.</Empty>
   return (
-    <ol className="ad-timeline" aria-label={`Recent jobs of ${name}`}>
+    <ol className="agd-timeline" aria-label={`Recent jobs of ${name}`}>
       {jobs.map((j) => {
         const failed = j.phase === 'done' && j.outcome !== 'merged'
         return (
-          <li key={j.id} className={`ad-tl ${j.phase === 'review' ? 'ad-tl-person' : failed ? 'ad-tl-alert' : 'ad-tl-agent'}`}>
-            <span className="ad-tl-time">{ago(Date.parse(j.updated), now).replace(' ago', '')}</span>
-            <span className="ad-tl-mark" aria-hidden="true" />
-            <div className="ad-tl-text">
+          <li key={j.id} className={`agd-tl ${j.phase === 'review' ? 'agd-tl-person' : failed ? 'agd-tl-alert' : 'agd-tl-agent'}`}>
+            <span className="agd-tl-time">{ago(Date.parse(j.updated), now).replace(' ago', '')}</span>
+            <span className="agd-tl-mark" aria-hidden="true" />
+            <div className="agd-tl-text">
               <div>{j.title || '(no title)'}</div>
-              <div className="ad-muted">
+              <div className="agd-muted">
                 {PHASE_LABEL[j.phase] ?? j.phase}{outcomeText(j) && `: ${outcomeText(j)}`}
-                {j.issue ? <> · {j.url ? <a className="ad-link" href={j.url} target="_blank" rel="noreferrer noopener">issue #{j.issue}</a> : `issue #${j.issue}`}</> : null}
-                {j.pr ? <> · {j.prUrl ? <a className="ad-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a> : `PR #${j.pr}`}</> : null}
-                {' · '}<a className="ad-link" href={runLogHash(j)}>{j.phase === 'build' || j.phase === 'queued' ? 'Watch the run' : 'Run log'}</a>
+                {j.issue ? <> · {j.url ? <a className="agd-link" href={j.url} target="_blank" rel="noreferrer noopener">issue #{j.issue}</a> : `issue #${j.issue}`}</> : null}
+                {j.pr ? <> · {j.prUrl ? <a className="agd-link" href={j.prUrl} target="_blank" rel="noreferrer noopener">PR #{j.pr}</a> : `PR #${j.pr}`}</> : null}
+                {' · '}<a className="agd-link" href={runLogHash(j)}>{j.phase === 'build' || j.phase === 'queued' ? 'Watch the run' : 'Run log'}</a>
               </div>
             </div>
           </li>
@@ -168,11 +168,11 @@ function UsageTab({ a, pause, now }: { a: AgentDetail; pause?: { until: number; 
   const pct = a.budgetLimit && a.budgetUsed !== undefined ? Math.round((a.budgetUsed / a.budgetLimit) * 100) : null
   return (
     <>
-      <dl className="ad-dl">
-        <dt>Claude units 24 h</dt><dd className="ad-data">{formatBudget(a) || 'not reported'}{pct !== null ? ` (${pct}%)` : ''}</dd>
+      <dl className="agd-dl">
+        <dt>Claude units 24 h</dt><dd className="agd-data">{formatBudget(a) || 'not reported'}{pct !== null ? ` (${pct}%)` : ''}</dd>
         <dt>Usage pause</dt><dd>{pause && pause.until * 1000 > now ? `${pause.reason}, until ${new Date(pause.until * 1000).toLocaleString()}` : 'none'}</dd>
       </dl>
-      <p className="ad-muted" style={{ margin: 0, fontSize: 13 }}>The credential proxy counts the units. Limits per subscription are on the <a className="ad-link" href="#usage">Usage</a> page.</p>
+      <p className="agd-muted" style={{ margin: 0, fontSize: 13 }}>The credential proxy counts the units. Limits per subscription are on the <a className="agd-link" href="#usage">Usage</a> page.</p>
     </>
   )
 }
@@ -190,23 +190,23 @@ function Settings({ a, token, onExpired, onDone }: { a: AgentDetail; token: stri
       else setMsg({ ok: false, text: `${what}: ${(e as Error).message}` })
     } finally { setBusy(false) }
   }
-  if (a.managed === false) return <p className="ad-muted" style={{ margin: 0 }}>This agent has no Agent object. Change it in the deployment repository.</p>
+  if (a.managed === false) return <p className="agd-muted" style={{ margin: 0 }}>This agent has no Agent object. Change it in the deployment repository.</p>
   return (
     <>
-      <div className="ad-row-actions">
+      <div className="agd-row-actions">
         {a.paused
-          ? <button className="ad-btn" type="button" disabled={busy} onClick={() => run(`Resume ${a.name}`, { paused: false })}><Icon name="play" />Resume</button>
-          : <button className="ad-btn" type="button" disabled={busy} onClick={() => run(`Pause ${a.name}`, { paused: true })}><Icon name="pause" />Pause</button>}
+          ? <button className="agd-btn" type="button" disabled={busy} onClick={() => run(`Resume ${a.name}`, { paused: false })}><Icon name="play" />Resume</button>
+          : <button className="agd-btn" type="button" disabled={busy} onClick={() => run(`Pause ${a.name}`, { paused: true })}><Icon name="pause" />Pause</button>}
       </div>
-      <form className="ad-form" onSubmit={(e) => { e.preventDefault(); if (!err) run(`Change ${a.name}`, { maxConcurrent: Number(max), scaleToZero: stz }) }}>
-        <label className="ad-field"><span>Max. concurrent</span>
-          <input className="ad-input" type="number" min={1} max={8} required value={max} aria-invalid={!!err} onChange={(e) => setMax(e.target.value)} />
+      <form className="agd-form" onSubmit={(e) => { e.preventDefault(); if (!err) run(`Change ${a.name}`, { maxConcurrent: Number(max), scaleToZero: stz }) }}>
+        <label className="agd-field"><span>Max. concurrent</span>
+          <input className="agd-input" type="number" min={1} max={8} required value={max} aria-invalid={!!err} onChange={(e) => setMax(e.target.value)} />
           <small>Issues and pull requests the agent works on at the same time, 1 to 8.</small></label>
-        <label className="ad-check"><input type="checkbox" checked={stz} onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
-        {err && <span className="ad-error">{err}</span>}
-        <div><button className="ad-btn ad-btn-primary" type="submit" disabled={busy || !!err}>Save</button></div>
+        <label className="agd-check"><input type="checkbox" checked={stz} onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
+        {err && <span className="agd-error">{err}</span>}
+        <div><button className="agd-btn agd-btn-primary" type="submit" disabled={busy || !!err}>Save</button></div>
       </form>
-      {msg && <p className={msg.ok ? 'ad-muted' : 'ad-error'} role={msg.ok ? 'status' : 'alert'} style={{ margin: 0 }}>{msg.text}</p>}
+      {msg && <p className={msg.ok ? 'agd-muted' : 'agd-error'} role={msg.ok ? 'status' : 'alert'} style={{ margin: 0 }}>{msg.text}</p>}
     </>
   )
 }

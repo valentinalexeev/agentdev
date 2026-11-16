@@ -44,13 +44,13 @@ export function App({ um }: { um: UserManager }) {
     um.getUser().then((u) => setUser(u && !u.expired ? u : null))
   }, [um])
 
-  if (error) return <SignIn><p className="ad-error" role="alert">{error}</p><button className="ad-btn ad-btn-primary" onClick={() => signIn()}>Try again</button></SignIn>
-  if (user === undefined) return <SignIn><p className="ad-muted">Loading…</p></SignIn>
+  if (error) return <SignIn><p className="agd-error" role="alert">{error}</p><button className="agd-btn agd-btn-primary" onClick={() => signIn()}>Try again</button></SignIn>
+  if (user === undefined) return <SignIn><p className="agd-muted">Loading…</p></SignIn>
   if (!user) {
     return (
       <SignIn>
         <p>Sign in with your agentdev account.</p>
-        <button className="ad-btn ad-btn-primary" onClick={() => signIn()}>Sign in</button>
+        <button className="agd-btn agd-btn-primary" onClick={() => signIn()}>Sign in</button>
       </SignIn>
     )
   }
@@ -59,9 +59,9 @@ export function App({ um }: { um: UserManager }) {
 
 function SignIn({ children }: { children: React.ReactNode }) {
   return (
-    <main className="ad-main" style={{ maxWidth: 420, margin: '12vh auto' }}>
-      <div className="ad-empty ad-form" style={{ alignItems: 'center' }}>
-        <span className="ad-brand" style={{ padding: 0 }}><Mark />agentdev</span>
+    <main className="agd-main" style={{ maxWidth: 420, margin: '12vh auto' }}>
+      <div className="agd-empty agd-form" style={{ alignItems: 'center' }}>
+        <span className="agd-brand" style={{ padding: 0 }}><Mark />agentdev</span>
         {children}
       </div>
     </main>
@@ -90,7 +90,7 @@ function useTheme(): [boolean, () => void] {
   const toggle = () => {
     const next = dark ? 'light' : 'dark'
     document.documentElement.dataset.theme = next
-    try { localStorage.setItem('ad-theme', next) } catch { /* storage blocked */ }
+    try { localStorage.setItem('agd-theme', next) } catch { /* storage blocked */ }
     setDark(!dark)
   }
   return [dark, toggle]
@@ -130,10 +130,10 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
   // #agents/<name> opens the agent drawer over the Agents page
   const [base, sub] = page.split('/') as [string, string | undefined]
   const title = [...NAV, ...ADMIN_NAV].find(([id]) => id === base)?.[1] ?? 'Today'
-  const count = (id: string) => id === 'today' ? (d.inbox.length > 0 && <span className="ad-count" aria-label={`${d.inbox.length} waiting for you`}>{d.inbox.length}</span>)
-    : id === 'approvals' ? (d.pending.length > 0 && <span className="ad-count" aria-label={`${d.pending.length} pending`}>{d.pending.length}</span>)
-      : id === 'agents' ? <span className="ad-nav-agentcount">{d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length}/{d.agents.length}</span>
-        : id === 'projects' ? <span className="ad-nav-agentcount">{d.projects.length}</span> : null
+  const count = (id: string) => id === 'today' ? (d.inbox.length > 0 && <span className="agd-count" aria-label={`${d.inbox.length} waiting for you`}>{d.inbox.length}</span>)
+    : id === 'approvals' ? (d.pending.length > 0 && <span className="agd-count" aria-label={`${d.pending.length} pending`}>{d.pending.length}</span>)
+      : id === 'agents' ? <span className="agd-nav-agentcount">{d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length}/{d.agents.length}</span>
+        : id === 'projects' ? <span className="agd-nav-agentcount">{d.projects.length}</span> : null
   // keyboard: P opens the scope picker (not inside a field)
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -144,42 +144,42 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
     return () => window.removeEventListener('keydown', on)
   }, [])
   return (
-    <div className={`ad-shell ${page === 'chat' ? 'ad-shell-fill' : ''}`}>
-      <a className="ad-btn ad-skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
-      <aside className="ad-rail" aria-label="Main">
-        <a className="ad-brand" href="#today" aria-label="agentdev, Today"><Mark />agentdev</a>
-        <nav className="ad-rail-group">
+    <div className={`agd-shell ${page === 'chat' ? 'agd-shell-fill' : ''}`}>
+      <a className="agd-btn agd-skip" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus() }}>Skip to content</a>
+      <aside className="agd-rail" aria-label="Main">
+        <a className="agd-brand" href="#today" aria-label="agentdev, Today"><Mark />agentdev</a>
+        <nav className="agd-rail-group">
           {NAV.map(([id, label, icon]) => (
-            <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
+            <a key={id} className="agd-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
               <Icon name={icon} /><span>{label}</span>{count(id)}
             </a>
           ))}
         </nav>
         {d.admin && (
-          <nav className="ad-rail-group" aria-label="Administration">
-            <span className="ad-rail-head ad-label">Admin</span>
+          <nav className="agd-rail-group" aria-label="Administration">
+            <span className="agd-rail-head agd-label">Admin</span>
             {ADMIN_NAV.map(([id, label, icon]) => (
-              <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}><Icon name={icon} /><span>{label}</span></a>
+              <a key={id} className="agd-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}><Icon name={icon} /><span>{label}</span></a>
             ))}
           </nav>
         )}
       </aside>
-      <header className="ad-topbar">
-        <button className="ad-scope" type="button" aria-haspopup="dialog" onClick={() => setPicking(true)}
+      <header className="agd-topbar">
+        <button className="agd-scope" type="button" aria-haspopup="dialog" onClick={() => setPicking(true)}
           aria-label={`Projects shown: ${scopeLabel(d)}, ${d.projects.length}. Change`}>
-          <span>{scopeLabel(d)}</span><span className="ad-data">{d.projects.length}</span><Icon name="down" />
+          <span>{scopeLabel(d)}</span><span className="agd-data">{d.projects.length}</span><Icon name="down" />
         </button>
-        <div className="ad-crumbs ad-hide-phone"><strong>{title}</strong></div>
+        <div className="agd-crumbs agd-hide-phone"><strong>{title}</strong></div>
         <span style={{ marginLeft: 'auto' }} />
         <ConnState />
-        <button className="ad-iconbtn ad-hide-phone" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>
+        <button className="agd-iconbtn agd-hide-phone" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>
           <Icon name={dark ? 'sun' : 'moon'} />
         </button>
-        <span className="ad-user"><span className="ad-avatar" aria-hidden="true">{name.slice(0, 2)}</span><span>{name}</span></span>
-        <button className="ad-btn ad-btn-quiet ad-hide-phone" type="button" onClick={onLogout}>Sign out</button>
+        <span className="agd-user"><span className="agd-avatar" aria-hidden="true">{name.slice(0, 2)}</span><span>{name}</span></span>
+        <button className="agd-btn agd-btn-quiet agd-hide-phone" type="button" onClick={onLogout}>Sign out</button>
       </header>
       <ConnBanner onSignIn={onSignIn} />
-      <main className="ad-main" id="main" tabIndex={-1}>
+      <main className="agd-main" id="main" tabIndex={-1}>
         {page === 'chat' ? <ChatPage key={params.get('s') ?? ''} token={token} onExpired={onExpired} sid={params.get('s') ?? ''} agent={params.get('agent') ?? ''} context={params.get('context') ?? ''} />
           : page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
@@ -192,16 +192,16 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
                       : page === 'platform' ? <PlatformPage token={token} onExpired={onExpired} />
                     : <TodayPage token={token} onExpired={onExpired} />}
       </main>
-      <nav className="ad-bottombar" aria-label="Main">
+      <nav className="agd-bottombar" aria-label="Main">
         {BOTTOM.map((id) => {
           const [, label, icon] = NAV.find(([n]) => n === id)!
           return (
-            <a key={id} className="ad-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
+            <a key={id} className="agd-nav" href={`#${id}`} aria-current={base === id ? 'page' : undefined}>
               <Icon name={icon} /><span>{label}</span>{id === 'today' || id === 'approvals' ? count(id) : null}
             </a>
           )
         })}
-        <button className="ad-nav" type="button" aria-haspopup="dialog" aria-current={MORE.includes(base) || ADMIN_NAV.some(([n]) => n === base) ? 'page' : undefined}
+        <button className="agd-nav" type="button" aria-haspopup="dialog" aria-current={MORE.includes(base) || ADMIN_NAV.some(([n]) => n === base) ? 'page' : undefined}
           onClick={() => setMore(true)}><Icon name="more" /><span>More</span></button>
       </nav>
       {base === 'agents' && sub && <AgentDrawer key={sub} name={decodeURIComponent(sub)} token={token} onExpired={onExpired}
@@ -230,20 +230,20 @@ function MoreSheet({ page, admin, name, dark, onTheme, onLogout, onClose }: {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => { const el = ref.current; if (el && !el.open) el.showModal(); return () => el?.close() }, [])
   return (
-    <dialog ref={ref} className="ad-sheet" aria-label="More" onCancel={(e) => { e.preventDefault(); onClose() }}
+    <dialog ref={ref} className="agd-sheet" aria-label="More" onCancel={(e) => { e.preventDefault(); onClose() }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <span className="ad-sheet-grip" aria-hidden="true" />
-      <nav className="ad-rail-group">
+      <span className="agd-sheet-grip" aria-hidden="true" />
+      <nav className="agd-rail-group">
         {NAV.filter(([id]) => MORE.includes(id)).map(([id, label, icon]) => (
-          <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
+          <a key={id} className="agd-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
             <Icon name={icon} /><span>{label}</span></a>
         ))}
         {admin && ADMIN_NAV.map(([id, label, icon]) => (
-          <a key={id} className="ad-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
+          <a key={id} className="agd-nav" href={`#${id}`} aria-current={page === id ? 'page' : undefined} onClick={onClose}>
             <Icon name={icon} /><span>{label}</span></a>
         ))}
-        <button className="ad-nav" type="button" onClick={onTheme}><Icon name={dark ? 'sun' : 'moon'} /><span>{dark ? 'Light theme' : 'Dark theme'}</span></button>
-        <button className="ad-nav" type="button" onClick={onLogout}><Icon name="x" /><span>Sign out {name}</span></button>
+        <button className="agd-nav" type="button" onClick={onTheme}><Icon name={dark ? 'sun' : 'moon'} /><span>{dark ? 'Light theme' : 'Dark theme'}</span></button>
+        <button className="agd-nav" type="button" onClick={onLogout}><Icon name="x" /><span>Sign out {name}</span></button>
       </nav>
     </dialog>
   )
@@ -264,14 +264,14 @@ function ScopePicker({ onClose }: { onClose: () => void }) {
   ].filter(([, l]) => l.toLowerCase().includes(q.toLowerCase()))
   const pick = (v: string) => { d.setScope(v); onClose() }
   return (
-    <dialog ref={ref} className="ad-palette" aria-label="Projects shown" onCancel={(e) => { e.preventDefault(); onClose() }}
+    <dialog ref={ref} className="agd-palette" aria-label="Projects shown" onCancel={(e) => { e.preventDefault(); onClose() }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <input autoFocus placeholder="Find a project" value={q} onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && opts[0]) pick(opts[0][0]) }} aria-label="Find a project" />
       <ul>
         {opts.map(([v, l, note]) => (
           <li key={v || 'all'} aria-selected={d.scope === v}>
-            <button type="button" onClick={() => pick(v)}><span className={v.startsWith('p:') ? 'ad-code' : ''}>{l}</span><span className="ad-muted">{note}</span></button>
+            <button type="button" onClick={() => pick(v)}><span className={v.startsWith('p:') ? 'agd-code' : ''}>{l}</span><span className="agd-muted">{note}</span></button>
           </li>
         ))}
       </ul>
@@ -280,8 +280,8 @@ function ScopePicker({ onClose }: { onClose: () => void }) {
 }
 
 const CONN: Record<Conn, [string, string]> = {
-  live: ['', 'Live'], stale: ['ad-conn-stale', 'Updated'], starting: ['ad-conn-waking', 'Starting'],
-  down: ['ad-conn-down', 'Unavailable'], offline: ['ad-conn-down', 'Offline'], signedout: ['ad-conn-down', 'Signed out'],
+  live: ['', 'Live'], stale: ['agd-conn-stale', 'Updated'], starting: ['agd-conn-waking', 'Starting'],
+  down: ['agd-conn-down', 'Unavailable'], offline: ['agd-conn-down', 'Offline'], signedout: ['agd-conn-down', 'Signed out'],
 }
 
 function ConnState() {
@@ -290,8 +290,8 @@ function ConnState() {
   // live: the stream (#345) is open; without it the console polls every 15 s and says so
   const text = d.conn === 'stale' && d.at ? `Updated ${ago(d.at, d.now)}` : d.conn === 'live' && !d.live ? 'Polling' : label
   const why = d.conn === 'live' && !d.live ? 'The live stream is not open. The console reads the data every 15 s and connects again. ' : ''
-  return <span className={`ad-conn ${cls}`} role="status" title={d.at ? `${why}Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
-    <span className="ad-conn-dot" /><span className="ad-hide-phone">{text}</span></span>
+  return <span className={`agd-conn ${cls}`} role="status" title={d.at ? `${why}Last update ${new Date(d.at).toLocaleTimeString()}` : undefined}>
+    <span className="agd-conn-dot" /><span className="agd-hide-phone">{text}</span></span>
 }
 
 // Not live: one banner with the cause and one action. The page keeps the last good data (#339).
@@ -300,10 +300,10 @@ function ConnBanner({ onSignIn }: { onSignIn: () => void }) {
   const at = d.at ? new Date(d.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
   const data = at ? ` The data below is from ${at}.` : ''
   if (d.conn === 'starting') return <Banner kind="warn" icon="clock"><strong>agentdev is starting.</strong> The platform scaled to zero and wakes now. This can take 1 to 2 minutes.{data}</Banner>
-  if (d.conn === 'down') return <Banner kind="down" icon="alert" action={<button className="ad-btn" type="button" onClick={d.reload}>Try again</button>}>
+  if (d.conn === 'down') return <Banner kind="down" icon="alert" action={<button className="agd-btn" type="button" onClick={d.reload}>Try again</button>}>
     <strong>The API does not answer.</strong>{at ? ` Last good update ${at}.` : ''} Actions can fail until it answers.</Banner>
   if (d.conn === 'offline') return <Banner kind="down" icon="alert"><strong>You are offline.</strong> The console updates again when the network is back.{data}</Banner>
-  if (d.conn === 'signedout') return <Banner kind="down" icon="alert" action={<button className="ad-btn ad-btn-primary" type="button" onClick={onSignIn}>Sign in</button>}>
+  if (d.conn === 'signedout') return <Banner kind="down" icon="alert" action={<button className="agd-btn agd-btn-primary" type="button" onClick={onSignIn}>Sign in</button>}>
     <strong>Your sign-in expired.</strong> Sign in again to come back to this page.</Banner>
   return null
 }

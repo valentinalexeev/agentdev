@@ -31,10 +31,10 @@ function Story({ e }: { e: AuditEntry }) {
       <PersonTag name={who} />{' '}
       {ok ? PAST[v] ?? v : `tried to ${v === 'change' ? 'change the settings of' : v}`}{' '}
       {e.agent ? <AgentTag name={e.agent} /> : 'an agent'}
-      {': '}<strong className={ok ? '' : 'ad-error'} style={{ display: 'inline' }}>{e.result}</strong>
-      {e.reason && <span className="ad-muted"> ({e.reason})</span>}
-      {ok && changes(e) && <span className="ad-muted"> · {changes(e)}</span>}
-      {ok && e.grant && <span className="ad-muted"> · allowed by {e.grant}</span>}
+      {': '}<strong className={ok ? '' : 'agd-error'} style={{ display: 'inline' }}>{e.result}</strong>
+      {e.reason && <span className="agd-muted"> ({e.reason})</span>}
+      {ok && changes(e) && <span className="agd-muted"> · {changes(e)}</span>}
+      {ok && e.grant && <span className="agd-muted"> · allowed by {e.grant}</span>}
     </span>
   )
 }
@@ -67,45 +67,45 @@ export function AuditPage({ token, onExpired }: { token: string; onExpired: () =
   return (
     <>
       {head}
-      <div className="ad-filters" style={{ marginBottom: 'var(--space-3)' }}>
-        <label className="ad-field ad-field-inline"><span>Person</span>
-          <input className="ad-input" style={{ width: 140 }} value={person} placeholder="all" onChange={(e) => setPerson(e.target.value.trim())} /></label>
-        <label className="ad-field ad-field-inline"><span>Agent</span>
-          <input className="ad-input" style={{ width: 140 }} value={filter.agent ?? ''} placeholder="all" onChange={(e) => setFilter({ ...filter, agent: e.target.value.trim() })} /></label>
-        <label className="ad-field ad-field-inline"><span>Action</span>
-          <select className="ad-input" value={action} onChange={(e) => setAction(e.target.value)}>
+      <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
+        <label className="agd-field agd-field-inline"><span>Person</span>
+          <input className="agd-input" style={{ width: 140 }} value={person} placeholder="all" onChange={(e) => setPerson(e.target.value.trim())} /></label>
+        <label className="agd-field agd-field-inline"><span>Agent</span>
+          <input className="agd-input" style={{ width: 140 }} value={filter.agent ?? ''} placeholder="all" onChange={(e) => setFilter({ ...filter, agent: e.target.value.trim() })} /></label>
+        <label className="agd-field agd-field-inline"><span>Action</span>
+          <select className="agd-input" value={action} onChange={(e) => setAction(e.target.value)}>
             {ACTIONS.map((a) => <option key={a} value={a}>{a || 'all'}</option>)}
           </select></label>
-        <div className="ad-seg" role="group" aria-label="Result">
+        <div className="agd-seg" role="group" aria-label="Result">
           {RESULTS.map(([v, l]) => <button key={l} type="button" aria-pressed={filter.result === v} onClick={() => setFilter({ ...filter, result: v })}>{l}</button>)}
         </div>
-        <div className="ad-seg" role="group" aria-label="Time">
+        <div className="agd-seg" role="group" aria-label="Time">
           {SINCE.map(([v, l]) => <button key={l} type="button" aria-pressed={filter.since === v} onClick={() => setFilter({ ...filter, since: v })}>{l}</button>)}
         </div>
-        <div className="ad-seg" role="group" aria-label="View">
+        <div className="agd-seg" role="group" aria-label="View">
           <button type="button" aria-pressed={!raw} onClick={() => setRaw(false)}>Story</button>
           <button type="button" aria-pressed={raw} onClick={() => setRaw(true)}>Raw</button>
         </div>
       </div>
-      {error && <p className="ad-error" role="alert">Cannot read the audit log: {error.msg}</p>}
-      {!shown ? (!error && <p className="ad-muted">Loading…</p>)
+      {error && <p className="agd-error" role="alert">Cannot read the audit log: {error.msg}</p>}
+      {!shown ? (!error && <p className="agd-muted">Loading…</p>)
         : shown.length === 0 ? <Empty title="No entries match these filters">Change the filters, or choose a longer time.</Empty>
           : (
-            <div className="ad-table-wrap">
-              <table className="ad-table ad-table-2l">
+            <div className="agd-table-wrap">
+              <table className="agd-table agd-table-2l">
                 <thead><tr><th>Time</th><th>{raw ? 'Entry (JSON)' : 'What happened'}</th></tr></thead>
                 <tbody>
                   {shown.map(({ id, entry: e }) => (
                     <tr key={id}>
-                      <td className="ad-data ad-nowrap" style={{ verticalAlign: 'top' }}><time dateTime={e.time}>{new Date(e.time).toLocaleString()}</time></td>
-                      <td>{raw ? <pre className="ad-code ad-raw">{JSON.stringify(e, null, 2)}</pre> : <Story e={e} />}</td>
+                      <td className="agd-data agd-nowrap" style={{ verticalAlign: 'top' }}><time dateTime={e.time}>{new Date(e.time).toLocaleString()}</time></td>
+                      <td>{raw ? <pre className="agd-code agd-raw">{JSON.stringify(e, null, 2)}</pre> : <Story e={e} />}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-      {next && <div style={{ marginTop: 'var(--space-3)' }}><button className="ad-btn" type="button" onClick={more}>Load older entries</button></div>}
+      {next && <div style={{ marginTop: 'var(--space-3)' }}><button className="agd-btn" type="button" onClick={more}>Load older entries</button></div>}
     </>
   )
 }
