@@ -99,6 +99,7 @@ func main() {
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
 	}
+	imux := http.NewServeMux()            // the internal listener (INTERNAL_ADDR): agent pods only (NetworkPolicy)
 	if os.Getenv("APPROVALS") == "true" { // #67: forge decisions, and the internal listener the agents' sidecars ask
 		dc := newDecider(agents, agents, gp, perms)
 		dc.github = gh
@@ -110,13 +111,21 @@ func main() {
 			}
 		}
 		go dc.run(ctx, time.Duration(envInt("APPROVAL_POLL_SECONDS", 15))*time.Second)
-		imux := http.NewServeMux()
 		imux.Handle("GET /internal/approvals/{agent}/{id}", internalDecision(agents))
 		imux.Handle("POST /internal/approvals/{agent}/{id}/void", internalVoid(agents))
-		isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
-		go func() { log.Fatal(isrv.ListenAndServe()) }()
 	}
+	// run log of jobs (#425, runlog.go): the agents' forge sidecars send run events to the internal listener; the
+	// caller must be a running pod of that agent. Always on: the listener and its NetworkPolicy exist without approvals.
+	var jes jobEventStore = &memJobEvents{}
+	if pg, ok := store.(*pgStore); ok {
+		jes = pg
+	}
+	wr.runlog = jes
+	imux.Handle("POST /internal/run-events/{agent}", (&runLog{store: jes, agents: agents, pods: agents}).ingest())
+	go pruneJobEvents(ctx, jes)
+	isrv := &http.Server{Addr: env("INTERNAL_ADDR", ":8081"), Handler: imux, ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	go func() { log.Fatal(isrv.ListenAndServe()) }()
 	if os.Getenv("CHAT_SESSIONS") == "true" { // console chat sessions (#346, chat.go)
 		chatSvc = chatFromEnv(ctx, wr, agents, store, gh)
 	}
@@ -318,9 +327,11 @@ func routes(verify verifier, agents agentLister, events eventStore, wr *writer) 
 	// R35 (#308): admins see every event, other users only the events of the agents they own (forge write access)
 	mux.Handle("GET /api/security-events", auth(verify, listSecurityEvents(events, wr)))
 	if wr != nil { // writes to Agent objects (#57 step 3), see write.go
-		mux.Handle("GET /api/jobs", auth(verify, http.HandlerFunc(wr.listJobs)))             // #345, jobs.go
-		mux.Handle("GET /api/stream", auth(verify, wr.stream()))                             // #345, stream.go (SSE)
-		mux.Handle("GET /api/agents/{name}", auth(verify, http.HandlerFunc(wr.agentDetail))) // #344, detail.go
+		mux.Handle("GET /api/jobs", auth(verify, http.HandlerFunc(wr.listJobs)))                                    // #345, jobs.go
+		mux.Handle("GET /api/stream", auth(verify, wr.stream()))                                                    // #345, stream.go (SSE)
+		mux.Handle("GET /api/jobs/{agent}/{job}/events", auth(verify, http.HandlerFunc(wr.listRunEvents)))          // #425
+		mux.Handle("GET /api/jobs/{agent}/{job}/events/stream", auth(verify, http.HandlerFunc(wr.streamRunEvents))) // #425
+		mux.Handle("GET /api/agents/{name}", auth(verify, http.HandlerFunc(wr.agentDetail)))                        // #344, detail.go
 		if wr.platform != nil {
 			mux.Handle("GET /api/platform", auth(verify, wr.platform.handler(wr.adminGroup))) // #344, admins only
 		}
