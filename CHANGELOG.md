@@ -13,7 +13,6 @@ While the version is `0.x`, breaking changes bump MINOR.
   1.26.9 or later (for example GO-2026-6610), and the advisories of `x/net` fixed only in v0.60.0, which needs Go 1.26;
   1.2.0 moves to Go 1.27 (#431). New images; no `./run.sh` step.
 
-
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
