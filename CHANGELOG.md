@@ -6,6 +6,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Security
+- Go modules (#431, 1.1 patch): `golang.org/x/crypto` v0.51.0 → v0.55.0 (`images/api`) and `golang.org/x/net` →
+  v0.58.0 (`images/api`, `images/credproxy`, `images/operator`), still with Go 1.25.14. It closes the Dependabot
+  `x/crypto` alerts and GO-2026-4918. Not fixed on 1.1: the Go standard library advisories that are fixed only in Go
+  1.26.9 or later (for example GO-2026-6610), and the advisories of `x/net` fixed only in v0.60.0, which needs Go 1.26;
+  1.2.0 moves to Go 1.27 (#431). New images; no `./run.sh` step.
+
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
