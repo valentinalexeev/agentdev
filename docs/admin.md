@@ -52,6 +52,59 @@ CAUTION: Step 3 deletes the work data of the agent.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 3. Delete the StatefulSet, the volumes and the forge account of the agent.
 
+### Keep the agents in Git (Flux)
+
+With the setting `agents_source: git`, Flux applies the `Agent` objects from the deployment repository (#58). The
+default is `api`: the playbook and the API write the `Agent` objects.
+
+In `git` mode:
+
+- An agent from Git is read-only in the API and the web UI. Only **Pause** and **Resume** are possible.
+- An agent that a person adds in the web UI or the API stays owned by the API. Flux does not prune it.
+- The playbook makes the Secrets of the agents. It does not apply the `Agent` objects.
+
+Each field has one owner:
+
+| Field | Owner |
+|---|---|
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero` | Git (Flux) |
+| `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
+| replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
+| `status` | the operator |
+
+CAUTION: Do not put `spec.paused` in the Git manifest. If you do, Flux owns the field and resumes an agent that the
+security pause stopped.
+
+1. Set `agents_source: git` in `instance.yml`. On `kind`, set `AGENTS_SOURCE=git` in `config.env`.
+2. Put one `Agent` manifest for each agent in the `agents/` directory of the deployment repository:
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Agent
+   metadata: {name: alice, namespace: coding-agents}
+   spec:
+     repo: my-org/my-repo
+     forge: github
+     claudeSecret: claude-shared
+     maxConcurrent: 2
+     scaleToZero: true
+     # no spec.paused: the API and the operator own it
+   ```
+3. Keep the agent in the `agents:` list of `instance.yml`. The playbook makes its Secrets.
+4. Add a Flux `Kustomization` for `agents/` (see "Health checks for Flux and Argo CD").
+5. Deploy again.
+
+NOTE: On `kind`, step 06 applies the `Agent` objects in both modes. It does the work of Flux.
+
+For Argo CD, add `ignoreDifferences` for `spec.paused`, or `selfHeal` resumes a paused agent:
+
+```yaml
+spec:
+  ignoreDifferences:
+    - group: agentdev.dev
+      kind: Agent
+      jsonPointers: [/spec/paused]
+```
+
 ### Give an agent its own Claude credential
 
 WARNING: Do not put the credential in git or in an issue.
@@ -1162,9 +1215,9 @@ subscribe again.
 
 **Filters on the lists** (#345). `GET /api/agents`, `GET /api/approvals`, `GET /api/security-events` and `GET /api/jobs` take `repo=owner/name` (only items of that repository) and `scope=mine` (only repositories where the caller has write access, also for admins; `scope=all` is the default). `GET /api/agents`, `GET /api/approvals` and `GET /api/jobs` also take `limit` and `cursor`; `next_cursor` in the answer gives the next page. A filter only narrows: it never shows an item the visibility rule hides.
 
-| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
+| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. With `agents_source: git`, an agent from Git accepts only `paused`; other fields give 409 (#58). |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
-| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. |
+| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. An agent from Git gives 409 (#58). |
 
 ### Give the API access to the forge
 

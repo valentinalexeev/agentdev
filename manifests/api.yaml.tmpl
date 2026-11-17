@@ -87,6 +87,9 @@ spec:
         # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
         - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
         - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
+        # agents from Git (#58): api (default) or git; with git, Agents without agentdev/created-by are read-only
+        # here except spec.paused (pause and resume)
+        - {name: AGENTS_SOURCE, value: "${AGENTS_SOURCE}"}
         # console chat sessions (#346, images/api/chat.go): Jobs in ${AGENTS_NS} that run the worker image's session
         # server. CHAT_TOKEN_KEY (Secret agentdev-api-chat) derives the per-session token for the session servers;
         # CHAT_ISSUE_TOKEN (same Secret, Gitea only) creates issues from drafts as the person (Sudo).
