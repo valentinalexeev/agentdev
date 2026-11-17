@@ -6,6 +6,19 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
+  operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`
+  (`forge_init.enabled`, admin token in Secret Manager `gitea-admin-token`, ExternalSecret `forge-init`) sets
+  collaborators, `agent:<name>` labels, the router webhook and branch protection through the Gitea API only
+  (`agentdev-operator forge-init`, no kubectl exec, no Kubernetes API token). docs/admin.md, "Connect an external
+  Gitea on GKE".
+
+### Upgrade
+- **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
+  (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
+  to the ESO secret list (#381), then set `forge_init: {enabled: true}`.
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
