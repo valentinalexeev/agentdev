@@ -1,6 +1,8 @@
 module github.com/valentinalexeev/agentdev/images/api
 
-go 1.25.14
+go 1.26.0
+
+toolchain go1.27.4
 
 require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
