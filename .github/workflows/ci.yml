@@ -234,6 +234,8 @@ jobs:
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/feedback.test.sh
           # run contract: STATUS line, no push on needs-decision/blocked, resume after an answer (#234)
           docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/contract.test.sh
+          # console chat sessions on the agent's paths: repo and pushes through the forge sidecar (#424)
+          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/chat-console.test.sh
           # tests of open PRs; each runs once its file is on the branch (#175 resume, #174 drain, #196 run guards)
           for t in resume drain guards; do
             if [ -f "images/worker/test/$t.test.sh" ]; then

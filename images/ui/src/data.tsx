@@ -14,7 +14,7 @@ interface Snapshot { agents: Agent[]; pending: Approval[]; usage: Usage | null; 
 
 
 function readScope(): Scope {
-  try { return localStorage.getItem('ad-scope') ?? 'mine' } catch { return 'mine' }
+  try { return localStorage.getItem('agd-scope') ?? 'mine' } catch { return 'mine' }
 }
 
 export function DataProvider({ token, onExpired, children }: { token: string; onExpired: () => void; children: React.ReactNode }) {
@@ -80,7 +80,7 @@ export function DataProvider({ token, onExpired, children }: { token: string; on
 
   const setScope = useCallback((s: Scope) => {
     setScopeState(s)
-    try { localStorage.setItem('ad-scope', s) } catch { /* storage blocked */ }
+    try { localStorage.setItem('agd-scope', s) } catch { /* storage blocked */ }
   }, [])
   const reload = useCallback(() => setTick((n) => n + 1), [])
 

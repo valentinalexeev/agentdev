@@ -188,14 +188,14 @@ empty lamp, never as an error.
 **Today.** Four KPI tiles (*Waiting for you* has the gate edge). The inbox. An *Overnight* strip. A short *Fleet*
 list of agents that need attention; healthy agents are counted, not listed.
 
-**Work.** Board of jobs by phase, one card per issue (the `ad-card` work card from botboard), filters by agent and
+**Work.** Board of jobs by phase, one card per issue (the `agd-card` work card from botboard), filters by agent and
 repository, and a list view for many items. A card links to the issue and the PR, and shows the outcome when done.
 
 **Agents.** Table: agent tag (lane colour), lifecycle lamp, attention chip, repositories, jobs now / max, tokens
 24 h against the budget, events 7 days. The row opens the agent drawer: an overview with a "waiting on" panel, recent
 jobs as a timeline, events, usage, settings (max. concurrent, scale to zero), and the generated harness guide.
 
-**Approval drawer.** Trusted facts first (`ad-dl`), then the untrusted block with its warning, then the decisions
+**Approval drawer.** Trusted facts first (`agd-dl`), then the untrusted block with its warning, then the decisions
 the request type allows. The confirm step states the effect in one sentence and that the name goes to the audit log.
 
 **Security.** Filter chips for severity and time, agent and repository filters, table, and an event drawer with

@@ -323,6 +323,26 @@ export interface Job {
   closed?: string
 }
 
+// Run log of a job (#425): what the agent did while the job ran. Every text field is model output (redacted and
+// clipped by the worker and the sidecar): untrusted, render as plain text only.
+type RunEventKind = 'text' | 'tool_use' | 'tool_result' | 'result' | 'truncated'
+export interface RunEvent {
+  id: number
+  agent: string
+  repo: string
+  job: string
+  time: string
+  kind: RunEventKind
+  data: { text?: string; tool?: string; input?: string; ok?: boolean; size?: number; subtype?: string; turns?: number; input_tokens?: number; output_tokens?: number } | null
+}
+
+export async function listRunEvents(token: string, agent: string, job: string, repo: string, after: number): Promise<{ events: RunEvent[]; next_after?: number }> {
+  const q = new URLSearchParams()
+  if (repo) q.set('repo', repo)
+  if (after) q.set('after', String(after))
+  return (await call(token, 'GET', `/api/jobs/${encodeURIComponent(agent)}/${encodeURIComponent(job)}/events?${q}`)).json()
+}
+
 // Agent detail (#344): the drawer. 404 when the person may not see the agent.
 export interface PodView { name: string; phase: string; ready: boolean; restarts: number; started?: string; reason?: string }
 export interface WaitingItem {

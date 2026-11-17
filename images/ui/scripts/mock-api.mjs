@@ -98,6 +98,8 @@ function api(req, res, url) {
   if (req.method === 'GET' && p === '/api/audit') return admin ? send(res, 200, audit(url)) : send(res, 403, { error: 'only agentdev-admins may read the audit trail' })
   if (req.method === 'GET' && p === '/api/stream') return stream(req, res)
   if (req.method === 'GET' && p === '/api/jobs') return send(res, 200, jobsPage(url))
+  if (req.method === 'GET' && /^\/api\/jobs\/[a-z0-9-]+\/(issue|pr)-[0-9]+\/events$/.test(p)) return send(res, 200, runEvents(url))
+  if (req.method === 'GET' && /^\/api\/jobs\/[a-z0-9-]+\/(issue|pr)-[0-9]+\/events\/stream$/.test(p)) return runStream(req, res, url)
   if (req.method === 'GET' && p === '/api/approvals') {
     const st = url.searchParams.get('state')
     return send(res, 200, { approvals: st === 'pending' ? D.approvals : st === 'decided' ? D.decided : [...D.approvals, ...D.decided] })
@@ -286,6 +288,35 @@ function jobsPage(url) {
   const limit = Number(q.get('limit') ?? 100), off = Number(q.get('cursor') ?? 0)
   const page = list.slice(off, off + limit)
   return { jobs: page, ...(off + limit < list.length ? { next_cursor: String(off + limit) } : {}) }
+}
+// ---- #425: run log of a job. The first text event carries markup that must show as text (XSS check). ----
+function makeRun(agent, job) {
+  const big = Array.from({ length: 60 }, (_, i) => `ok   - test ${i + 1}`).join('\n')
+  const t = now - 20 * min
+  const ev = (i, kind, data) => ({ id: i, agent, repo: '', job, time: iso(t + i * 20000), kind, data })
+  return [
+    ev(1, 'text', { text: 'I will read the failing test first. <img src=x onerror=alert(1)> <script>alert(2)</script> **not bold**' }),
+    ev(2, 'tool_use', { tool: 'Bash', input: '{"command":"npm test -- login"}' }),
+    ev(3, 'tool_result', { ok: false, size: 5300, text: big + ' [clipped]' }),
+    ev(4, 'tool_use', { tool: 'Edit', input: '{"file_path":"src/login.test.ts","old_string":"timeout: 0","new_string":"timeout: 5000"}' }),
+    ev(5, 'tool_result', { ok: true, size: 64, text: 'The file src/login.test.ts has been updated. token=[redacted]' }),
+    ev(6, 'text', { text: 'The test waited forever for the slow upstream. A timeout fixes it.' }),
+    ev(7, 'result', { ok: true, turns: 6, input_tokens: 18234, output_tokens: 912 }),
+    ev(8, 'truncated', { size: 2097152 }),
+  ]
+}
+function runEvents(url) {
+  const [, , , agent, job] = url.pathname.split('/')
+  const after = Number(url.searchParams.get('after') ?? 0)
+  return { events: makeRun(agent, job).filter((e) => e.id > after) }
+}
+function runStream(req, res, url) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' })
+  const sse = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, time: new Date().toISOString(), data })}\n\n`)
+  sse('hello', { heartbeatSeconds: 15 })
+  const beat = setInterval(() => sse('heartbeat', null), 15000)
+  req.on('close', () => clearInterval(beat))
+  void url
 }
 function detail(res, name) {
   const a = D.agents.find((x) => x.name === name)
