@@ -58,8 +58,27 @@ api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner
 api_github: "{{ (forge_kind | default('gitea')) == 'github' }}"
 api_github_url: "{{ github_url | default('https://github.com') }}"
 api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
-# The Postgres pod of the platform role and its superuser
-api_db_pod: platform-db-0
+# db-init Job (#382): the image of the platform Postgres (psql), and schema.sql/grants.sql of the API image. The schema
+# version is the one the API computes from its embedded files (images/api/events.go, schemaVersion).
+api_db_init_image: postgres:17.11   # = platform_postgres_image of the role platform (tests/db_init.yml checks it)
+api_schema_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql', rstrip=false) }}"
+api_grants_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql', rstrip=false) }}"
+api_schema_version: "{{ (api_schema_sql ~ api_grants_sql) | hash('sha256') | truncate(16, true, '') }}"
+# the ConfigMap of the Job (manifests/db-init/) and its env: secret values only by Secret name (#381 may make these
+# Secrets ExternalSecrets with the same names)
+api_db_init_files:
+  agentdev.sh: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev.sh', rstrip=false) }}"
+  agentdev-roles.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev-roles.sql', rstrip=false) }}"
+  agentdev-schema.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev-schema.sql', rstrip=false) }}"
+  schema.sql: "{{ api_schema_sql }}"
+  grants.sql: "{{ api_grants_sql }}"
+  settings.sql: |
+    UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};
+    UPDATE chat_settings SET retention_days = {{ api_chat_retention_days | int }};
+api_db_init_env:
+  - {name: SCHEMA_VERSION, value: "{{ api_schema_version }}"}
+  - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}}
+  - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}}
 # web UI (#48) next to the API; the role ingress makes it public on https://<ingress.host>/ (#120)
 api_ui: "{{ api.ui | default(true) }}"
 api_ui_image: "{{ image_registry }}/agentdev-ui:{{ image_tag }}"

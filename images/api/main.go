@@ -194,6 +194,11 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !cfg.DBMigrate { // the db-init Job owns the schema (#382): serve only once it applied this version
+		if err := waitSchema(ctx, pg.db, schemaVersion(), schemaWait); err != nil {
+			return nil, err
+		}
+	}
 	go func() {
 		for {
 			if _, err := pg.Prune(ctx); err != nil {

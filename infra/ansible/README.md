@@ -50,9 +50,12 @@ from Secret Manager and run after `include_role: platform`.
 The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
 authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
 `./run.sh 10` it:
-- creates `agentdev_owner` (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies
-  `images/api/schema.sql` as the owner, sets the retention (`api.db_retention_days`, default 365) and applies
-  `images/api/grants.sql`. SQL goes to `psql` in `platform-db-0` on stdin (`no_log`), never in argv;
+- runs the Job `agentdev-db-init-<hash>` in the cluster (#382, no `kubectl exec`): it creates `agentdev_owner`
+  (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies `images/api/schema.sql` as
+  the owner, sets the retention (`api.db_retention_days`, default 365), applies `images/api/grants.sql` and writes the
+  schema version. The SQL is a ConfigMap of the same name (`manifests/db-init/`); the passwords come from the Secrets
+  `platform-db` and `agentdev-api-db` by name. The hash covers the SQL, so a new `schema.sql` gives a new Job and the
+  same files change nothing. The API serves only once the schema version matches its own (`startupProbe`);
 - writes the Secrets `agentdev-api-db`, `agentdev-api-forge` (only if Secret Manager `agentdev-api-forge-token` has
   a value, else absent: forge writes give 503, fail closed) and `agentdev-api-siem` (addresses from
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,

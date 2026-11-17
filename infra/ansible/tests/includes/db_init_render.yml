@@ -1,0 +1,17 @@
+---
+# One case of tests/db_init.yml: render the Job agentdev-db-init with a schema and a retention, keep its name.
+- name: "Render case {{ case.key }}"
+  ansible.builtin.include_tasks: ../../tasks/db_init_render.yml
+  vars:
+    platform_ns: agentdev-platform
+    db_init_name: agentdev-db-init
+    db_init_image: "{{ api_db_init_image }}"
+    db_init_command: [sh, /db-init/agentdev.sh]
+    api_schema_sql: "{{ case.sql }}"
+    api_db_retention_days: "{{ case.retention }}"
+    db_init_files: "{{ api_db_init_files }}"
+    db_init_env: "{{ api_db_init_env }}"
+
+- name: "Keep the name of case {{ case.key }}"
+  ansible.builtin.set_fact:
+    db_init_names: "{{ db_init_names | default({}) | combine({case.key: db_init_full}) }}"
