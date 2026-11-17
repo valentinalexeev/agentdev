@@ -16,6 +16,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
   key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
   is larger (about 50 MB). New images; no `./run.sh` step.
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
