@@ -60,7 +60,7 @@ api_github_url: "{{ github_url | default('https://github.com') }}"
 api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
 # db-init Job (#382): the image of the platform Postgres (psql), and schema.sql/grants.sql of the API image. The schema
 # version is the one the API computes from its embedded files (images/api/events.go, schemaVersion).
-api_db_init_image: postgres:17.11   # = platform_postgres_image of the role platform (tests/db_init.yml checks it)
+api_db_init_image: postgres:17.11   # the Postgres image of the role platform (tests/db_init.yml checks it)
 api_schema_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql', rstrip=false) }}"
 api_grants_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql', rstrip=false) }}"
 api_schema_version: "{{ (api_schema_sql ~ api_grants_sql) | hash('sha256') | truncate(16, true, '') }}"
