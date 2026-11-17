@@ -7,12 +7,15 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Security
-- Go modules (#431, 1.1 patch): `golang.org/x/crypto` v0.51.0 → v0.55.0 (`images/api`) and `golang.org/x/net` →
-  v0.58.0 (`images/api`, `images/credproxy`, `images/operator`), still with Go 1.25.14. It closes the Dependabot
-  `x/crypto` alerts and GO-2026-4918. Not fixed on 1.1: the Go standard library advisories that are fixed only in Go
-  1.26.9 or later (for example GO-2026-6610), and the advisories of `x/net` fixed only in v0.60.0, which needs Go 1.26;
-  1.2.0 moves to Go 1.27 (#431). New images; no `./run.sh` step.
-
+- Go 1.27 and dependencies (#431). The images build with `golang:1.27.4-alpine` (Go 1.25 gets no more fixes), every
+  `go.mod` has `go 1.26.0` and `toolchain go1.27.4`, and the CI uses the same toolchain. Bumped:
+  `golang.org/x/net` v0.62.0 (api, credproxy, operator), `golang.org/x/crypto` v0.59.0 (api),
+  `go.opentelemetry.io/otel` v1.47.0 and `google.golang.org/grpc` v1.85.0 (credproxy, operator). `govulncheck` shows no
+  reachable vulnerability in any module. It closes the Go standard library advisories fixed in Go 1.26.9 to 1.26.11
+  (for example GO-2026-6610 HTTP/2 response smuggling, GO-2026-6809 crypto/x509, GO-2026-6859 net/http), the `x/net`,
+  `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
+  key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
+  is larger (about 50 MB). New images; no `./run.sh` step.
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
