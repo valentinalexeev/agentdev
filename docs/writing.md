@@ -150,7 +150,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | quota project | the Google Cloud project that a Google API charges for a request |
 | token budget | old name of the budget, before 1.2.0 it counted raw tokens; now the budget counts cost units |
 | specification (spec) | the project file, for example `my-project.yaml` |
-| sync | one run of `scripts/mcp-sync.sh` |
+| sync | one reconcile of an `McpProject` by the operator (was one run of `scripts/mcp-sync.sh`) |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
 | web UI | the agentdev management user interface |
 | Gateway | the GKE Gateway (a Google Cloud load balancer) that the Ansible role `ingress` makes in `ingress.mode: gateway` |

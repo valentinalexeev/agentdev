@@ -28,6 +28,7 @@ vars=$(jq -nc --argjson lb "${labels}" --argjson eh "$(json_list "${EGRESS_HOSTS
   --arg to "${TELEMETRY_OTLP_URL:-}" --arg ti "${TELEMETRY_INSTANCE:-agentdev}" --arg tn "${TELEMETRY_SCRAPER_NS:-monitoring}" \
   --argjson ts "${TELEMETRY_SCRAPER_SELECTOR}" \
   --arg gs "${AGENT_GRACE_SECONDS:-300}" --arg dm "${DRAIN_MAX_MINUTES:-60}" \
+  --argjson mh "$(json_list "${MCP_ALLOWED_HOSTS:-}")" --arg me "${CF_ADMIN_EMAIL:-admin@agentdev.dev}" \
   '{operator_cost_labels: $lb, operator_egress_hosts: $eh, operator_egress_extra_hosts: $ex,
     operator_executor_egress_hosts: $xh, operator_claude_proxy: ($cp == "true"), operator_secrets_store_enabled: ($ss == "true"),
     operator_security: {pause_after: $pa, retention_days: $rd, max_per_agent: $mx, rate_per_min: $rp, rate_burst: $rb},
@@ -35,7 +36,8 @@ vars=$(jq -nc --argjson lb "${labels}" --argjson eh "$(json_list "${EGRESS_HOSTS
     operator_executor: {poll_seconds: $xp, retention_days: $xr, apply_start_minutes: $xa},
     operator_usage: {five_hour: $u5, weekly: $uw},
     operator_telemetry: {otlp_url: $to, instance: $ti, scraper_ns: $tn, scraper_selector: $ts},
-    operator_rollout: {grace_seconds: $gs, drain_max_minutes: $dm}}')
+    operator_rollout: {grace_seconds: $gs, drain_max_minutes: $dm},
+    mcp_allowed_hosts: $mh, operator_mcp_admin_email: $me}')
 # 13-secrets.sh calls this script with KIND_TAGS=secrets and its own -e values as arguments (one list of operator settings)
 ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" --tags "${KIND_TAGS:-operator}" "$@" \
   -e "kind_cluster_name=${CLUSTER_NAME}" -e "platform_ns=${PLATFORM_NS}" -e "agents_ns=${AGENTS_NS}" \
