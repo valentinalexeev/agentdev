@@ -45,3 +45,13 @@ output "budget" {
   description = "Name of the billing budget; null when create_budget is false (#199)."
   value       = one(google_billing_budget.monthly[*].name)
 }
+
+output "secrets_readers" {
+  description = "Google service accounts of the SecretStores agentdev-platform-secrets (#381): copy into instance.yml `external_secrets.gsa`."
+  value       = { for k, v in google_service_account.secrets_reader : k => v.email }
+}
+
+output "generated_secrets" {
+  description = "Secret Manager ids that Terraform generates (values only in Secret Manager and the state, never here)."
+  value       = sort(keys(local.generated_secrets))
+}
