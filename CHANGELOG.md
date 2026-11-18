@@ -47,6 +47,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Deprecated
 - `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
 
+### Fixed
+- docs/security.md had risk id R110 twice, so `scripts/check-risk-ids.sh` failed (#454). The job header risk (#196)
+  keeps R110. The notification action risk (#347) is now R120.
+
 ### Upgrade
 - **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
   (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
@@ -568,7 +572,7 @@ backwards compatible by default.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Security
-- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
+- R108, R109 and R120 (#347; first numbered R110): push subscription endpoints are limited to the allowed push hosts and public addresses,
   payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
 - R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
   a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
