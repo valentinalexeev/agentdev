@@ -93,7 +93,9 @@ func main() {
 	}
 	wr := &writer{store: agents, perms: perms, adminGroup: cfg.AdminGrp, usage: agents,
 		limits: agentLimits{Total: envCount("MAX_AGENTS"), PerUser: envCount("MAX_AGENTS_PER_USER")}, // #27, 0 = no cap
-		events: store}
+		events: store, source: mustAgentsSource()}
+	agents.source = wr.source
+	log.Printf("agents source: %s (#58)", wr.source)
 	wr.jobs = newJobCache(forgeJobs{gitea: gp, github: gh}, 30*time.Second) // #345, jobs.go
 	wr.platform = newPlatformChecker(agents, forgeProbeFrom(gp, gh), cfg.Namespace, env("PLATFORM_NS", "agentdev-platform"))
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
@@ -194,6 +196,11 @@ func openStore(ctx context.Context, cfg config) (eventStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !cfg.DBMigrate { // the db-init Job owns the schema (#382): serve only once it applied this version
+		if err := waitSchema(ctx, pg.db, schemaVersion(), schemaWait); err != nil {
+			return nil, err
+		}
+	}
 	go func() {
 		for {
 			if _, err := pg.Prune(ctx); err != nil {
@@ -242,6 +249,8 @@ type agent struct {
 	MaxConcurrent int32    `json:"maxConcurrent,omitempty"`
 	ScaleToZero   bool     `json:"scaleToZero"`
 	Paused        bool     `json:"paused"`
+	// api | git (#58): a Git-owned Agent is read-only in the API except pause and resume; empty for managed: false
+	Source string `json:"source,omitempty"`
 	// SecurityEvents in the last 7 days (#70)
 	SecurityEvents int `json:"securityEvents"`
 	// Claude tokens in the last 24 h and the agent's limit (0 = none), from the credential proxy (#66, budget.go)

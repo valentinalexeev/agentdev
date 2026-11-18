@@ -189,6 +189,13 @@ func main() {
 		}
 		log.Info("scoped secrets store on", "store", store)
 	}
+	// MCP per project (#383, was scripts/mcp-sync.sh): McpProject -> ContextForge; MCP_CONTEXTFORGE_URL=off disables
+	if on, err := setupMcpProjects(mgr, ns, os.Getenv); err != nil {
+		log.Error(err, "mcpproject controller")
+		os.Exit(1)
+	} else if on {
+		log.Info("mcp projects on")
+	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
 	// deploy.yml) fails on kind and GKE alike instead of passing before the crash loop

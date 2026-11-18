@@ -10,6 +10,7 @@ export interface Agent {
   maxConcurrent?: number
   scaleToZero?: boolean
   paused?: boolean
+  source?: 'api' | 'git' // #58: git = the deployment repository owns it; only pause and resume here
   securityEvents?: number // last 7 days (#70)
   budgetUsed?: number // Claude cost units in the last 24 h, counted by the credential proxy (#66, #196)
   budgetLimit?: number // units per 24 h; 0 = no limit
