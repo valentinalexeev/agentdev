@@ -133,6 +133,29 @@ func TestEnvtestMcpOperatorCannotReadClaudeShared(t *testing.T) {
 	if err := admin.Get(ctx, types.NamespacedName{Namespace: ns, Name: "agent-alice-mcp"}, &got); err != nil || len(got.Data["CF_TOKEN"]) == 0 {
 		t.Fatalf("agent-alice-mcp: %v", err)
 	}
+	// a deleted Secret is restored within one reconcile (dry-run create probe, the operator still cannot get it)
+	if err := admin.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "agent-alice-mcp"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Get(ctx, types.NamespacedName{Namespace: ns, Name: "agent-alice-mcp"}, &got); err != nil || len(got.Data["CF_TOKEN"]) == 0 {
+		t.Fatalf("agent-alice-mcp not restored: %v", err)
+	}
+	if cf.minted != 2 || len(cf.revoked) != 1 {
+		t.Fatalf("restore: minted %d revoked %v", cf.minted, cf.revoked)
+	}
+	// a present Secret: the probe sees AlreadyExists, nothing is minted
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if cf.minted != 2 {
+		t.Fatalf("present Secret re-minted: %d", cf.minted)
+	}
+	if err := admin.Get(ctx, req.NamespacedName, &p); err != nil {
+		t.Fatal(err)
+	}
 	// renew (server changed) patches the Secret in place
 	p.Status.Tokens[0].ServerID = "old"
 	if err := admin.Status().Update(ctx, &p); err != nil {
@@ -141,7 +164,7 @@ func TestEnvtestMcpOperatorCannotReadClaudeShared(t *testing.T) {
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	if cf.minted != 2 || len(cf.revoked) != 1 {
+	if cf.minted != 3 || len(cf.revoked) != 2 {
 		t.Fatalf("renew: minted %d revoked %v", cf.minted, cf.revoked)
 	}
 	if err := admin.Delete(ctx, &p); err != nil {

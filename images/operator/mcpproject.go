@@ -270,7 +270,11 @@ func (r *McpProjectReconciler) agentToken(ctx context.Context, cf ContextForge, 
 	name := mcpSecretName(agent)
 	rec := tokenRec(p, name)
 	if rec != nil && rec.ServerID == sid && r.Now().Unix() < rec.RenewAfter {
-		return nil
+		missing, err := r.secretMissing(ctx, name)
+		if err != nil || !missing {
+			return err
+		}
+		log.FromContext(ctx).Info("mcp: token Secret is missing; minting a new token", "secret", name)
 	}
 	if owner, err := r.otherOwner(ctx, p, name); err != nil {
 		return err
@@ -305,6 +309,22 @@ func (r *McpProjectReconciler) agentToken(ctx context.Context, cf ContextForge, 
 		}
 	}
 	return nil
+}
+
+// secretMissing tells if the Secret name is absent without reading it (#452): a server-side dry-run create of an
+// empty Secret. AlreadyExists means present; success means missing (nothing is stored). Needs only create.
+func (r *McpProjectReconciler) secretMissing(ctx context.Context, name string) (bool, error) {
+	probe := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: r.NS, Name: name,
+		Labels: map[string]string{"app.kubernetes.io/managed-by": "agentdev-operator"}}}
+	err := r.Create(ctx, probe, client.DryRunAll, client.FieldOwner(mcpFieldOwner))
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsAlreadyExists(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("check Secret %s: %s", name, apierrors.ReasonForError(err))
+	}
 }
 
 // dropSecrets revokes and deletes the token Secrets in status that are not in keep (all of them for keep == nil).
