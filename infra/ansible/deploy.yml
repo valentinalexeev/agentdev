@@ -218,6 +218,39 @@
         forge_proxy_auth_sha: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
       no_log: true
 
+    # #449 review: a cluster that does not serve a CRD the values select fails here with a clear message, also under
+    # --check. This read only checks; it never selects a template (#384 criterion 3). render.yml does not run it.
+    - name: Read the CRDs the instance values need (FQDNNetworkPolicy, Gateway API)
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item.name }}"
+      loop: >-
+        {{ ([{'name': 'fqdnnetworkpolicies.networking.gke.io',
+              'why': 'platform.egress.fqdn gke. Apply infra/terraform, or set platform.egress.fqdn: none'}]
+            if deploy_fqdn == 'gke' else [])
+           + ([{'name': 'gateways.gateway.networking.k8s.io',
+                'why': 'ingress.mode gateway. Set Terraform public_hosts and apply, or use ingress.mode external'}]
+              if deploy_gateway | bool else []) }}
+      loop_control: {label: "{{ item.name }}"}
+      register: deploy_crds
+      vars:
+        deploy_fqdn: >-
+          {{ (((platform | default({})).egress | default({})).fqdn
+             | default('gke' if egress_fqdn_policy | bool else 'none')) | string }}
+        deploy_gateway: >-
+          {{ ((ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined)
+             and (ingress | default({})).mode | default('gateway') == 'gateway' }}
+
+    - name: Stop when the cluster does not serve a CRD the instance values need
+      ansible.builtin.assert:
+        that: item.resources | length > 0
+        fail_msg: "The cluster does not serve the CRD {{ item.item.name }}. It is needed by {{ item.item.why }}."
+        quiet: true
+      loop: "{{ deploy_crds.results | default([]) }}"
+      loop_control: {label: "{{ item.item.name }}"}
+
     # one renderer for deploy.yml and render.yml (#384); the objects have no secret values, the Secrets are made below
     - name: Render the instance objects (tasks/render_objects.yml)
       ansible.builtin.include_tasks: tasks/render_objects.yml

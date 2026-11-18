@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Upgrade
+- **`deploy.yml` task order (#384).** No new step to run: apply `deploy.yml` as usual. The order of some tasks changed:
+  1. All reads of Secret Manager come first: platform, agent, executor, Gitea wake poll and GitHub App secrets, the
+     forge proxy credential, and the Claude proxy signing key and agent keys (made once, as before).
+  2. A new check reads the FQDNNetworkPolicy and Gateway API CRDs, when the values need them. It stops with a clear
+     message, also under `--check`.
+  3. The platform namespace is now made together with the agents namespace, before the CRDs (before: after the CRDs).
+  4. The `webhook-router` Secret is a separate task, before the router objects.
+  The objects themselves are the same. Re-run: `deploy.yml` only.
+
 ### Added
 - **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a
   directory, with no cluster or Secret Manager access and no secret values (`SECRETS.md` lists the Secret names).

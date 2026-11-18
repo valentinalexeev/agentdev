@@ -55,7 +55,7 @@ output "platform" {
     ingress = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
     # Service default/kubernetes: the first address of the services range, and the control plane private endpoint
     kube_api_ips = compact([
-      cidrhost(google_compute_subnetwork.nodes.secondary_ip_range[1].ip_cidr_range, 1),
+      cidrhost(one([for r in google_compute_subnetwork.nodes.secondary_ip_range : r.ip_cidr_range if r.range_name == "services"]), 1),
       google_container_cluster.this.private_cluster_config[0].private_endpoint,
     ])
   }

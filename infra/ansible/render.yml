@@ -14,8 +14,15 @@
   gather_facts: false
   vars:
     repo_root: "{{ playbook_dir }}/../.."
-    render_dir: "{{ playbook_dir }}/rendered"
   tasks:
+    - name: The render_dir is set (an absolute path outside the agentdev checkout)
+      ansible.builtin.assert:
+        that:
+          - render_dir is defined and render_dir is string and render_dir is match('^/')
+          - not (render_dir | realpath).startswith((repo_root | realpath) ~ '/')
+        fail_msg: "Set -e render_dir=<absolute path outside the agentdev checkout>, for example $PWD/rendered in the deployment repository"
+        quiet: true
+
     - name: Value checks of the instance (same as deploy.yml)
       ansible.builtin.include_tasks: tasks/checks.yml
 
