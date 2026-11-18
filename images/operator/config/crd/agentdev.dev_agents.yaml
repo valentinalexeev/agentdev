@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -112,6 +115,9 @@ spec:
             description: AgentStatus is observed state, written by the operator only.
             properties:
               conditions:
+                description: |-
+                  Reconciled, SecurityPaused and Ready. Ready is True for running, starting, stopped and paused (the router can
+                  wake the agent) and False for invalid and blocked (#386); Flux and Argo CD health checks read it.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -167,6 +173,11 @@ spec:
                   - type
                   type: object
                 type: array
+              image:
+                description: |-
+                  Worker image of the StatefulSet: the version the agent runs at its next wake. A stopped agent keeps running
+                  the old pod image until then.
+                type: string
               observedGeneration:
                 description: .metadata.generation last reconciled.
                 format: int64

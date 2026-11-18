@@ -87,6 +87,9 @@ spec:
         # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
         - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
         - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
+        # agents from Git (#58): api (default) or git; with git, Agents without agentdev/created-by are read-only
+        # here except spec.paused (pause and resume)
+        - {name: AGENTS_SOURCE, value: "${AGENTS_SOURCE}"}
         # console chat sessions (#346, images/api/chat.go): Jobs in ${AGENTS_NS} that run the worker image's session
         # server. CHAT_TOKEN_KEY (Secret agentdev-api-chat) derives the per-session token for the session servers;
         # CHAT_ISSUE_TOKEN (same Secret, Gitea only) creates issues from drafts as the person (Sudo).
@@ -120,8 +123,9 @@ spec:
         - {name: GITHUB_APP_PRIVATE_KEY_FILE, value: /var/run/agentdev/github-app/private-key.pem}
         - name: GITHUB_API_TOKEN
           valueFrom: {secretKeyRef: {name: agentdev-api-github, key: GITHUB_API_TOKEN, optional: true}}
-        # security_events table (#70): DATABASE_URL from the Secret 10-api.sh creates (login agentdev_api; schema
-        # and retention are set by 10-api.sh as agentdev_owner, the API only inserts, reads and calls the prune function)
+        # security_events table (#70): DATABASE_URL from the Secret agentdev-api-db (login agentdev_api). The Job
+        # agentdev-db-init sets the schema and retention as agentdev_owner (#382); the API only inserts, reads and calls
+        # the prune functions, and serves only after the Job wrote the schema version of this image (waitSchema)
         - name: DATABASE_URL
           valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
         # optional SIEM outputs, instance config only: webhook (#70), syslog over TLS and OTLP (#71); keys in outputs.go
@@ -130,6 +134,8 @@ spec:
         # the App's private key is a file, never an environment variable (same as the forge sidecar, #128)
         volumeMounts: [{name: github-app, mountPath: /var/run/agentdev/github-app, readOnly: true}]
         ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
+        # the API listens only after the db-init Job applied its schema (#382): allow 15 minutes before liveness counts
+        startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5, failureThreshold: 180}
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
         resources:

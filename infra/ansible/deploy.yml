@@ -337,7 +337,7 @@
         definition: "{{ agentdev_objects.egress_web }}"
       when: platform_fqdn == 'none'
 
-    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #202, #383)"
       kubernetes.core.k8s:
         <<: *k8s
         definition: "{{ agentdev_objects.crds }}"
@@ -346,7 +346,7 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
 
-    - name: Postgres + ContextForge, then mcp-sync per project (#51)
+    - name: "Postgres + ContextForge, then one McpProject per project (#51, #383)"
       ansible.builtin.include_role: {name: platform}
 
     # authentik (#114): same chart, values and blueprints as ./run.sh 09; before the API, which uses it as the issuer
@@ -364,6 +364,12 @@
     - name: Management API (database roles, Secrets, Deployment)
       ansible.builtin.include_role: {name: api}
       when: api_effective_issuer | length > 0
+
+    # External Gitea (#442), opt-in: collaborators, labels, router webhook and branch protection through the Gitea API
+    # (Job forge-init-<hash>, admin token from Secret Manager through ESO). Default: secrets-only, nothing runs here.
+    - name: Optional setup of the external Gitea (forge-init Job)
+      ansible.builtin.include_tasks: tasks/forge_init.yml
+      when: forge_kind == 'gitea' and (forge_init.enabled | default(false) | bool)
 
     # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
     # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host
@@ -517,8 +523,9 @@
       kubernetes.core.k8s:
         <<: *k8s
         definition: "{{ agentdev_objects.agents }}"
-      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below
-      when: not ansible_check_mode
+      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below.
+      # agents_source git (#58): Flux applies the Agent objects from the deployment repository, not the playbook
+      when: not ansible_check_mode and (agents_source | default('api')) == 'api'
 
     - name: Per-agent Claude secrets (only agents that have one)
       kubernetes.core.k8s:

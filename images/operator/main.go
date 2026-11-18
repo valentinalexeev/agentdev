@@ -46,6 +46,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
 		os.Exit(runObsMCP(os.Stdout))
 	}
+	// optional setup of an external Gitea (#442): same image, Job forge-init-<hash> (infra/ansible/tasks/forge_init.yml)
+	if len(os.Args) > 1 && os.Args[1] == "forge-init" {
+		os.Exit(runForgeInit(os.Stdout))
+	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -184,6 +188,13 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("scoped secrets store on", "store", store)
+	}
+	// MCP per project (#383, was scripts/mcp-sync.sh): McpProject -> ContextForge; MCP_CONTEXTFORGE_URL=off disables
+	if on, err := setupMcpProjects(mgr, ns, os.Getenv); err != nil {
+		log.Error(err, "mcpproject controller")
+		os.Exit(1)
+	} else if on {
+		log.Info("mcp projects on")
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,

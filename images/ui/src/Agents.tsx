@@ -72,10 +72,14 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
                 onClick={() => act(`Resume ${a.name}`, () => patchAgent(token, a.name, { paused: false }))}><Icon name="play" />Resume</button>
               : <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Pause agent ${a.name}`}
                 onClick={() => act(`Pause ${a.name}`, () => patchAgent(token, a.name, { paused: true }))}><Icon name="pause" />Pause</button>}
-            <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
-              onClick={() => { setNotice(''); setEditing(a) }}>Edit</button>
-            <button className="agd-btn agd-btn-sm agd-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
-              onClick={() => { setNotice(''); setDeleting(a.name) }}>Delete</button>
+            {a.source === 'git'
+              ? <span className="agd-muted" title="Change it in the deployment repository">from Git</span>
+              : <>
+                <button className="agd-btn agd-btn-sm" disabled={busy} aria-label={`Edit settings of agent ${a.name}`}
+                  onClick={() => { setNotice(''); setEditing(a) }}>Edit</button>
+                <button className="agd-btn agd-btn-sm agd-btn-quiet" disabled={busy} aria-label={`Delete agent ${a.name}`}
+                  onClick={() => { setNotice(''); setDeleting(a.name) }}>Delete</button>
+              </>}
           </div>
         )}
       </td>

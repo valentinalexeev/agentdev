@@ -12,6 +12,11 @@
       - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
       - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
       - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
+      # external Gitea (#442): HTTPS only (tokens and the webhook secret travel to it)
+      - forge_kind != 'gitea' or forge_url is match('^https://[a-z0-9.-]+(:[0-9]{1,5})?(/.*)?$')
+      - not (forge_init.enabled | default(false) | bool) or forge_kind == 'gitea'
+      # #58: api (the playbook and the API write Agent objects) or git (Flux applies them from the deployment repo)
+      - (agents_source | default('api')) in ['api', 'git']
     fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
     quiet: true
 

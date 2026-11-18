@@ -34,7 +34,9 @@
 
 - name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
   ansible.builtin.set_fact:
-    egress_fqdn_matches: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2') | from_yaml }}"
+    egress_fqdn_matches: >-
+      {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2',
+         template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts) | unique | list}) | from_yaml }}
     exec_egress_fqdn_matches: >-
       {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
          'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
@@ -107,7 +109,8 @@
   vars:
     crd_paths: "{{ crd_files | map('regex_replace', '^', repo_root ~ '/images/operator/config/crd/') | list }}"
     crd_files: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml,
+                agentdev.dev_mcpprojects.yaml]
     router_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
     vars_router:
       src: "{{ repo_root }}/manifests/router.yaml.tmpl"
@@ -131,7 +134,7 @@
         BOTBOARD_NS: botboard
         # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
         EGRESS_HOSTS: "{{ agent_egress_hosts }}"
-        FORGE_EGRESS_HOSTS: "{{ forge_egress_hosts | join(' ') }}"
+        FORGE_EGRESS_HOSTS: "{{ (forge_egress_hosts + forge_gitea_egress_hosts) | unique | join(' ') }}"
         # deploy.yml: a hash of the forge sidecar credential, so a new credential restarts the proxy. Render: empty.
         FORGE_PROXY_AUTH_SHA: "{{ forge_proxy_auth_sha | default('') }}"
         EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
@@ -191,6 +194,9 @@
         # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
         SECRETS_STORE: ""
         SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
+        # MCP per project (#383): McpProject controller, admin login from Secret contextforge
+        MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
+        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
         CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
       replace: []
     vars_proxy:
