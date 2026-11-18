@@ -1,0 +1,26 @@
+---
+# Platform secrets through the External Secrets Operator (#381). GKE (deploy.yml, secrets_mode: external): ESO syncs
+# every platform Secret from GCP Secret Manager, Reloader restarts the consumers when a Secret changes. The playbook
+# reads no secret value and calls no `gcloud secrets` command in this mode.
+external_secrets_eso_chart_version: 2.14.0          # same as secrets_store_eso_chart_version (kind)
+external_secrets_eso_ns: external-secrets
+external_secrets_eso_sa: external-secrets
+# Stakater Reloader v2 (#381 owner decision): the latest v2 only, pinned. Chart 3.0.0-beta.5 = app v2.0.0-beta.2.
+external_secrets_reloader_chart_version: 3.0.0-beta.5
+external_secrets_reloader_ns: reloader
+# external_secrets_store and external_secrets_refresh: group_vars/all.yml (the roles platform, api, ... read them too)
+# Google service accounts from `terraform output secrets_readers`; the defaults follow the Terraform names
+external_secrets_cfg: "{{ external_secrets | default({}) }}"
+external_secrets_gsa:
+  platform: "{{ (external_secrets_cfg.gsa | default({})).platform | default('agentdev-sm-platform@' ~ gcp_project ~ '.iam.gserviceaccount.com') }}"
+  agents: "{{ (external_secrets_cfg.gsa | default({})).agents | default('agentdev-sm-agents@' ~ gcp_project ~ '.iam.gserviceaccount.com') }}"
+  executors: "{{ (external_secrets_cfg.gsa | default({})).executors | default('agentdev-sm-executors@' ~ gcp_project ~ '.iam.gserviceaccount.com') }}"
+  forwarder: "{{ (external_secrets_cfg.gsa | default({})).forwarder | default('agentdev-sm-forwarder@' ~ gcp_project ~ '.iam.gserviceaccount.com') }}"
+# namespaces with a store, and the Terraform reader of each (the forwarder only with ingress.forwarder.deploy)
+external_secrets_fwd_ns: >-
+  {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
+     if ((ingress | default({})).forwarder | default({})).deploy is defined else '' }}
+external_secrets_namespaces: >-
+  {{ [{'ns': platform_ns, 'reader': 'platform'}, {'ns': agents_ns, 'reader': 'agents'}]
+     + ([{'ns': exec_ns, 'reader': 'executors'}] if executors | length > 0 else [])
+     + ([{'ns': external_secrets_fwd_ns, 'reader': 'forwarder'}] if external_secrets_fwd_ns | length > 0 else []) }}

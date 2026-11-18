@@ -29,7 +29,7 @@ locals {
 
   # who reads what (exact secret ids; a trailing * is a prefix). Keep in step with the ExternalSecrets of the Ansible
   # role external_secrets (infra/ansible/roles/external_secrets/defaults/main.yml).
-  secret_readers = {
+  secret_readers = merge({
     platform = {
       namespace = var.platform_namespace
       ids = concat(["platform-*", "agentdev-api-forge-token", "agentdev-api-chat-token-key", "agentdev-chat-issue-token",
@@ -45,7 +45,13 @@ locals {
       namespace = var.executors_namespace
       ids       = ["exec-*"]
     }
-  }
+    }, var.forwarder_namespace == "" ? {} : {
+    # deployed forwarder (#316): only its pre-auth key, in its own namespace
+    forwarder = {
+      namespace = var.forwarder_namespace
+      ids       = [var.forwarder_authkey_secret]
+    }
+  })
   # IAM condition per reader: the secret itself and its versions
   secret_conditions = {
     for r, v in local.secret_readers : r => join(" || ", [

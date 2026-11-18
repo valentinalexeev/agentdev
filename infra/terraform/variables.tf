@@ -259,3 +259,15 @@ variable "executors_namespace" {
   type    = string
   default = "agentdev-executors"
 }
+
+variable "forwarder_namespace" {
+  description = "Namespace of the deployed forwarder (instance.yml ingress.forwarder.namespace with deploy, #316). Empty: no forwarder secrets reader."
+  type        = string
+  default     = ""
+}
+
+variable "forwarder_authkey_secret" {
+  description = "Secret Manager id of the forwarder pre-auth key (ingress.forwarder.deploy.authkey_secret)."
+  type        = string
+  default     = "funnel-sidecar-authkey"
+}
