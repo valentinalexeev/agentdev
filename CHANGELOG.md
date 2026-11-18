@@ -33,6 +33,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   "Health checks for Flux and Argo CD".
 
 ### Changed
+- **McpProject controller no longer reads Secrets in the agents namespace (#452).** The operator Role there has
+  `create`, `patch` and `delete` on Secrets, no `get`, `list` or `watch`, so the operator cannot read `claude-shared`
+  or forge tokens. It writes `agent-<name>-mcp` by server-side apply and keeps the token id, virtual server and renew
+  time in the new `McpProject` status field `tokens`. The first reconcile after the upgrade mints new tokens once;
+  tokens minted before it are not revoked and expire on their own.
 - **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
   role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
   retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and

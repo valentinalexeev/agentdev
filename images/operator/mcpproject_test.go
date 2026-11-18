@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -225,13 +226,58 @@ func TestMcpRenewsNearExpiryAndRevokesOld(t *testing.T) {
 	}
 }
 
-func TestMcpAdoptsScriptSecretOnlyOfSameProject(t *testing.T) {
-	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "agent-alice-mcp", Namespace: ns,
-		Labels: map[string]string{mcpLabelProject: "api"}}, Data: map[string][]byte{"CF_TOKEN": []byte("x")}}
-	r, c, _ := mcpFixture(t, mcpProject(docsServer, "alice"), other)
+func TestMcpNeverTakesAnotherProjectsSecret(t *testing.T) {
+	other := &v1.McpProject{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: ns},
+		Status: v1.McpProjectStatus{TokenSecrets: []string{"agent-alice-mcp"}}}
+	r, c, cf := mcpFixture(t, mcpProject(docsServer, "alice"), other)
 	p := reconcileMcp(t, r, c)
-	if cond := ready(p); cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, `project "api"`) {
-		t.Fatalf("Ready: %+v", cond)
+	if cond := ready(p); cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, `project "api"`) || cf.minted != 0 {
+		t.Fatalf("Ready: %+v, minted %d", cond, cf.minted)
+	}
+}
+
+// #452: the controller never gets, lists or watches a Secret in the agents namespace (so not claude-shared either).
+// Every Secret read there fails; create, renew, agent removal and delete still work.
+func TestMcpNeverReadsAgentSecrets(t *testing.T) {
+	r, c, cf := mcpFixture(t, mcpProject(docsServer, "alice", "bob"))
+	reads := 0
+	guard := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+			if _, ok := o.(*corev1.Secret); ok && k.Namespace == ns {
+				reads++
+				return apierrors.NewForbidden(corev1.Resource("secrets"), k.Name, errors.New("no get"))
+			}
+			return cl.Get(ctx, k, o, opts...)
+		},
+		List: func(ctx context.Context, cl client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := l.(*corev1.SecretList); ok {
+				reads++
+				return apierrors.NewForbidden(corev1.Resource("secrets"), "", errors.New("no list"))
+			}
+			return cl.List(ctx, l, opts...)
+		},
+	}
+	gc := interceptor.NewClient(c.(client.WithWatch), guard)
+	r.Client, r.Direct = gc, gc
+	p := reconcileMcp(t, r, c)
+	if cond := ready(p); cond.Reason != "Synced" || len(p.Status.Tokens) != 2 {
+		t.Fatalf("Ready %+v tokens %+v", cond, p.Status.Tokens)
+	}
+	r.Now = func() time.Time { return time.Unix(1_800_000_000, 0).Add((mcpRenewDays + 1) * 24 * time.Hour) }
+	p = reconcileMcp(t, r, c)
+	p.Spec.Agents = []string{"alice"}
+	if err := c.Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	reconcileMcp(t, r, c)
+	if err := c.Delete(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p := reconcileMcp(t, r, c); p != nil {
+		t.Fatalf("finalizer not removed")
+	}
+	if reads != 0 || cf.minted != 4 || len(cf.revoked) != 4 || len(cf.tokens) != 0 {
+		t.Fatalf("secret reads %d, minted %d, revoked %v, live %v", reads, cf.minted, cf.revoked, cf.tokens)
 	}
 }
 

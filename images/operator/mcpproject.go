@@ -29,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,10 +41,11 @@ import (
 // +kubebuilder:rbac:groups=agentdev.dev,resources=mcpprojects,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=agentdev.dev,resources=mcpprojects/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentdev.dev,resources=mcpprojects/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch;delete
 
 const (
 	mcpFinalizer     = "agentdev.dev/mcp-tokens"
+	mcpFieldOwner    = "agentdev-operator-mcp"
 	mcpLabelProject  = "agentdev/mcp-project" // same label and annotations as scripts/mcp-sync.sh: its Secrets are adopted
 	mcpAnnServer     = "agentdev/mcp-server"
 	mcpAnnTokenID    = "agentdev/mcp-token-id"
@@ -236,46 +238,68 @@ func (r *McpProjectReconciler) sync(ctx context.Context, cf ContextForge, p *v1.
 	return "", "", nil
 }
 
+// tokenRec is the status record of one token Secret, or nil.
+func tokenRec(p *v1.McpProject, name string) *v1.McpToken {
+	for i := range p.Status.Tokens {
+		if p.Status.Tokens[i].Secret == name {
+			return &p.Status.Tokens[i]
+		}
+	}
+	return nil
+}
+
+// otherOwner is the name of another McpProject in the namespace that records the Secret name, or "".
+func (r *McpProjectReconciler) otherOwner(ctx context.Context, p *v1.McpProject, name string) (string, error) {
+	var all v1.McpProjectList
+	if err := r.List(ctx, &all, client.InNamespace(r.NS)); err != nil {
+		return "", err
+	}
+	for _, o := range all.Items {
+		if o.Name != p.Name && (slices.Contains(o.Status.TokenSecrets, name) || tokenRec(&o, name) != nil) {
+			return o.Name, nil
+		}
+	}
+	return "", nil
+}
+
 // agentToken keeps agent-<agent>-mcp: a token scoped to sid, re-minted 30 days before it expires or when the
-// virtual server changed. A Secret of that name that belongs to another project is never taken over.
+// virtual server changed. The operator never reads the Secret (#452): what it needs (token id, server, renew time)
+// is in the McpProject status, and the Secret is written by server-side apply (no get). A Secret name another
+// McpProject records is never taken over.
 func (r *McpProjectReconciler) agentToken(ctx context.Context, cf ContextForge, p *v1.McpProject, agent, sid string) error {
 	name := mcpSecretName(agent)
-	var s corev1.Secret
-	err := r.Direct.Get(ctx, client.ObjectKey{Namespace: r.NS, Name: name}, &s)
-	exists := err == nil
-	if err != nil && !apierrors.IsNotFound(err) {
-		return err
+	rec := tokenRec(p, name)
+	if rec != nil && rec.ServerID == sid && r.Now().Unix() < rec.RenewAfter {
+		return nil
 	}
-	if exists {
-		if owner := s.Labels[mcpLabelProject]; owner != p.Name {
-			return fmt.Errorf("Secret %s belongs to project %q (one project per agent)", name, owner)
-		}
-		renew, _ := strconv.ParseInt(s.Annotations[mcpAnnRenewAfter], 10, 64)
-		if s.Annotations[mcpAnnServer] == sid && r.Now().Unix() < renew && len(s.Data["CF_TOKEN"]) > 0 {
-			return nil
-		}
+	if owner, err := r.otherOwner(ctx, p, name); err != nil {
+		return err
+	} else if owner != "" {
+		return fmt.Errorf("Secret %s belongs to project %q (one project per agent)", name, owner)
 	}
 	tok, tid, err := cf.MintToken(ctx, fmt.Sprintf("agent-%s-%s-%s", agent, p.Name, r.Now().UTC().Format("20060102150405")), sid)
 	if err != nil {
 		return err
 	}
-	old := s.Annotations[mcpAnnTokenID]
-	s.Namespace, s.Name = r.NS, name
-	s.Labels = map[string]string{mcpLabelProject: p.Name, "app.kubernetes.io/managed-by": "agentdev-operator"}
-	s.Annotations = map[string]string{mcpAnnServer: sid, mcpAnnTokenID: tid,
-		mcpAnnRenewAfter: strconv.FormatInt(r.Now().Add(mcpRenewDays*24*time.Hour).Unix(), 10)}
-	s.Type = corev1.SecretTypeOpaque
-	s.Data = map[string][]byte{"CF_URL": []byte(r.CFURL + "/servers/" + sid + "/mcp"), "CF_TOKEN": []byte(tok)}
-	if exists {
-		err = r.Update(ctx, &s)
-	} else {
-		err = r.Create(ctx, &s)
-	}
-	if err != nil {
+	renew := r.Now().Add(mcpRenewDays * 24 * time.Hour).Unix()
+	ac := corev1ac.Secret(name, r.NS).
+		WithLabels(map[string]string{mcpLabelProject: p.Name, "app.kubernetes.io/managed-by": "agentdev-operator"}).
+		WithAnnotations(map[string]string{mcpAnnServer: sid, mcpAnnTokenID: tid, mcpAnnRenewAfter: strconv.FormatInt(renew, 10)}).
+		WithType(corev1.SecretTypeOpaque).
+		WithData(map[string][]byte{"CF_URL": []byte(r.CFURL + "/servers/" + sid + "/mcp"), "CF_TOKEN": []byte(tok)})
+	if err := r.Apply(ctx, ac, client.FieldOwner(mcpFieldOwner), client.ForceOwnership); err != nil {
 		_ = cf.RevokeToken(ctx, tid) // never leave a live token that no Secret records
 		return fmt.Errorf("store Secret %s: %s", name, apierrors.ReasonForError(err))
 	}
-	if exists && old != "" && old != tid {
+	old := ""
+	if rec == nil {
+		p.Status.Tokens = append(p.Status.Tokens, v1.McpToken{Secret: name})
+		rec = &p.Status.Tokens[len(p.Status.Tokens)-1]
+	} else {
+		old = rec.TokenID
+	}
+	rec.TokenID, rec.ServerID, rec.RenewAfter = tid, sid, renew
+	if old != "" && old != tid {
 		if err := cf.RevokeToken(ctx, old); err != nil {
 			log.FromContext(ctx).Info("mcp: could not revoke the replaced token", "secret", name, "tokenID", old)
 		}
@@ -284,35 +308,35 @@ func (r *McpProjectReconciler) agentToken(ctx context.Context, cf ContextForge, 
 }
 
 // dropSecrets revokes and deletes the token Secrets in status that are not in keep (all of them for keep == nil).
-// cf may be nil (ContextForge gone): then only the Secrets are deleted.
+// cf may be nil (ContextForge gone): then only the Secrets are deleted. The Secret is deleted by name, never read.
 func (r *McpProjectReconciler) dropSecrets(ctx context.Context, cf ContextForge, p *v1.McpProject, keep []string) error {
-	left := []string{}
+	left, recs := []string{}, []v1.McpToken{}
 	for _, name := range p.Status.TokenSecrets {
 		if slices.Contains(keep, name) {
 			left = append(left, name)
 			continue
 		}
-		var s corev1.Secret
-		err := r.Direct.Get(ctx, client.ObjectKey{Namespace: r.NS, Name: name}, &s)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
+		if owner, err := r.otherOwner(ctx, p, name); err != nil {
 			return err
-		}
-		if s.Labels[mcpLabelProject] != p.Name {
+		} else if owner != "" {
 			continue // another project's now
 		}
-		if id := s.Annotations[mcpAnnTokenID]; id != "" && cf != nil {
-			if err := cf.RevokeToken(ctx, id); err != nil {
-				log.FromContext(ctx).Info("mcp: could not revoke token", "secret", name, "tokenID", id)
+		if rec := tokenRec(p, name); rec != nil && rec.TokenID != "" && cf != nil {
+			if err := cf.RevokeToken(ctx, rec.TokenID); err != nil {
+				log.FromContext(ctx).Info("mcp: could not revoke token", "secret", name, "tokenID", rec.TokenID)
 			}
 		}
-		if err := r.Delete(ctx, &s); client.IgnoreNotFound(err) != nil {
+		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: r.NS, Name: name}}
+		if err := r.Delete(ctx, s); client.IgnoreNotFound(err) != nil {
 			return err
 		}
 	}
-	p.Status.TokenSecrets = left
+	for _, t := range p.Status.Tokens {
+		if slices.Contains(left, t.Secret) {
+			recs = append(recs, t)
+		}
+	}
+	p.Status.TokenSecrets, p.Status.Tokens = left, recs
 	return nil
 }
 

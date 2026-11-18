@@ -38,13 +38,14 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
-# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects, and one token Secret agent-<name>-mcp per agent. Secrets
-# are read by name only (no list or watch); resourceNames cannot express agent-*-mcp, so get/update/delete cover the
-# namespace (docs/security.md R52)
+# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects, and one token Secret agent-<name>-mcp per agent. The
+# operator never reads a Secret here (#452): it writes them by server-side apply (create/patch) and deletes them by name,
+# and keeps token id, server and renew time in the McpProject status. No get, list or watch, so it cannot read
+# claude-shared or forge tokens (docs/security.md R52)
 - {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [mcpprojects/status], verbs: [get, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [mcpprojects/finalizers], verbs: [update]}
-- {apiGroups: [""], resources: [secrets], verbs: [get, create, update, delete]}
+- {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
