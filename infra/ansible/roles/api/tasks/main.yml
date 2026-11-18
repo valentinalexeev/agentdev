@@ -1,7 +1,7 @@
 ---
-# agentdev API in {{ platform_ns }} (#46, #104). Runs after the platform role (Postgres). Same steps as 10-api.sh:
-# database roles and grants, the Secrets agentdev-api-db, agentdev-api-forge and agentdev-api-siem, then the
-# Deployment from manifests/api.yaml.tmpl. Every task that holds a secret value has no_log.
+# agentdev API in {{ platform_ns }} (#46, #104). Runs after the platform role (Postgres). The Secrets agentdev-api-db,
+# agentdev-api-forge and agentdev-api-siem, the Job agentdev-db-init (database roles, schema and grants, #382), then the
+# Deployment from manifests/api.yaml.tmpl, which waits for the schema version of the Job. Every task that holds a secret value has no_log.
 - name: Check the API settings
   ansible.builtin.assert:
     that:
@@ -28,9 +28,6 @@
 - name: Read the API secrets
   ansible.builtin.include_tasks: "secrets_{{ api_secret_source }}.yml"
 
-- name: Database roles, schema and grants
-  ansible.builtin.include_tasks: database.yml
-
 # kind only: Gitea in the cluster; on GKE the forge token is a manual step (docs/admin.md)
 - name: Forge account agentdev-api on Gitea (kind)
   ansible.builtin.include_tasks: forge_gitea.yml
@@ -38,6 +35,10 @@
 
 - name: Secrets agentdev-api-db, agentdev-api-forge, agentdev-api-siem and the chat Secrets
   ansible.builtin.include_tasks: secrets_k8s.yml
+
+# after the Secret agentdev-api-db: the Job reads the API password from it (#382)
+- name: Database roles, schema and grants (Job agentdev-db-init)
+  ansible.builtin.include_tasks: database.yml
 
 # Web Push (#347): VAPID key pair, Secret agentdev-api-vapid and the NotificationChannel object
 - name: Notification channels

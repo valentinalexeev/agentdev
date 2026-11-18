@@ -894,8 +894,9 @@ authentik, set `authentik.enabled: false`.
 
 `akadmin` is the break-glass admin. authentik makes it at the first start with the password from Secret Manager
 `platform-authentik-admin`. A password that you change in the UI stays: authentik uses the first password only once.
-The playbook adds `akadmin` to `agentdev-admins` with an add-only call. It never removes a member, and it fails when
-authentik has no active superuser.
+The Job `authentik-breakglass-<hash>` (role `authentik`, #382, `manifests/db-init/breakglass.py`) adds `akadmin` to
+`agentdev-admins` with an add-only call. It never removes a member, and it fails when authentik has no active
+superuser.
 
 WARNING: Do not delete `akadmin`, do not deactivate it, and do not remove its password login. Keep its password and
 the MFA recovery codes in the password manager of the owner. If the Workspace source fails, this is the only login.

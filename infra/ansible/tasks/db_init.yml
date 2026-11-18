@@ -1,0 +1,78 @@
+---
+# In-cluster bootstrap Job (#382), shared by the roles api (database agentdev), authentik (database authentik and the
+# break-glass admin). No kubectl exec: the role applies a ConfigMap and a Job, both named <db_init_name>-<hash>, where
+# the hash covers the files, the image and the extra inputs. A changed file gives a new Job (a Job's pod template is
+# immutable, so a GitOps engine would otherwise have to replace it); the same files give the same objects, so a second
+# apply changes nothing. Finished Jobs of older hashes are removed. Secret values come only from Kubernetes Secrets by
+# name (secretKeyRef); they never reach this task, argv or a log.
+# Inputs:
+#   db_init_name     base name, for example agentdev-db-init
+#   db_init_files    dict file name -> content (mounted at /db-init)
+#   db_init_image    container image
+#   db_init_command  command of the container
+#   db_init_env      list of container env entries (secretKeyRef only for secret values)
+#   db_init_env_from list of envFrom entries (a whole Secret by name)
+#   db_init_extra    string folded into the hash (for example the schema version)
+#   db_init_user     uid/gid of the container (default 999, the postgres image)
+#   db_init_rerun    true: delete the Job of the current hash first, so it runs again (a rotated password)
+#   db_init_wait     true: wait until the Job completed and fail with its log when it failed
+- name: "Render of {{ db_init_name }}"
+  ansible.builtin.include_tasks: db_init_render.yml
+
+- name: "ConfigMap with the scripts of {{ db_init_name }}"
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ db_init_cm }}"
+
+- name: "Run again (a Secret changed) of {{ db_init_name }}"
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: "{{ db_init_full }}"
+    namespace: "{{ platform_ns }}"
+    delete_options: {propagationPolicy: Background}
+    wait: true
+  when: db_init_rerun | default(false) | bool
+
+- name: "Job of {{ db_init_name }}"
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ db_init_job }}"
+
+- name: "Wait for the Job of {{ db_init_name }}"
+  when: db_init_wait | default(true) | bool and not ansible_check_mode
+  block:
+    - name: "Wait until complete of {{ db_init_name }}"
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ platform_ns }} wait --for=condition=complete
+        job/{{ db_init_full }} --timeout={{ db_init_timeout | default('600s') }}
+      changed_when: false
+  rescue:
+    - name: "Log of the failed Job (no secret values: they are only in env) of {{ db_init_name }}"
+      ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} logs job/{{ db_init_full }} --tail=40
+      register: db_init_log
+      changed_when: false
+      failed_when: false
+
+    - name: "Stop of {{ db_init_name }}"
+      ansible.builtin.fail:
+        msg: "Job {{ db_init_full }} did not complete: {{ db_init_log.stdout | default('') }}"
+
+- name: "Old Jobs and ConfigMaps (other hashes) of {{ db_init_name }}"
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", delete, "{{ item }}",
+           -l, "agentdev/db-init={{ db_init_name }}", --field-selector, "metadata.name!={{ db_init_full }}",
+           --ignore-not-found, --cascade=background]
+  loop: [job, configmap]
+  register: db_init_gc
+  changed_when: "'deleted' in db_init_gc.stdout"
+  when: not ansible_check_mode and (db_init_wait | default(true) | bool)
+
+- name: "Result of {{ db_init_name }}"
+  ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} logs job/{{ db_init_full }} --tail=5
+  register: db_init_result
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode and (db_init_wait | default(true) | bool)

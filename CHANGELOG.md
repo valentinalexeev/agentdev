@@ -6,6 +6,21 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Changed
+- **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
+  role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
+  retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and
+  database `authentik`) and `authentik-breakglass-<hash>` (`akadmin` into `agentdev-admins`, add only; replaces
+  `breakglass.yml`). The hash covers the SQL, so a changed schema gives a new Job; the same files change nothing. The
+  Jobs read the Postgres passwords from the Secrets `platform-db`, `agentdev-api-db` and `authentik` by name. The
+  API waits until the database holds the schema version of its own `schema.sql` and `grants.sql` before it serves
+  (`startupProbe`, up to 15 minutes); `DATABASE_MIGRATE=true` keeps the old self-migrating mode for tests.
+
+### Upgrade
+- Nothing to do by hand: the next playbook run applies the Jobs, the API waits for them. Jobs of an older hash are
+  removed. A new API image together with an old database (a playbook run that stopped before the role `api`) does not
+  serve until the role `api` ran: run the playbook to the end. The variables `api_db_pod` and `authentik_db_pod` are
+  gone.
 ### Added
 - **Agents from Git (#58).** New instance setting `agents_source: api|git` (default `api`; `AGENTS_SOURCE` on kind).
   With `git`, Flux applies the `Agent` objects from the deployment repository; the playbook no longer applies them,
