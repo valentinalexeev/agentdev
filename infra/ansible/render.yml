@@ -1,0 +1,98 @@
+---
+# Render mode (#384): write the manifests of one instance to a directory, for a GitOps engine (Argo CD, Flux).
+#
+#   ansible-playbook render.yml -e @instance.yml -e render_dir=$PWD/rendered
+#
+# No cluster access, no gcloud and no secret values. The value checks of deploy.yml run first (tasks/checks.yml), so
+# the CI of a deployment repository finds bad values before a merge. Cluster facts that deploy.yml read before are
+# instance values (`platform`, from `terraform output platform`). Output: one file per group, numbered in apply order
+# (CRDs and namespaces first, then the objects that use them). No hooks and no install-time lookups. The Secrets the
+# objects use are listed in SECRETS.md of the output; they come from deploy.yml or from the external secrets (#381).
+# Not rendered yet: the roles platform, authentik, authentik_sso and api (Helm releases and generated credentials, #447).
+- name: Render agentdev manifests (no cluster access)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: The render_dir is set (an absolute path outside the agentdev checkout)
+      ansible.builtin.assert:
+        that:
+          - render_dir is defined and render_dir is string and render_dir is match('^/')
+          - not (render_dir | realpath).startswith((repo_root | realpath) ~ '/')
+        fail_msg: "Set -e render_dir=<absolute path outside the agentdev checkout>, for example $PWD/rendered in the deployment repository"
+        quiet: true
+
+    - name: Value checks of the instance (same as deploy.yml)
+      ansible.builtin.include_tasks: tasks/checks.yml
+
+    - name: Render the objects (tasks/render_objects.yml, the same as deploy.yml)
+      ansible.builtin.include_tasks: tasks/render_objects.yml
+      vars:
+        # render mode cannot read Secret Manager: an agent uses its own Claude Secret when agents[].own_claude is true
+        agent_own_claude: "{{ dict(agents | map(attribute='name') | zip(agents | map(attribute='own_claude', default=false))) }}"
+
+    - name: Ingress objects (role ingress, render only)
+      ansible.builtin.include_role:
+        name: ingress
+        tasks_from: render.yml
+      when: (ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined
+
+    - name: The output directory is empty or absent (old files would stay in the GitOps source)
+      ansible.builtin.find:
+        paths: "{{ render_dir }}"
+        file_type: any
+        hidden: true
+      register: render_old
+
+    - name: Refuse an output directory with files in it
+      ansible.builtin.assert:
+        that: render_old.matched | default(0) == 0
+        fail_msg: "{{ render_dir }} is not empty: remove it, or set render_dir to a new directory"
+        quiet: true
+
+    - name: Make the output directory
+      ansible.builtin.file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write one file per group, in apply order
+      ansible.builtin.copy:
+        dest: "{{ render_dir }}/{{ '%02d' | format(idx) }}-{{ item.key | replace('_', '-') }}.yaml"
+        content: "{{ item.value | map('to_nice_yaml', indent=2, sort_keys=false) | join('---\n') }}"
+        mode: "0644"
+      loop: "{{ ((agentdev_objects | dict2items) + (ingress_objects | default({}) | dict2items)) | selectattr('value') | list }}"
+      loop_control: {index_var: idx, label: "{{ item.key }}"}
+
+    - name: List the Secrets the objects need (names only)
+      ansible.builtin.copy:
+        dest: "{{ render_dir }}/SECRETS.md"
+        mode: "0644"
+        content: |
+          # Secrets of this instance (not in this directory)
+
+          The rendered objects use these Secrets. They hold credentials, so they are not rendered (#384). Make them
+          with `deploy.yml`, or with the external secrets of #381. Values live in Secret Manager.
+
+          | Namespace | Secret |
+          |---|---|
+          {% for s in render_secret_names %}
+          | {{ s.0 }} | {{ s.1 }} |
+          {% endfor %}
+      vars:
+        render_secret_names: >-
+          {{ [[agents_ns, 'claude-shared'], [agents_ns, 'webhook-router'], [agents_ns, 'egress-forge-proxy']]
+             + ([agents_ns] | product(agents | map(attribute='name') | map('regex_replace', '^', 'agent-')) | list)
+             + ([agents_ns] | product(agents | selectattr('own_claude', 'defined') | selectattr('own_claude')
+                | map(attribute='name') | map('regex_replace', '^', 'claude-')) | list)
+             + ([[agents_ns, 'claude-proxy-signing']] if claude_proxy | bool else [])
+             + (([agents_ns] | product(agents | map(attribute='name') | map('regex_replace', '^', 'agent-') | map('regex_replace', '$', '-proxy')) | list)
+                if claude_proxy | bool else [])
+             + ([[agents_ns, 'webhook-router-poll']] if (wake_poll_seconds | int) > 0 else [])
+             + ([exec_ns] | product(executors | map(attribute='name') | product(['forge', 'plan', 'apply'])
+                | map('join', '-') | map('regex_replace', '^', 'exec-')) | list) }}
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "Rendered to {{ render_dir }}. Check: kubeconform -strict -ignore-missing-schemas {{ render_dir }}"

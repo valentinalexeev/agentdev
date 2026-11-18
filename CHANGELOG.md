@@ -7,6 +7,13 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a
+  directory, with no cluster or Secret Manager access and no secret values (`SECRETS.md` lists the Secret names).
+  `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
+  (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
+  `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
+  `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447). Docs: `docs/admin.md`, "Render the
+  manifests for a GitOps engine".
 - **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
   operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`
   (`forge_init.enabled`, admin token in Secret Manager `gitea-admin-token`, ExternalSecret `forge-init`) sets
@@ -33,6 +40,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   "Health checks for Flux and Argo CD".
 
 ### Changed
+- `deploy.yml` does not read the cluster to select a template (#384). The FQDNNetworkPolicy objects follow
+  `platform.egress.fqdn` (default from `egress_fqdn_policy`, as before), and the Gateway follows
+  `platform.ingress.gateway_api` (default `true`). The preflight (`crds`) still compares them with the cluster.
+  No migration: without `platform` the behaviour is the same. To use the render mode, re-apply `infra/terraform` and
+  copy `terraform output platform` into `ansible/instance.yml`.
 - **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
   role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
   retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and
@@ -47,7 +59,19 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Deprecated
 - `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
 
+### Fixed
+- An executor without `executors[].path` no longer renders `path: ""`, which the Executor CRD refuses (#384, found
+  by the kind apply of the rendered manifests).
+
 ### Upgrade
+- **`deploy.yml` task order (#384).** No new step to run: apply `deploy.yml` as usual. The order of some tasks changed:
+  1. All reads of Secret Manager come first: platform, agent, executor, Gitea wake poll and GitHub App secrets, the
+     forge proxy credential, and the Claude proxy signing key and agent keys (made once, as before).
+  2. A new check reads the FQDNNetworkPolicy and Gateway API CRDs, when the values need them. It stops with a clear
+     message, also under `--check`.
+  3. The platform namespace is now made together with the agents namespace, before the CRDs (before: after the CRDs).
+  4. The `webhook-router` Secret is a separate task, before the router objects.
+  The objects themselves are the same. Re-run: `deploy.yml` only.
 - **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
   (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
   to the ESO secret list (#381), then set `forge_init: {enabled: true}`.

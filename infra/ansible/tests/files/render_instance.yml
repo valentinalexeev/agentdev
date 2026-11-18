@@ -1,0 +1,27 @@
+# Instance values of tests/render_mode.yml (#384): the example deployment with every rendered part on. Not secret.
+gcp_project: my-agentdev
+gcp_zone: europe-west4-a
+image_tag: "1.2.0"
+reviewer: my-github-login
+agents:
+  - {name: alice, user: alice, repos: my-org/my-repo}
+  - {name: bob, user: bob, repos: my-org/my-repo, own_claude: true}
+agentdev_labels: {environment: prod}
+github_app: {app_id: 1012345}
+api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/"}
+executors:
+  - name: tf-prod
+    environment: prod
+    repo: my-org/platform
+    image: hashicorp/terraform@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    plan: [terraform, plan]
+    apply: [terraform, apply]
+    plan_gsa: exec-tf-prod-plan@my-agentdev.iam.gserviceaccount.com
+ingress:
+  host: agentdev.example.com
+  webhook_host: hooks.example.com
+  certificate: agentdev-public
+platform:
+  egress: {fqdn: gke}
+  ingress: {gateway_api: true}
+  kube_api_ips: [10.30.0.1, 172.16.0.2]
