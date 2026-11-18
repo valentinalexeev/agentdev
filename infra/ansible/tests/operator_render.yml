@@ -40,6 +40,26 @@
           - t_render.results | length == 2
         quiet: true
 
+    # #381 acceptance 3 / review of #445: in the agents namespace the operator reads only claude-proxy-signing, writes
+    # Secrets only by create/patch, and the policy that limits those writes to agent-*-proxy ships with the Role
+    - name: Operator Secret access in the agents namespace
+      ansible.builtin.assert:
+        that:
+          - t_sec | selectattr('verbs', 'contains', 'get') | rejectattr('resourceNames', 'defined') | list | length == 0
+          - t_sec | selectattr('verbs', 'contains', 'get') | map(attribute='resourceNames') | flatten == ['claude-proxy-signing']
+          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch', 'update', 'delete']) | length == 0
+          - t_pol | length == 1
+          - t_pol[0].spec.validations[0].expression is search("-proxy")
+          - t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicyBinding')
+            | selectattr('spec.policyName', 'equalto', 'agentdev-operator-secrets') | list | length == 1
+        quiet: true
+      vars:
+        t_role: "{{ t_op | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.namespace', 'equalto', 'v') | first }}"
+        t_sec: "{{ t_role.rules | selectattr('resources', 'contains', 'secrets') | list }}"
+        t_pol: >-
+          {{ t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy')
+             | selectattr('metadata.name', 'equalto', 'agentdev-operator-secrets') | list }}
+
     - name: The agents' egress list without api.anthropic.com (Claude proxy on)
       ansible.builtin.assert:
         that:

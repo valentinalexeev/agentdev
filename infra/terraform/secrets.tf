@@ -10,10 +10,12 @@
 #    secrets. The agents namespace can never read a platform-* secret (acceptance 3 of #381): its account has no
 #    grant on them, and manifests/secrets-policy.yaml.tmpl pins its ExternalSecrets.
 #    The project secrets store of #202 (agentdev-ps-*) is separate and unchanged.
+# Opt-in (var.external_secrets, default false): an instance in the default playbook mode, where the playbook made these
+# secrets, gets no resource from this file, so a module upgrade with no new inputs plans no change (no 409).
 
 locals {
   # name => random bytes (hex length = 2 x bytes); the same lengths as the playbook used (openssl rand -hex N)
-  generated_secrets = merge(
+  generated_secrets = !var.external_secrets ? {} : merge(
     { for k in ["pg-admin", "pg-contextforge", "pg-agentdev", "pg-authentik", "jwt", "enc", "cf-admin",
     "cf-default-user", "cf-basic-auth", "authentik-secret-key", "authentik-admin"] : "platform-${k}" => 48 },
     {
@@ -29,7 +31,7 @@ locals {
 
   # who reads what (exact secret ids; a trailing * is a prefix). Keep in step with the ExternalSecrets of the Ansible
   # role external_secrets (infra/ansible/roles/external_secrets/defaults/main.yml).
-  secret_readers = merge({
+  secret_readers = !var.external_secrets ? {} : merge({
     platform = {
       namespace = var.platform_namespace
       ids = concat(["platform-*", "agentdev-api-forge-token", "agentdev-api-chat-token-key", "agentdev-chat-issue-token",

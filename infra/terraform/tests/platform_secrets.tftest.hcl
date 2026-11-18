@@ -15,6 +15,21 @@ variables {
   billing_account_id = "000000-000000-000000"
   github_repository  = "example-org/example-deploy"
   agent_names        = ["alice", "bob"]
+  external_secrets   = true
+}
+
+# Default (playbook mode, an upgrade from 1.1.x with no new inputs): no secret, account or grant from secrets.tf
+run "off_by_default" {
+  command = plan
+  variables {
+    external_secrets = false
+  }
+  assert {
+    condition = (length(random_id.generated) + length(google_secret_manager_secret.generated)
+      + length(google_secret_manager_secret_version.generated) + length(google_service_account.secrets_reader)
+    + length(google_project_iam_member.secrets_reader) + length(google_service_account_iam_member.secrets_reader_wi)) == 0
+    error_message = "secrets.tf must make no resource unless external_secrets = true"
+  }
 }
 
 run "generated_and_scoped" {

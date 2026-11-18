@@ -78,7 +78,15 @@ rules:
   verbs:
   - create
   - get
-  - update
+  - patch
+- apiGroups:
+  - ""
+  resourceNames:
+  - claude-proxy-signing
+  resources:
+  - secrets
+  verbs:
+  - get
 - apiGroups:
   - ""
   resourceNames:

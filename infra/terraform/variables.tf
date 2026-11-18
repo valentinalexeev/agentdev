@@ -223,6 +223,11 @@ variable "agent_disk_type" {
 }
 
 # ---------- platform secrets (#381) ----------
+variable "external_secrets" {
+  description = "Platform secrets through the External Secrets Operator (#381): generate the secrets in Secret Manager and make the per-namespace reader accounts. Set together with external_secrets.mode: external in instance.yml. Default false: nothing from secrets.tf, as in 1.1."
+  type        = bool
+  default     = false
+}
 variable "agent_names" {
   description = "Agent names (the `agents[].name` of instance.yml). Terraform makes the wake token agent-<name>-wake-token of each one once (#381)."
   type        = list(string)

@@ -56,12 +56,14 @@ func TestEnsureProxyKeyWritesSecret(t *testing.T) {
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "ola" {
 		t.Fatalf("owner: %+v", s.OwnerReferences)
 	}
-	rv := s.ResourceVersion
+	// a real API server keeps the resourceVersion on an unchanged apply; the fake client does not, so compare the data
+	// (Reloader restarts on a data hash change only)
+	before := string(s.Data["ANTHROPIC_AUTH_TOKEN"])
 	if _, err := r.ensureProxyKey(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-ola-proxy"}, &s)
-	if s.ResourceVersion != rv {
+	if string(s.Data["ANTHROPIC_AUTH_TOKEN"]) != before || len(s.Data) != 1 {
 		t.Fatalf("second run changed the Secret (would restart the pod)")
 	}
 }

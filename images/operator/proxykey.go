@@ -12,7 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -23,10 +23,18 @@ import (
 // <agent>.<hex HMAC-SHA256(signing, "agentdev-claude-proxy/v1:<agent>")>. The key only names the agent to the proxy
 // and is worth nothing outside the cluster (docs/security.md R11).
 //
-// The operator reads only claude-proxy-signing (by name, uncached) and writes only agent-<name>-proxy Secrets (create,
-// and get/update by name pattern; RBAC cannot narrow create by name, as for executor-egress-proxy).
+// RBAC (review of #445): get only on claude-proxy-signing (resourceNames), so the operator cannot read claude-shared or
+// any other Secret here. agent-<name>-proxy is written by a server-side apply, which needs create and patch but no get.
+// RBAC cannot narrow create or patch by a name pattern: the ValidatingAdmissionPolicy agentdev-operator-secrets
+// (manifests/secrets-policy.yaml.tmpl, applied in both modes) lets the operator write only agent-*-proxy Secrets.
+//
+// Two writers during 1.x: in secrets mode playbook, deploy.yml also writes agent-<name>-proxy (the same HMAC, so the
+// same value and no restart). The operator sets a controller owner reference on the Secret, also on the playbook's
+// one, so deleting the Agent now deletes its proxy Secret too (before, the Secret stayed until the playbook removed
+// it). A later deploy.yml run writes it again for an agent that is still listed.
 
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create;update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get,resourceNames=claude-proxy-signing
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;patch
 
 const (
 	proxySigningSecret = "claude-proxy-signing"
@@ -63,18 +71,20 @@ func (r *AgentReconciler) ensureProxyKey(ctx context.Context, a *v1.Agent) (bool
 		return false, fmt.Errorf("secret %s: key missing or shorter than 32 bytes", proxySigningSecret)
 	}
 	want := proxyKey(signing, a.Name)
-	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name + "-proxy", Namespace: a.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, s, func() error {
-		if s.Labels == nil {
-			s.Labels = map[string]string{}
-		}
-		s.Labels["app"], s.Labels["agent"] = "coding-agent", a.Name
-		if string(s.Data["ANTHROPIC_AUTH_TOKEN"]) != want {
-			s.Data = map[string][]byte{"ANTHROPIC_AUTH_TOKEN": []byte(want)}
-		}
-		return controllerutil.SetControllerReference(a, s, r.Scheme())
-	})
-	if err != nil {
+	// server-side apply: no read of the existing Secret; an unchanged value is a no-op (no new resourceVersion, no
+	// restart). Force takes the fields over from the playbook's client-side apply.
+	ctrl := true
+	s := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name + "-proxy", Namespace: a.Namespace,
+			Labels: map[string]string{"app": "coding-agent", "agent": a.Name},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Agent", Name: a.Name,
+				UID: a.UID, Controller: &ctrl, BlockOwnerDeletion: &ctrl}}},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"ANTHROPIC_AUTH_TOKEN": []byte(want)},
+	}
+	//nolint:staticcheck // client.Apply with a typed object: the same as in controller-runtime 0.23 docs for Patch
+	if err := r.Client.Patch(ctx, s, client.Apply, client.FieldOwner("agentdev-operator"), client.ForceOwnership); err != nil {
 		return false, fmt.Errorf("proxy key secret: %w", err)
 	}
 	return true, nil

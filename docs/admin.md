@@ -86,7 +86,8 @@ secrets once in Secret Manager. The External Secrets Operator copies each one in
 name and keys as before. Stakater Reloader v2 (a pinned beta, owner decision on #381) restarts the workloads that
 carry `secret.reloader.stakater.com/reload`.
 
-1. In `terraform/instance.tfvars`, set `agent_names` to the names of `agents` in `ansible/instance.yml`.
+1. In `terraform/instance.tfvars`, set `external_secrets = true` and set `agent_names` to the names of `agents` in
+   `ansible/instance.yml`. With the default `false`, Terraform makes none of these secrets or accounts.
 2. For an upgrade from 1.1.x, the playbook already made the generated secrets. List them in
    `keep_existing_secret_values` and import them (`terraform/imports.tf.example` of the deployment template). If you
    skip this step, Terraform writes new values, the databases keep the old passwords, and the platform breaks.

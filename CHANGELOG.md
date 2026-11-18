@@ -10,7 +10,7 @@ While the version is `0.x`, breaking changes bump MINOR.
 - GKE: `external_secrets.mode: external` (#381). Terraform generates the platform secrets once in Secret Manager, and
   the External Secrets Operator 2.14.0 makes the Kubernetes Secrets with unchanged names and keys. Stakater Reloader
   v2.0.0-beta.2 (chart 3.0.0-beta.5, scoped) restarts annotated workloads. The operator writes the `agent-<n>-proxy`
-  keys. The Claude proxy refuses a bad `claude-shared` at start. The default `playbook` mode is unchanged.
+  keys. The Claude proxy refuses a bad `claude-shared` at start. The default `playbook` mode is unchanged, and Terraform makes nothing new unless `external_secrets = true`.
 
 ### Upgrade
 - To use external mode on an instance from 1.1.x, import the generated secrets first and list them in

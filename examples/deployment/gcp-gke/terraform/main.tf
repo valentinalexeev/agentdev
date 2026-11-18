@@ -51,6 +51,7 @@ module "agentdev" {
   # create_plan_identity = true
   # secrets from Secret Manager through the External Secrets Operator (agentdev #381): uncomment with a ref= that
   # contains #381; see imports.tf.example for an upgrade
+  # external_secrets            = var.external_secrets
   # agent_names                 = var.agent_names
   # keep_existing_secret_values = var.keep_existing_secret_values
   # platform_extra_secret_ids   = var.platform_extra_secret_ids
@@ -159,6 +160,10 @@ variable "monitoring_components" {
   description = "GKE monitoring components (agentdev #208); null keeps the GKE default list."
   type        = list(string)
   default     = ["SYSTEM_COMPONENTS"]
+}
+variable "external_secrets" {
+  type    = bool
+  default = false
 }
 variable "agent_names" {
   type    = list(string)
