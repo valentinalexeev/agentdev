@@ -123,13 +123,24 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 `reviewer`, `agents`) come from the deployment (`example.vars.yml` shows the shape); the playbook stops with a
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
 
+### Render mode (#384)
+`render.yml` writes the manifests of one instance to `render_dir`, for a GitOps engine. It needs no cluster and no
+gcloud, and writes no secret values (`SECRETS.md` lists the Secrets by name). `deploy.yml` uses the same renderer
+(`tasks/render_objects.yml`) and the same value checks (`tasks/checks.yml`). Cluster facts come from `platform`
+(`terraform output platform`). The roles `platform`, `authentik`, `authentik_sso` and `api` render with their
+`tasks/render.yml` (#447): authentik as `helm template` output, the database and break-glass steps as the Jobs of `tasks/db_init_render.yml` (#382).
+```bash
+ansible-playbook infra/ansible/render.yml -e @<deployment repo>/ansible/instance.yml -e render_dir=$PWD/rendered
+```
+Test: `tests/render_mode.yml` (also runs `kubeconform` and `gitleaks` on the render of `examples/deployment/gcp-gke`).
+
 ### Preflight (#314)
 `preflight.yml` only reads. `deploy.yml` imports it first, so a deploy stops before its first change. It checks:
 1. Claude secrets (#212): `claude-shared` and each `agent-<name>-claude` that exists has a `KEY=VALUE` line.
 2. Release (#218): the playbook checkout is on tag `v<image_tag>`, so the router image and its manifests match.
    A checkout that is not on a release tag gives a warning.
 3. CRDs: the Gateway API (with `ingress.mode: gateway`, the default when `ingress` is set) and FQDNNetworkPolicy
-   (with `egress_fqdn_policy`).
+   (with `platform.egress.fqdn: gke`, or `egress_fqdn_policy` when `platform` is not set).
 4. Images: each agentdev image exists on ghcr.io at `image_tag`.
 5. Plan identity (#421): with `plan_identity: true` (Terraform `create_plan_identity = true`), the gcloud account
    (the apply account in CI) has the permissions to create it; otherwise it prints the owner grant commands

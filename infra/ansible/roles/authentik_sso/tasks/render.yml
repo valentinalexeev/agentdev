@@ -1,0 +1,6 @@
+---
+# Render mode of the role (#447): authentik-sso holds the IdP certificate or client secret, so it is a Secret only.
+# The render lists its name; the authentik pods read it with envFrom (optional).
+- name: Company SSO Secret name
+  ansible.builtin.set_fact:
+    authentik_sso_secret_names: "{{ [[platform_ns, authentik_sso_secret]] }}"

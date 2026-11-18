@@ -23,6 +23,11 @@
     preflight_ingress_gateway: >-
       {{ ((ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined)
          and (ingress | default({})).mode | default('gateway') == 'gateway' }}
+    # #384: the same instance values as tasks/render_objects.yml (terraform output platform); this check compares them
+    # with the cluster, the render does not read it
+    preflight_fqdn: >-
+      {{ (((platform | default({})).egress | default({})).fqdn | default('gke' if egress_fqdn_policy | bool else 'none'))
+         | string }}
   tasks:
     - name: Preflight needs the instance values (see example.vars.yml)
       ansible.builtin.assert:
@@ -124,8 +129,8 @@
                   'why': 'ingress.mode gateway. Set Terraform public_hosts and apply infra/terraform, or use ingress.mode external'}]
                 if preflight_ingress_gateway | bool else [])
                + ([{'name': 'fqdnnetworkpolicies.networking.gke.io',
-                    'why': 'egress_fqdn_policy. Apply infra/terraform (enable_fqdn_network_policy), or set egress_fqdn_policy: false'}]
-                  if egress_fqdn_policy | bool else []) }}
+                    'why': 'platform.egress.fqdn gke. Apply infra/terraform (enable_fqdn_network_policy), or set platform.egress.fqdn: none'}]
+                  if preflight_fqdn == 'gke' else []) }}
           loop_control: {label: "{{ item.name }}"}
           register: preflight_crds
 
