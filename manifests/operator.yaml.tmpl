@@ -40,10 +40,18 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
 # proxy keys (#381): get only the signing key by name (never claude-shared or another Secret); write
 # agent-<name>-proxy by server-side apply (create, patch; no get, list or watch). create and patch cannot be narrowed by
-# a name pattern in RBAC: the ValidatingAdmissionPolicy agentdev-operator-secrets (secrets-policy.yaml.tmpl, applied in
-# both secrets modes) lets the operator write only agent-*-proxy Secrets here
+# a name pattern in RBAC: the ValidatingAdmissionPolicy agentdev-operator-secrets (below in this file, applied in
+# both secrets modes) lets the operator write only agent-*-proxy and agent-*-mcp Secrets here
 - {apiGroups: [""], resources: [secrets], resourceNames: [claude-proxy-signing], verbs: [get]}
 - {apiGroups: [""], resources: [secrets], verbs: [create, patch]}
+# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects, and one token Secret agent-<name>-mcp per agent. Secrets
+# are read by name only (no list or watch); resourceNames cannot express agent-*-mcp, so get/update/delete cover the
+# namespace (docs/security.md R52);
+# the policy agentdev-operator-secrets limits the writes and deletes to agent-*-mcp and agent-*-proxy names
+- {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/status], verbs: [get, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/finalizers], verbs: [update]}
+- {apiGroups: [""], resources: [secrets], verbs: [get, create, update, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -53,7 +61,8 @@ subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM
 ---
 # Proxy keys (#381): the operator writes Secrets in the agents namespace only to keep agent-<name>-proxy (the HMAC of
 # the agent name, images/operator/proxykey.go). Its Role allows create and patch on all Secrets there (RBAC cannot
-# narrow them by a name pattern); this policy narrows the writes to agent-*-proxy names. It sits here, next to the Role,
+# narrow them by a name pattern); this policy narrows the writes to agent-*-proxy names, and to agent-*-mcp
+# for the McpProject controller (#383, also deletes). It sits here, next to the Role,
 # so every path that applies the Role (deploy.yml in both secrets modes, the kind operator role) applies the guard too.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -68,8 +77,10 @@ spec:
   - name: operator
     expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-operator'"
   validations:
-  - expression: "request.operation != 'DELETE' && object.metadata.name.startsWith('agent-') && object.metadata.name.endsWith('-proxy')"
-    message: "the operator writes only agent-<name>-proxy Secrets in the agents namespace"
+  - expression: >-
+      request.name.startsWith('agent-') && (request.name.endsWith('-mcp')
+      || (request.operation != 'DELETE' && request.name.endsWith('-proxy')))
+    message: "the operator writes only agent-<name>-proxy and agent-<name>-mcp Secrets, and deletes only agent-<name>-mcp, in the agents namespace"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -77,6 +88,20 @@ metadata: {name: agentdev-operator-secrets}
 spec:
   policyName: agentdev-operator-secrets
   validationActions: [Deny]
+---
+# MCP per project (#383): the ContextForge admin login, read by name from the Secret ContextForge starts with. Nothing else
+# in the platform namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [contextforge], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator-mcp}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
 ---
 # deterministic executors (#69): own namespace, so their write credentials never sit next to agents. Only cluster
 # admins write Executors and the exec-* Secrets here; agents and the API have no rights in this namespace.
@@ -177,6 +202,10 @@ spec:
         - {name: FORWARDER_NOT_READY_MINUTES, value: "${FORWARDER_NOT_READY_MINUTES}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
+        # MCP per project (#383): ContextForge in this namespace, its admin login from Secret contextforge
+        - {name: PLATFORM_NS, value: "${PLATFORM_NS}"}
+        - {name: MCP_ADMIN_EMAIL, value: "${MCP_ADMIN_EMAIL}"}
+        - {name: MCP_ALLOWED_HOSTS, value: "${MCP_ALLOWED_HOSTS}"}   # trusted MCP hosts (host or host:port); others: Ready=False
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}

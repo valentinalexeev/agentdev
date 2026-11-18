@@ -19,7 +19,9 @@ authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.1
 # ranges shorter than /8 (IPv4) or /16 (IPv6), for example 0.0.0.0/0, are refused unless this is true (#198 review):
 # authentik would trust a forged X-Forwarded-For from any client
 authentik_trusted_proxy_allow_wide: false
-authentik_db_pod: platform-db-0
+# in-cluster Jobs (#382): psql from the platform Postgres image, ak shell from the authentik image of the chart
+authentik_db_init_image: postgres:17.11   # the Postgres image of the role platform (tests/db_init.yml checks it)
+authentik_image: "ghcr.io/goauthentik/server:{{ authentik_version }}"
 # break-glass (docs/admin.md): akadmin is added to agentdev-admins once; add only, never removed by the playbook
 authentik_breakglass_admin_group: true
 # kind (#106, kind.yml): secrets as files in .secrets/platform instead of Secret Manager

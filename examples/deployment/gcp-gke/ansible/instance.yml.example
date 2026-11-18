@@ -4,9 +4,13 @@ gcp_zone: europe-west4-a
 # Two keys pin one agentdev release (change them together with terraform/main.tf ref=):
 #   agentdev_ref: the git tag the CI clones for the playbook (with the v)
 #   image_tag:    the image tag the pods pull (the same version without the v)
-agentdev_ref: v1.1.0-rc.2
-image_tag: "1.1.0-rc.2"
+agentdev_ref: v1.1.0-rc.3
+image_tag: "1.1.0-rc.3"
 reviewer: my-github-login
+# agentdev #58: who writes the Agent objects. api (default): this playbook and the API. git: Flux applies them from the
+# deployment repository (agents/ layer); the API then changes only pause/resume of those agents. List the agents
+# here in both modes: the playbook still makes their Secrets.
+# agents_source: api
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
   # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}

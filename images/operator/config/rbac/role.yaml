@@ -77,8 +77,10 @@ rules:
   - secrets
   verbs:
   - create
+  - delete
   - get
   - patch
+  - update
 - apiGroups:
   - ""
   resourceNames:
@@ -124,6 +126,7 @@ rules:
   resources:
   - agents
   - agents/status
+  - mcpprojects
   verbs:
   - get
   - list
@@ -167,10 +170,17 @@ rules:
   - agentdev.dev
   resources:
   - executors/status
+  - mcpprojects/status
   - projectsecrets/status
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - agentdev.dev
+  resources:
+  - mcpprojects/finalizers
+  verbs:
   - update
 - apiGroups:
   - apps

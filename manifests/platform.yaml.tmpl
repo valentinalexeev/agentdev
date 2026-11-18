@@ -144,3 +144,6 @@ spec:
   ingress:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}}]
     ports: [{port: 4444}]
+  # the operator's McpProject controller (#383) calls the admin API; it replaced the port-forward of mcp-sync.sh
+  - from: [{podSelector: {matchLabels: {app: agentdev-operator}}}]
+    ports: [{port: 4444}]

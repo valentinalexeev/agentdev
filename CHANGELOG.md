@@ -7,14 +7,97 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
+  operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`
+  (`forge_init.enabled`, admin token in Secret Manager `gitea-admin-token`, ExternalSecret `forge-init`) sets
+  collaborators, `agent:<name>` labels, the router webhook and branch protection through the Gitea API only
+  (`agentdev-operator forge-init`, no kubectl exec, no Kubernetes API token). docs/admin.md, "Connect an external
+  Gitea on GKE".
+- **Agents from Git (#58).** New instance setting `agents_source: api|git` (default `api`; `AGENTS_SOURCE` on kind).
+  With `git`, Flux applies the `Agent` objects from the deployment repository; the playbook no longer applies them,
+  and the API and web UI treat every Agent it did not make as read-only except pause and resume (409 otherwise).
+  `GET /api/agents` shows `source: api|git`. The API writes Agents with the field manager `agentdev-api`, the
+  operator's security pause patches only `spec.paused` with `agentdev-operator`, so Flux server-side apply never
+  fights over `spec.paused`. Docs: `docs/admin.md`, "Keep the agents in Git (Flux)".
+- **McpProject controller in the operator (#383, phase 2 of #388).** A new kind `McpProject` (`agentdev.dev/v1alpha1`,
+  short name `mcpp`, in the agents namespace; main has no project resource yet) replaces `scripts/mcp-sync.sh`: one
+  ContextForge gateway per server, one virtual server per project, one token per agent in Secret `agent-<name>-mcp`
+  (same keys, label and annotations as the script, so its Secrets are adopted). The host allow-list is the operator's
+  `MCP_ALLOWED_HOSTS`; a refused host sets `Ready=False` (`HostNotAllowed`) with the reason in status and changes
+  nothing. The admin password comes from the Secret `contextforge`, never a file. Deleting an `McpProject` revokes its
+  tokens. Tokens renew in their last 30 days on the 6-hourly resync.
+- **`Ready` condition for GitOps health checks (#386).** `Agent`, `Executor` and `ProjectSecret` have a `Ready`
+  condition with `observedGeneration`, which Flux (kstatus) and Argo CD read. A stopped (scaled to zero) or paused
+  agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
+  image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
+  "Health checks for Flux and Argo CD".
 - GKE: `external_secrets.mode: external` (#381). Terraform generates the platform secrets once in Secret Manager, and
   the External Secrets Operator 2.14.0 makes the Kubernetes Secrets with unchanged names and keys. Stakater Reloader
   v2.0.0-beta.2 (chart 3.0.0-beta.5, scoped) restarts annotated workloads. The operator writes the `agent-<n>-proxy`
   keys. The Claude proxy refuses a bad `claude-shared` at start. The default `playbook` mode is unchanged, and Terraform makes nothing new unless `external_secrets = true`.
 
+### Changed
+- **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
+  role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
+  retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and
+  database `authentik`) and `authentik-breakglass-<hash>` (`akadmin` into `agentdev-admins`, add only; replaces
+  `breakglass.yml`). The hash covers the SQL, so a changed schema gives a new Job; the same files change nothing. The
+  Jobs read the Postgres passwords from the Secrets `platform-db`, `agentdev-api-db` and `authentik` by name. The
+  API waits until the database holds the schema version of its own `schema.sql` and `grants.sql` before it serves
+  (`startupProbe`, up to 15 minutes); `DATABASE_MIGRATE=true` keeps the old self-migrating mode for tests.
+- The role `platform` applies one `McpProject` per `mcp_projects` spec instead of running `scripts/mcp-sync.sh` with a
+  temporary password file; `yq`, `jq` and `curl` are no longer needed on the operator machine for the sync.
+
+### Deprecated
+- `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
+
 ### Upgrade
+- **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
+  (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
+  to the ESO secret list (#381), then set `forge_init: {enabled: true}`.
+- **#382:** nothing to do by hand: the next playbook run applies the Jobs, the API waits for them. Jobs of an older hash are
+  removed. A new API image together with an old database (a playbook run that stopped before the role `api`) does not
+  serve until the role `api` ran: run the playbook to the end. The variables `api_db_pod` and `authentik_db_pod` are
+  gone.
+- **#58:** nothing to do for `agents_source: api` (the default). To move to `git`: add the Agent manifests (without
+  `spec.paused`) to the deployment repository, set `agents_source: git`, run the playbook (role `api` and
+  `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
+- **#383:**
+  1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
+     `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets get/create/update/delete
+     in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
+  2. Existing `agent-<name>-mcp` Secrets made by the script are taken over as they are; no token is re-minted until the
+     project's virtual server changes or the token is in its last 30 days.
+  3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
+  4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
+- **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
+  the playbook (role `operator`) on GKE. No spec changes, no agent restart.
 - To use external mode on an instance from 1.1.x, import the generated secrets first and list them in
   `keep_existing_secret_values` (docs/admin.md). Otherwise Terraform writes new database passwords.
+
+## [1.1.0-rc.3] - 2026-11-17
+
+### Upgrade
+**From 1.0.x (1.0.0 or 1.0.1):** follow the 1.1.0-rc.2 section below (rc.1 steps with the opt-in plan identity),
+pinning `v1.1.0-rc.3` / `1.1.0-rc.3` instead.
+
+**From 1.1.0-rc.1:** do the steps of the 1.1.0-rc.2 section below, pinning rc.3 instead of rc.2.
+
+**From 1.1.0-rc.2:** pin rc.3 everywhere (ADR 0006): `ref=v1.1.0-rc.3` in `terraform/main.tf`,
+`agentdev_ref: v1.1.0-rc.3` and `image_tag: "1.1.0-rc.3"` in `ansible/instance.yml`, in one PR. New images only
+(Go 1.27 builds); no schema, value or `./run.sh` step. Anyone building agentdev's Go code needs Go 1.27.4 (the
+`toolchain` line in `go.mod` downloads it automatically).
+
+### Security
+- Go 1.27 and dependencies (#431). The images build with `golang:1.27.4-alpine` (Go 1.25 gets no more fixes), every
+  `go.mod` has `go 1.26.0` and `toolchain go1.27.4`, and the CI uses the same toolchain. Bumped:
+  `golang.org/x/net` v0.62.0 (api, credproxy, operator), `golang.org/x/crypto` v0.59.0 (api),
+  `go.opentelemetry.io/otel` v1.47.0 and `google.golang.org/grpc` v1.85.0 (credproxy, operator). `govulncheck` shows no
+  reachable vulnerability in any module. It closes the Go standard library advisories fixed in Go 1.26.9 to 1.26.11
+  (for example GO-2026-6610 HTTP/2 response smuggling, GO-2026-6809 crypto/x509, GO-2026-6859 net/http), the `x/net`,
+  `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
+  key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
+  is larger (about 50 MB). New images; no `./run.sh` step.
 
 ## [1.1.0-rc.2] - 2026-11-16
 
@@ -1221,6 +1304,7 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.3...HEAD
+[1.1.0-rc.3]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.2...v1.1.0-rc.3
 [1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0

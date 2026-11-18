@@ -78,6 +78,19 @@ wake_poll_seconds: 300              # the router checks the forge for work of st
 # zero and wake_poll_seconds 0 the playbook refuses to run without them (agents would stop and never start again).
 webhooks_enabled: "{{ ((ingress | default({})).webhook_host | default((ingress | default({})).host | default(''))) | length > 0 }}"
 sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-only token of the wake poll (optional)
+# External Gitea (#442; forge_kind gitea, forge_url https://gitea.example.com). Default is secrets-only: the owner puts
+# the tokens (agent-<name>-forge-token, agentdev-api-forge-token, router-poll-forge-token) and the webhook secret in
+# Secret Manager. The host of forge_url is added to the forge sidecar's egress hosts by itself.
+# forge_init.enabled: true runs the Job forge-init-<hash> (tasks/forge_init.yml) with an admin token of that Gitea
+# (Secret Manager sm_gitea_admin_token, synced by ESO). It sets collaborators, agent:<name> labels, the router webhook
+# and branch protection through the Gitea API; it mints no tokens and creates no repository.
+# Keys: enabled, create_accounts (false), protect_branch (true), hook_url (in-cluster router; set the public webhook
+# URL when Gitea is outside the cluster), api_user (agentdev-api), router_user (agentdev-router), ca_configmap
+# (ConfigMap in platform_ns with ca.crt for a private CA), rerun (any new string runs the Job again).
+forge_init: {enabled: false}
+sm_gitea_admin_token: gitea-admin-token
+# the external Gitea host for the forge sidecar (Squid and FQDNNetworkPolicy); empty for GitHub
+forge_gitea_egress_hosts: "{{ [forge_url | urlsplit('hostname')] if forge_kind == 'gitea' else [] }}"
 # agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
 # "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
 agent_storage_class: agentdev-agent

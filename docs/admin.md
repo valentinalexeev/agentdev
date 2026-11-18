@@ -52,6 +52,59 @@ CAUTION: Step 3 deletes the work data of the agent.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 3. Delete the StatefulSet, the volumes and the forge account of the agent.
 
+### Keep the agents in Git (Flux)
+
+With the setting `agents_source: git`, Flux applies the `Agent` objects from the deployment repository (#58). The
+default is `api`: the playbook and the API write the `Agent` objects.
+
+In `git` mode:
+
+- An agent from Git is read-only in the API and the web UI. Only **Pause** and **Resume** are possible.
+- An agent that a person adds in the web UI or the API stays owned by the API. Flux does not prune it.
+- The playbook makes the Secrets of the agents. It does not apply the `Agent` objects.
+
+Each field has one owner:
+
+| Field | Owner |
+|---|---|
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero` | Git (Flux) |
+| `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
+| replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
+| `status` | the operator |
+
+CAUTION: Do not put `spec.paused` in the Git manifest. If you do, Flux owns the field and resumes an agent that the
+security pause stopped.
+
+1. Set `agents_source: git` in `instance.yml`. On `kind`, set `AGENTS_SOURCE=git` in `config.env`.
+2. Put one `Agent` manifest for each agent in the `agents/` directory of the deployment repository:
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Agent
+   metadata: {name: alice, namespace: coding-agents}
+   spec:
+     repo: my-org/my-repo
+     forge: github
+     claudeSecret: claude-shared
+     maxConcurrent: 2
+     scaleToZero: true
+     # no spec.paused: the API and the operator own it
+   ```
+3. Keep the agent in the `agents:` list of `instance.yml`. The playbook makes its Secrets.
+4. Add a Flux `Kustomization` for `agents/` (see "Health checks for Flux and Argo CD").
+5. Deploy again.
+
+NOTE: On `kind`, step 06 applies the `Agent` objects in both modes. It does the work of Flux.
+
+For Argo CD, add `ignoreDifferences` for `spec.paused`, or `selfHeal` resumes a paused agent:
+
+```yaml
+spec:
+  ignoreDifferences:
+    - group: agentdev.dev
+      kind: Agent
+      jsonPointers: [/spec/paused]
+```
+
 ### Give an agent its own Claude credential
 
 WARNING: Do not put the credential in git or in an issue.
@@ -444,6 +497,68 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
 
+### Health checks for Flux and Argo CD
+
+The kinds `Agent`, `Executor` and `ProjectSecret` have a `Ready` condition and `status.observedGeneration` (#386).
+Flux and Argo CD read them. A stopped agent is ready: the router can start it again.
+
+| Kind | `Ready` is `True` | `Ready` is `False` (reason) |
+|---|---|---|
+| `Agent` | phase `running`, `starting`, `stopped` or `paused` | phase `blocked` (`Blocked`), phase `invalid` (`SecretNotBound`) |
+| `Executor` | phase `ready` or `paused` | phase `invalid` or `error` |
+| `ProjectSecret` | phase `ready` (`Synced`) | phase `pending` (`Pending`) or `error` (`Error`) |
+
+`status.image` of an `Agent` shows the worker image of its StatefulSet. A stopped agent starts with this image at its
+next wake.
+
+To make Flux wait for the agents, use a `Kustomization` with `wait: true` or with `healthChecks`:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agents
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./agents
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: deployment
+  dependsOn:
+    - name: agentdev        # the layer with the CRDs and the operator
+  timeout: 5m
+  healthChecks:
+    - apiVersion: agentdev.dev/v1alpha1
+      kind: Agent
+      name: alice
+      namespace: coding-agents
+```
+
+For Argo CD, add a health check for each kind to `argocd-cm`. Do not use `Suspended` for a stopped agent: one
+suspended resource makes all of the Application suspended.
+
+```yaml
+resource.customizations.health.agentdev.dev_Agent: |
+  hs = {status = "Progressing", message = "waiting for the operator"}
+  if obj.status ~= nil and obj.status.conditions ~= nil then
+    if (obj.status.observedGeneration or 0) < obj.metadata.generation then return hs end
+    for _, c in ipairs(obj.status.conditions) do
+      if c.type == "Ready" then
+        hs.message = c.message
+        if c.status == "True" then hs.status = "Healthy" else hs.status = "Degraded" end
+      end
+    end
+  end
+  return hs
+```
+
+Use the same script for `agentdev.dev_Executor` and `agentdev.dev_ProjectSecret`.
+
+To show the state of all agents, do this command:
+`kubectl -n coding-agents get agents`. The column `READY` shows the `Ready` condition.
+
 ## Labels
 
 agentdev labels its cloud resources and Kubernetes objects with `service` and `environment`, so the billing export
@@ -567,7 +682,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 3. Run run.sh step 08: `./run.sh 08`
    The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
    The playbook deploys the namespace `agentdev-platform` with Postgres.
-   If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
+   If `MCP_PROJECTS` is set, the step also deploys ContextForge and makes one `McpProject` for each specification.
+   The operator (step 12) syncs each `McpProject` to ContextForge.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
 the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
@@ -595,13 +711,15 @@ database stays in Postgres. To keep ContextForge without `mcp_projects`, set `pl
    Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
    List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
 3. Run the playbook (refer to `infra/ansible/README.md`).
-   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+   The playbook makes one `McpProject` for each specification. The operator syncs it to ContextForge.
+   The machine that runs the playbook does not read the ContextForge admin password.
 4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
 
 CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
 the connection from ContextForge.
 
-NOTE: The dry run (`--check`) does not run the sync.
+NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not exist yet. The playbook skips the
+`McpProject` objects in that case.
 
 ### Add MCP servers to a project
 
@@ -620,9 +738,11 @@ NOTE: The dry run (`--check`) does not run the sync.
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
    A bad server can put instructions in them (prompt injection). Refer to R51 in `docs/security.md`.
 
-   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
-3. Run the sync: `scripts/mcp-sync.sh <spec>`
-   The bootstrap also runs this script.
+   The operator makes no changes in ContextForge if a server is on a host that is not in the list. The
+   `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
+3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
+   You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
+   `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
@@ -665,7 +785,7 @@ Before you start, make sure that Prometheus or Loki operates in the cluster. age
    ```
 
 5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
-6. Run the sync: `scripts/mcp-sync.sh <spec>`
+6. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the project.
 7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
@@ -706,19 +826,46 @@ cannot close its code block. The output goes only to the model. agentdev does no
 
 ### Reference: the MCP sync
 
-You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
+The operator syncs each `McpProject` (short name `mcpp`) in the agents namespace (#383). The name is the project:
 
-- It stops if a server host is not in the allow-list.
+```yaml
+apiVersion: agentdev.dev/v1alpha1
+kind: McpProject
+metadata: {name: web, namespace: coding-agents}
+spec:
+  servers:
+    - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
+  agents: [alice, bob]
+```
+
+The sync runs at each change and every 6 hours (`MCP_RESYNC_MINUTES` on the operator). It does these actions:
+
+- It stops if a server host is not in the allow-list (`MCP_ALLOWED_HOSTS` on the operator, from `mcp_allowed_hosts`).
+  The allow-list is an instance setting. An `McpProject` cannot change it.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.
 - It keeps the token in the Secret `agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`).
 
 Tokens are valid for one year. A sync in the last 30 days of a token makes a new token and revokes the old token.
-When you remove an agent from `agents:` (or remove `mcp:`), the next sync deletes its Secret and revokes its token.
+When you remove an agent from `agents:` (or remove the servers), the next sync deletes its Secret and revokes its
+token. When you delete the `McpProject`, the operator revokes all its tokens and deletes their Secrets.
+
+The operator reads the ContextForge admin password from the Secret `contextforge` in `agentdev-platform` (key
+`PLATFORM_ADMIN_PASSWORD`). Its Role there can read only that Secret. The status shows the result, never a token:
+
+| `Ready` reason | Meaning |
+|---|---|
+| `Synced` | The gateways, the virtual server and every agent token are in place |
+| `NoServers` | The spec has no servers; no tokens |
+| `HostNotAllowed`, `InvalidServer` | A server is refused; nothing changed in ContextForge |
+| `ContextForgeUnavailable` | ContextForge is not deployed or the admin login failed |
+| `NoTools` | ContextForge found no tools on the servers; make sure that they operate |
+| `SyncFailed` | A ContextForge call or a Secret failed; the message names the step |
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
-Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
+Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace and
+the operator pod. GKE
 applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
 (kindnet) does not.
 
@@ -776,8 +923,9 @@ authentik, set `authentik.enabled: false`.
 
 `akadmin` is the break-glass admin. authentik makes it at the first start with the password from Secret Manager
 `platform-authentik-admin`. A password that you change in the UI stays: authentik uses the first password only once.
-The playbook adds `akadmin` to `agentdev-admins` with an add-only call. It never removes a member, and it fails when
-authentik has no active superuser.
+The Job `authentik-breakglass-<hash>` (role `authentik`, #382, `manifests/db-init/breakglass.py`) adds `akadmin` to
+`agentdev-admins` with an add-only call. It never removes a member, and it fails when authentik has no active
+superuser.
 
 WARNING: Do not delete `akadmin`, do not deactivate it, and do not remove its password login. Keep its password and
 the MFA recovery codes in the password manager of the owner. If the Workspace source fails, this is the only login.
@@ -1191,9 +1339,9 @@ subscribe again.
 
 **Filters on the lists** (#345). `GET /api/agents`, `GET /api/approvals`, `GET /api/security-events` and `GET /api/jobs` take `repo=owner/name` (only items of that repository) and `scope=mine` (only repositories where the caller has write access, also for admins; `scope=all` is the default). `GET /api/agents`, `GET /api/approvals` and `GET /api/jobs` also take `limit` and `cursor`; `next_cursor` in the answer gives the next page. A filter only narrows: it never shows an item the visibility rule hides.
 
-| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
+| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. With `agents_source: git`, an agent from Git accepts only `paused`; other fields give 409 (#58). |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
-| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. |
+| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. An agent from Git gives 409 (#58). |
 
 ### Give the API access to the forge
 
@@ -2346,6 +2494,34 @@ Differences from GitHub (#241):
 - **Session monitor:** `tools/ghwatch -forge gitea` reads a Gitea repository (token in `GITEA_TOKEN`). Gitea has no
   repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
   label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
+
+### Connect an external Gitea on GKE
+
+agentdev does not run Gitea on GKE. It connects to a Gitea that you already operate (#442). The in-cluster Gitea of
+the Ansible role `gitea_forge` is for kind only.
+
+1. In `ansible/instance.yml`, set `forge_kind: gitea` and `forge_url: https://<your gitea host>`.
+   The playbook refuses a URL that is not `https://`. It adds the host to the egress hosts of the forge sidecar (Squid
+   and the FQDN network policy). The agent container cannot reach the host.
+2. On Gitea, make one account for each agent and give each a token with the scopes
+   `write:repository,write:issue,read:user`.
+3. Put each token in Secret Manager as `agent-<name>-forge-token`.
+4. Optional: make the account `agentdev-api` with a token `read:repository,read:user` and put it in
+   `agentdev-api-forge-token`. Make the account `agentdev-router` with a token `read:repository,read:issue` and put
+   it in `router-poll-forge-token` (wake poll).
+5. Put the webhook secret in `github-app-webhook-secret` (the name stays for Gitea too).
+6. Do one of these steps for collaborators, labels, the webhook and branch protection:
+   - Set them by hand on Gitea (the same rules as the reference below), or
+   - Set `forge_init: {enabled: true}` and put an admin token of Gitea in the Secret Manager entry
+     `gitea-admin-token`. The Job `forge-init-<hash>` in `agentdev-platform` uses the Gitea API only. It makes the
+     agents write collaborators, `agentdev-api` admin collaborator and `agentdev-router` read collaborator. It also
+     makes the label `agent:<name>`, one webhook to the router, and the branch protection (one approval by
+     `reviewer`). It does not make tokens or repositories. With `create_accounts: true` it also makes missing agent
+     accounts. When Gitea is outside the cluster, set `forge_init.hook_url` to the public webhook URL of the router.
+     For a private CA, put `ca.crt` in a ConfigMap in `agentdev-platform` and set `forge_init.ca_configmap`.
+
+NOTE: The Job has no Kubernetes API token. Only the Job reads the Secret `forge-init` (ESO, #381). The same inputs
+give the same Job name. To run it again with the same inputs, set `forge_init.rerun` to a new string.
 
 ## Limits and blocked agents
 

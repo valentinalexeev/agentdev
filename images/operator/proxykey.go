@@ -23,10 +23,10 @@ import (
 // <agent>.<hex HMAC-SHA256(signing, "agentdev-claude-proxy/v1:<agent>")>. The key only names the agent to the proxy
 // and is worth nothing outside the cluster (docs/security.md R11).
 //
-// RBAC (review of #445): get only on claude-proxy-signing (resourceNames), so the operator cannot read claude-shared or
-// any other Secret here. agent-<name>-proxy is written by a server-side apply, which needs create and patch but no get.
+// RBAC (review of #445): this controller gets only claude-proxy-signing (resourceNames). Note: the McpProject
+// controller (#383) needs get on agent-<name>-mcp, which RBAC can only grant for all Secrets of the namespace. agent-<name>-proxy is written by a server-side apply, which needs create and patch but no get.
 // RBAC cannot narrow create or patch by a name pattern: the ValidatingAdmissionPolicy agentdev-operator-secrets
-// (manifests/secrets-policy.yaml.tmpl, applied in both modes) lets the operator write only agent-*-proxy Secrets.
+// (manifests/operator.yaml.tmpl, next to the Role, so applied in both modes) lets the operator write only agent-*-proxy (and agent-*-mcp) Secrets.
 //
 // Two writers during 1.x: in secrets mode playbook, deploy.yml also writes agent-<name>-proxy (the same HMAC, so the
 // same value and no restart). The operator sets a controller owner reference on the Secret, also on the playbook's

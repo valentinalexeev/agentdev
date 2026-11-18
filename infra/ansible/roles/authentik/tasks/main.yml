@@ -1,5 +1,5 @@
 ---
-# authentik on GKE (#114): the same steps as ./run.sh 09 (database, Secret `authentik`, ConfigMap
+# authentik on GKE (#114): the same steps as ./run.sh 09 (Secret `authentik`, Job authentik-db-init (#382), ConfigMap
 # `authentik-blueprints`, Helm chart with manifests/authentik-values.yaml), with secrets from Secret Manager.
 # Runs after the platform role (Postgres) and before the roles authentik_sso and api. Every task that holds a secret
 # value has no_log. The blueprints create the group agentdev-admins but never set its members (R53): the only member
@@ -69,21 +69,6 @@
   when: not ansible_check_mode and authentik_playbook_secrets
   no_log: true
 
-# init.sql only runs on an empty volume: create the role and database here too (same SQL as 09-authentik.sh)
-- name: Database role and database authentik
-  ansible.builtin.command:
-    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ authentik_db_pod }}", --,
-           psql, -U, postgres, -v, ON_ERROR_STOP=1, -q]
-    stdin: |
-      SELECT 'CREATE ROLE authentik LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authentik')\gexec
-      ALTER ROLE authentik PASSWORD '{{ authentik_secret['pg-authentik'] }}';
-      SELECT 'CREATE DATABASE authentik OWNER authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='authentik')\gexec
-  changed_when: false
-  # secrets_mode external: platform-db init.sql creates the role on a fresh volume; a changed password is the db-init
-  # Job's (#382)
-  when: not ansible_check_mode and authentik_playbook_secrets
-  no_log: true
-
 # secrets_mode external (#381): ExternalSecret authentik with the same keys as templates/config.env.j2
 - name: ExternalSecret authentik (configuration)
   ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
@@ -115,6 +100,22 @@
   register: authentik_config
   when: authentik_playbook_secrets
   no_log: true
+
+# init.sql of platform-db only runs on an empty volume: the Job authentik-db-init-<hash> makes the login and the
+# database authentik in the cluster (#382, no kubectl exec). The password comes from the Secret authentik by name.
+- name: Job authentik-db-init (login and database authentik)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init.yml"
+  vars:
+    db_init_name: authentik-db-init
+    db_init_image: "{{ authentik_db_init_image }}"
+    db_init_command: [sh, /db-init/authentik.sh]
+    db_init_files:
+      authentik.sh: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik.sh', rstrip=false) }}"
+      authentik-roles.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik-roles.sql', rstrip=false) }}"
+    db_init_env:
+      - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}}
+      - {name: AUTHENTIK_DB_PASSWORD, valueFrom: {secretKeyRef: {name: authentik, key: AUTHENTIK_POSTGRESQL__PASSWORD}}}
+    db_init_rerun: "{{ authentik_config is changed }}"
 
 # only manifests/authentik-blueprint-*.yaml, never manifests/kind/ (the kind stand-in)
 - name: ConfigMap authentik-blueprints
@@ -148,6 +149,27 @@
     wait: true
     timeout: 15m0s
 
-- name: Group agentdev-admins and the break-glass admin
-  ansible.builtin.include_tasks: breakglass.yml
-  when: authentik_breakglass_admin_group | bool and not ansible_check_mode
+# Break-glass admin (docs/admin.md): the Job authentik-breakglass-<hash> runs manifests/db-init/breakglass.py with
+# `ak shell` in the authentik image (#382, was a kubectl exec): akadmin into agentdev-admins, add only.
+- name: Group agentdev-admins and the break-glass admin (Job authentik-breakglass)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init.yml"
+  vars:
+    db_init_name: authentik-breakglass
+    db_init_image: "{{ authentik_image }}"
+    db_init_user: 1000                    # the authentik image's user
+    db_init_memory: 1Gi
+    db_init_command: [sh, -c, 'exec ak shell -c "$(cat /db-init/breakglass.py)"']
+    db_init_files:
+      breakglass.py: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/breakglass.py', rstrip=false) }}"
+    db_init_env:
+      - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
+    db_init_env_from: [{secretRef: {name: authentik}}]
+    db_init_timeout: 900s
+  when: authentik_breakglass_admin_group | bool
+
+- name: Warn when the break-glass admin akadmin is missing
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: authentik user akadmin not found (renamed or deleted), so no break-glass admin was added to
+      agentdev-admins. Nothing was recreated. Restore one as in docs/admin.md, "Keep a break-glass admin".
+  when: "'BREAKGLASS=missing' in (db_init_result.stdout | default(''))"
