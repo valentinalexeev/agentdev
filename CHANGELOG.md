@@ -7,6 +7,29 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- **McpProject controller in the operator (#383, phase 2 of #388).** A new kind `McpProject` (`agentdev.dev/v1alpha1`,
+  short name `mcpp`, in the agents namespace; main has no project resource yet) replaces `scripts/mcp-sync.sh`: one
+  ContextForge gateway per server, one virtual server per project, one token per agent in Secret `agent-<name>-mcp`
+  (same keys, label and annotations as the script, so its Secrets are adopted). The host allow-list is the operator's
+  `MCP_ALLOWED_HOSTS`; a refused host sets `Ready=False` (`HostNotAllowed`) with the reason in status and changes
+  nothing. The admin password comes from the Secret `contextforge`, never a file. Deleting an `McpProject` revokes its
+  tokens. Tokens renew in their last 30 days on the 6-hourly resync.
+
+### Changed
+- The role `platform` applies one `McpProject` per `mcp_projects` spec instead of running `scripts/mcp-sync.sh` with a
+  temporary password file; `yq`, `jq` and `curl` are no longer needed on the operator machine for the sync.
+
+### Deprecated
+- `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
+
+### Upgrade
+1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
+   `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets get/create/update/delete
+   in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
+2. Existing `agent-<name>-mcp` Secrets made by the script are taken over as they are; no token is re-minted until the
+   project's virtual server changes or the token is in its last 30 days.
+3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
+4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
 - **`Ready` condition for GitOps health checks (#386).** `Agent`, `Executor` and `ProjectSecret` have a `Ready`
   condition with `observedGeneration`, which Flux (kstatus) and Argo CD read. A stopped (scaled to zero) or paused
   agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker

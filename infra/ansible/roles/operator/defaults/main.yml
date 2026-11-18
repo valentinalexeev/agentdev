@@ -43,5 +43,7 @@ operator_telemetry:
 # cache never syncs
 operator_secrets_store_enabled: true
 operator_crds: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml, agentdev.dev_mcpprojects.yaml]
+# MCP per project (#383): the operator's McpProject controller; same values as the role platform
+operator_mcp_admin_email: admin@agentdev.dev
 operator_timeout: 120

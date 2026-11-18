@@ -600,7 +600,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 3. Run run.sh step 08: `./run.sh 08`
    The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
    The playbook deploys the namespace `agentdev-platform` with Postgres.
-   If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
+   If `MCP_PROJECTS` is set, the step also deploys ContextForge and makes one `McpProject` for each specification.
+   The operator (step 12) syncs each `McpProject` to ContextForge.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
 the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
@@ -628,13 +629,15 @@ database stays in Postgres. To keep ContextForge without `mcp_projects`, set `pl
    Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
    List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
 3. Run the playbook (refer to `infra/ansible/README.md`).
-   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+   The playbook makes one `McpProject` for each specification. The operator syncs it to ContextForge.
+   The machine that runs the playbook does not read the ContextForge admin password.
 4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
 
 CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
 the connection from ContextForge.
 
-NOTE: The dry run (`--check`) does not run the sync.
+NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not exist yet. The playbook skips the
+`McpProject` objects in that case.
 
 ### Add MCP servers to a project
 
@@ -653,9 +656,11 @@ NOTE: The dry run (`--check`) does not run the sync.
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
    A bad server can put instructions in them (prompt injection). Refer to R51 in `docs/security.md`.
 
-   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
-3. Run the sync: `scripts/mcp-sync.sh <spec>`
-   The bootstrap also runs this script.
+   The operator makes no changes in ContextForge if a server is on a host that is not in the list. The
+   `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
+3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
+   You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
+   `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
@@ -698,7 +703,7 @@ Before you start, make sure that Prometheus or Loki operates in the cluster. age
    ```
 
 5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
-6. Run the sync: `scripts/mcp-sync.sh <spec>`
+6. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the project.
 7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
@@ -739,19 +744,46 @@ cannot close its code block. The output goes only to the model. agentdev does no
 
 ### Reference: the MCP sync
 
-You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
+The operator syncs each `McpProject` (short name `mcpp`) in the agents namespace (#383). The name is the project:
 
-- It stops if a server host is not in the allow-list.
+```yaml
+apiVersion: agentdev.dev/v1alpha1
+kind: McpProject
+metadata: {name: web, namespace: coding-agents}
+spec:
+  servers:
+    - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
+  agents: [alice, bob]
+```
+
+The sync runs at each change and every 6 hours (`MCP_RESYNC_MINUTES` on the operator). It does these actions:
+
+- It stops if a server host is not in the allow-list (`MCP_ALLOWED_HOSTS` on the operator, from `mcp_allowed_hosts`).
+  The allow-list is an instance setting. An `McpProject` cannot change it.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.
 - It keeps the token in the Secret `agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`).
 
 Tokens are valid for one year. A sync in the last 30 days of a token makes a new token and revokes the old token.
-When you remove an agent from `agents:` (or remove `mcp:`), the next sync deletes its Secret and revokes its token.
+When you remove an agent from `agents:` (or remove the servers), the next sync deletes its Secret and revokes its
+token. When you delete the `McpProject`, the operator revokes all its tokens and deletes their Secrets.
+
+The operator reads the ContextForge admin password from the Secret `contextforge` in `agentdev-platform` (key
+`PLATFORM_ADMIN_PASSWORD`). Its Role there can read only that Secret. The status shows the result, never a token:
+
+| `Ready` reason | Meaning |
+|---|---|
+| `Synced` | The gateways, the virtual server and every agent token are in place |
+| `NoServers` | The spec has no servers; no tokens |
+| `HostNotAllowed`, `InvalidServer` | A server is refused; nothing changed in ContextForge |
+| `ContextForgeUnavailable` | ContextForge is not deployed or the admin login failed |
+| `NoTools` | ContextForge found no tools on the servers; make sure that they operate |
+| `SyncFailed` | A ContextForge call or a Secret failed; the message names the step |
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
-Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
+Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace and
+the operator pod. GKE
 applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
 (kindnet) does not.
 
