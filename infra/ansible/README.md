@@ -128,7 +128,7 @@ clear message if one is missing. Secret values are read at run time and every ta
 gcloud, and writes no secret values (`SECRETS.md` lists the Secrets by name). `deploy.yml` uses the same renderer
 (`tasks/render_objects.yml`) and the same value checks (`tasks/checks.yml`). Cluster facts come from `platform`
 (`terraform output platform`). The roles `platform`, `authentik`, `authentik_sso` and `api` render with their
-`tasks/render.yml` (#447): authentik as `helm template` output, the database step as a Job (`roles/api/templates/db-setup.yaml.j2`).
+`tasks/render.yml` (#447): authentik as `helm template` output, the database and break-glass steps as the Jobs of `tasks/db_init_render.yml` (#382).
 ```bash
 ansible-playbook infra/ansible/render.yml -e @<deployment repo>/ansible/instance.yml -e render_dir=$PWD/rendered
 ```

@@ -2,7 +2,8 @@
 # Render mode of the role (#447, render.yml): Postgres, ContextForge and obs-mcp as the fact platform_objects, with no
 # cluster or Secret Manager access. The Secrets platform-db, contextforge and obs-mcp-token are not rendered (values);
 # their names are in SECRETS.md. Placeholders fill the secret values of the template only to render it; every Secret
-# of the template is dropped before the result is kept. mcp-sync (a script against ContextForge) is not rendered (#383).
+# of the template is dropped before the result is kept. One McpProject per mcp_projects spec (#383),
+# the same objects as deploy.yml applies.
 - name: Observability MCP settings are valid
   ansible.builtin.assert:
     that:
@@ -24,6 +25,7 @@
       platform_obs_mcp: >-
         {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars=obs_render) | from_yaml_all | list)
            if platform_obs_mcp_enabled | bool else [] }}
+      platform_mcp: "{{ lookup('ansible.builtin.template', repo_root ~ '/infra/ansible/templates/mcpprojects.j2') | from_yaml }}"
   vars:
     platform_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
     platform_render:

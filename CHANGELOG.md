@@ -12,7 +12,9 @@ While the version is `0.x`, breaking changes bump MINOR.
   `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
   (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
   `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
-  `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447). Docs: `docs/admin.md`, "Render the
+  `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml` (#447): authentik as
+  `helm template` output, the database and break-glass steps as the Jobs `agentdev-db-init-<hash>`,
+  `authentik-db-init-<hash>` and `authentik-breakglass-<hash>` of #382, Secrets by name only. Docs: `docs/admin.md`, "Render the
   manifests for a GitOps engine".
 - **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
   operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`

@@ -90,12 +90,8 @@
     db_init_name: authentik-db-init
     db_init_image: "{{ authentik_db_init_image }}"
     db_init_command: [sh, /db-init/authentik.sh]
-    db_init_files:
-      authentik.sh: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik.sh', rstrip=false) }}"
-      authentik-roles.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik-roles.sql', rstrip=false) }}"
-    db_init_env:
-      - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}}
-      - {name: AUTHENTIK_DB_PASSWORD, valueFrom: {secretKeyRef: {name: authentik, key: AUTHENTIK_POSTGRESQL__PASSWORD}}}
+    db_init_files: "{{ authentik_db_init_files }}"
+    db_init_env: "{{ authentik_db_init_env }}"
     db_init_rerun: "{{ authentik_config is changed }}"
 
 # only manifests/authentik-blueprint-*.yaml, never manifests/kind/ (the kind stand-in)
@@ -136,12 +132,10 @@
     db_init_image: "{{ authentik_image }}"
     db_init_user: 1000                    # the authentik image's user
     db_init_memory: 1Gi
-    db_init_command: [sh, -c, 'exec ak shell -c "$(cat /db-init/breakglass.py)"']
-    db_init_files:
-      breakglass.py: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/breakglass.py', rstrip=false) }}"
-    db_init_env:
-      - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
-    db_init_env_from: [{secretRef: {name: authentik}}]
+    db_init_command: "{{ authentik_breakglass_command }}"
+    db_init_files: "{{ authentik_breakglass_files }}"
+    db_init_env: "{{ authentik_breakglass_env }}"
+    db_init_env_from: "{{ authentik_breakglass_env_from }}"
     db_init_timeout: 900s
   when: authentik_breakglass_admin_group | bool
 

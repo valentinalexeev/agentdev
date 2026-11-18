@@ -1,8 +1,9 @@
 ---
 # Render mode of the role (#447, render.yml): the API, the web UI, the NotificationChannel and the database Job as the
 # fact api_objects, with no cluster or Secret Manager access. The Secrets agentdev-api-* are not rendered (values);
-# their names are in SECRETS.md. The database step of deploy.yml (psql in the Postgres pod) becomes the Job
-# agentdev-db-setup: it reads the passwords from the Secrets platform-db, agentdev-api-db and authentik.
+# their names are in SECRETS.md. The database step is the Job agentdev-db-init-<hash> of tasks/db_init_render.yml (#382),
+# the same objects as deploy.yml applies (roles, schema, grants, SCHEMA_VERSION). It reads the passwords from the
+# Secrets platform-db and agentdev-api-db by name.
 - name: Check the API settings (same checks as the role)
   ansible.builtin.assert:
     that:
@@ -21,11 +22,20 @@
       api.chat.* whole numbers, notifications.channels webpush only (example.vars.yml)
     quiet: true
 
+- name: Render the Job agentdev-db-init (roles, database, schema, retention, grants)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init_render.yml"
+  vars:
+    db_init_name: agentdev-db-init
+    db_init_image: "{{ api_db_init_image }}"
+    db_init_command: [sh, /db-init/agentdev.sh]
+    db_init_files: "{{ api_db_init_files }}"
+    db_init_env: "{{ api_db_init_env }}"
+
 - name: Render the API objects
   ansible.builtin.set_fact:
     api_objects:
       api_crds: "{{ [lookup('ansible.builtin.file', repo_root ~ '/images/operator/config/crd/agentdev.dev_notificationchannels.yaml') | from_yaml] }}"
-      api_db: "{{ lookup('ansible.builtin.template', 'db-setup.yaml.j2') | from_yaml_all | list }}"
+      api_db: "{{ [db_init_cm, db_init_job] }}"
       api: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=api_render) | from_yaml_all | list }}"
       api_ui: >-
         {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars=ui_render) | from_yaml_all | list)
@@ -67,6 +77,7 @@
         CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
         CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
         NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
+        AGENTS_SOURCE: "{{ api_agents_source }}"
       replace: []
     ui_render:
       src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
