@@ -31,9 +31,11 @@ the playbook on first run.
 
 ## Platform (#51)
 The `platform` role deploys Postgres and ContextForge from `manifests/platform.yaml.tmpl` into `platform_ns`,
-then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the operator machine; needs `yq`, `jq`,
-`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
-not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
+then applies one `McpProject` for each spec in `mcp_projects` (paths on the operator machine). The operator's
+McpProject controller (#383, was `scripts/mcp-sync.sh`) registers the servers in ContextForge and writes the agents'
+token Secrets; it reads the ContextForge admin password from the Secret `contextforge`, so the playbook never handles it
+for the sync. Only servers on hosts in `mcp_allowed_hosts` (operator `MCP_ALLOWED_HOSTS`) are registered
+(`docs/security.md` R51); a refused host shows in `kubectl get mcpp`.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 ContextForge is deployed only when `mcp_projects` is not empty (#172); with an empty list the role removes it and the
 agents' `agent-<name>-mcp` Secrets (Postgres and the `contextforge` database stay). `platform_contextforge_enabled: true`
@@ -50,9 +52,12 @@ from Secret Manager and run after `include_role: platform`.
 The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
 authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
 `./run.sh 10` it:
-- creates `agentdev_owner` (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies
-  `images/api/schema.sql` as the owner, sets the retention (`api.db_retention_days`, default 365) and applies
-  `images/api/grants.sql`. SQL goes to `psql` in `platform-db-0` on stdin (`no_log`), never in argv;
+- runs the Job `agentdev-db-init-<hash>` in the cluster (#382, no `kubectl exec`): it creates `agentdev_owner`
+  (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies `images/api/schema.sql` as
+  the owner, sets the retention (`api.db_retention_days`, default 365), applies `images/api/grants.sql` and writes the
+  schema version. The SQL is a ConfigMap of the same name (`manifests/db-init/`); the passwords come from the Secrets
+  `platform-db` and `agentdev-api-db` by name. The hash covers the SQL, so a new `schema.sql` gives a new Job and the
+  same files change nothing. The API serves only once the schema version matches its own (`startupProbe`);
 - writes the Secrets `agentdev-api-db`, `agentdev-api-forge` (only if Secret Manager `agentdev-api-forge-token` has
   a value, else absent: forge writes give 503, fail closed) and `agentdev-api-siem` (addresses from
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,

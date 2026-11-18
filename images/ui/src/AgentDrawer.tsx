@@ -198,14 +198,16 @@ function Settings({ a, token, onExpired, onDone }: { a: AgentDetail; token: stri
           ? <button className="agd-btn" type="button" disabled={busy} onClick={() => run(`Resume ${a.name}`, { paused: false })}><Icon name="play" />Resume</button>
           : <button className="agd-btn" type="button" disabled={busy} onClick={() => run(`Pause ${a.name}`, { paused: true })}><Icon name="pause" />Pause</button>}
       </div>
-      <form className="agd-form" onSubmit={(e) => { e.preventDefault(); if (!err) run(`Change ${a.name}`, { maxConcurrent: Number(max), scaleToZero: stz }) }}>
+      {a.source === 'git'
+        ? <p className="agd-muted" style={{ margin: 0 }}>This agent comes from Git. Change its settings in the deployment repository.</p>
+        : <form className="agd-form" onSubmit={(e) => { e.preventDefault(); if (!err) run(`Change ${a.name}`, { maxConcurrent: Number(max), scaleToZero: stz }) }}>
         <label className="agd-field"><span>Max. concurrent</span>
           <input className="agd-input" type="number" min={1} max={8} required value={max} aria-invalid={!!err} onChange={(e) => setMax(e.target.value)} />
           <small>Issues and pull requests the agent works on at the same time, 1 to 8.</small></label>
         <label className="agd-check"><input type="checkbox" checked={stz} onChange={(e) => setStz(e.target.checked)} /> Scale to zero</label>
         {err && <span className="agd-error">{err}</span>}
         <div><button className="agd-btn agd-btn-primary" type="submit" disabled={busy || !!err}>Save</button></div>
-      </form>
+      </form>}
       {msg && <p className={msg.ok ? 'agd-muted' : 'agd-error'} role={msg.ok ? 'status' : 'alert'} style={{ margin: 0 }}>{msg.text}</p>}
     </>
   )

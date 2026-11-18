@@ -15,6 +15,7 @@
     platform_sm_prefix: platform-
     approvals: {enabled: true}
     usage: {five_hour: 70, weekly: 85}
+    agents_source: git
     api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2, chat: {enabled: true}}
   tasks:
     - name: Load the role defaults
@@ -41,6 +42,7 @@
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             MAX_AGENTS: "{{ api_max_agents }}"
             MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+            AGENTS_SOURCE: "{{ api_agents_source }}"
             CHAT_SESSIONS: "{{ api_chat | string | lower }}"
             CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"
             CHAT_FORGE_IMAGE: "{{ api_chat_forge_image }}"
@@ -63,6 +65,7 @@
           - env.USAGE_WEEKLY == '85'
           - env.MAX_AGENTS == '2'   # #27
           - env.MAX_AGENTS_PER_USER == '0'
+          - env.AGENTS_SOURCE == 'git'   # #58
           - env.CHAT_SESSIONS == 'true'   # #346
           - env.CHAT_IDLE_SECONDS == '1800'
           - env.CHAT_RETENTION_DAYS == '30'

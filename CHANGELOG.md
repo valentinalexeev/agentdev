@@ -6,6 +6,63 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a
+  directory, with no cluster or Secret Manager access and no secret values (`SECRETS.md` lists the Secret names).
+  `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
+  (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
+  `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
+  `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447). Docs: `docs/admin.md`, "Render the
+  manifests for a GitOps engine".
+- **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
+  operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`
+  (`forge_init.enabled`, admin token in Secret Manager `gitea-admin-token`, ExternalSecret `forge-init`) sets
+  collaborators, `agent:<name>` labels, the router webhook and branch protection through the Gitea API only
+  (`agentdev-operator forge-init`, no kubectl exec, no Kubernetes API token). docs/admin.md, "Connect an external
+  Gitea on GKE".
+- **Agents from Git (#58).** New instance setting `agents_source: api|git` (default `api`; `AGENTS_SOURCE` on kind).
+  With `git`, Flux applies the `Agent` objects from the deployment repository; the playbook no longer applies them,
+  and the API and web UI treat every Agent it did not make as read-only except pause and resume (409 otherwise).
+  `GET /api/agents` shows `source: api|git`. The API writes Agents with the field manager `agentdev-api`, the
+  operator's security pause patches only `spec.paused` with `agentdev-operator`, so Flux server-side apply never
+  fights over `spec.paused`. Docs: `docs/admin.md`, "Keep the agents in Git (Flux)".
+- **McpProject controller in the operator (#383, phase 2 of #388).** A new kind `McpProject` (`agentdev.dev/v1alpha1`,
+  short name `mcpp`, in the agents namespace; main has no project resource yet) replaces `scripts/mcp-sync.sh`: one
+  ContextForge gateway per server, one virtual server per project, one token per agent in Secret `agent-<name>-mcp`
+  (same keys, label and annotations as the script, so its Secrets are adopted). The host allow-list is the operator's
+  `MCP_ALLOWED_HOSTS`; a refused host sets `Ready=False` (`HostNotAllowed`) with the reason in status and changes
+  nothing. The admin password comes from the Secret `contextforge`, never a file. Deleting an `McpProject` revokes its
+  tokens. Tokens renew in their last 30 days on the 6-hourly resync.
+- **`Ready` condition for GitOps health checks (#386).** `Agent`, `Executor` and `ProjectSecret` have a `Ready`
+  condition with `observedGeneration`, which Flux (kstatus) and Argo CD read. A stopped (scaled to zero) or paused
+  agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
+  image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
+  "Health checks for Flux and Argo CD".
+
+### Changed
+- `deploy.yml` does not read the cluster to select a template (#384). The FQDNNetworkPolicy objects follow
+  `platform.egress.fqdn` (default from `egress_fqdn_policy`, as before), and the Gateway follows
+  `platform.ingress.gateway_api` (default `true`). The preflight (`crds`) still compares them with the cluster.
+  No migration: without `platform` the behaviour is the same. To use the render mode, re-apply `infra/terraform` and
+  copy `terraform output platform` into `ansible/instance.yml`.
+- **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
+  role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
+  retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and
+  database `authentik`) and `authentik-breakglass-<hash>` (`akadmin` into `agentdev-admins`, add only; replaces
+  `breakglass.yml`). The hash covers the SQL, so a changed schema gives a new Job; the same files change nothing. The
+  Jobs read the Postgres passwords from the Secrets `platform-db`, `agentdev-api-db` and `authentik` by name. The
+  API waits until the database holds the schema version of its own `schema.sql` and `grants.sql` before it serves
+  (`startupProbe`, up to 15 minutes); `DATABASE_MIGRATE=true` keeps the old self-migrating mode for tests.
+- The role `platform` applies one `McpProject` per `mcp_projects` spec instead of running `scripts/mcp-sync.sh` with a
+  temporary password file; `yq`, `jq` and `curl` are no longer needed on the operator machine for the sync.
+
+### Deprecated
+- `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
+
+### Fixed
+- An executor without `executors[].path` no longer renders `path: ""`, which the Executor CRD refuses (#384, found
+  by the kind apply of the rendered manifests).
+
 ### Upgrade
 - **`deploy.yml` task order (#384).** No new step to run: apply `deploy.yml` as usual. The order of some tasks changed:
   1. All reads of Secret Manager come first: platform, agent, executor, Gitea wake poll and GitHub App secrets, the
@@ -15,27 +72,26 @@ While the version is `0.x`, breaking changes bump MINOR.
   3. The platform namespace is now made together with the agents namespace, before the CRDs (before: after the CRDs).
   4. The `webhook-router` Secret is a separate task, before the router objects.
   The objects themselves are the same. Re-run: `deploy.yml` only.
-
-### Added
-- **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a
-  directory, with no cluster or Secret Manager access and no secret values (`SECRETS.md` lists the Secret names).
-  `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
-  (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
-  `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
-  `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml` (#447): authentik as
-  `helm template` output, the database step as the Job `agentdev-db-setup-<hash>`, Secrets by name only. Docs: `docs/admin.md`, "Render the
-  manifests for a GitOps engine".
-
-### Changed
-- `deploy.yml` does not read the cluster to select a template (#384). The FQDNNetworkPolicy objects follow
-  `platform.egress.fqdn` (default from `egress_fqdn_policy`, as before), and the Gateway follows
-  `platform.ingress.gateway_api` (default `true`). The preflight (`crds`) still compares them with the cluster.
-  No migration: without `platform` the behaviour is the same. To use the render mode, re-apply `infra/terraform` and
-  copy `terraform output platform` into `ansible/instance.yml`.
-
-### Fixed
-- An executor without `executors[].path` no longer renders `path: ""`, which the Executor CRD refuses (#384, found
-  by the kind apply of the rendered manifests).
+- **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
+  (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
+  to the ESO secret list (#381), then set `forge_init: {enabled: true}`.
+- **#382:** nothing to do by hand: the next playbook run applies the Jobs, the API waits for them. Jobs of an older hash are
+  removed. A new API image together with an old database (a playbook run that stopped before the role `api`) does not
+  serve until the role `api` ran: run the playbook to the end. The variables `api_db_pod` and `authentik_db_pod` are
+  gone.
+- **#58:** nothing to do for `agents_source: api` (the default). To move to `git`: add the Agent manifests (without
+  `spec.paused`) to the deployment repository, set `agents_source: git`, run the playbook (role `api` and
+  `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
+- **#383:**
+  1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
+     `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets get/create/update/delete
+     in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
+  2. Existing `agent-<name>-mcp` Secrets made by the script are taken over as they are; no token is re-minted until the
+     project's virtual server changes or the token is in its last 30 days.
+  3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
+  4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
+- **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
+  the playbook (role `operator`) on GKE. No spec changes, no agent restart.
 
 ## [1.1.0-rc.3] - 2026-11-17
 

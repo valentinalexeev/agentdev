@@ -102,6 +102,9 @@ type ProjectSecretStatus struct {
 	SyncedAt *metav1.Time `json:"syncedAt,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Ready (#386): True when synced, False when pending or error. Flux and Argo CD health checks read it.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

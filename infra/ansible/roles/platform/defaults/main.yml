@@ -20,10 +20,13 @@ platform_secret_keys:
   - cf-admin
   - cf-default-user
   - cf-basic-auth
-# mcp_projects (project specs for scripts/mcp-sync.sh) is in group_vars/all.yml
+# mcp_projects (project specs, one McpProject each, #383) is in group_vars/all.yml. The specs read from the operator
+# machine; none while ContextForge is off (their McpProjects are deleted, the operator drops the token Secrets).
+platform_mcp_specs: >-
+  {{ (query('ansible.builtin.file', *mcp_projects) | map('from_yaml') | list) if platform_contextforge_enabled | bool else [] }}
 
 # Read-only observability MCP tools (#205): settings are `obs_mcp` in group_vars/all.yml. The Deployment uses the
-# operator image (operator_image) and is applied before mcp-sync, so a project spec can register it.
+# operator image (operator_image) and is applied before the McpProjects, so a project spec can register it.
 platform_obs_mcp_enabled: "{{ obs_mcp.enabled | default(false) | bool }}"
 
 # kind (#106, kind.yml): secrets as files instead of Secret Manager, images loaded into the kind nodes.

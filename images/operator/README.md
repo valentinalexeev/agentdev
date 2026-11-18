@@ -61,3 +61,11 @@ merge commit, and an apply after an `Approval` of that plan. The same binary run
 `ExternalSecret ps-<name>` per `ProjectSecret` (short name `psec`) and mirrors its sync state into the status
 (`pending`, `ready`, `error`). It never reads the value. An ExternalSecret of the same name that it does not own is
 never taken over. Field rules: `api/v1alpha1/projectsecret_types.go`; name rules: `manifests/secrets-policy.yaml.tmpl`.
+
+**MCP per project (#383, was `scripts/mcp-sync.sh`).** For each `McpProject` (short name `mcpp`) in the agents
+namespace the operator registers the servers as ContextForge gateways `<project>-<server>`, keeps the virtual server
+`project-<project>` with their tools, and one token per agent in Secret `agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`).
+It reads the admin password from Secret `contextforge` in `PLATFORM_NS` (`PLATFORM_ADMIN_PASSWORD`), refuses hosts
+outside `MCP_ALLOWED_HOSTS` with the reason in `status.conditions[Ready]`, resyncs every `MCP_RESYNC_MINUTES` (360),
+and revokes the tokens when an agent or the `McpProject` goes (finalizer). ContextForge URL: `MCP_CONTEXTFORGE_URL`
+(default `http://contextforge.<PLATFORM_NS>.svc.cluster.local:4444`; `off` disables the controller).
