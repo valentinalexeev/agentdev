@@ -53,6 +53,8 @@
           - docs.gke | selectattr('kind', 'equalto', 'Gateway') | list | length == 1
           - docs.gke | selectattr('kind', 'equalto', 'Agent') | map(attribute='spec.claudeSecret') | list == ['claude-shared', 'claude-bob']
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
+          # the CRD refuses an empty path, so an executor without executors[].path has no path key
+          - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='spec') | selectattr('path', 'defined') | list | length == 0
           - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 6
           - (files.results[0].files | map(attribute='path') | map('basename') | sort | first) == '00-namespaces.yaml'
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agent-alice-proxy')

@@ -22,6 +22,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   No migration: without `platform` the behaviour is the same. To use the render mode, re-apply `infra/terraform` and
   copy `terraform output platform` into `ansible/instance.yml`.
 
+### Fixed
+- An executor without `executors[].path` no longer renders `path: ""`, which the Executor CRD refuses (#384, found
+  by the kind apply of the rendered manifests).
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
