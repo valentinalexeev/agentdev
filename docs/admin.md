@@ -415,6 +415,68 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
 
+### Health checks for Flux and Argo CD
+
+The kinds `Agent`, `Executor` and `ProjectSecret` have a `Ready` condition and `status.observedGeneration` (#386).
+Flux and Argo CD read them. A stopped agent is ready: the router can start it again.
+
+| Kind | `Ready` is `True` | `Ready` is `False` (reason) |
+|---|---|---|
+| `Agent` | phase `running`, `starting`, `stopped` or `paused` | phase `blocked` (`Blocked`), phase `invalid` (`SecretNotBound`) |
+| `Executor` | phase `ready` or `paused` | phase `invalid` or `error` |
+| `ProjectSecret` | phase `ready` (`Synced`) | phase `pending` (`Pending`) or `error` (`Error`) |
+
+`status.image` of an `Agent` shows the worker image of its StatefulSet. A stopped agent starts with this image at its
+next wake.
+
+To make Flux wait for the agents, use a `Kustomization` with `wait: true` or with `healthChecks`:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agents
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./agents
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: deployment
+  dependsOn:
+    - name: agentdev        # the layer with the CRDs and the operator
+  timeout: 5m
+  healthChecks:
+    - apiVersion: agentdev.dev/v1alpha1
+      kind: Agent
+      name: alice
+      namespace: coding-agents
+```
+
+For Argo CD, add a health check for each kind to `argocd-cm`. Do not use `Suspended` for a stopped agent: one
+suspended resource makes all of the Application suspended.
+
+```yaml
+resource.customizations.health.agentdev.dev_Agent: |
+  hs = {status = "Progressing", message = "waiting for the operator"}
+  if obj.status ~= nil and obj.status.conditions ~= nil then
+    if (obj.status.observedGeneration or 0) < obj.metadata.generation then return hs end
+    for _, c in ipairs(obj.status.conditions) do
+      if c.type == "Ready" then
+        hs.message = c.message
+        if c.status == "True" then hs.status = "Healthy" else hs.status = "Degraded" end
+      end
+    end
+  end
+  return hs
+```
+
+Use the same script for `agentdev.dev_Executor` and `agentdev.dev_ProjectSecret`.
+
+To show the state of all agents, do this command:
+`kubectl -n coding-agents get agents`. The column `READY` shows the `Ready` condition.
+
 ## Labels
 
 agentdev labels its cloud resources and Kubernetes objects with `service` and `environment`, so the billing export

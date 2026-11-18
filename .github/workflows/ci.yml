@@ -199,7 +199,8 @@ jobs:
       - name: Go dead code (staticcheck U1000, #132)
         if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          # setup-go installs the go.mod `go` line; build staticcheck with the `toolchain` line (#431)
+          GOTOOLCHAIN="$(cd images/api && go env GOVERSION)" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           for m in api operator forge credproxy; do
             (cd images/$m && "$(go env GOPATH)/bin/staticcheck" -checks U1000 ./...) || exit 1
           done
