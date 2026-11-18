@@ -182,6 +182,7 @@ gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), b
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
 kindnet, Argo CD, Flux, terminal, Claude Code, push notification (a message that the browser shows when the web UI is
 not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device,
+field manager (the name that Kubernetes records for the writer of a field, #58), deployment repository,
 condition (a status entry of a Kubernetes object, for example `Ready`, #386), health check (of Flux or Argo CD),
 Kustomization (the Flux object that applies a directory of a Git repository).
 
@@ -203,6 +204,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
 | mute | stop the notifications of a project or a type (#347) |
 | merge | add the changes of a pull request to the main branch |
+| prune | delete the objects that Flux applied before and that are no longer in Git (#58) |
 | publish | make a Service of the cluster available on a public or tailnet URL |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |

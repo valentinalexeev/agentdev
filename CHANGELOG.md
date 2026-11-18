@@ -7,6 +7,17 @@ While the version is `0.x`, breaking changes bump MINOR.
 ## [Unreleased]
 
 ### Added
+- **Agents from Git (#58).** New instance setting `agents_source: api|git` (default `api`; `AGENTS_SOURCE` on kind).
+  With `git`, Flux applies the `Agent` objects from the deployment repository; the playbook no longer applies them,
+  and the API and web UI treat every Agent it did not make as read-only except pause and resume (409 otherwise).
+  `GET /api/agents` shows `source: api|git`. The API writes Agents with the field manager `agentdev-api`, the
+  operator's security pause patches only `spec.paused` with `agentdev-operator`, so Flux server-side apply never
+  fights over `spec.paused`. Docs: `docs/admin.md`, "Keep the agents in Git (Flux)".
+
+### Upgrade
+- **#58:** nothing to do for `agents_source: api` (the default). To move to `git`: add the Agent manifests (without
+  `spec.paused`) to the deployment repository, set `agents_source: git`, run the playbook (role `api` and
+  `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
 - **McpProject controller in the operator (#383, phase 2 of #388).** A new kind `McpProject` (`agentdev.dev/v1alpha1`,
   short name `mcpp`, in the agents namespace; main has no project resource yet) replaces `scripts/mcp-sync.sh`: one
   ContextForge gateway per server, one virtual server per project, one token per agent in Secret `agent-<name>-mcp`

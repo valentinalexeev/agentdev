@@ -35,6 +35,8 @@
           - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
           - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
           - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
+          # #58: api (the playbook and the API write Agent objects) or git (Flux applies them from the deployment repo)
+          - (agents_source | default('api')) in ['api', 'git']
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
         quiet: true
 
@@ -792,8 +794,9 @@
             scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
-      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below
-      when: not ansible_check_mode
+      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below.
+      # agents_source git (#58): Flux applies the Agent objects from the deployment repository, not the playbook
+      when: not ansible_check_mode and (agents_source | default('api')) == 'api'
       no_log: true
 
     - name: Per-agent Claude secrets (only agents that have one)
