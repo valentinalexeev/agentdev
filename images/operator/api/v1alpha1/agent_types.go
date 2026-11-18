@@ -63,8 +63,14 @@ type AgentStatus struct {
 	Phase string `json:"phase,omitempty"`
 	// Ready pods (0 or 1).
 	Ready int32 `json:"ready,omitempty"`
+	// Worker image of the StatefulSet: the version the agent runs at its next wake. A stopped agent keeps running
+	// the old pod image until then.
+	// +optional
+	Image string `json:"image,omitempty"`
 	// .metadata.generation last reconciled.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Reconciled, SecurityPaused and Ready. Ready is True for running, starting, stopped and paused (the router can
+	// wake the agent) and False for invalid and blocked (#386); Flux and Argo CD health checks read it.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -74,6 +80,7 @@ type AgentStatus struct {
 // +kubebuilder:resource:shortName=ag
 // +kubebuilder:printcolumn:name="Repo",type=string,JSONPath=`.spec.repo`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="agent name must be at most 40 characters"

@@ -6,6 +6,16 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- **`Ready` condition for GitOps health checks (#386).** `Agent`, `Executor` and `ProjectSecret` have a `Ready`
+  condition with `observedGeneration`, which Flux (kstatus) and Argo CD read. A stopped (scaled to zero) or paused
+  agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
+  image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
+  "Health checks for Flux and Argo CD".
+
+### Upgrade
+- **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
+  the playbook (role `operator`) on GKE. No spec changes, no agent restart.
 ## [1.1.0-rc.3] - 2026-11-17
 
 ### Upgrade

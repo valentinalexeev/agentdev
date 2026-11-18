@@ -181,7 +181,9 @@ Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, 
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
 kindnet, Argo CD, Flux, terminal, Claude Code, push notification (a message that the browser shows when the web UI is
-not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device.
+not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device,
+condition (a status entry of a Kubernetes object, for example `Ready`, #386), health check (of Flux or Argo CD),
+Kustomization (the Flux object that applies a directory of a Git repository).
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
