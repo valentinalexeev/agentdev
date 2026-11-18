@@ -1,0 +1,78 @@
+{# Database setup as a Job (#447, render mode): the same SQL as tasks/database.yml (API roles, schema, grants) and
+   roles/authentik/tasks/main.yml (authentik role and database). deploy.yml runs that SQL with psql in the Postgres
+   pod; a GitOps engine applies this Job instead. Passwords come from Secrets at run time, never from this file:
+   platform-db (POSTGRES_PASSWORD), agentdev-api-db (DATABASE_URL) and authentik (AUTHENTIK_POSTGRESQL__PASSWORD).
+   api_db_image: the Postgres image of the rendered StatefulSet platform-db (render.yml passes it).
+   The Job name has a hash of its content, because a Job is immutable: a changed schema makes a new Job. #}
+{% set sql_files = {'schema.sql': lookup('ansible.builtin.file', repo_root ~ '/images/api/schema.sql'),
+                    'grants.sql': lookup('ansible.builtin.file', repo_root ~ '/images/api/grants.sql')} %}
+{% set auth = authentik_enabled | default(false) | bool %}
+{% set script %}
+set -eu
+# the API password is the one in DATABASE_URL of agentdev-api-db (postgres://agentdev_api:<hex>@platform-db:5432/...)
+PG_API_PASSWORD=${DATABASE_URL#*://agentdev_api:}
+PG_API_PASSWORD=${PG_API_PASSWORD%%@*}
+case "$PG_API_PASSWORD" in *[!0-9a-f]*|'') echo "agentdev-api-db: the password is not hex" >&2; exit 1;; esac
+export PGHOST=platform-db PGUSER=postgres
+until pg_isready -q; do sleep 2; done
+psql -v ON_ERROR_STOP=1 -q <<SQL
+SELECT 'CREATE ROLE agentdev_owner NOLOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner')\gexec
+SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
+ALTER ROLE agentdev_api PASSWORD '$PG_API_PASSWORD';
+SELECT 'CREATE DATABASE agentdev OWNER agentdev_owner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
+ALTER DATABASE agentdev OWNER TO agentdev_owner;
+SQL
+{
+  echo 'REASSIGN OWNED BY agentdev_api TO agentdev_owner;'
+  echo 'SET ROLE agentdev_owner;'
+  cat /sql/schema.sql
+  echo 'UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};'
+  echo 'UPDATE chat_settings SET retention_days = {{ api_chat_retention_days | int }};'
+  echo 'RESET ROLE;'
+  cat /sql/grants.sql
+} | psql -d agentdev -v ON_ERROR_STOP=1 -q
+{% if auth %}
+case "$PG_AUTHENTIK_PASSWORD" in *[!0-9a-f]*|'') echo "authentik: the database password is not hex" >&2; exit 1;; esac
+psql -v ON_ERROR_STOP=1 -q <<SQL
+SELECT 'CREATE ROLE authentik LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authentik')\gexec
+ALTER ROLE authentik PASSWORD '$PG_AUTHENTIK_PASSWORD';
+SELECT 'CREATE DATABASE authentik OWNER authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='authentik')\gexec
+SQL
+{% endif %}
+{% endset %}
+{% set hash = (sql_files | to_json ~ script) | hash('sha256') %}
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: agentdev-db-setup-{{ hash[:10] }}, namespace: {{ platform_ns }}}
+data: {{ (sql_files | combine({'setup.sh': script})) | to_json }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: agentdev-db-setup-{{ hash[:10] }}, namespace: {{ platform_ns }}}
+spec:
+  backoffLimit: 20
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata: {labels: {app: agentdev-db-setup, agentdev/db-client: "true"}}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 999, runAsGroup: 999, runAsNonRoot: true}
+      containers:
+      - name: setup
+        image: {{ api_db_image }}
+        command: [/bin/sh, /sql/setup.sh]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        env:
+        - name: PGPASSWORD
+          valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}
+        - name: DATABASE_URL
+          valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
+{% if auth %}
+        - name: PG_AUTHENTIK_PASSWORD
+          valueFrom: {secretKeyRef: {name: authentik, key: AUTHENTIK_POSTGRESQL__PASSWORD}}
+{% endif %}
+        volumeMounts: [{name: sql, mountPath: /sql, readOnly: true}]
+      volumes:
+      - name: sql
+        configMap: {name: agentdev-db-setup-{{ hash[:10] }}}

@@ -1,0 +1,69 @@
+---
+# Render mode of the role (#447, render.yml): Postgres, ContextForge and obs-mcp as the fact platform_objects, with no
+# cluster or Secret Manager access. The Secrets platform-db, contextforge and obs-mcp-token are not rendered (values);
+# their names are in SECRETS.md. Placeholders fill the secret values of the template only to render it; every Secret
+# of the template is dropped before the result is kept. mcp-sync (a script against ContextForge) is not rendered (#383).
+- name: Observability MCP settings are valid
+  ansible.builtin.assert:
+    that:
+      - (obs_mcp.prometheus_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
+      - (obs_mcp.loki_url | default('')) is match('^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$')
+      - (obs_mcp.cloud_logging_project | default('')) is match('^([a-z][a-z0-9-]{4,28}[a-z0-9])?$')
+      - (obs_mcp.prometheus_url | default('')) ~ (obs_mcp.loki_url | default('')) ~ (obs_mcp.cloud_logging_project | default('')) != ''
+    fail_msg: "obs_mcp: URLs http(s)://host[:port][/path] without credentials, a GCP project id, at least one backend"
+    quiet: true
+  when: platform_obs_mcp_enabled | bool
+
+- name: Render the platform objects
+  ansible.builtin.set_fact:
+    platform_objects:
+      platform: >-
+        {{ platform_docs | rejectattr('kind', 'equalto', 'Secret')
+           | rejectattr('kind', 'equalto', 'Namespace')
+           | rejectattr('metadata.name', 'equalto', '' if platform_contextforge_enabled | bool else 'contextforge') | list }}
+      platform_obs_mcp: >-
+        {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars=obs_render) | from_yaml_all | list)
+           if platform_obs_mcp_enabled | bool else [] }}
+  vars:
+    platform_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+    platform_render:
+      src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        AGENTS_NS: "{{ agents_ns }}"
+        SERVICE_CIDR: "{{ platform_service_cidr }}"
+        POSTGRES_IMAGE: "{{ platform_postgres_image }}"
+        CONTEXTFORGE_IMAGE: "{{ platform_contextforge_image }}"
+        CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
+        PG_ADMIN_PASSWORD: rendered-without-secret
+        PG_CF_PASSWORD: rendered-without-secret
+        PG_AGENTDEV_PASSWORD: rendered-without-secret
+        PG_AUTHENTIK_PASSWORD: rendered-without-secret
+        CF_JWT_SECRET: rendered-without-secret
+        CF_ENC_SECRET: rendered-without-secret
+        CF_ADMIN_PASSWORD: rendered-without-secret
+        CF_DEFAULT_USER_PASSWORD: rendered-without-secret
+        CF_BASIC_AUTH_PASSWORD: rendered-without-secret
+      replace: []
+    obs_render:
+      src: "{{ repo_root }}/manifests/obs-mcp.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        OPERATOR_IMAGE: "{{ operator_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        PROMETHEUS_URL: "{{ obs_mcp.prometheus_url | default('') }}"
+        LOKI_URL: "{{ obs_mcp.loki_url | default('') }}"
+        LOKI_TENANT: "{{ obs_mcp.loki_tenant | default('') }}"
+        CLOUD_LOGGING_PROJECT: "{{ obs_mcp.cloud_logging_project | default('') }}"
+        OBS_GSA: "{{ obs_mcp.cloud_logging_gsa | default('') }}"
+        OBS_MCP_MAX_OUTPUT: "{{ obs_mcp.max_output | default(16384) }}"
+        OBS_MCP_RATE_PER_MIN: "{{ obs_mcp.rate_per_min | default(30) }}"
+        OBS_MCP_RATE_BURST: "{{ obs_mcp.rate_burst | default(10) }}"
+      replace: []
+
+- name: Platform Secret names (values from deploy.yml or the external secrets, issue 381)
+  ansible.builtin.set_fact:
+    platform_secret_names: >-
+      {{ [platform_ns] | product(['platform-db'] + (['contextforge'] if platform_contextforge_enabled | bool else [])
+         + (['obs-mcp-token'] if platform_obs_mcp_enabled | bool and (obs_mcp.token_secret | default('')) | length > 0 else []))
+         | list }}

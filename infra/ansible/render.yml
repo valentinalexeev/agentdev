@@ -8,7 +8,9 @@
 # instance values (`platform`, from `terraform output platform`). Output: one file per group, numbered in apply order
 # (CRDs and namespaces first, then the objects that use them). No hooks and no install-time lookups. The Secrets the
 # objects use are listed in SECRETS.md of the output; they come from deploy.yml or from the external secrets (#381).
-# Not rendered yet: the roles platform, authentik, authentik_sso and api (Helm releases and generated credentials, #447).
+# The roles platform, authentik, authentik_sso and api render with their tasks/render.yml (#447): the authentik chart
+# as `helm template` output (needs helm), the database step as a Job. Not rendered: mcp-sync (#383), the break-glass
+# group of authentik (an API call), the Secrets (names in SECRETS.md).
 - name: Render agentdev manifests (no cluster access)
   hosts: localhost
   gather_facts: false
@@ -31,6 +33,25 @@
       vars:
         # render mode cannot read Secret Manager: an agent uses its own Claude Secret when agents[].own_claude is true
         agent_own_claude: "{{ dict(agents | map(attribute='name') | zip(agents | map(attribute='own_claude', default=false))) }}"
+
+    # #447: the roles of deploy.yml that deploy the platform, authentik and the API, render only (tasks/render.yml)
+    - name: Platform objects (role platform, render only)
+      ansible.builtin.include_role: {name: platform, tasks_from: render.yml}
+
+    - name: Authentik objects (role authentik, render only)
+      ansible.builtin.include_role: {name: authentik, tasks_from: render.yml}
+      when: authentik_enabled | bool
+
+    - name: Company SSO Secret name (role authentik_sso, render only)
+      ansible.builtin.include_role: {name: authentik_sso, tasks_from: render.yml}
+      when: ((authentik | default({})).sso | default({})) | length > 0
+
+    - name: API objects (role api, render only)
+      ansible.builtin.include_role: {name: api, tasks_from: render.yml}
+      vars:
+        api_db_image: "{{ platform_objects.platform | selectattr('kind', 'equalto', 'StatefulSet') | map(attribute='spec.template.spec.containers')
+                          | flatten | map(attribute='image') | first }}"
+      when: api_effective_issuer | length > 0
 
     - name: Ingress objects (role ingress, render only)
       ansible.builtin.include_role:
@@ -62,7 +83,10 @@
         dest: "{{ render_dir }}/{{ '%02d' | format(idx) }}-{{ item.key | replace('_', '-') }}.yaml"
         content: "{{ item.value | map('to_nice_yaml', indent=2, sort_keys=false) | join('---\n') }}"
         mode: "0644"
-      loop: "{{ ((agentdev_objects | dict2items) + (ingress_objects | default({}) | dict2items)) | selectattr('value') | list }}"
+      loop: >-
+        {{ ((agentdev_objects | dict2items)[:1] + (platform_objects | default({}) | dict2items)
+            + (authentik_objects | default({}) | dict2items) + (api_objects | default({}) | dict2items)
+            + (agentdev_objects | dict2items)[1:] + (ingress_objects | default({}) | dict2items)) | selectattr('value') | list }}
       loop_control: {index_var: idx, label: "{{ item.key }}"}
 
     - name: List the Secrets the objects need (names only)
@@ -90,6 +114,8 @@
              + (([agents_ns] | product(agents | map(attribute='name') | map('regex_replace', '^', 'agent-') | map('regex_replace', '$', '-proxy')) | list)
                 if claude_proxy | bool else [])
              + ([[agents_ns, 'webhook-router-poll']] if (wake_poll_seconds | int) > 0 else [])
+             + (platform_secret_names | default([])) + (authentik_secret_names | default([]))
+             + (authentik_sso_secret_names | default([])) + (api_secret_names | default([]))
              + ([exec_ns] | product(executors | map(attribute='name') | product(['forge', 'plan', 'apply'])
                 | map('join', '-') | map('regex_replace', '^', 'exec-')) | list) }}
 

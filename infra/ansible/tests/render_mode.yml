@@ -55,11 +55,25 @@
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
           # the CRD refuses an empty path, so an executor without executors[].path has no path key
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='spec') | selectattr('path', 'defined') | list | length == 0
-          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 6
+          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 7
+          # #447: platform, authentik (helm template), API, UI, NotificationChannel and the database Job
+          - docs.gke | selectattr('kind', 'equalto', 'StatefulSet') | map(attribute='metadata.name') | list == ['platform-db']
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.name') | select('match', '^authentik-')
+            | list | length == 2
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'in', ['agentdev-api', 'agentdev-ui'])
+            | list | length == 2
+          - docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='metadata.name') | select('match', '^agentdev-db-setup-[0-9a-f]{10}$')
+            | list | length == 1
+          - docs.gke | selectattr('kind', 'equalto', 'NotificationChannel') | list | length == 1
+          - docs.gke | selectattr('metadata.annotations', 'defined') | map(attribute='metadata.annotations') | select
+            | map('dict2items') | flatten | selectattr('key', 'search', 'helm.sh/hook') | list | length == 0
+          - "'rendered-without-secret' not in (docs.gke | to_json)"
           - (files.results[0].files | map(attribute='path') | map('basename') | sort | first) == '00-namespaces.yaml'
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agent-alice-proxy')
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('claude-bob')
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('exec-tf-prod-forge')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-platform \\| platform-db')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-api-vapid')
           # the Claude proxy NetworkPolicy names the API server from platform.kube_api_ips
           - >-
             docs.gke | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy')

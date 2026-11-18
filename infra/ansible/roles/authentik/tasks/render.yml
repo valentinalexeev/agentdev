@@ -1,0 +1,32 @@
+---
+# Render mode of the role (#447, render.yml): the authentik chart as `helm template` output, the blueprints ConfigMap
+# and the database Job, as the fact authentik_objects. The Secret `authentik` (configuration with credentials) is not
+# rendered; its name is in SECRETS.md. No Helm hooks and no lookup in the chart output (checked by tests/render_mode.yml).
+# The chart's checksum/secret annotation is dropped: it hashes the chart's own (empty) Secret values, never changes
+# with existingSecret, and looks like a key to gitleaks. Not rendered: the break-glass admin group step (a call to the authentik API, docs/admin.md).
+- name: Check the authentik settings (render)
+  ansible.builtin.assert:
+    that:
+      - authentik_host is match('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+      - authentik_version is match('^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,3}$')
+    fail_msg: "authentik needs ingress.auth_host (a DNS name) and authentik.version YYYY.M.P"
+    quiet: true
+
+- name: Render the authentik chart (helm template, no cluster access)
+  ansible.builtin.command:
+    argv: [helm, template, authentik, authentik, --repo, "{{ authentik_chart_repo }}", --version, "{{ authentik_version }}",
+           --namespace, "{{ platform_ns }}", -f, "{{ repo_root }}/manifests/authentik-values.yaml"]
+  register: authentik_helm
+  changed_when: false
+  check_mode: false
+
+- name: Render the authentik objects
+  ansible.builtin.set_fact:
+    authentik_objects:
+      authentik: >-
+        {{ (authentik_helm.stdout | regex_replace('(?m)^\\s*checksum/secret: .*\\n', '') | from_yaml_all | select | list)
+           + [{'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': 'authentik-blueprints', 'namespace': platform_ns},
+               'data': dict(authentik_blueprint_files | map('basename') | zip(query('ansible.builtin.file', *authentik_blueprint_files)))}] }}
+    authentik_secret_names: "{{ [[platform_ns, 'authentik']] }}"
+  vars:
+    authentik_blueprint_files: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') | sort }}"

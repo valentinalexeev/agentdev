@@ -22,7 +22,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
   (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
   `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
-  `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447). Docs: `docs/admin.md`, "Render the
+  `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml` (#447): authentik as
+  `helm template` output, the database step as the Job `agentdev-db-setup-<hash>`, Secrets by name only. Docs: `docs/admin.md`, "Render the
   manifests for a GitOps engine".
 
 ### Changed

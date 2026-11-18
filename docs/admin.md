@@ -2607,8 +2607,12 @@ The render reads the cluster facts from the instance values in `platform`:
 5. Make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`, or the external secrets of #381.
 6. Give the directory to the GitOps engine. Apply the files in the order of their numbers.
 
-NOTE: The render does not write the objects of the roles `platform`, `authentik`, `authentik_sso` and `api` yet
-(#447). Deploy them with `deploy.yml`.
+The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authentik and API objects (#447):
+
+- The authentik chart is `helm template` output. The render needs `helm`. The output has no Helm hooks.
+- The database step of `deploy.yml` is the Job `agentdev-db-setup-<hash>`. It reads the passwords from the Secrets
+  `platform-db`, `agentdev-api-db` and `authentik`. A changed schema gives a new Job name.
+- The render does not write `mcp-sync` (#383) or the break-glass group of authentik. Use `deploy.yml` for them.
 
 NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and
 `deploy.yml` reads the API server addresses from the cluster. `deploy.yml` does not read the cluster to select a
