@@ -18,6 +18,61 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **#58:** nothing to do for `agents_source: api` (the default). To move to `git`: add the Agent manifests (without
   `spec.paused`) to the deployment repository, set `agents_source: git`, run the playbook (role `api` and
   `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
+- **McpProject controller in the operator (#383, phase 2 of #388).** A new kind `McpProject` (`agentdev.dev/v1alpha1`,
+  short name `mcpp`, in the agents namespace; main has no project resource yet) replaces `scripts/mcp-sync.sh`: one
+  ContextForge gateway per server, one virtual server per project, one token per agent in Secret `agent-<name>-mcp`
+  (same keys, label and annotations as the script, so its Secrets are adopted). The host allow-list is the operator's
+  `MCP_ALLOWED_HOSTS`; a refused host sets `Ready=False` (`HostNotAllowed`) with the reason in status and changes
+  nothing. The admin password comes from the Secret `contextforge`, never a file. Deleting an `McpProject` revokes its
+  tokens. Tokens renew in their last 30 days on the 6-hourly resync.
+
+### Changed
+- The role `platform` applies one `McpProject` per `mcp_projects` spec instead of running `scripts/mcp-sync.sh` with a
+  temporary password file; `yq`, `jq` and `curl` are no longer needed on the operator machine for the sync.
+
+### Deprecated
+- `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
+
+### Upgrade
+1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
+   `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets get/create/update/delete
+   in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
+2. Existing `agent-<name>-mcp` Secrets made by the script are taken over as they are; no token is re-minted until the
+   project's virtual server changes or the token is in its last 30 days.
+3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
+4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
+- **`Ready` condition for GitOps health checks (#386).** `Agent`, `Executor` and `ProjectSecret` have a `Ready`
+  condition with `observedGeneration`, which Flux (kstatus) and Argo CD read. A stopped (scaled to zero) or paused
+  agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
+  image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
+  "Health checks for Flux and Argo CD".
+
+### Upgrade
+- **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
+  the playbook (role `operator`) on GKE. No spec changes, no agent restart.
+## [1.1.0-rc.3] - 2026-11-17
+
+### Upgrade
+**From 1.0.x (1.0.0 or 1.0.1):** follow the 1.1.0-rc.2 section below (rc.1 steps with the opt-in plan identity),
+pinning `v1.1.0-rc.3` / `1.1.0-rc.3` instead.
+
+**From 1.1.0-rc.1:** do the steps of the 1.1.0-rc.2 section below, pinning rc.3 instead of rc.2.
+
+**From 1.1.0-rc.2:** pin rc.3 everywhere (ADR 0006): `ref=v1.1.0-rc.3` in `terraform/main.tf`,
+`agentdev_ref: v1.1.0-rc.3` and `image_tag: "1.1.0-rc.3"` in `ansible/instance.yml`, in one PR. New images only
+(Go 1.27 builds); no schema, value or `./run.sh` step. Anyone building agentdev's Go code needs Go 1.27.4 (the
+`toolchain` line in `go.mod` downloads it automatically).
+
+### Security
+- Go 1.27 and dependencies (#431). The images build with `golang:1.27.4-alpine` (Go 1.25 gets no more fixes), every
+  `go.mod` has `go 1.26.0` and `toolchain go1.27.4`, and the CI uses the same toolchain. Bumped:
+  `golang.org/x/net` v0.62.0 (api, credproxy, operator), `golang.org/x/crypto` v0.59.0 (api),
+  `go.opentelemetry.io/otel` v1.47.0 and `google.golang.org/grpc` v1.85.0 (credproxy, operator). `govulncheck` shows no
+  reachable vulnerability in any module. It closes the Go standard library advisories fixed in Go 1.26.9 to 1.26.11
+  (for example GO-2026-6610 HTTP/2 response smuggling, GO-2026-6809 crypto/x509, GO-2026-6859 net/http), the `x/net`,
+  `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
+  key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
+  is larger (about 50 MB). New images; no `./run.sh` step.
 
 ## [1.1.0-rc.2] - 2026-11-16
 
@@ -1224,6 +1279,7 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.3...HEAD
+[1.1.0-rc.3]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.2...v1.1.0-rc.3
 [1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0

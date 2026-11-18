@@ -86,6 +86,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "SecretNotBound", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "SecretNotBound", msg, a.Generation))
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
@@ -246,6 +247,10 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	}
 	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionTrue,
 		Reason: "Applied", Message: "service and statefulset match the spec", ObservedGeneration: a.Generation})
+	meta.SetStatusCondition(&s.Conditions, agentReady(s.Phase, true, "", "", a.Generation))
+	if cs := sts.Spec.Template.Spec.Containers; len(cs) > 0 {
+		s.Image = cs[0].Image // the version the agent runs at its next wake (#386)
+	}
 	if equalStatus(a.Status, s) {
 		return nil
 	}
@@ -257,12 +262,12 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {
-	if x.Phase != y.Phase || x.Ready != y.Ready || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
+	if x.Phase != y.Phase || x.Ready != y.Ready || x.Image != y.Image || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
 		return false
 	}
 	for _, c := range y.Conditions {
 		o := meta.FindStatusCondition(x.Conditions, c.Type)
-		if o == nil || o.Status != c.Status || o.Reason != c.Reason {
+		if o == nil || o.Status != c.Status || o.Reason != c.Reason || o.ObservedGeneration != c.ObservedGeneration {
 			return false
 		}
 	}

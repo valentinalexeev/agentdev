@@ -340,7 +340,7 @@
       no_log: true
       when: forge_kind == 'github'
 
-    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #202, #383)"
       kubernetes.core.k8s:
         <<: *k8s
         src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -349,14 +349,15 @@
         wait_condition: {type: Established, status: "True"}
         wait_timeout: 60
       loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml,
+             agentdev.dev_mcpprojects.yaml]
 
     - name: Platform namespace
       kubernetes.core.k8s:
         <<: *k8s
         definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}", labels: "{{ agentdev_effective_labels }}"}}
 
-    - name: Postgres + ContextForge, then mcp-sync per project (#51)
+    - name: "Postgres + ContextForge, then one McpProject per project (#51, #383)"
       ansible.builtin.include_role: {name: platform}
 
     # authentik (#114): same chart, values and blueprints as ./run.sh 09; before the API, which uses it as the issuer
@@ -457,6 +458,9 @@
             # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
             SECRETS_STORE: ""
             SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
+            # MCP per project (#383): McpProject controller, admin login from Secret contextforge
+            MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
+            MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
             CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
           replace: []
 

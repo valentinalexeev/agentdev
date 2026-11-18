@@ -1,0 +1,52 @@
+# McpProjects from mcp_projects (#383): each project spec becomes one McpProject (servers, agent names), none while
+# ContextForge is off, and the role no longer runs scripts/mcp-sync.sh or writes the admin password to a file.
+# Run: ansible-playbook infra/ansible/tests/platform_mcpprojects.yml
+- name: McpProjects of the platform role (#383)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/platform/defaults/main.yml
+
+    - name: A project spec
+      ansible.builtin.tempfile: {state: file, suffix: .yaml}
+      register: t_file
+
+    - name: Write it
+      ansible.builtin.copy:
+        dest: "{{ t_file.path }}"
+        mode: "0600"
+        content: |
+          project: web
+          agents: [{name: alice}, {name: bob}]
+          mcp:
+            servers: [{name: docs, url: "http://docs-mcp.tools.svc.cluster.local:8080/mcp"}]
+
+    - name: One McpProject per spec
+      vars: {mcp_projects: ["{{ t_file.path }}"]}
+      ansible.builtin.assert:
+        that:
+          - platform_mcp_specs | length == 1
+          - platform_mcp_specs[0].project == 'web'
+          - platform_mcp_specs[0].agents | map(attribute='name') | list == ['alice', 'bob']
+          - platform_mcp_specs[0].mcp.servers[0].name == 'docs'
+
+    # include_vars wins over task vars; set_fact wins over include_vars (as -e instance.yml does in the role)
+    - name: ContextForge off
+      ansible.builtin.set_fact: {platform_contextforge_enabled: false}
+
+    - name: None while ContextForge is off
+      vars: {mcp_projects: ["{{ t_file.path }}"]}
+      ansible.builtin.assert:
+        that: platform_mcp_specs | length == 0
+
+    - name: The role makes McpProjects and no longer runs the script or writes a password file
+      vars: {t_role: "{{ lookup('ansible.builtin.file', '../roles/platform/tasks/main.yml') }}"}
+      ansible.builtin.assert:
+        that:
+          - "'kind: McpProject' in t_role"
+          - "'mcp-sync.sh\"' not in t_role"
+          - "'tempfile' not in t_role"
+
+    - name: Remove the spec
+      ansible.builtin.file: {path: "{{ t_file.path }}", state: absent}

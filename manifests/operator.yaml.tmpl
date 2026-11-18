@@ -38,11 +38,32 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
+# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects, and one token Secret agent-<name>-mcp per agent. Secrets
+# are read by name only (no list or watch); resourceNames cannot express agent-*-mcp, so get/update/delete cover the
+# namespace (docs/security.md R52)
+- {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/status], verbs: [get, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/finalizers], verbs: [update]}
+- {apiGroups: [""], resources: [secrets], verbs: [get, create, update, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+# MCP per project (#383): the ContextForge admin login, read by name from the Secret ContextForge starts with. Nothing else
+# in the platform namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [contextforge], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator-mcp}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
 ---
 # deterministic executors (#69): own namespace, so their write credentials never sit next to agents. Only cluster
@@ -144,6 +165,10 @@ spec:
         - {name: FORWARDER_NOT_READY_MINUTES, value: "${FORWARDER_NOT_READY_MINUTES}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
+        # MCP per project (#383): ContextForge in this namespace, its admin login from Secret contextforge
+        - {name: PLATFORM_NS, value: "${PLATFORM_NS}"}
+        - {name: MCP_ADMIN_EMAIL, value: "${MCP_ADMIN_EMAIL}"}
+        - {name: MCP_ALLOWED_HOSTS, value: "${MCP_ALLOWED_HOSTS}"}   # trusted MCP hosts (host or host:port); others: Ready=False
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
