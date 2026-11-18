@@ -98,9 +98,9 @@
         botboard_context: kind-{{ kind_cluster_name }}
       tags: [botboard, never]
 
-    # Postgres always; ContextForge and mcp-sync only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
+    # Postgres always; ContextForge and the McpProjects (#383) only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
     # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager.
-    - name: Postgres, ContextForge MCP gateway, obs-mcp, mcp-sync (was 08-mcp.sh)
+    - name: Postgres, ContextForge MCP gateway, obs-mcp, McpProjects (was 08-mcp.sh)
       ansible.builtin.include_role:
         name: platform
         apply: {tags: [mcp]}

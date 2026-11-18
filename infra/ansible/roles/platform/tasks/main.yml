@@ -1,5 +1,5 @@
 ---
-# Postgres + ContextForge in {{ platform_ns }} (#14, #51), then scripts/mcp-sync.sh for each project spec.
+# Postgres + ContextForge in {{ platform_ns }} (#14, #51), then one McpProject per project spec (#383).
 # Every task that holds a secret value has no_log.
 # platform_secret_source: secret_manager (GKE, deploy.yml) or files (kind, kind.yml: .secrets/platform, #106).
 - name: Platform images on kind (pull, load)
@@ -105,7 +105,7 @@
   loop_control: {label: "{{ item.kind }}/contextforge"}
   when: not platform_contextforge_enabled | bool
 
-- name: Find MCP token Secrets of the agents (made by mcp-sync)
+- name: Find MCP token Secrets of the agents (made by the operator or mcp-sync)
   kubernetes.core.k8s_info:
     context: "{{ kube_context }}"
     kind: Secret
@@ -199,36 +199,58 @@
   changed_when: false
   when: platform_obs_mcp_enabled | bool and not ansible_check_mode
 
-- name: MCP sync for each project spec
-  when: mcp_projects | length > 0 and platform_contextforge_enabled | bool and not ansible_check_mode
-  block:
-    - name: Admin password file for mcp-sync (0600, removed below)
-      ansible.builtin.tempfile: {state: file, suffix: .cf}
-      register: platform_cf_file
+# MCP per project (#383): each spec in mcp_projects becomes an McpProject; the operator's controller registers the
+# servers in ContextForge and keeps the agents' token Secrets (was scripts/mcp-sync.sh with a temp password file). The
+# admin login stays in the Secret contextforge; the allow-list is the operator's MCP_ALLOWED_HOSTS, and a refused host
+# shows in `kubectl get mcpp` (Ready=False, HostNotAllowed). No secret value is read here.
+- name: McpProject CRD (also applied by the operator role; kind runs this role first)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_mcpprojects.yaml"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
 
-    - name: Write the admin password
-      ansible.builtin.copy:
-        dest: "{{ platform_cf_file.path }}"
-        content: "{{ platform_secret['cf-admin'] }}"
-        mode: "0600"
-      no_log: true
+- name: McpProject CRD served (in --check on a first run it is not)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: mcpprojects.agentdev.dev
+  register: platform_mcp_crd
 
-    # mcp-sync.sh never prints a token; no_log as a second guard (GHAS on #99). Only listed MCP hosts are registered.
-    - name: Run scripts/mcp-sync.sh
-      ansible.builtin.command:
-        argv: ["{{ repo_root }}/scripts/mcp-sync.sh", "{{ item }}"]
-      environment:
-        KUBECTL: "kubectl --context {{ kube_context }}"
-        PLATFORM_NS: "{{ platform_ns }}"
-        AGENTS_NS: "{{ agents_ns }}"
-        CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
-        CF_ADMIN_FILE: "{{ platform_cf_file.path }}"
-        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
-      loop: "{{ mcp_projects }}"
-      register: platform_mcp_sync
-      changed_when: "': registered' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
-      no_log: true
-  always:
-    - name: Remove the admin password file
-      ansible.builtin.file: {path: "{{ platform_cf_file.path }}", state: absent}
-      when: platform_cf_file.path is defined
+- name: McpProject per project spec
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: agentdev.dev/v1alpha1
+      kind: McpProject
+      metadata: {name: "{{ item.project }}", namespace: "{{ agents_ns }}", labels: {agentdev/mcp-source: ansible}}
+      spec:
+        servers: "{{ (item.mcp | default({}, true)).servers | default([], true) }}"
+        agents: "{{ item.agents | default([], true) | map(attribute='name') | list }}"
+  loop: "{{ platform_mcp_specs }}"
+  loop_control: {label: "{{ item.project }}"}
+  when: platform_mcp_crd.resources | length > 0
+
+- name: McpProjects from earlier runs
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: agentdev.dev/v1alpha1
+    kind: McpProject
+    namespace: "{{ agents_ns }}"
+    label_selectors: [agentdev/mcp-source=ansible]
+  register: platform_mcp_have
+  when: platform_mcp_crd.resources | length > 0
+
+# the operator revokes their tokens and deletes their Secrets (finalizer)
+- name: Remove McpProjects no longer in mcp_projects
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: absent
+    api_version: agentdev.dev/v1alpha1
+    kind: McpProject
+    namespace: "{{ agents_ns }}"
+    name: "{{ item }}"
+  loop: "{{ platform_mcp_have.resources | default([]) | map(attribute='metadata.name') | list
+            | difference(platform_mcp_specs | map(attribute='project') | list) }}"

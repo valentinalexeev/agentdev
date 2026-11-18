@@ -518,7 +518,9 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 	if !a.Spec.Paused {
 		patch := client.MergeFrom(a.DeepCopy())
 		a.Spec.Paused = true
-		if err := c.Patch(ctx, &a, patch); err != nil {
+		// a merge patch of spec.paused only, under the operator's own field manager (#58): with agents from Git, Flux
+		// server-side apply owns the other spec fields and never spec.paused, so the two never fight
+		if err := c.Patch(ctx, &a, patch, client.FieldOwner(OperatorFieldManager)); err != nil {
 			return fmt.Errorf("pause %s: %w", a.Name, err)
 		}
 		log.FromContext(ctx).Info("agent paused by security event", "agent", a.Name, "reason", reason)
@@ -664,3 +666,6 @@ func (c *Collector) usageSourceText() string {
 	}
 	return "usage is accepted only from the forge sidecar"
 }
+
+// OperatorFieldManager is the field manager of the operator's writes to Agent objects (#58).
+const OperatorFieldManager = "agentdev-operator"

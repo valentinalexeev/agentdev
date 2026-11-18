@@ -37,6 +37,7 @@ ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIK
   -e "api_forge_repo=${REPO}" -e "api_secrets_dir=${SPIKE_DIR}/.secrets/platform" \
   -e "api_github_app_dir=${SPIKE_DIR}/.secrets/github-app" -e "${vars}" \
   -e "api_max_agents=${MAX_AGENTS:-0}" -e "api_max_agents_per_user=${MAX_AGENTS_PER_USER:-0}" \
+  -e "agents_source=${AGENTS_SOURCE:-api}" \
   -e "api_chat_worker_image=${WORKER_IMAGE}" -e "api_chat_forge_image=${FORGE_IMAGE}"   # agent caps (#27), chat (#346, #424)
 s=$(( ($(ms_now)-t0)/1000 ))
 record "agentdev API up in ${PLATFORM_NS} (issuer ${API_OIDC_ISSUER}, Ansible, ${s}s)"

@@ -31,9 +31,11 @@ the playbook on first run.
 
 ## Platform (#51)
 The `platform` role deploys Postgres and ContextForge from `manifests/platform.yaml.tmpl` into `platform_ns`,
-then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the operator machine; needs `yq`, `jq`,
-`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
-not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
+then applies one `McpProject` for each spec in `mcp_projects` (paths on the operator machine). The operator's
+McpProject controller (#383, was `scripts/mcp-sync.sh`) registers the servers in ContextForge and writes the agents'
+token Secrets; it reads the ContextForge admin password from the Secret `contextforge`, so the playbook never handles it
+for the sync. Only servers on hosts in `mcp_allowed_hosts` (operator `MCP_ALLOWED_HOSTS`) are registered
+(`docs/security.md` R51); a refused host shows in `kubectl get mcpp`.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 ContextForge is deployed only when `mcp_projects` is not empty (#172); with an empty list the role removes it and the
 agents' `agent-<name>-mcp` Secrets (Postgres and the `contextforge` database stay). `platform_contextforge_enabled: true`
