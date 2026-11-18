@@ -31,6 +31,7 @@
   register: ingress_fwd_key
   changed_when: false
   failed_when: ingress_fwd_key.rc != 0 or ingress_fwd_key.stdout_lines | length < 2
+  when: secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Forwarder namespace
@@ -48,7 +49,16 @@
       kind: Secret
       metadata: {name: funnel-sidecar, namespace: "{{ ingress_forwarder.namespace }}", labels: {app.kubernetes.io/part-of: agentdev}}
       stringData: {authkey: "{{ ingress_fwd_key.stdout_lines[1:] | join('\n') }}"}
+  when: secrets_mode | default('playbook') == 'playbook'
   no_log: true
+
+# secrets_mode external (#381): ExternalSecret funnel-sidecar; Reloader restarts the forwarder on a new key
+- name: ExternalSecret funnel-sidecar
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  vars:
+    es_specs:
+      - {name: funnel-sidecar, ns: "{{ ingress_forwarder.namespace }}", data: {authkey: "{{ ingress_fwd_authkey_secret }}"}}
+  when: secrets_mode | default('playbook') == 'external'
 
 - name: Forwarder ServiceAccount, Deployment and NetworkPolicy
   kubernetes.core.k8s:
@@ -58,5 +68,6 @@
     wait_condition: {type: Available, status: 'True'}
     wait_timeout: "{{ ingress_smoke_timeout | int }}"
   vars:
-    ingress_fwd_authkey_version: "{{ ingress_fwd_key.stdout_lines[0] }}"
+    # secrets_mode external: no version here, Reloader restarts the pod instead
+    ingress_fwd_authkey_version: "{{ ingress_fwd_key.stdout_lines[0] if ingress_fwd_key.stdout_lines is defined else '' }}"
     ingress_fwd_objects: "{{ lookup('ansible.builtin.template', 'forwarder_deploy.yaml.j2') | from_yaml_all | list }}"

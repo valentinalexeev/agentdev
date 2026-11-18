@@ -26,6 +26,15 @@
 
 - name: Read the API secrets
   ansible.builtin.include_tasks: "secrets_{{ api_secret_source }}.yml"
+  when: api_playbook_secrets
+
+# secrets_mode external (#381): ExternalSecrets with the same names and keys; no value passes through Ansible
+- name: ExternalSecrets of the API
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  vars:
+    es_specs: >-
+      {{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}
+  when: not api_playbook_secrets
 
 - name: Database roles, schema and grants
   ansible.builtin.include_tasks: database.yml
@@ -37,6 +46,7 @@
 
 - name: Secrets agentdev-api-db, agentdev-api-forge, agentdev-api-siem and the chat Secrets
   ansible.builtin.include_tasks: secrets_k8s.yml
+  when: api_playbook_secrets
 
 # Web Push (#347): VAPID key pair, Secret agentdev-api-vapid and the NotificationChannel object
 - name: Notification channels

@@ -62,6 +62,19 @@
         deployment:
           resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
 
+# the same CEL policies as kind (#202 and #381 rules 4 and 5): name and store rules for ExternalSecrets in the agents
+# namespace, and the operator writes only agent-<name>-proxy Secrets there
+- name: Secrets policies (CEL)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_policy) | from_yaml_all | list }}"
+  vars:
+    es_policy:
+      src: "{{ repo_root }}/manifests/secrets-policy.yaml.tmpl"
+      values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}", ESO_NS: "{{ external_secrets_eso_ns }}",
+               ESO_SA: "{{ external_secrets_eso_sa }}"}
+      replace: []
+
 - name: Namespaces of the stores
   kubernetes.core.k8s:
     context: "{{ kube_context }}"

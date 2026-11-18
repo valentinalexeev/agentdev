@@ -2,7 +2,7 @@
 # Platform secrets through the External Secrets Operator (#381). GKE (deploy.yml, secrets_mode: external): ESO syncs
 # every platform Secret from GCP Secret Manager, Reloader restarts the consumers when a Secret changes. The playbook
 # reads no secret value and calls no `gcloud secrets` command in this mode.
-external_secrets_eso_chart_version: 2.14.0          # same as secrets_store_eso_chart_version (kind)
+external_secrets_eso_chart_version: 2.14.0          # ESO_CHART_VERSION: the same chart as the kind secrets_store role
 external_secrets_eso_ns: external-secrets
 external_secrets_eso_sa: external-secrets
 # Stakater Reloader v2 (#381 owner decision): the latest v2 only, pinned. Chart 3.0.0-beta.5 = app v2.0.0-beta.2.

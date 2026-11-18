@@ -38,6 +38,10 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
+# proxy keys (#381): read the signing key (by name, uncached), write agent-<name>-proxy (owned by the Agent). No list or
+# watch. create and get/update cannot be narrowed by a name pattern in RBAC: the ValidatingAdmissionPolicy
+# agentdev-operator-secrets (secrets-policy.yaml.tmpl) lets the operator write only agent-*-proxy Secrets here
+- {apiGroups: [""], resources: [secrets], verbs: [get, create, update]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

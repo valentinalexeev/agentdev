@@ -10,7 +10,7 @@
       {{ ('Secret Manager ' ~ api_sm_db_password) if api_secret_source == 'gcp' else (api_secrets_dir ~ '/pg-agentdev-api') }}
       must hold a hex password (openssl rand -hex 24)
     quiet: true
-  when: not ansible_check_mode
+  when: not ansible_check_mode and api_playbook_secrets
   no_log: true
 
 - name: Database roles and the database agentdev
@@ -20,7 +20,7 @@
     stdin: |
       SELECT 'CREATE ROLE agentdev_owner NOLOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner')\gexec
       SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
-      ALTER ROLE agentdev_api PASSWORD '{{ api_db_password }}';
+      {% if api_playbook_secrets %}ALTER ROLE agentdev_api PASSWORD '{{ api_db_password }}';{% endif %}
       SELECT 'CREATE DATABASE agentdev OWNER agentdev_owner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
       ALTER DATABASE agentdev OWNER TO agentdev_owner;
   changed_when: false   # idempotent SQL; psql -q gives no reliable change signal

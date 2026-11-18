@@ -14,7 +14,8 @@ automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: obs-mcp, namespace: ${PLATFORM_NS}, labels: {app: obs-mcp}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: obs-mcp, namespace: ${PLATFORM_NS}, labels: {app: obs-mcp}, annotations: {secret.reloader.stakater.com/reload: "obs-mcp-token"}}
 spec:
   replicas: 1                      # rate limits are per pod
   selector: {matchLabels: {app: obs-mcp}}

@@ -11,7 +11,7 @@
   when: platform_secret_source == 'files'
 
 - name: Platform secrets from Secret Manager
-  when: platform_secret_source == 'secret_manager'
+  when: platform_secret_source == 'secret_manager' and secrets_mode | default('playbook') == 'playbook'
   block:
     - name: Platform secrets exist in Secret Manager (generated once)
       ansible.builtin.shell: |
@@ -47,16 +47,29 @@
         platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
       no_log: true
 
+# secrets_mode external (#381): ExternalSecrets platform-db and contextforge, with the same keys as the template's
+# Secrets. The values are made by Terraform (infra/terraform/secrets.tf) and never pass through Ansible.
+- name: ExternalSecrets platform-db and contextforge
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  vars:
+    es_specs: >-
+      {{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}
+  when: secrets_mode | default('playbook') == 'external'
+
 # ContextForge (Secret, Deployment, Service, NetworkPolicy, all named contextforge) only when
 # platform_contextforge_enabled (default: mcp_projects is not empty, #172). Postgres always: the API uses it.
 - name: Postgres, ContextForge and their NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
+    # secrets_mode external: the two Secrets come from their ExternalSecrets, so only the other objects apply
     definition: >-
-      {{ platform_docs if platform_contextforge_enabled | bool
-         else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list }}
+      {{ (platform_docs if platform_contextforge_enabled | bool
+          else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list)
+         | rejectattr('kind', 'equalto', 'Secret' if secrets_mode | default('playbook') == 'external' else '-') | list }}
   vars:
     platform_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+    # secrets_mode external: no values here (the Secret documents are not applied), placeholders fill the template
+    platform_ps: "{{ platform_secret | default(dict(platform_secret_keys | zip(['-'] * platform_secret_keys | length))) }}"
     platform_render:
       src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
       values:
@@ -66,16 +79,16 @@
         POSTGRES_IMAGE: "{{ platform_postgres_image }}"
         CONTEXTFORGE_IMAGE: "{{ platform_contextforge_image }}"
         CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
-        PG_ADMIN_PASSWORD: "{{ platform_secret['pg-admin'] }}"
-        PG_CF_PASSWORD: "{{ platform_secret['pg-contextforge'] }}"
-        PG_AGENTDEV_PASSWORD: "{{ platform_secret['pg-agentdev'] }}"
-        PG_AUTHENTIK_PASSWORD: "{{ platform_secret['pg-authentik'] }}"
-        CF_JWT_SECRET: "{{ platform_secret['jwt'] }}"
-        CF_ENC_SECRET: "{{ platform_secret['enc'] }}"
+        PG_ADMIN_PASSWORD: "{{ platform_ps['pg-admin'] }}"
+        PG_CF_PASSWORD: "{{ platform_ps['pg-contextforge'] }}"
+        PG_AGENTDEV_PASSWORD: "{{ platform_ps['pg-agentdev'] }}"
+        PG_AUTHENTIK_PASSWORD: "{{ platform_ps['pg-authentik'] }}"
+        CF_JWT_SECRET: "{{ platform_ps['jwt'] }}"
+        CF_ENC_SECRET: "{{ platform_ps['enc'] }}"
         # same rule as 08-mcp.sh: ContextForge wants upper, lower, digit and symbol
-        CF_ADMIN_PASSWORD: "Aa1!{{ platform_secret['cf-admin'] }}"
-        CF_DEFAULT_USER_PASSWORD: "Aa1!{{ platform_secret['cf-default-user'] }}"
-        CF_BASIC_AUTH_PASSWORD: "Aa1!{{ platform_secret['cf-basic-auth'] }}"
+        CF_ADMIN_PASSWORD: "Aa1!{{ platform_ps['cf-admin'] }}"
+        CF_DEFAULT_USER_PASSWORD: "Aa1!{{ platform_ps['cf-default-user'] }}"
+        CF_BASIC_AUTH_PASSWORD: "Aa1!{{ platform_ps['cf-basic-auth'] }}"
       replace: []
   no_log: true
 
@@ -148,10 +161,11 @@
   check_mode: false
   failed_when: platform_obs_token.rc != 0 and not ansible_check_mode
   when: platform_obs_mcp_enabled | bool and platform_secret_source == 'secret_manager'
-    and (obs_mcp.token_secret | default('')) | length > 0
+    and (obs_mcp.token_secret | default('')) | length > 0 and secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Observability MCP token Secret (only in obs-mcp's namespace, never in the agents namespace)
+  # secrets_mode external: ExternalSecret obs-mcp-token (externalsecrets.j2)
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
     state: "{{ 'present' if platform_obs_token.stdout | default('') | length > 0 else 'absent' }}"
@@ -160,7 +174,7 @@
       kind: Secret
       metadata: {name: obs-mcp-token, namespace: "{{ platform_ns }}"}
       stringData: {token: "{{ platform_obs_token.stdout | default('') }}"}
-  when: platform_obs_mcp_enabled | bool
+  when: platform_obs_mcp_enabled | bool and secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Observability MCP server (obs-mcp)
@@ -199,8 +213,10 @@
   changed_when: false
   when: platform_obs_mcp_enabled | bool and not ansible_check_mode
 
+# secrets_mode external: the sync needs the ContextForge admin password here; the operator controller of #383 replaces it
 - name: MCP sync for each project spec
   when: mcp_projects | length > 0 and platform_contextforge_enabled | bool and not ansible_check_mode
+    and secrets_mode | default('playbook') == 'playbook'
   block:
     - name: Admin password file for mcp-sync (0600, removed below)
       ansible.builtin.tempfile: {state: file, suffix: .cf}

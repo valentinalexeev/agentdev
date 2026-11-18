@@ -19,6 +19,8 @@ metadata:
   name: {{ ingress_fwd_name }}
   namespace: {{ ingress_forwarder.namespace }}
   labels: {{ (ingress_fwd_labels | combine({'app.kubernetes.io/part-of': 'agentdev'})) | to_json }}
+  # #381: a new pre-auth key from its ExternalSecret restarts the forwarder (Stakater Reloader)
+  annotations: {secret.reloader.stakater.com/reload: funnel-sidecar}
 spec:
   replicas: 1
   strategy: {type: Recreate}

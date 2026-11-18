@@ -56,7 +56,8 @@ subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, labels: {app: agentdev-api}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, labels: {app: agentdev-api}, annotations: {secret.reloader.stakater.com/reload: "agentdev-api-db,agentdev-api-forge,agentdev-api-github,agentdev-api-siem,agentdev-api-chat,agentdev-api-vapid"}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: agentdev-api}}

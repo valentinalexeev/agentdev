@@ -73,6 +73,34 @@ Use this task to replace a Claude credential or a forge token.
 1. Replace the file or the secret.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
+NOTE: With `external_secrets.mode: external` on GKE (#381), step 2 is not needed. Add a new version of the
+Secret Manager secret. The External Secrets Operator copies it within `external_secrets_refresh` (default 15
+minutes), and Reloader restarts the pods that use it. An agent pod restarts at its next scale to zero or drain, not
+in the middle of a job. The Claude proxy refuses to start when `claude-shared` has no `CLAUDE_CODE_OAUTH_TOKEN=` or
+`ANTHROPIC_API_KEY=` line. It reports an invalid `agent-<agent>-claude` as a security event.
+
+### Read the secrets from Secret Manager without the playbook (GKE, #381)
+
+In `external` mode, no secret value passes through the operator machine or Ansible. Terraform generates the random
+secrets once in Secret Manager. The External Secrets Operator copies each one into a Kubernetes Secret with the same
+name and keys as before. Stakater Reloader v2 (a pinned beta, owner decision on #381) restarts the workloads that
+carry `secret.reloader.stakater.com/reload`.
+
+1. In `terraform/instance.tfvars`, set `agent_names` to the names of `agents` in `ansible/instance.yml`.
+2. For an upgrade from 1.1.x, the playbook already made the generated secrets. List them in
+   `keep_existing_secret_values` and import them (`terraform/imports.tf.example` of the deployment template). If you
+   skip this step, Terraform writes new values, the databases keep the old passwords, and the platform breaks.
+3. Apply Terraform. `terraform output secrets_readers` shows the Google service accounts of the namespaces.
+4. Make sure that the secrets you supply exist in Secret Manager: `claude-shared`, `router-register-token`,
+   `github-app-*`, `agent-<agent>-forge-token`, and `agentdev-api-vapid-*` if Web Push is on. External mode does not
+   create them.
+5. In `ansible/instance.yml`, set `external_secrets: {mode: external}`. Set `own_claude: true` on each agent that has
+   `agent-<agent>-claude`. Deploy.
+
+WARNING: The Terraform state now holds the generated values. Only the deployment identities may read the state bucket.
+
+NOTE: A new version of a database password does not change the password in Postgres yet (#382).
+
 ### Set the concurrency
 
 The concurrency is the number of items that one agent works on at the same time.

@@ -49,6 +49,11 @@ module "agentdev" {
   # read-only plan identity for PR plans (agentdev #291, opt-in since #421): first the owner grants of docs/admin.md
   # "Show the plan on deployment pull requests", and plan_identity: true in ansible/instance.yml for the preflight
   # create_plan_identity = true
+  # secrets from Secret Manager through the External Secrets Operator (agentdev #381): uncomment with a ref= that
+  # contains #381; see imports.tf.example for an upgrade
+  # agent_names                 = var.agent_names
+  # keep_existing_secret_values = var.keep_existing_secret_values
+  # platform_extra_secret_ids   = var.platform_extra_secret_ids
 }
 
 # Migration (agentdev #199): if this repository has the workaround resource
@@ -154,6 +159,18 @@ variable "monitoring_components" {
   description = "GKE monitoring components (agentdev #208); null keeps the GKE default list."
   type        = list(string)
   default     = ["SYSTEM_COMPONENTS"]
+}
+variable "agent_names" {
+  type    = list(string)
+  default = []
+}
+variable "keep_existing_secret_values" {
+  type    = list(string)
+  default = []
+}
+variable "platform_extra_secret_ids" {
+  type    = list(string)
+  default = []
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

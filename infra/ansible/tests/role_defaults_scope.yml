@@ -29,6 +29,8 @@
           import glob, os, re, sys, yaml
           roles = sys.argv[1]
           defaults = {}
+          # Ansible tags such as !unsafe (#381 ESO templates) are plain strings for this scan
+          yaml.SafeLoader.add_constructor('!unsafe', lambda l, n: l.construct_scalar(n) if isinstance(n, yaml.ScalarNode) else None)
           for f in glob.glob(roles + '/*/defaults/main.yml'):
               defaults[f.split('/')[-3]] = set((yaml.safe_load(open(f)) or {}).keys())
           bad = []

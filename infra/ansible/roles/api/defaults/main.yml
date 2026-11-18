@@ -83,3 +83,6 @@ api_sm_chat_issue_token: agentdev-chat-issue-token  # optional, Gitea only
 # cost labels as the operator role.
 api_ns_labels: "{{ agentdev_effective_labels }}"
 api_agents_ns_definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ api_ns_labels }}"}}
+# #381: secrets_mode external reads no secret value (ExternalSecrets, templates/externalsecrets.j2). The role password
+# of agentdev_api is then set by the db-init Job (#382), and the VAPID pair must exist in Secret Manager (docs/admin.md).
+api_playbook_secrets: "{{ secrets_mode | default('playbook') == 'playbook' or api_secret_source == 'files' }}"

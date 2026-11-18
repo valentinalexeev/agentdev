@@ -181,3 +181,29 @@ authentik_default_discovery_url: >-
      if authentik_default_issuer | length > 0 else '' }}
 # the issuer the playbook uses (api role, approvals check, ingress UI route)
 api_effective_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer) }}"
+# ESO template snippets (#381) for the ExternalSecret specs (templates/externalsecrets*.j2). !unsafe: Ansible passes
+# them to the cluster as written. eso.<x> is "{{ .<x> }}", the value of the data key <x> of the ExternalSecret.
+eso: !unsafe
+  webhook: "{{ .webhook }}"
+  register: "{{ .register }}"
+  wake: "{{ .wake }}"
+  forge: "{{ .forge }}"
+  appkey: "{{ .appkey }}"
+  key: "{{ .key }}"
+  token: "{{ .token }}"
+  password: "{{ .password }}"
+  forge_auth: '^Basic {{ printf "forge:%s" .password | b64enc }}$'
+  admin: "{{ .admin }}"
+  cf: "{{ .cf }}"
+  agentdev: "{{ .agentdev }}"
+  authentik: "{{ .authentik }}"
+  jwt: "{{ .jwt }}"
+  enc: "{{ .enc }}"
+  user: "{{ .user }}"
+  basic: "{{ .basic }}"
+  pw: "{{ .pw }}"
+  # KEY=VALUE lines of .raw as Secret keys (empty values skipped)
+  env_lines: "{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (ne $kv._0 \"\") (ne (default \"\" $kv._1) \"\") }}{{ $kv._0 }}: {{ $kv._1 | toJson }}\n{{ end }}{{- end }}"
+  # only the two recognised Claude keys (#212), plus CREDENTIAL_FORMAT ok|invalid: the Claude proxy refuses an invalid
+  # claude-shared at start and reports every invalid one (images/credproxy/credcheck.go)
+  claude_lines: "{{- $ok := false }}{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (has $kv._0 (list \"CLAUDE_CODE_OAUTH_TOKEN\" \"ANTHROPIC_API_KEY\")) (ne (trim (default \"\" $kv._1)) \"\") }}{{- $ok = true }}{{ $kv._0 }}: {{ trim $kv._1 | toJson }}\n{{ end }}{{- end }}CREDENTIAL_FORMAT: {{ if $ok }}ok{{ else }}invalid{{ end }}\n"

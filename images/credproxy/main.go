@@ -293,7 +293,15 @@ func main() {
 	if err != nil || jobLimit < 0 {
 		log.Fatal("CLAUDE_JOB_BUDGET_UNITS must be a non-negative integer")
 	}
-	s := newServer(signing, credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}, b, up, http.DefaultTransport)
+	creds := credStore{envOr("CREDENTIALS_DIR", "/etc/claude-proxy/credentials")}
+	// #381: refuse a bad credential at start (the playbook no longer reads the secrets to check them)
+	if err := creds.checkCredentials(func(secret string) {
+		log.Printf("WARNING: Claude secret %s has no recognised credential (CLAUDE_CODE_OAUTH_TOKEN= or ANTHROPIC_API_KEY=)", secret)
+		emitEvent(strings.TrimPrefix(secret, "claude-"), "claude-credential-format", "high", "secret "+secret+" ignored at start")
+	}); err != nil {
+		log.Fatal(err)
+	}
+	s := newServer(signing, creds, b, up, http.DefaultTransport)
 	s.prices = newPrices(os.Getenv("PRICES_DIR"))
 	s.jobLimit = jobLimit
 	if s.approval, err = approvalFromEnv(os.Getenv, jobLimit); err != nil {

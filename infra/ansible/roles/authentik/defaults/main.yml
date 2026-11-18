@@ -26,3 +26,6 @@ authentik_breakglass_admin_group: true
 authentik_secret_source: secret_manager    # files: authentik_secrets_dir (kind)
 authentik_secrets_dir: "{{ repo_root }}/.secrets/platform"
 authentik_file_keys: [pg-authentik, authentik-secret-key, authentik-secret-key2, authentik-admin]
+# #381: secrets_mode external reads no secret value (ExternalSecret authentik, Reloader restarts the pods)
+authentik_playbook_secrets: "{{ secrets_mode | default('playbook') == 'playbook' or authentik_secret_source == 'files' }}"
+authentik_es_refs: !unsafe {authentik-secret-key: "{{ .key }}", pg-authentik: "{{ .pg }}", authentik-admin: "{{ .admin }}"}
