@@ -2591,6 +2591,7 @@ The render reads the cluster facts from the instance values in `platform`:
 | `platform.egress.fqdn` | `gke`: FQDNNetworkPolicy for the egress proxies and the Claude proxy. `none`: Squid only | `terraform output platform` |
 | `platform.ingress.gateway_api` | the cluster serves the Gateway API (necessary for `ingress.mode: gateway`) | `terraform output platform` |
 | `platform.ingress.certificate_domains` | the domains of the managed certificate; `ingress.auth_host` must be one of them | `terraform output platform` |
+| `platform.kube_version` | the Kubernetes minor version of the cluster, for `helm template` | `terraform output platform` |
 | `platform.kube_api_ips` | the addresses of Service `default/kubernetes`, for the Claude proxy NetworkPolicy | `terraform output platform` |
 
 1. Apply `infra/terraform` with an agentdev release that contains #384.
@@ -2612,6 +2613,11 @@ The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authent
 - The authentik chart is `helm template` output. The render needs `helm`. The output has no Helm hooks.
 - The database step of `deploy.yml` is the Job `agentdev-db-setup-<hash>`. It reads the passwords from the Secrets
   `platform-db`, `agentdev-api-db` and `authentik`. A changed schema gives a new Job name.
+- The authentik Deployments have the annotation `secret.reloader.stakater.com/reload: authentik,authentik-sso`.
+  Reloader (#445) restarts them when one of these Secrets changes. Without Reloader, restart them by hand after a
+  change: `kubectl -n agentdev-platform rollout restart deploy/authentik-server deploy/authentik-worker`. The pod
+  annotation `agentdev/config-hash` changes with the values file, the blueprints and the chart version.
+- `helm template` uses `platform.kube_version` (`terraform output platform`), or `1.36` when it is not set.
 - The render does not write `mcp-sync` (#383) or the break-glass group of authentik. Use `deploy.yml` for them.
 
 NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and

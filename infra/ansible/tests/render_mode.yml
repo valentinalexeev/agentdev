@@ -65,6 +65,15 @@
           - docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='metadata.name') | select('match', '^agentdev-db-setup-[0-9a-f]{10}$')
             | list | length == 1
           - docs.gke | selectattr('kind', 'equalto', 'NotificationChannel') | list | length == 1
+          # #451 review: restarts on a config change (Reloader annotation, render-time config hash)
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='metadata.annotations') | map('to_json')
+            | select('search', '"secret.reloader.stakater.com/reload": "authentik,authentik-sso"') | list | length == 2
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='spec.template.metadata.annotations') | map(attribute='agentdev/config-hash')
+            | select('match', '^[0-9a-f]{16}$') | list | length == 2
           - docs.gke | selectattr('metadata.annotations', 'defined') | map(attribute='metadata.annotations') | select
             | map('dict2items') | flatten | selectattr('key', 'search', 'helm.sh/hook') | list | length == 0
           - "'rendered-without-secret' not in (docs.gke | to_json)"

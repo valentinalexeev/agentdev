@@ -12,13 +12,45 @@
     fail_msg: "authentik needs ingress.auth_host (a DNS name) and authentik.version YYYY.M.P"
     quiet: true
 
+# Restarts on a configuration change (#451 review). deploy.yml sets agentdev/config-hash from the Secret `authentik`.
+# The render cannot read it, so it sets two things instead:
+#   - agentdev/config-hash on the pods: a hash of the non-secret inputs (values file, blueprints, chart version);
+#   - secret.reloader.stakater.com/reload on the Deployments: Reloader (#445) restarts them when the Secret `authentik`
+#     or `authentik-sso` changes. Without Reloader, restart them by hand (docs/admin.md).
+- name: Values file of the render (annotations only, no secret)
+  ansible.builtin.tempfile: {state: file, suffix: .yaml}
+  register: authentik_render_values
+  changed_when: false
+
+- name: Write the render values
+  ansible.builtin.copy:
+    dest: "{{ authentik_render_values.path }}"
+    mode: "0600"
+    content: "{{ authentik_render_annotations | to_nice_yaml }}"
+  changed_when: false
+  vars:
+    authentik_blueprint_files: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') | sort }}"
+    authentik_config_hash: >-
+      {{ (([lookup('ansible.builtin.file', repo_root ~ '/manifests/authentik-values.yaml'), authentik_version,
+            authentik_admin_email, authentik_trusted_proxy_cidrs | join(','), authentik_ui_callback]
+           + query('ansible.builtin.file', *authentik_blueprint_files)) | to_json | hash('sha256'))[:16] }}
+    authentik_render_annotations:
+      global: {podAnnotations: {agentdev/config-hash: "{{ authentik_config_hash }}"}}
+      server: {deploymentAnnotations: {secret.reloader.stakater.com/reload: "authentik,authentik-sso"}}
+      worker: {deploymentAnnotations: {secret.reloader.stakater.com/reload: "authentik,authentik-sso"}}
+
 - name: Render the authentik chart (helm template, no cluster access)
   ansible.builtin.command:
     argv: [helm, template, authentik, authentik, --repo, "{{ authentik_chart_repo }}", --version, "{{ authentik_version }}",
-           --namespace, "{{ platform_ns }}", -f, "{{ repo_root }}/manifests/authentik-values.yaml"]
+           --namespace, "{{ platform_ns }}", --kube-version, "{{ render_kube_version }}",
+           -f, "{{ repo_root }}/manifests/authentik-values.yaml", -f, "{{ authentik_render_values.path }}"]
   register: authentik_helm
   changed_when: false
   check_mode: false
+
+- name: Remove the render values file
+  ansible.builtin.file: {path: "{{ authentik_render_values.path }}", state: absent}
+  changed_when: false
 
 - name: Render the authentik objects
   ansible.builtin.set_fact:
