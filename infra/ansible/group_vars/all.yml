@@ -216,7 +216,7 @@ eso: !unsafe
   basic: "{{ .basic }}"
   pw: "{{ .pw }}"
   # KEY=VALUE lines of .raw as Secret keys (empty values skipped)
-  env_lines: "{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (ne $kv._0 \"\") (ne (default \"\" $kv._1) \"\") }}{{ $kv._0 }}: {{ $kv._1 | toJson }}\n{{ end }}{{- end }}"
+  env_lines: "{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (ne $kv._0 \"\") (ne (default \"\" $kv._1) \"\") }}{{ $kv._0 }}: {{ $kv._1 | toJson }}\n{{ end }}{{- end }}"  # noqa: jinja[invalid] yaml[line-length]
   # only the two recognised Claude keys (#212), plus CREDENTIAL_FORMAT ok|invalid: the Claude proxy refuses an invalid
   # claude-shared at start and reports every invalid one (images/credproxy/credcheck.go)
-  claude_lines: "{{- $ok := false }}{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (has $kv._0 (list \"CLAUDE_CODE_OAUTH_TOKEN\" \"ANTHROPIC_API_KEY\")) (ne (trim (default \"\" $kv._1)) \"\") }}{{- $ok = true }}{{ $kv._0 }}: {{ trim $kv._1 | toJson }}\n{{ end }}{{- end }}CREDENTIAL_FORMAT: {{ if $ok }}ok{{ else }}invalid{{ end }}\n"
+  claude_lines: "{{- $ok := false }}{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (has $kv._0 (list \"CLAUDE_CODE_OAUTH_TOKEN\" \"ANTHROPIC_API_KEY\")) (ne (trim (default \"\" $kv._1)) \"\") }}{{- $ok = true }}{{ $kv._0 }}: {{ trim $kv._1 | toJson }}\n{{ end }}{{- end }}CREDENTIAL_FORMAT: {{ if $ok }}ok{{ else }}invalid{{ end }}\n"  # noqa: jinja[invalid] yaml[line-length]

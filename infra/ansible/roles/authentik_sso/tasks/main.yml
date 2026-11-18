@@ -16,7 +16,7 @@
         authentik_sso_check_values: false
 
     - name: ExternalSecret authentik-sso
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+      ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
       vars:
         es_specs:
           - name: "{{ authentik_sso_secret }}"

@@ -31,7 +31,7 @@
 
 # secrets_mode external (#381): ExternalSecrets with the same names and keys; no value passes through Ansible
 - name: ExternalSecrets of the API
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
   vars:
     es_specs: >-
       {{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}

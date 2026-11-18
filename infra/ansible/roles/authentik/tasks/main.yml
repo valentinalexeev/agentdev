@@ -71,7 +71,7 @@
 
 # secrets_mode external (#381): ExternalSecret authentik with the same keys as templates/config.env.j2
 - name: ExternalSecret authentik (configuration)
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
   vars:
     es_specs:
       - name: authentik

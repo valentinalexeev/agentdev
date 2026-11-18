@@ -82,7 +82,7 @@
   loop: "{{ external_secrets_namespaces }}"
   loop_control: {label: "{{ item.ns }}"}
 
-- name: SecretStore {{ external_secrets_store }} per namespace (Workload Identity, own Google account)
+- name: SecretStore per namespace (Workload Identity, own Google account) {{ external_secrets_store }}
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
     definition: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_store) | from_yaml_all | list }}"

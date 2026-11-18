@@ -54,7 +54,7 @@
 
 # secrets_mode external (#381): ExternalSecret funnel-sidecar; Reloader restarts the forwarder on a new key
 - name: ExternalSecret funnel-sidecar
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/external_secrets.yml"
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
   vars:
     es_specs:
       - {name: funnel-sidecar, ns: "{{ ingress_forwarder.namespace }}", data: {authkey: "{{ ingress_fwd_authkey_secret }}"}}
