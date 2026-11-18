@@ -6,6 +6,30 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.1.0-rc.3] - 2026-11-17
+
+### Upgrade
+**From 1.0.x (1.0.0 or 1.0.1):** follow the 1.1.0-rc.2 section below (rc.1 steps with the opt-in plan identity),
+pinning `v1.1.0-rc.3` / `1.1.0-rc.3` instead.
+
+**From 1.1.0-rc.1:** do the steps of the 1.1.0-rc.2 section below, pinning rc.3 instead of rc.2.
+
+**From 1.1.0-rc.2:** pin rc.3 everywhere (ADR 0006): `ref=v1.1.0-rc.3` in `terraform/main.tf`,
+`agentdev_ref: v1.1.0-rc.3` and `image_tag: "1.1.0-rc.3"` in `ansible/instance.yml`, in one PR. New images only
+(Go 1.27 builds); no schema, value or `./run.sh` step. Anyone building agentdev's Go code needs Go 1.27.4 (the
+`toolchain` line in `go.mod` downloads it automatically).
+
+### Security
+- Go 1.27 and dependencies (#431). The images build with `golang:1.27.4-alpine` (Go 1.25 gets no more fixes), every
+  `go.mod` has `go 1.26.0` and `toolchain go1.27.4`, and the CI uses the same toolchain. Bumped:
+  `golang.org/x/net` v0.62.0 (api, credproxy, operator), `golang.org/x/crypto` v0.59.0 (api),
+  `go.opentelemetry.io/otel` v1.47.0 and `google.golang.org/grpc` v1.85.0 (credproxy, operator). `govulncheck` shows no
+  reachable vulnerability in any module. It closes the Go standard library advisories fixed in Go 1.26.9 to 1.26.11
+  (for example GO-2026-6610 HTTP/2 response smuggling, GO-2026-6809 crypto/x509, GO-2026-6859 net/http), the `x/net`,
+  `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
+  key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
+  is larger (about 50 MB). New images; no `./run.sh` step.
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade
@@ -1211,6 +1235,7 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 - **BREAKING** `manifests/router.yaml.tmpl`: takes `ROUTER_IMAGE` and `IMAGE_PULL_POLICY` instead of
   embedded code (`ROUTER_JS`, `ROUTER_HASH`) (#28).
 
-[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.3...HEAD
+[1.1.0-rc.3]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.2...v1.1.0-rc.3
 [1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
