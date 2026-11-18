@@ -46,6 +46,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
 		os.Exit(runObsMCP(os.Stdout))
 	}
+	// optional setup of an external Gitea (#442): same image, Job forge-init-<hash> (infra/ansible/tasks/forge_init.yml)
+	if len(os.Args) > 1 && os.Args[1] == "forge-init" {
+		os.Exit(runForgeInit(os.Stdout))
+	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()

@@ -2466,6 +2466,34 @@ Differences from GitHub (#241):
   repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
   label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
 
+### Connect an external Gitea on GKE
+
+agentdev does not run Gitea on GKE. It connects to a Gitea that you already operate (#442). The in-cluster Gitea of
+the Ansible role `gitea_forge` is for kind only.
+
+1. In `ansible/instance.yml`, set `forge_kind: gitea` and `forge_url: https://<your gitea host>`.
+   The playbook refuses a URL that is not `https://`. It adds the host to the egress hosts of the forge sidecar (Squid
+   and the FQDN network policy). The agent container cannot reach the host.
+2. On Gitea, make one account for each agent and give each a token with the scopes
+   `write:repository,write:issue,read:user`.
+3. Put each token in Secret Manager as `agent-<name>-forge-token`.
+4. Optional: make the account `agentdev-api` with a token `read:repository,read:user` and put it in
+   `agentdev-api-forge-token`. Make the account `agentdev-router` with a token `read:repository,read:issue` and put
+   it in `router-poll-forge-token` (wake poll).
+5. Put the webhook secret in `github-app-webhook-secret` (the name stays for Gitea too).
+6. Do one of these steps for collaborators, labels, the webhook and branch protection:
+   - Set them by hand on Gitea (the same rules as the reference below), or
+   - Set `forge_init: {enabled: true}` and put an admin token of Gitea in the Secret Manager entry
+     `gitea-admin-token`. The Job `forge-init-<hash>` in `agentdev-platform` uses the Gitea API only. It makes the
+     agents write collaborators, `agentdev-api` admin collaborator and `agentdev-router` read collaborator. It also
+     makes the label `agent:<name>`, one webhook to the router, and the branch protection (one approval by
+     `reviewer`). It does not make tokens or repositories. With `create_accounts: true` it also makes missing agent
+     accounts. When Gitea is outside the cluster, set `forge_init.hook_url` to the public webhook URL of the router.
+     For a private CA, put `ca.crt` in a ConfigMap in `agentdev-platform` and set `forge_init.ca_configmap`.
+
+NOTE: The Job has no Kubernetes API token. Only the Job reads the Secret `forge-init` (ESO, #381). The same inputs
+give the same Job name. To run it again with the same inputs, set `forge_init.rerun` to a new string.
+
 ## Limits and blocked agents
 
 ### Set a quota for the agents

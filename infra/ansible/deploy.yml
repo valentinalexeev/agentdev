@@ -35,6 +35,9 @@
           - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
           - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
           - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
+          # external Gitea (#442): HTTPS only (tokens and the webhook secret travel to it)
+          - forge_kind != 'gitea' or forge_url is match('^https://[a-z0-9.-]+(:[0-9]{1,5})?(/.*)?$')
+          - not (forge_init.enabled | default(false) | bool) or forge_kind == 'gitea'
           # #58: api (the playbook and the API write Agent objects) or git (Flux applies them from the deployment repo)
           - (agents_source | default('api')) in ['api', 'git']
         fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
@@ -236,7 +239,7 @@
             BOTBOARD_NS: botboard
             # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
             EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}"
-            FORGE_EGRESS_HOSTS: "{{ forge_egress_hosts | join(' ') }}"
+            FORGE_EGRESS_HOSTS: "{{ (forge_egress_hosts + forge_gitea_egress_hosts) | unique | join(' ') }}"
             FORGE_PROXY_AUTH_SHA: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
             EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
           replace: []
@@ -246,7 +249,9 @@
     # the mapping lives in egress_fqdn.j2 (tested by tests/egress_fqdn.yml).
     - name: Egress hosts as FQDNNetworkPolicy matches
       ansible.builtin.set_fact:
-        egress_fqdn_matches: "{{ lookup('ansible.builtin.template', 'egress_fqdn.j2') | from_yaml }}"
+        egress_fqdn_matches: >-
+          {{ lookup('ansible.builtin.template', 'egress_fqdn.j2',
+             template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts) | unique | list}) | from_yaml }}
 
     - name: Is the FQDNNetworkPolicy type served (enable_fqdn_network_policy)?
       kubernetes.core.k8s_info:
@@ -375,6 +380,12 @@
     - name: Management API (database roles, Secrets, Deployment)
       ansible.builtin.include_role: {name: api}
       when: api_effective_issuer | length > 0
+
+    # External Gitea (#442), opt-in: collaborators, labels, router webhook and branch protection through the Gitea API
+    # (Job forge-init-<hash>, admin token from Secret Manager through ESO). Default: secrets-only, nothing runs here.
+    - name: Optional setup of the external Gitea (forge-init Job)
+      ansible.builtin.include_tasks: tasks/forge_init.yml
+      when: forge_kind == 'gitea' and (forge_init.enabled | default(false) | bool)
 
     # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
     # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host
