@@ -129,3 +129,7 @@ github_app:
 #     syslog_server_name: siem.example.com
 #     otlp_url: https://collector.example.com:4318/v1/logs
 #     otlp_server_name: collector.example.com
+# Secrets without the playbook (agentdev #381): the External Secrets Operator reads Secret Manager and Reloader
+# restarts the pods on a new version. Needs agent_names in terraform/instance.tfvars and, for an upgrade from 1.1.x,
+# terraform/imports.tf.example. Mark agents with a Secret Manager agent-<name>-claude with own_claude: true.
+# external_secrets: {mode: external}

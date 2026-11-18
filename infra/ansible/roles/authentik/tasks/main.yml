@@ -27,7 +27,7 @@
   when: authentik_secret_source == 'files'
 
 - name: Authentik secrets from Secret Manager
-  when: authentik_secret_source == 'secret_manager'
+  when: authentik_secret_source == 'secret_manager' and authentik_playbook_secrets
   block:
     - name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)
       ansible.builtin.shell: |
@@ -66,8 +66,26 @@
     that: authentik_secret['pg-authentik'] is match('^[0-9a-f]{32,}$')
     fail_msg: "the platform secret pg-authentik must hold a hex password"
     quiet: true
-  when: not ansible_check_mode
+  when: not ansible_check_mode and authentik_playbook_secrets
   no_log: true
+
+# secrets_mode external (#381): ExternalSecret authentik with the same keys as templates/config.env.j2
+- name: ExternalSecret authentik (configuration)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
+  vars:
+    es_specs:
+      - name: authentik
+        ns: "{{ platform_ns }}"
+        data:
+          key: "{{ platform_sm_prefix }}authentik-secret-key"
+          pg: "{{ platform_sm_prefix }}pg-authentik"
+          admin: "{{ platform_sm_prefix }}authentik-admin"
+        template: "{{ authentik_es_env }}"
+    # config.env.j2 with ESO references in place of the three values (authentik_es_refs: plain strings, Ansible does not
+    # template a variable's value twice, so {{ .key }} reaches ESO as written; tests/external_secrets_render.yml)
+    authentik_secret: "{{ authentik_es_refs }}"
+    authentik_es_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+  when: not authentik_playbook_secrets
 
 - name: Secret authentik (configuration)
   kubernetes.core.k8s:
@@ -80,6 +98,7 @@
   vars:
     authentik_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
   register: authentik_config
+  when: authentik_playbook_secrets
   no_log: true
 
 # init.sql of platform-db only runs on an empty volume: the Job authentik-db-init-<hash> makes the login and the
@@ -120,10 +139,13 @@
     release_namespace: "{{ platform_ns }}"
     values_files: ["{{ repo_root }}/manifests/authentik-values.yaml"]
     # a changed Secret `authentik` restarts the pods (hash only, never the values)
-    values:
-      global:
-        podAnnotations:
-          agentdev/config-hash: "{{ (authentik_config.result.data | default({}) | to_json | hash('sha256'))[:16] }}"
+    # secrets_mode playbook: a changed Secret `authentik` restarts the pods (hash only, never the values).
+    # external (#381): Reloader restarts server and worker when `authentik` or `authentik-sso` changes.
+    values: >-
+      {{ {'global': {'podAnnotations': {'agentdev/config-hash': (authentik_config.result.data | default({}) | to_json | hash('sha256'))[:16]}}}
+         if authentik_playbook_secrets else
+         {'server': {'deploymentAnnotations': {reloader_annotation: 'authentik,authentik-sso'}},
+          'worker': {'deploymentAnnotations': {reloader_annotation: 'authentik,authentik-sso'}}} }}
     wait: true
     timeout: 15m0s
 

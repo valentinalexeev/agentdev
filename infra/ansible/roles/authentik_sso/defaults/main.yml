@@ -8,3 +8,4 @@ authentik_sso_sm_idp_cert: authentik-sso-idp-cert                 # saml: the Go
 authentik_sso_sm_oidc_client_secret: authentik-sso-oidc-client-secret   # oidc only
 # Kubernetes Secret read by the authentik pods (manifests/authentik-values.yaml envFrom)
 authentik_sso_secret: authentik-sso
+authentik_sso_es_ref: !unsafe "{{ .sso }}"   # #381: ESO reference of the secret value (secrets_mode external)

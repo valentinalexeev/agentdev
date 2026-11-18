@@ -75,7 +75,8 @@ stringData:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}, annotations: {secret.reloader.stakater.com/reload: "contextforge"}}
 spec:
   replicas: 1                      # DB cache, no Redis: one replica (ADR 0001)
   selector: {matchLabels: {app: contextforge}}

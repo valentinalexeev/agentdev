@@ -79,7 +79,16 @@ rules:
   - create
   - delete
   - get
+  - patch
   - update
+- apiGroups:
+  - ""
+  resourceNames:
+  - claude-proxy-signing
+  resources:
+  - secrets
+  verbs:
+  - get
 - apiGroups:
   - ""
   resourceNames:

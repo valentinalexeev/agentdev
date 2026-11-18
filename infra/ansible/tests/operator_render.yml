@@ -40,6 +40,31 @@
           - t_render.results | length == 2
         quiet: true
 
+    # #381 acceptance 3 / review of #445, with #383: in the agents namespace the operator reads claude-proxy-signing by name
+    # and (McpProject) Secrets by name without list or watch; the policy that limits writes to agent-*-proxy and
+    # agent-*-mcp ships with the Role
+    - name: Operator Secret access in the agents namespace
+      ansible.builtin.assert:
+        that:
+          # the only unnamed get is the McpProject controller's (#383, agent-<name>-mcp; RBAC has no name pattern)
+          - t_sec | selectattr('verbs', 'contains', 'get') | rejectattr('resourceNames', 'defined') | map(attribute='verbs') | list
+            == [['get', 'create', 'update', 'delete']]
+          - t_sec | selectattr('verbs', 'contains', 'get') | selectattr('resourceNames', 'defined')
+            | map(attribute='resourceNames') | flatten == ['claude-proxy-signing']
+          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch']) | length == 0
+          - t_pol | length == 1
+          - t_pol[0].spec.validations[0].expression is search("-proxy")
+          - t_pol[0].spec.validations[0].expression is search("-mcp")
+          - t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicyBinding')
+            | selectattr('spec.policyName', 'equalto', 'agentdev-operator-secrets') | list | length == 1
+        quiet: true
+      vars:
+        t_role: "{{ t_op | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.namespace', 'equalto', 'v') | first }}"
+        t_sec: "{{ t_role.rules | selectattr('resources', 'contains', 'secrets') | list }}"
+        t_pol: >-
+          {{ t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy')
+             | selectattr('metadata.name', 'equalto', 'agentdev-operator-secrets') | list }}
+
     - name: The agents' egress list without api.anthropic.com (Claude proxy on)
       ansible.builtin.assert:
         that:

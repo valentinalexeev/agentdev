@@ -31,6 +31,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
   image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
   "Health checks for Flux and Argo CD".
+- GKE: `external_secrets.mode: external` (#381). Terraform generates the platform secrets once in Secret Manager, and
+  the External Secrets Operator 2.14.0 makes the Kubernetes Secrets with unchanged names and keys. Stakater Reloader
+  v2.0.0-beta.2 (chart 3.0.0-beta.5, scoped) restarts annotated workloads. The operator writes the `agent-<n>-proxy`
+  keys. The Claude proxy refuses a bad `claude-shared` at start. The default `playbook` mode is unchanged, and Terraform makes nothing new unless `external_secrets = true`.
 
 ### Changed
 - **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
@@ -68,6 +72,8 @@ While the version is `0.x`, breaking changes bump MINOR.
   4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
 - **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
   the playbook (role `operator`) on GKE. No spec changes, no agent restart.
+- To use external mode on an instance from 1.1.x, import the generated secrets first and list them in
+  `keep_existing_secret_values` (docs/admin.md). Otherwise Terraform writes new database passwords.
 
 ## [1.1.0-rc.3] - 2026-11-17
 

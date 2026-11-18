@@ -221,3 +221,58 @@ variable "agent_disk_type" {
     error_message = "agent_disk_type must be pd-standard, pd-balanced or pd-ssd."
   }
 }
+
+# ---------- platform secrets (#381) ----------
+variable "external_secrets" {
+  description = "Platform secrets through the External Secrets Operator (#381): generate the secrets in Secret Manager and make the per-namespace reader accounts. Set together with external_secrets.mode: external in instance.yml. Default false: nothing from secrets.tf, as in 1.1."
+  type        = bool
+  default     = false
+}
+variable "agent_names" {
+  description = "Agent names (the `agents[].name` of instance.yml). Terraform makes the wake token agent-<name>-wake-token of each one once (#381)."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.agent_names : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", a))])
+    error_message = "agent_names: DNS labels (lower-case letters, digits, -)."
+  }
+}
+
+variable "keep_existing_secret_values" {
+  description = "Generated secrets that already have a value (an upgrade from 1.1.x, where the playbook made them). Terraform adds no version for these names, so the values stay. See imports.tf.example of the deployment template."
+  type        = list(string)
+  default     = []
+}
+
+variable "platform_extra_secret_ids" {
+  description = "More Secret Manager ids the platform namespace may read (for example the forwarder pre-auth key funnel-sidecar-authkey, or gitea-admin-token of forge_init). A trailing * is a prefix."
+  type        = list(string)
+  default     = []
+}
+
+variable "platform_namespace" {
+  type    = string
+  default = "agentdev-platform"
+}
+
+variable "agents_namespace" {
+  type    = string
+  default = "coding-agents"
+}
+
+variable "executors_namespace" {
+  type    = string
+  default = "agentdev-executors"
+}
+
+variable "forwarder_namespace" {
+  description = "Namespace of the deployed forwarder (instance.yml ingress.forwarder.namespace with deploy, #316). Empty: no forwarder secrets reader."
+  type        = string
+  default     = ""
+}
+
+variable "forwarder_authkey_secret" {
+  description = "Secret Manager id of the forwarder pre-auth key (ingress.forwarder.deploy.authkey_secret)."
+  type        = string
+  default     = "funnel-sidecar-authkey"
+}
