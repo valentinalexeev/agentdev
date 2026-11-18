@@ -1,6 +1,6 @@
 # agentdev Claude credential proxy (#66): the only component that holds the Claude credential.
 # Published as ghcr.io/valentinalexeev/agentdev-credproxy (#28). Vet and tests run in CI (lint job).
-FROM --platform=$BUILDPLATFORM golang:1.25.14-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
