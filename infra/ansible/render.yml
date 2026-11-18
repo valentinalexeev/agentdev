@@ -8,7 +8,7 @@
 # instance values (`platform`, from `terraform output platform`). Output: one file per group, numbered in apply order
 # (CRDs and namespaces first, then the objects that use them). No hooks and no install-time lookups. The Secrets the
 # objects use are listed in SECRETS.md of the output; they come from deploy.yml or from the external secrets (#381).
-# Not rendered yet: the roles platform, authentik, authentik_sso and api (Helm releases and generated credentials, #451).
+# Not rendered yet: the roles platform, authentik, authentik_sso and api (Helm releases and generated credentials, #447).
 - name: Render agentdev manifests (no cluster access)
   hosts: localhost
   gather_facts: false
@@ -18,16 +18,6 @@
   tasks:
     - name: Value checks of the instance (same as deploy.yml)
       ansible.builtin.include_tasks: tasks/checks.yml
-
-    - name: The certificate check of ingress.auth_host needs Terraform, not the cluster (#384)
-      ansible.builtin.assert:
-        that: ((platform | default({})).ingress | default({})).certificate_domains is not defined
-              or ingress_auth_host | default('') in platform.ingress.certificate_domains
-              or not (ingress_auth | default(false) | bool)
-        fail_msg: >-
-          ingress.auth_host is not in platform.ingress.certificate_domains (terraform output platform): add it to
-          Terraform public_hosts and apply
-        quiet: true
 
     - name: Render the objects (tasks/render_objects.yml, the same as deploy.yml)
       ansible.builtin.include_tasks: tasks/render_objects.yml

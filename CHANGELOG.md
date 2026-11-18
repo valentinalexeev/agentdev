@@ -6,6 +6,22 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+### Added
+- **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a
+  directory, with no cluster or Secret Manager access and no secret values (`SECRETS.md` lists the Secret names).
+  `deploy.yml` applies the same objects (`tasks/render_objects.yml`) and runs the same value checks
+  (`tasks/checks.yml`). New Terraform output `platform` and instance value `platform` (`egress.fqdn`,
+  `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace the reads of the cluster. The roles
+  `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447). Docs: `docs/admin.md`, "Render the
+  manifests for a GitOps engine".
+
+### Changed
+- `deploy.yml` does not read the cluster to select a template (#384). The FQDNNetworkPolicy objects follow
+  `platform.egress.fqdn` (default from `egress_fqdn_policy`, as before), and the Gateway follows
+  `platform.ingress.gateway_api` (default `true`). The preflight (`crds`) still compares them with the cluster.
+  No migration: without `platform` the behaviour is the same. To use the render mode, re-apply `infra/terraform` and
+  copy `terraform output platform` into `ansible/instance.yml`.
+
 ## [1.1.0-rc.2] - 2026-11-16
 
 ### Upgrade

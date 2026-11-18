@@ -106,6 +106,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | deployment repository | the private repository that contains the values of one production instance |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
+| GitOps engine | a program in the cluster (Argo CD, Flux) that applies the manifests of a git repository or OCI artifact (#384) |
 | guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
@@ -196,6 +197,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
 | deny | refuse an approval request |
+| render | write the manifests of an instance to files, with no change to the cluster (`infra/ansible/render.yml`, #384) |
 | drain | tell an agent to start no new job and let its running jobs finish (#174) |
 | edit | change the text of a forge comment after you wrote it |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |

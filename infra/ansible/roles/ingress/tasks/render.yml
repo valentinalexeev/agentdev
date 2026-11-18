@@ -22,6 +22,16 @@
     quiet: true
   when: ingress_mode == 'gateway'
 
+# the deploy reads the certificate with gcloud; the render takes the domains from terraform output platform
+- name: The certificate covers ingress.auth_host (platform.ingress.certificate_domains)
+  ansible.builtin.assert:
+    that: ingress_auth_host in ((platform | default({})).ingress | default({})).certificate_domains | default([ingress_auth_host])
+    fail_msg: >-
+      ingress.auth_host {{ ingress_auth_host }} is not in platform.ingress.certificate_domains: add it to Terraform
+      public_hosts, apply, and copy `terraform output platform`
+    quiet: true
+  when: ingress_mode == 'gateway' and ingress_auth | bool
+
 - name: Render the ingress objects
   ansible.builtin.set_fact:
     ingress_objects:

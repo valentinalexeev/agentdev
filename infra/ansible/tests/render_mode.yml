@@ -88,3 +88,31 @@
       loop: [bad, nogw]
       register: refused
       failed_when: refused.stat.exists
+
+# acceptance criterion 1 of #384: the render output of examples/deployment/gcp-gke passes kubeconform and gitleaks.
+# Both from pinned container images (the kubeconform image is the one of .github/workflows/ci.yml).
+- name: The example deployment renders to valid manifests without secrets
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}/example"
+    example: "{{ playbook_dir }}/../../../examples/deployment/gcp-gke/ansible/instance.yml.example"
+    kubeconform_image: ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+    gitleaks_image: zricethezav/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
+  tasks:
+    - name: Render the example instance (with the values of `terraform output platform`)
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ example }}", -e, "render_dir={{ out }}",
+               -e, '{"platform": {"egress": {"fqdn": "gke"}, "ingress": {"gateway_api": true}, "kube_api_ips": ["10.30.0.1"]},
+               "approvals": {"enabled": false}}']
+      changed_when: false
+
+    - name: Kubeconform (strict; CRD types without a schema are skipped)
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}:/w:ro", "{{ kubeconform_image }}", -strict, -summary, -ignore-missing-schemas, /w]
+      changed_when: false
+
+    - name: Gitleaks finds no secret in the output
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}:/w:ro", "{{ gitleaks_image }}", dir, /w, --no-banner, --exit-code, "1"]
+      changed_when: false

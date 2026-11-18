@@ -199,7 +199,7 @@
       register: kube_api
       when: claude_proxy | bool and (platform | default({})).kube_api_ips is not defined
 
-    - name: Agents with their own Claude Secret (agent-<name>-claude has a KEY=VALUE line, #5)
+    - name: Agents with their own Claude Secret (agent-<name>-claude has a KEY=VALUE line, issue 5)
       ansible.builtin.set_fact:
         agent_own_claude: >-
           {{ agent_own_claude | default({}) | combine({item.name:

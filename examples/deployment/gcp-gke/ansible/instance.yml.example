@@ -76,6 +76,12 @@ github_app:
 # Approvals (agentdev #67) are on by default and need api.oidc_issuer. To turn them off:
 # approvals: {enabled: false}
 # rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174: wait for running jobs before an agent pod is replaced
+# Cluster facts (agentdev #384): copy `terraform output platform`. The playbook and the render mode (render.yml) use
+# them in place of reading the cluster; the preflight compares them with the cluster.
+# platform:
+#   egress: {fqdn: gke}                 # gke | none (Squid only)
+#   ingress: {gateway_api: true, certificate_domains: [agentdev.example.com]}
+#   kube_api_ips: [10.30.0.1, 172.16.0.2]
 # Public HTTPS entry point (agentdev #120): from `terraform output ingress` after terraform public_hosts is set.
 # DNS: an A record for each name -> `terraform output webhook_ip`. github_app.public_url = https://<webhook_host>.
 # ingress:

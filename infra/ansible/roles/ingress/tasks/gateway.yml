@@ -27,7 +27,13 @@
   changed_when: false
   failed_when: false
   check_mode: false
-  when: ingress_auth | bool
+  when: ingress_auth | bool and ((platform | default({})).ingress | default({})).certificate_domains is not defined
+
+# #384: with platform.ingress.certificate_domains (terraform output platform) no gcloud read is needed
+- name: Domains of the certificate from platform.ingress.certificate_domains
+  ansible.builtin.set_fact:
+    ingress_cert_domains: {rc: 0, stdout: "{{ platform.ingress.certificate_domains | join(',') }}"}
+  when: ingress_auth | bool and ((platform | default({})).ingress | default({})).certificate_domains is defined
 
 - name: Check that ingress.auth_host is covered by the certificate (Terraform public_hosts)
   ansible.builtin.assert:

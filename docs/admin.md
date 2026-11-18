@@ -2578,6 +2578,46 @@ To check that the identity cannot apply, run `terraform apply` with it once. The
 To remove the identity, set `create_plan_identity = false` and `plan_identity: false`, then apply. You can then
 remove the three owner grants again.
 
+### Render the manifests for a GitOps engine
+
+`infra/ansible/render.yml` renders the manifests of one instance to a directory (#384). A GitOps engine (Argo CD,
+Flux) can then apply them. The render does not connect to the cluster or to Secret Manager. The output contains no
+secret values. `deploy.yml` uses the same renderer (`tasks/render_objects.yml`), so both give the same objects.
+
+The render reads the cluster facts from the instance values in `platform`:
+
+| Value | Meaning | Source |
+|---|---|---|
+| `platform.egress.fqdn` | `gke`: FQDNNetworkPolicy for the egress proxies and the Claude proxy. `none`: Squid only | `terraform output platform` |
+| `platform.ingress.gateway_api` | the cluster serves the Gateway API (necessary for `ingress.mode: gateway`) | `terraform output platform` |
+| `platform.ingress.certificate_domains` | the domains of the managed certificate; `ingress.auth_host` must be one of them | `terraform output platform` |
+| `platform.kube_api_ips` | the addresses of Service `default/kubernetes`, for the Claude proxy NetworkPolicy | `terraform output platform` |
+
+1. Apply `infra/terraform` with an agentdev release that contains #384.
+2. Copy `terraform output platform` into `platform` of `ansible/instance.yml`.
+3. Render the manifests:
+   ```bash
+   ansible-playbook infra/ansible/render.yml -e @ansible/instance.yml -e render_dir=$PWD/rendered
+   ```
+4. Check the output:
+   ```bash
+   kubeconform -strict -ignore-missing-schemas rendered/
+   gitleaks dir rendered/
+   ```
+5. Make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`, or the external secrets of #381.
+6. Give the directory to the GitOps engine. Apply the files in the order of their numbers.
+
+NOTE: The render does not write the objects of the roles `platform`, `authentik`, `authentik_sso` and `api` yet
+(#447). Deploy them with `deploy.yml`.
+
+NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and
+`deploy.yml` reads the API server addresses from the cluster. `deploy.yml` does not read the cluster to select a
+template. The preflight (`crds`) compares `platform` with the cluster.
+
+The render refuses bad values before it writes a file. It uses the same checks as `deploy.yml` (`tasks/checks.yml`):
+labels, executors, approvals, Claude budget and wake source. Thus the CI of a deployment repository finds them
+before a merge.
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.
