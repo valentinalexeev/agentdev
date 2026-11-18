@@ -45,3 +45,18 @@ output "budget" {
   description = "Name of the billing budget; null when create_budget is false (#199)."
   value       = one(google_billing_budget.monthly[*].name)
 }
+
+# #384: what the playbook read from the cluster before, as instance values. Copy into ansible/instance.yml `platform`,
+# so the render mode (infra/ansible/render.yml) needs no cluster access. The preflight compares them with the cluster.
+output "platform" {
+  description = "Cluster facts for instance.yml `platform` (Ansible render mode, #384): copy them as they are."
+  value = {
+    egress  = { fqdn = "gke" } # enable_fqdn_network_policy is always on in this module
+    ingress = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
+    # Service default/kubernetes: the first address of the services range, and the control plane private endpoint
+    kube_api_ips = compact([
+      cidrhost(google_compute_subnetwork.nodes.secondary_ip_range[1].ip_cidr_range, 1),
+      google_container_cluster.this.private_cluster_config[0].private_endpoint,
+    ])
+  }
+}

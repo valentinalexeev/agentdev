@@ -45,25 +45,18 @@
       Make sure ingress.auth_host {{ ingress_auth_host }} is in Terraform public_hosts.
   when: ingress_auth | bool and ingress_cert_domains.rc | default(1) != 0
 
-- name: Is the Gateway API served (Terraform gateway_api_config)?
-  kubernetes.core.k8s_info:
-    context: "{{ kube_context }}"
-    api_version: apiextensions.k8s.io/v1
-    kind: CustomResourceDefinition
-    name: gateways.gateway.networking.k8s.io
-  register: ingress_gateway_crd
-
-- name: Stop when the cluster has no Gateway API
+# #384: the playbook does not read the cluster to choose a template. platform.ingress.gateway_api (terraform output
+# platform) says whether the cluster serves the Gateway API; the preflight (crds) checks it against the cluster.
+- name: Stop when the cluster has no Gateway API (platform.ingress.gateway_api)
   ansible.builtin.assert:
-    that: ingress_gateway_crd.resources | length > 0
+    that: platform_gateway_api | default(true) | bool
     fail_msg: >-
-      ingress.mode gateway needs the Gateway API, and the cluster does not serve it. Set Terraform public_hosts (and do
-      not set gateway_enabled = false, #208), apply infra/terraform, then run again. Or use ingress.mode external.
+      ingress.mode gateway needs the Gateway API, and platform.ingress.gateway_api is false. Set Terraform public_hosts
+      (and do not set gateway_enabled = false, #208), apply infra/terraform, copy `terraform output platform`, then run
+      again. Or use ingress.mode external.
     quiet: true
-  when: not ansible_check_mode
 
 - name: Gateway, routes, policies and NetworkPolicy
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
     definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml_all | list }}"
-  when: ingress_gateway_crd.resources | length > 0

@@ -1,0 +1,16 @@
+{#- Executor objects (#69, #384). Rendered by tasks/render_objects.yml. -#}
+{%- set out = [] -%}
+{%- for e in executors -%}
+{%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Executor',
+        'metadata': {'name': e.name, 'namespace': exec_ns},
+        'spec': {'environment': e.environment, 'repo': e.repo, 'forge': forge_kind,
+                 'branch': e.branch | default('main'), 'path': e.path | default(''), 'image': e.image,
+                 'plan': {'command': e.plan}, 'apply': {'command': e.apply},
+                 'planCredentials': {'secretName': 'exec-' ~ e.name ~ '-plan', 'serviceAccountName': 'exec-' ~ e.name ~ '-plan'},
+                 'applyCredentials': {'secretName': 'exec-' ~ e.name ~ '-apply', 'serviceAccountName': 'exec-' ~ e.name ~ '-apply'},
+                 'forgeSecret': 'exec-' ~ e.name ~ '-forge',
+                 'approvalHours': e.approval_hours | default(24) | int,
+                 'allowForkPRs': e.allow_fork_prs | default(false) | bool,
+                 'egressHosts': e.egress_hosts | default([])}}) -%}
+{%- endfor -%}
+{{ out | to_json }}

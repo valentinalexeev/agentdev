@@ -1,0 +1,90 @@
+---
+# Test of the render mode (#384): ansible-playbook infra/ansible/tests/render_mode.yml (no cluster, no gcloud).
+# Renders the example instance with the FQDN policy (gke) and without it (none), with the Gateway, and checks that the
+# output has no Secret, the right groups, and that a bad value is refused before anything is written.
+- name: Render mode
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}"
+  tasks:
+    - name: Remove old output
+      ansible.builtin.file: {path: "{{ out }}", state: absent}
+
+    - name: Render with the FQDN policy and the Gateway
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/gke"]
+      changed_when: false
+
+    - name: Render without the FQDN policy
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/none", -e, '{"platform": {"egress": {"fqdn": "none"}, "ingress": {"gateway_api": true},
+               "kube_api_ips": ["10.30.0.1"]}}']
+      changed_when: false
+
+    - name: Read the output
+      ansible.builtin.find: {paths: "{{ out }}/{{ item }}", patterns: "*.yaml"}
+      loop: [gke, none]
+      register: files
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        docs: >-
+          {{ docs | default({}) | combine({item.item: item.files | map(attribute='path') | sort
+             | map('ansible.builtin.extract', texts) | map('from_yaml_all') | map('list') | flatten}) }}
+      loop: "{{ files.results }}"
+      loop_control: {label: "{{ item.item }}"}
+      vars:
+        texts: "{{ dict(item.files | map(attribute='path') | zip(query('ansible.builtin.file', *(item.files | map(attribute='path'))))) }}"
+
+    - name: Check the output
+      ansible.builtin.assert:
+        that:
+          - docs.gke | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.none | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | map(attribute='metadata.name') | sort
+            == ['claude-proxy', 'egress-proxy', 'executor-egress-proxy']
+          - docs.none | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | list | length == 0
+          - docs.none | selectattr('metadata.name', 'equalto', 'egress-proxy-web') | list | length == 1
+          - docs.none | selectattr('metadata.name', 'equalto', 'executor-egress-proxy-web') | list | length == 1
+          - docs.gke | selectattr('metadata.name', 'equalto', 'egress-proxy-web') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'Gateway') | list | length == 1
+          - docs.gke | selectattr('kind', 'equalto', 'Agent') | map(attribute='spec.claudeSecret') | list == ['claude-shared', 'claude-bob']
+          - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
+          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 6
+          - (files.results[0].files | map(attribute='path') | map('basename') | sort | first) == '00-namespaces.yaml'
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agent-alice-proxy')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('claude-bob')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('exec-tf-prod-forge')
+          # the Claude proxy NetworkPolicy names the API server from platform.kube_api_ips
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy')
+            | map(attribute='spec.egress') | flatten | map(attribute='to', default=[]) | flatten
+            | selectattr('ipBlock', 'defined') | map(attribute='ipBlock.cidr') | select('in', ['10.30.0.1/32', '172.16.0.2/32'])
+            | list | length == 2
+        quiet: true
+
+    - name: A bad value is refused before anything is written
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/bad", -e, '{"agentdev_labels": {"environment": "Prod"}}']
+      register: bad
+      changed_when: false
+      failed_when: bad.rc == 0
+
+    - name: A Gateway without the Gateway API is refused
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/nogw", -e, '{"platform": {"egress": {"fqdn": "gke"}, "ingress": {"gateway_api": false},
+               "kube_api_ips": ["10.30.0.1"]}}']
+      register: nogw
+      changed_when: false
+      failed_when: nogw.rc == 0 or 'gateway_api' not in nogw.stdout
+
+    - name: No output for refused values
+      ansible.builtin.stat: {path: "{{ out }}/{{ item }}"}
+      loop: [bad, nogw]
+      register: refused
+      failed_when: refused.stat.exists
