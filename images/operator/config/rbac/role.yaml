@@ -80,7 +80,6 @@ rules:
   - delete
   - get
   - patch
-  - update
 - apiGroups:
   - ""
   resourceNames:

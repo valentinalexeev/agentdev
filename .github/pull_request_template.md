@@ -3,6 +3,10 @@
 
 ## What was done
 
+## Changelog
+<!-- changelog.d/<issue>-<slug>.md added (changelog.d/README.md), or label `no-changelog` and why. Do not edit
+     "## [Unreleased]" in CHANGELOG.md: CI fails it. -->
+
 ## Checks
 <!-- CI result, ./run.sh steps re-run, e2e observations (issue -> PR -> review -> reply), independent review -->
 

@@ -851,6 +851,13 @@ Tokens are valid for one year. A sync in the last 30 days of a token makes a new
 When you remove an agent from `agents:` (or remove the servers), the next sync deletes its Secret and revokes its
 token. When you delete the `McpProject`, the operator revokes all its tokens and deletes their Secrets.
 
+The operator cannot read the Secrets in the agents namespace (#452). It keeps the token id, the server and the renew
+time in the `McpProject` status. At each sync it tells if `agent-<name>-mcp` exists with a dry-run create (no read).
+- If the Secret is missing (deleted by hand), the sync makes a new token, writes the Secret and revokes the old token.
+- The operator does not see a changed Secret (edit drift). To repair a changed or doubtful Secret, delete it:
+  `kubectl -n coding-agents delete secret agent-<name>-mcp`. The next sync (at most `MCP_RESYNC_MINUTES`, or at once
+  after any change to the `McpProject`) makes it again with a new token.
+
 The operator reads the ContextForge admin password from the Secret `contextforge` in `agentdev-platform` (key
 `PLATFORM_ADMIN_PASSWORD`). Its Role there can read only that Secret. The status shows the result, never a token:
 
