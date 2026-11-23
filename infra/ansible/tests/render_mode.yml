@@ -14,7 +14,7 @@
     - name: Render with the FQDN policy and the Gateway
       ansible.builtin.command:
         argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
-               -e, "render_dir={{ out }}/gke"]
+               -e, "render_dir={{ out }}/gke", -e, '{"mcp_projects": ["{{ playbook_dir }}/files/render_mcp_project.yml"]}']
       changed_when: false
 
     - name: Render without the FQDN policy
@@ -55,11 +55,59 @@
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
           # the CRD refuses an empty path, so an executor without executors[].path has no path key
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='spec') | selectattr('path', 'defined') | list | length == 0
-          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 7
+          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 8   # 7 of the operator + NotificationChannel (role api)
+          # #447: platform, authentik (helm template), API, UI, NotificationChannel and the database Job
+          - docs.gke | selectattr('kind', 'equalto', 'StatefulSet') | map(attribute='metadata.name') | list == ['platform-db']
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.name') | select('match', '^authentik-')
+            | list | length == 2
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'in', ['agentdev-api', 'agentdev-ui'])
+            | list | length == 2
+          # #451 review: the Jobs of tasks/db_init_render.yml (#382), each with its ConfigMap
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='metadata.name') | map('regex_replace', '-[0-9a-f]{10}$', '')
+            | sort | list == ['agentdev-db-init', 'authentik-breakglass', 'authentik-db-init']
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.labels', 'defined')
+            | selectattr('metadata.labels', 'contains', 'agentdev/db-init') | list | length == 3
+          # the API waits for SCHEMA_VERSION (#382): the Job must write it
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | selectattr('metadata.name', 'match', '^agentdev-db-init-')
+            | map(attribute='spec.template.spec.containers') | flatten | map(attribute='env') | flatten
+            | selectattr('name', 'equalto', 'SCHEMA_VERSION') | map(attribute='value') | select('match', '^[0-9a-f]{16}$')
+            | list | length == 1
+          # no secret values: every env of a db Job is a plain non-secret value or a secretKeyRef
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='spec.template.spec.containers') | flatten
+            | map(attribute='env') | flatten | selectattr('value', 'defined') | map(attribute='name')
+            | reject('in', ['SCHEMA_VERSION', 'AUTHENTIK_POSTGRESQL__PORT']) | list | length == 0
+          # no shell-expanded password in a script (the #451 db-setup did ALTER ROLE ... PASSWORD '$VAR')
+          - (docs.gke | to_json) is not search("PASSWORD '\$")
+          - docs.gke | selectattr('kind', 'equalto', 'NotificationChannel') | list | length == 1
+          # #383: one McpProject per spec, the same object as roles/platform/tasks/main.yml
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'McpProject') | map(attribute='metadata.name') | list == ['demo']
+          - >-
+            (docs.gke | selectattr('kind', 'equalto', 'McpProject') | first).spec
+            == {'servers': [{'name': 'docs', 'url': 'https://mcp.example.com/sse'}], 'agents': ['alice']}
+          - docs.none | selectattr('kind', 'equalto', 'McpProject') | list | length == 0
+          # #451 review: restarts on a config change (Reloader annotation, render-time config hash)
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='metadata.annotations') | map('to_json')
+            | select('search', '"secret.reloader.stakater.com/reload": "authentik,authentik-sso"') | list | length == 2
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='spec.template.metadata.annotations') | map(attribute='agentdev/config-hash')
+            | select('match', '^[0-9a-f]{16}$') | list | length == 2
+          - docs.gke | selectattr('metadata.annotations', 'defined') | map(attribute='metadata.annotations') | select
+            | map('dict2items') | flatten | selectattr('key', 'search', 'helm.sh/hook') | list | length == 0
+          - "'rendered-without-secret' not in (docs.gke | to_json)"
           - (files.results[0].files | map(attribute='path') | map('basename') | sort | first) == '00-namespaces.yaml'
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agent-alice-proxy')
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('claude-bob')
           - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('exec-tf-prod-forge')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-platform \\| platform-db')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-api-vapid')
           # the Claude proxy NetworkPolicy names the API server from platform.kube_api_ips
           - >-
             docs.gke | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy')

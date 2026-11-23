@@ -61,8 +61,9 @@ output "generated_secrets" {
 output "platform" {
   description = "Cluster facts for instance.yml `platform` (Ansible render mode, #384): copy them as they are."
   value = {
-    egress  = { fqdn = "gke" } # enable_fqdn_network_policy is always on in this module
-    ingress = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
+    egress       = { fqdn = "gke" }                                                                 # enable_fqdn_network_policy is always on in this module
+    kube_version = join(".", slice(split(".", google_container_cluster.this.master_version), 0, 2)) # helm template (#451)
+    ingress      = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
     # Service default/kubernetes: the first address of the services range, and the control plane private endpoint
     kube_api_ips = compact([
       cidrhost(one([for r in google_compute_subnetwork.nodes.secondary_ip_range : r.ip_cidr_range if r.range_name == "services"]), 1),
