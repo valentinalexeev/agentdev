@@ -86,9 +86,26 @@
       authentik_db: "{{ authentik_db_objects }}"
       authentik_breakglass: "{{ [db_init_cm, db_init_job] if authentik_breakglass_admin_group | bool else [] }}"
       authentik: >-
-        {{ (authentik_helm.stdout | regex_replace('(?m)^\\s*checksum/secret: .*\\n', '') | from_yaml_all | select | list)
+        {{ (authentik_helm.stdout | regex_replace('(?m)^[ \\t]*checksum/secret: .*\n', '') | from_yaml_all | select | list)
            + [{'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': 'authentik-blueprints', 'namespace': platform_ns},
                'data': dict(authentik_blueprint_files | map('basename') | zip(query('ansible.builtin.file', *authentik_blueprint_files)))}] }}
     authentik_secret_names: "{{ [[platform_ns, 'authentik']] }}"
   vars:
     authentik_blueprint_files: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') | sort }}"
+
+# secrets_mode external (#457): the ExternalSecret authentik of tasks/main.yml, with ESO references in place of the
+# three values (authentik_es_refs, plain strings that reach ESO as written)
+- name: Authentik ExternalSecret spec (secrets_mode external)
+  ansible.builtin.set_fact:
+    authentik_es_specs:
+      - name: authentik
+        ns: "{{ platform_ns }}"
+        data:
+          key: "{{ platform_sm_prefix }}authentik-secret-key"
+          pg: "{{ platform_sm_prefix }}pg-authentik"
+          admin: "{{ platform_sm_prefix }}authentik-admin"
+        template: "{{ authentik_es_env }}"
+  vars:
+    authentik_secret: "{{ authentik_es_refs }}"
+    authentik_es_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+  when: not authentik_playbook_secrets

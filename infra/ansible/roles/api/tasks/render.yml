@@ -88,3 +88,9 @@
         OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
         OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
       replace: []
+
+# secrets_mode external (#457): the ExternalSecret specs of tasks/main.yml, rendered by render.yml
+- name: API ExternalSecret specs (secrets_mode external)
+  ansible.builtin.set_fact:
+    api_es_specs: "{{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}"
+  when: not api_playbook_secrets
