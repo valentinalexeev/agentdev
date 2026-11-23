@@ -6,6 +6,46 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.2.0-rc.2] - 2026-11-23
+
+### Deprecated
+- **run.sh and the kind step wrappers are now removed in 1.3.0, not 1.2.0 (#470, #476).** `run.sh`, `04-coder.sh`, the numbered step wrappers and `99-teardown.sh` stay deprecated in 1.2.0 and are removed
+  in 1.3.0 (#470), not in 1.2.0 as the 1.1.0-rc notes said. Use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
+  `AGENTS.md` step 5 now matches `docs/install.md`: the owner applies only the CI identity, and the CI creates the
+  cluster (#471, #476).
+
+### Fixed
+- **First deploy and resume after a deleted cluster work through the deployment CI (#471).** The example deployment CI runs the checks that need no cluster before `infra` and the CRD checks in the new job
+  `preflight-cluster` after `infra`, so a first install or a resume after `gcloud container clusters delete` works on
+  both engines. `scripts/upgrade-check.sh` skips the cluster checks with a notice when the cluster is not found and has
+  `--phase no-cluster|cluster`. Docs: `docs/install.md`, `docs/troubleshooting.md`.
+- **BREAKING** **The Flux template no longer collides with an existing Flux install (#472).** The Flux template names its `GitRepository`, root `Kustomization` and deploy key Secret `agentdev` (was `flux-system`),
+  and its Helm repositories `agentdev-external-secrets` and `agentdev-stakater`. The sync moved to
+  `gitops/flux/clusters/agentdev/sync/`. The node pool of the Flux controllers is set in
+  `flux-system/controller-nodepool.yaml` (default `system`). docs/admin.md "Install an instance with Flux" has steps for
+  a cluster that already runs Flux.
+
+### Upgrade
+**#471:**
+1. Copy `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke` of this release into the deployment
+   repository. An existing cluster is checked as before.
+
+**#472:**
+1. Only for an instance that already runs the Flux template of 1.2.0-rc.1. Copy the new `gitops/flux/` tree. Move your
+   `flux-system/gotk-sync.yaml` to `sync/gotk-sync.yaml` and apply the changes of `sync/gotk-sync.yaml.example`.
+2. Make the Secret `agentdev` with the same deploy key:
+   `kubectl -n flux-system get secret flux-system -o json | jq '.metadata={name:"agentdev",namespace:"flux-system"}' | kubectl apply -f -`
+3. Stop the old root sync: `kubectl -n flux-system patch kustomization flux-system --type merge -p '{"spec":{"prune":false,"suspend":true}}'`
+4. Merge the new tree into `main`. Wait until the job `render` pushed the branch `gitops`.
+5. Apply the new sync: `kubectl apply -k gitops/flux/clusters/agentdev/sync`. The branch `gitops` now holds only the
+   new tree, so the old root `flux-system` never goes into the inventory of `agentdev`.
+6. When `flux get kustomizations` shows `agentdev` Ready, remove the old objects. Delete the old root while it is
+   still suspended. Some objects can already be pruned, so each delete uses `--ignore-not-found`:
+   `kubectl -n flux-system delete kustomization flux-system --ignore-not-found`,
+   `kubectl -n flux-system delete gitrepository flux-system --ignore-not-found`,
+   `kubectl -n flux-system delete helmrepository external-secrets stakater --ignore-not-found`,
+   `kubectl -n flux-system delete secret flux-system --ignore-not-found`.
+
 ## [1.2.0-rc.1] - 2026-11-23
 
 ### Added

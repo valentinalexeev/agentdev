@@ -1,12 +1,7 @@
----
-issue: 471
-type: fix
-section: Fixed
-status: done
-breaking: false
-title: First deploy and resume after a deleted cluster work through the deployment CI
-components: [ansible, ci]
----
+# First deploy and resume after a deleted cluster work through the deployment CI (#471)
+
+Released in 1.2.0-rc.2 (2026-11-23). Type: fix. Section: Fixed. Components: ansible, ci.
+
 ## Summary
 
 The example deployment CI runs the checks that need no cluster before `infra` and the CRD checks in the new job
