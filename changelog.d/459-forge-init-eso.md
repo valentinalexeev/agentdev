@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: forge-init reads its secrets through the platform store
 components: [terraform, ansible]
+pr: 460
 ---
 ## Summary
 
