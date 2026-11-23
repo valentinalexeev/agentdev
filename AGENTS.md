@@ -30,14 +30,12 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
    cd agentdev/infra/terraform/bootstrap && terraform init
    terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars    # see bootstrap/example.tfvars
    ```
-5. **Plan the infrastructure** in the deployment repo (you may run plan; the owner applies the first time):
-   ```bash
-   cd terraform
-   terraform init -backend-config="bucket=<project_id>-tfstate"
-   terraform plan -var-file=instance.tfvars -out plan.bin
-   ```
-   Summarize the plan for the owner (resources, rough monthly cost per `infra/terraform/README.md`), then the
-   owner runs `terraform apply plan.bin`. This also creates the Workload Identity setup the deployment CI uses.
+5. **Create the CI identity only** (the owner, one time; #471). The cluster and everything else are created by
+   the deployment CI on the first merge, so do not apply all of `terraform/` locally. Run
+   `terraform plan -var-file=instance.tfvars` to summarize the full plan for the owner (resources, rough
+   monthly cost per `infra/terraform/README.md`), then the owner runs the targeted `terraform apply` from
+   `docs/install.md` ("make only the CI identity"). Terraform warns that `-target` is for exceptional use:
+   that is expected here. The targeted apply's plan must show no cluster.
 6. **Wire the deployment CI:** set repository variables `GCP_WIF_PROVIDER` and `GCP_SERVICE_ACCOUNT`
    (from `terraform output github_actions_auth`) and `GCP_PROJECT`; for PR plans also `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT`; ask the owner to protect `main`.
 7. **Images:** nothing to build. Deployments pull `ghcr.io/valentinalexeev/agentdev-worker` and

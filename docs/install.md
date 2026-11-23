@@ -142,7 +142,8 @@ the CI. When you deleted the cluster to stop the cost, the next deploy makes it 
      -target=module.agentdev.google_billing_account_iam_member.plan_budgets
    ```
 
-   Examine the plan before you type `yes`. It must show no cluster.
+   Examine the plan before you type `yes`. It must show no cluster. Terraform warns that `-target` is for
+   exceptional use. This warning is expected here.
 2. Get the CI values: `terraform output github_actions_auth`
 3. Set the CI variables of the deployment repository to these values (refer to `AGENTS.md`, step 6).
 4. Put the secret values into Secret Manager. The list is in `infra/ansible/README.md`.

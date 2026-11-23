@@ -3016,7 +3016,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
 
 NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
-`99-teardown.sh` are removed in 1.2.0. Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
+`99-teardown.sh` are removed in 1.3.0 (#470). Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.
