@@ -28,7 +28,11 @@ while (( \$# )); do case "\$1" in
   -H|-m) shift;; -*) ;; *) url=\$1;; esac; shift; done
 echo "\${method} \${url}" >> "${calls}"
 case "\${url}" in
-  http://127.0.0.1:7070/sync) cp "${tmp}/sync.bundle" "\${out}";;
+  http://127.0.0.1:7070/healthz)  # #482: the sidecar is up only after HEALTHZ_FAILS calls (a container start race)
+    n=\$(( \$(cat "${tmp}/healthz.n" 2>/dev/null || echo 0) + 1 )); echo "\${n}" > "${tmp}/healthz.n"
+    (( \${n} > \${HEALTHZ_FAILS:-0} )) || exit 7; echo ok;;
+  http://127.0.0.1:7070/sync) [[ -f "${tmp}/healthz.n" ]] && (( \$(cat "${tmp}/healthz.n") <= \${HEALTHZ_FAILS:-0} )) && exit 7
+    cp "${tmp}/sync.bundle" "\${out}";;
   http://127.0.0.1:7070/identity) echo '{"forge":"github","agent":"alice","name":"alice (agentdev)","email":"1+app[bot]@users.noreply.github.com","login":"app[bot]"}';;
   http://127.0.0.1:7070/api/v1/repos/o/r) echo '{"default_branch":"main"}';;
   http://127.0.0.1:7070/push\?branch=agent/alice/*) cp "\${data#@}" "${tmp}/pushed.bundle"; printf '{"sha":"x"}\n200';;
@@ -42,21 +46,26 @@ cat > "${bin}/tmux" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
+cat > "${bin}/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
 cat > "${bin}/chat-session-server" <<EOF
 #!/usr/bin/env bash
 echo "server \$(pwd) mcp=\${CHAT_MCP_CONFIG:-}" > "${tmp}/server"
 EOF
 cp "${here}/../agentdev-forge.sh" "${bin}/agentdev-forge"
-chmod +x "${bin}/tmux" "${bin}/chat-session-server" "${bin}/agentdev-forge"
+chmod +x "${bin}/tmux" "${bin}/sleep" "${bin}/chat-session-server" "${bin}/agentdev-forge"
 
 # run the console session with /state pointed at the test dir (the script uses the fixed paths /state/...)
 script="${tmp}/session.sh"
 sed "s#/state#${tmp}/state#g" "${here}/../agent-chat-session.sh" > "${script}"
 mkdir -p "${tmp}/state"
 PATH="${bin}:${PATH}" CHAT_MODE=console REPO=o/r FORGE_USER=alice CHAT_AGENT=alice FORGE_API=http://127.0.0.1:7070 \
-  CLAUDE_CONFIG_DIR="${tmp}/claude" CF_URL=http://cf/servers/x CF_TOKEN=secret GUIDE_FILE=/nonexistent \
+  CLAUDE_CONFIG_DIR="${tmp}/claude" CF_URL=http://cf/servers/x CF_TOKEN=secret GUIDE_FILE=/nonexistent HEALTHZ_FAILS=3 \
   bash "${script}" > "${tmp}/out" 2>&1
 work="${tmp}/state/repo"
+check "console: waits for the forge sidecar before the first sync (#482)" "[[ \$(grep -c '/healthz' '${calls}') == 4 ]] && grep -n . '${calls}' | grep -m1 '/sync' | grep -q '^5:'"
 check "console: the repo comes from the sidecar bundle (POST /sync)" "grep -qx 'POST http://127.0.0.1:7070/sync' '${calls}'"
 check "console: no call goes anywhere but the sidecar" "! grep -v ' http://127.0.0.1:7070/' '${calls}'"
 check "console: main is checked out with the forge content" "[[ \$(git -C '${work}' rev-parse --abbrev-ref HEAD) == main && -f '${work}/README.md' ]]"
@@ -82,8 +91,9 @@ PATH="${bin}:${PATH}" REPO=o/r agentdev-forge push main "${work}" > "${tmp}/push
 check "push: a branch the sidecar refuses fails with its answer" "(( rc != 0 )) && grep -q 'HTTP 403' '${tmp}/push2.out'"
 
 # a sidecar that fails: the session ends with a clear log line, no repo
-rm -rf "${tmp}/state"; mkdir -p "${tmp}/state"; rm -f "${tmp}/sync.bundle"
+rm -rf "${tmp}/state"; mkdir -p "${tmp}/state"; rm -f "${tmp}/sync.bundle" "${tmp}/healthz.n"
 PATH="${bin}:${PATH}" CHAT_MODE=console REPO=o/r FORGE_USER=alice FORGE_API=http://127.0.0.1:7070 CLAUDE_CONFIG_DIR="${tmp}/claude" \
-  bash "${script}" > "${tmp}/out2" 2>&1; rc=$?
+  HEALTHZ_FAILS=99999 CHAT_SIDECAR_WAIT_SECONDS=5 bash "${script}" > "${tmp}/out2" 2>&1; rc=$?
 check "sidecar down: the session fails closed with a message" "(( rc != 0 )) && grep -q 'sync through the forge sidecar failed' '${tmp}/out2'"
+check "sidecar down: the wait is bounded (CHAT_SIDECAR_WAIT_SECONDS)" "[[ \$(cat '${tmp}/healthz.n') == 5 ]]"
 exit "${fail}"
