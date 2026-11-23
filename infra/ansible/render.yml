@@ -10,7 +10,9 @@
 # objects use are listed in SECRETS.md of the output; they come from deploy.yml or from the external secrets (#381).
 # The roles platform, authentik, authentik_sso and api render with their tasks/render.yml (#447): the authentik chart
 # as `helm template` output (needs helm), the database and break-glass steps as the Jobs of tasks/db_init_render.yml
-# (#382), one McpProject per mcp_projects spec (#383). Not rendered: the Secrets (names in SECRETS.md).
+# (#382), one McpProject per mcp_projects spec (#383). Not rendered: the Secrets. secrets_mode playbook: their names
+# are in SECRETS.md. secrets_mode external (#457): the output has the SecretStores, the CEL policies and the
+# ExternalSecrets (Secret Manager ids only) in place of SECRETS.md; ESO and Reloader are prerequisites.
 - name: Render agentdev manifests (no cluster access)
   hosts: localhost
   gather_facts: false
@@ -36,6 +38,12 @@
 
     - name: Value checks of the instance (same as deploy.yml)
       ansible.builtin.include_tasks: tasks/checks.yml
+
+    - name: Secrets mode is playbook or external (#381, same as deploy.yml)
+      ansible.builtin.assert:
+        that: secrets_mode in ['playbook', 'external']
+        fail_msg: "external_secrets.mode must be playbook or external (example.vars.yml)"
+        quiet: true
 
     - name: Render the objects (tasks/render_objects.yml, the same as deploy.yml)
       ansible.builtin.include_tasks: tasks/render_objects.yml
@@ -68,6 +76,30 @@
         tasks_from: render.yml
       when: (ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined
 
+    # #457: secrets_mode external. The SecretStores, the CEL policies and the ExternalSecrets that deploy.yml and the
+    # roles apply (names and Secret Manager ids only, never a value). The ESO and Reloader charts are prerequisites.
+    - name: Secrets stores and policies (role external_secrets, render only)
+      ansible.builtin.include_role: {name: external_secrets, tasks_from: render.yml}
+      when: secrets_mode == 'external'
+
+    - name: ExternalSecrets (the same specs as deploy.yml and the roles)
+      ansible.builtin.set_fact:
+        external_secrets_objects: >-
+          {{ external_secrets_objects | combine({'externalsecrets':
+             lookup('ansible.builtin.template', playbook_dir ~ '/templates/externalsecrets.j2', template_vars={'es_specs': render_es_specs})
+             | from_yaml_all | select | list}) }}
+      vars:
+        render_es_specs: >-
+          {{ (lookup('ansible.builtin.template', 'templates/externalsecrets-agents.j2') | from_yaml)
+             + (platform_es_specs | default([])) + (authentik_es_specs | default([])) + (authentik_sso_es_specs | default([]))
+             + (api_es_specs | default([])) + (ingress_es_specs | default([])) }}
+      when: secrets_mode == 'external'
+
+    # External Gitea (#442), opt-in: the ExternalSecret forge-init and the Job forge-init-<hash> of tasks/forge_init.yml
+    - name: Forge-init objects (render only)
+      ansible.builtin.include_tasks: tasks/forge_init_render.yml
+      when: forge_kind == 'gitea' and (forge_init.enabled | default(false) | bool)
+
     - name: The output directory is empty or absent (old files would stay in the GitOps source)
       ansible.builtin.find:
         paths: "{{ render_dir }}"
@@ -95,10 +127,14 @@
       loop: >-
         {{ ((agentdev_objects | dict2items)[:1] + (platform_objects | default({}) | dict2items)
             + (authentik_objects | default({}) | dict2items) + (api_objects | default({}) | dict2items)
-            + (agentdev_objects | dict2items)[1:] + (ingress_objects | default({}) | dict2items)) | selectattr('value') | list }}
+            + (agentdev_objects | dict2items)[1:] + (ingress_objects | default({}) | dict2items)
+            + (external_secrets_objects | default({}) | dict2items)
+            + ([{'key': 'forge_init', 'value': [forge_init_es, forge_init_job]}] if forge_init_job is defined else []))
+           | selectattr('value') | list }}
       loop_control: {index_var: idx, label: "{{ item.key }}"}
 
     - name: List the Secrets the objects need (names only)
+      when: secrets_mode == 'playbook'   # external (#457): the ExternalSecrets in the output make them
       ansible.builtin.copy:
         dest: "{{ render_dir }}/SECRETS.md"
         mode: "0644"

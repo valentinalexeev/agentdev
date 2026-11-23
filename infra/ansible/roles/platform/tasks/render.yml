@@ -69,3 +69,10 @@
       {{ [platform_ns] | product(['platform-db'] + (['contextforge'] if platform_contextforge_enabled | bool else [])
          + (['obs-mcp-token'] if platform_obs_mcp_enabled | bool and (obs_mcp.token_secret | default('')) | length > 0 else []))
          | list }}
+
+# secrets_mode external (#457): the ExternalSecret specs of tasks/main.yml, rendered by render.yml (names and Secret
+# Manager ids only)
+- name: Platform ExternalSecret specs (secrets_mode external)
+  ansible.builtin.set_fact:
+    platform_es_specs: "{{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}"
+  when: secrets_mode | default('playbook') == 'external'

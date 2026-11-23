@@ -53,3 +53,10 @@
            if ingress_forwarder_watch | bool else [] }}
       ingress_forwarder_deploy: >-
         {{ (lookup('ansible.builtin.template', 'forwarder_deploy.yaml.j2') | from_yaml_all | list) if ingress_fwd_deploy_on | bool else [] }}
+
+# secrets_mode external (#457): the ExternalSecret funnel-sidecar of tasks/forwarder.yml (deployed forwarder only)
+- name: Forwarder ExternalSecret spec (secrets_mode external)
+  ansible.builtin.set_fact:
+    ingress_es_specs:
+      - {name: funnel-sidecar, ns: "{{ ingress_forwarder.namespace }}", data: {authkey: "{{ ingress_fwd_authkey_secret }}"}}
+  when: secrets_mode | default('playbook') == 'external' and ingress_fwd_deploy_on | bool

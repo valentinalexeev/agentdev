@@ -2817,7 +2817,8 @@ The render reads the cluster facts from the instance values in `platform`:
    kubeconform -strict -ignore-missing-schemas rendered/
    gitleaks dir rendered/
    ```
-5. Make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`, or the external secrets of #381.
+5. With `external_secrets.mode: playbook`, make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`.
+   With `external_secrets.mode: external`, go to the next step. The output contains the ExternalSecrets (#457).
 6. Give the directory to the GitOps engine. Apply the files in the order of their numbers.
 
 The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authentik and API objects (#447):
@@ -2833,7 +2834,18 @@ The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authent
   annotation `agentdev/config-hash` changes with the values file, the blueprints and the chart version.
 - `helm template` uses `platform.kube_version` (`terraform output platform`), or `1.36` when it is not set.
 - The render writes one `McpProject` for each spec in `mcp_projects` (#383). The operator registers the servers.
-- The render does not write the Secrets. Their names are in `SECRETS.md`.
+- The render does not write the Secrets. With `external_secrets.mode: playbook`, their names are in `SECRETS.md`.
+- With `external_secrets.mode: external` (#457), the render writes the objects of the External Secrets Operator in
+  place of `SECRETS.md`. These are the same objects that `deploy.yml` applies:
+  - `secrets-policy.yaml`: the CEL policies (ValidatingAdmissionPolicy) for Secrets and ExternalSecrets.
+  - `secrets-stores.yaml`: one ServiceAccount and one SecretStore `agentdev-platform-secrets` in each namespace,
+    with the Google service account of `terraform output secrets_readers`.
+  - `externalsecrets.yaml`: the ExternalSecrets. They contain Secret Manager ids only, never a value.
+  - With `forge_init.enabled`, the ExternalSecret `forge-init` and the Job `forge-init-<hash>` (#442).
+
+  CAUTION: The GitOps engine must install the External Secrets Operator and Stakater Reloader before these files.
+  Use the chart versions of `infra/ansible/roles/external_secrets/defaults/main.yml`, with the same values as the role.
+  The render does not write the two charts.
 
 NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and
 `deploy.yml` reads the API server addresses from the cluster. `deploy.yml` does not read the cluster to select a
