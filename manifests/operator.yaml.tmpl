@@ -38,20 +38,55 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
-# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects, and one token Secret agent-<name>-mcp per agent. The
-# operator never reads a Secret here (#452): it writes them by server-side apply (create/patch) and deletes them by name,
-# and keeps token id, server and renew time in the McpProject status. No get, list or watch, so it cannot read
-# claude-shared or forge tokens (docs/security.md R52)
+# Secrets in the agents namespace (#381, #383, #452): the operator never lists, watches or reads a Secret here, except
+# get on the proxy signing key by name (never claude-shared or a forge token). It writes agent-<name>-proxy (#381) and
+# agent-<name>-mcp (#383) by server-side apply (create, patch) and deletes agent-<name>-mcp by name; the McpProject
+# controller keeps token id, server and renew time in the McpProject status. create, patch and delete cannot be
+# narrowed by a name pattern in RBAC: the ValidatingAdmissionPolicy agentdev-operator-secrets (below in this file,
+# applied in both secrets modes) limits writes to agent-*-proxy and agent-*-mcp and deletes to agent-*-mcp
+# (docs/security.md R52, R119)
+- {apiGroups: [""], resources: [secrets], resourceNames: [claude-proxy-signing], verbs: [get]}
+- {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
+# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects
 - {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [mcpprojects/status], verbs: [get, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [mcpprojects/finalizers], verbs: [update]}
-- {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+# Proxy keys (#381): the operator writes Secrets in the agents namespace only to keep agent-<name>-proxy (the HMAC of
+# the agent name, images/operator/proxykey.go). Its Role allows create and patch on all Secrets there (RBAC cannot
+# narrow them by a name pattern); this policy narrows the writes to agent-*-proxy names, and to agent-*-mcp
+# for the McpProject controller (#383, also deletes). It sits here, next to the Role,
+# so every path that applies the Role (deploy.yml in both secrets modes, the kind operator role) applies the guard too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-operator-secrets}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE, DELETE], resources: [secrets]}
+  matchConditions:
+  - name: operator
+    expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-operator'"
+  validations:
+  - expression: >-
+      request.name.startsWith('agent-') && (request.name.endsWith('-mcp')
+      || (request.operation != 'DELETE' && request.name.endsWith('-proxy')))
+    message: "the operator writes only agent-<name>-proxy and agent-<name>-mcp Secrets, and deletes only agent-<name>-mcp, in the agents namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-operator-secrets}
+spec:
+  policyName: agentdev-operator-secrets
+  validationActions: [Deny]
 ---
 # MCP per project (#383): the ContextForge admin login, read by name from the Secret ContextForge starts with. Nothing else
 # in the platform namespace.

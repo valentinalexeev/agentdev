@@ -40,6 +40,31 @@
           - t_render.results | length == 2
         quiet: true
 
+    # #381 acceptance 3 / review of #445, with #383 and #452: in the agents namespace the operator reads only
+    # claude-proxy-signing by name; one unnamed rule create, patch, delete for agent-*-proxy and agent-*-mcp; no list or
+    # watch; the policy that limits writes and deletes to those names ships with the Role
+    - name: Operator Secret access in the agents namespace
+      ansible.builtin.assert:
+        that:
+          - t_sec | rejectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['create', 'patch', 'delete']]
+          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list == [['claude-proxy-signing']]
+          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['get']]
+          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch', 'update']) | length == 0
+          - t_pol | length == 1
+          - t_pol[0].spec.validations[0].expression is search("-proxy")
+          - t_pol[0].spec.validations[0].expression is search("-mcp")
+          - t_pol[0].spec.validations[0].expression is search("DELETE")
+          - "'DELETE' in t_pol[0].spec.matchConstraints.resourceRules[0].operations"
+          - t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicyBinding')
+            | selectattr('spec.policyName', 'equalto', 'agentdev-operator-secrets') | list | length == 1
+        quiet: true
+      vars:
+        t_role: "{{ t_op | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.namespace', 'equalto', 'v') | first }}"
+        t_sec: "{{ t_role.rules | selectattr('resources', 'contains', 'secrets') | list }}"
+        t_pol: >-
+          {{ t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy')
+             | selectattr('metadata.name', 'equalto', 'agentdev-operator-secrets') | list }}
+
     - name: The agents' egress list without api.anthropic.com (Claude proxy on)
       ansible.builtin.assert:
         that:

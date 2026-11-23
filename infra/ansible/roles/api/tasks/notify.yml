@@ -28,7 +28,7 @@
 
 - name: VAPID key pair
   ansible.builtin.include_tasks: notify_keys.yml
-  when: "'webpush' in api_notify_channels"
+  when: "'webpush' in api_notify_channels and api_playbook_secrets"
 
 - name: Secret agentdev-api-vapid
   kubernetes.core.k8s:
@@ -41,7 +41,7 @@
         publicKey: "{{ api_vapid.publicKey | default('') }}"
         privateKey: "{{ api_vapid.privateKey | default('') }}"
   no_log: true
-  when: "'webpush' in api_notify_channels"
+  when: "'webpush' in api_notify_channels and api_playbook_secrets"
 
 - name: NotificationChannel webpush
   kubernetes.core.k8s:

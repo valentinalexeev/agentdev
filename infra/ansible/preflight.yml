@@ -4,7 +4,8 @@
 #   ansible-playbook deploy.yml -e @instance.yml --tags preflight
 #
 # deploy.yml imports this play first, so a deploy stops before its first change. Checks:
-#   1. claude: claude-shared and each existing agent-<name>-claude have a recognised KEY=VALUE line (#212).
+#   1. claude: claude-shared and each existing agent-<name>-claude have a recognised KEY=VALUE line (#212). Only
+#      with secrets_mode playbook; with external the Claude proxy refuses a bad credential at start (#381).
 #   2. release: the playbook checkout and image_tag are the same release, so the router image and its manifests
 #      move together (#218).
 #   3. crds: the cluster serves the CRDs that the instance values need (Gateway API, FQDNNetworkPolicy).
@@ -41,8 +42,9 @@
         quiet: true
 
     # 1. Claude credential formats (#212). The message comes from tasks/claude_credential.yml.
+    # secrets_mode external (#381): the playbook reads no secret; the Claude proxy checks the format at start instead
     - name: Claude credentials
-      when: "'claude' in preflight_checks"
+      when: "'claude' in preflight_checks and secrets_mode | default('playbook') == 'playbook'"
       block:
         - name: Read claude-shared from Secret Manager (not logged)
           ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_claude_shared }} --project {{ gcp_project }}

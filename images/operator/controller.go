@@ -114,6 +114,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, fmt.Errorf("service account: %w", err)
 	}
 
+	// proxy key (#381): agent-<name>-proxy from claude-proxy-signing, before the pod that reads it
+	if _, err := r.ensureProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// harness guide (#206): written before the pod that mounts it. The mount is optional, so a failure here never blocks
 	// the StatefulSet: it is logged and retried, and the pod starts with the security rules only meanwhile.
 	guideRetry := false

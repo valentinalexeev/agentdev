@@ -41,6 +41,7 @@
       register: platform_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Keep them in facts (not logged)
       ansible.builtin.set_fact:
@@ -48,12 +49,32 @@
         register_token: "{{ platform_secrets.results[1].stdout }}"
         forge_webhook_secret: "{{ platform_secrets.results[2].stdout }}"
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Refuse a claude-shared without a recognised key (#212)
       ansible.builtin.include_tasks: tasks/claude_credential.yml
       vars:
         claude_cred_text: "{{ claude_shared_env }}"
         claude_cred_name: "{{ sm_claude_shared }}"
+      when: secrets_mode == 'playbook'
+
+    - name: Secrets mode is playbook or external (#381)
+      ansible.builtin.assert:
+        that: secrets_mode in ['playbook', 'external']
+        fail_msg: "external_secrets.mode must be playbook or external (example.vars.yml)"
+        quiet: true
+
+    # ---------- secrets_mode external (#381): no secret value on this machine, no `gcloud secrets` call ----------
+    - name: External Secrets Operator, Reloader and the platform secrets stores
+      ansible.builtin.include_role: {name: external_secrets}
+      when: secrets_mode == 'external'
+
+    - name: ExternalSecrets of the agents and executors namespaces
+      ansible.builtin.include_tasks: tasks/external_secrets.yml
+      vars:
+        es_specs: >-
+          {{ lookup('ansible.builtin.template', 'templates/externalsecrets-agents.j2') | from_yaml }}
+      when: secrets_mode == 'external'
 
     - name: Forge sidecar egress credential (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
@@ -67,7 +88,7 @@
       args: {executable: /bin/bash}
       register: forge_proxy_key
       changed_when: false
-      when: not ansible_check_mode
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
@@ -83,6 +104,7 @@
       loop: "{{ agents }}"
       register: wake_created
       changed_when: "'created' in wake_created.stdout"
+      when: secrets_mode == 'playbook'
 
     - name: Read per-agent secrets
       ansible.builtin.shell: |
@@ -102,6 +124,7 @@
       register: agent_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     # An agent-<name>-claude that exists but has no recognised key would silently fall back to claude-shared (#212).
     - name: Refuse an agent-<name>-claude without a recognised key (#212)
@@ -111,14 +134,14 @@
         claude_cred_name: "agent-{{ item.name }}-claude"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
-      when: agent_secrets.results[idx].stdout_lines[2:] | map('trim') | select | list | length > 0
+      when: secrets_mode == 'playbook' and (agent_secrets.results[idx].stdout_lines[2:] | map('trim') | select | list | length > 0)
 
     - name: GitHub App private key (#2), only for the agents' forge sidecars
       ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_github_app_private_key }} --project {{ gcp_project }}
       register: github_app_key
       changed_when: false
       no_log: true
-      when: forge_kind == 'github'
+      when: secrets_mode == 'playbook' and (forge_kind == 'github')
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
     # (exec-<name>-forge-token), optional plan/apply env Secrets (exec-<name>-plan-env, exec-<name>-apply-env: KEY=VALUE
@@ -137,6 +160,7 @@
       register: exec_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     # Wake poll (#181): the router's read-only forge credential. GitHub: the App (the router narrows its installation
     # tokens to read access); Gitea: the optional Secret Manager entry router-poll-forge-token (a read-only token).
@@ -150,12 +174,12 @@
       register: router_poll_token
       changed_when: false
       no_log: true
-      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
+      when: secrets_mode == 'playbook' and (forge_kind == 'gitea' and (wake_poll_seconds | int) > 0)
 
     - name: Scale to zero on Gitea has a wake poll token or webhooks (#190)
       ansible.builtin.include_tasks: tasks/wake_source.yml
       vars: {wake_poll_token: "{{ router_poll_token.stdout | default('') }}"}
-      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
+      when: secrets_mode == 'playbook' and (forge_kind == 'gitea' and (wake_poll_seconds | int) > 0)
 
     # ---------- Claude credential proxy (#66, same template as 06-agents.sh) ----------
     - name: Claude proxy signing key (generated once, kept in Secret Manager)
@@ -170,7 +194,7 @@
       args: {executable: /bin/bash}
       register: proxy_signing_created
       changed_when: "'created' in proxy_signing_created.stdout"
-      when: claude_proxy | bool and not ansible_check_mode
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
 
     - name: Claude proxy keys of the agents (HMAC of the agent name; never the credential)
       ansible.builtin.shell: |
@@ -184,7 +208,7 @@
       args: {executable: /bin/bash}
       register: proxy_keys
       changed_when: false
-      when: claude_proxy | bool and not ansible_check_mode
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
       no_log: true
 
     # the Claude proxy NetworkPolicy names the API server (#352). platform.kube_api_ips (terraform output platform) is the
@@ -201,9 +225,11 @@
 
     - name: Agents with their own Claude Secret (agent-<name>-claude has a KEY=VALUE line, issue 5)
       ansible.builtin.set_fact:
+        # secrets_mode external: agents[].own_claude says that agent-<name>-claude exists (the playbook does not read it)
         agent_own_claude: >-
           {{ agent_own_claude | default({}) | combine({item.name:
-             agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0}) }}
+             (item.own_claude | default(false) | bool) if secrets_mode == 'external'
+             else (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0)}) }}
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true
@@ -215,7 +241,8 @@
              + ((kube_api.results[1].resources | default([])) | map(attribute='subsets', default=[]) | flatten
                 | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list)
              if kube_api.results is defined else [] }}
-        forge_proxy_auth_sha: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
+        # secrets_mode external: Reloader restarts the proxy on a new credential (no hash of it in pod metadata)
+        forge_proxy_auth_sha: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] if secrets_mode == 'playbook' else 'reloader' }}"
       no_log: true
 
     # #449 review: a cluster that does not serve a CRD the values select fails here with a clear message, also under
@@ -278,6 +305,7 @@
           metadata: {name: claude-shared, namespace: "{{ agents_ns }}"}
           stringData: "{{ dict(claude_shared_env.splitlines() | select('search', '=') | map('split', '=', 1)) }}"
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Webhook router Secret (forge webhook secret, register token)
       kubernetes.core.k8s:
@@ -290,6 +318,7 @@
             FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
             REGISTER_TOKEN: "{{ register_token }}"
       no_log: true
+      when: secrets_mode == 'playbook'   # external (#381): the Secret webhook-router comes from its ExternalSecret
 
     - name: Webhook router
       kubernetes.core.k8s:
@@ -307,7 +336,7 @@
           stringData:
             password: "{{ forge_proxy_key.stdout }}"
             auth: "^Basic {{ ('forge:' ~ forge_proxy_key.stdout) | b64encode }}$"
-      when: not ansible_check_mode
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
     - name: Egress allow-list (#65) - proxy and agent NetworkPolicy
@@ -434,6 +463,7 @@
       loop: "{{ exec_secrets.results | default([]) }}"
       loop_control: {label: "exec-{{ item.item.0.name }}-{{ item.item.1 }}"}
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Executor service accounts (GKE Workload Identity, read-only for plan, write for apply)
       kubernetes.core.k8s:
@@ -464,6 +494,7 @@
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Wake poll credential (Secret webhook-router-poll, router pod only)
       kubernetes.core.k8s:
@@ -478,6 +509,7 @@
                 'github-installation-id': github_app.installation_id | default('') | string}
                if forge_kind == 'github' else {'gitea-token': router_poll_token.stdout | default('')} }}
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Claude proxy signing Secret
       kubernetes.core.k8s:
@@ -487,7 +519,7 @@
           kind: Secret
           metadata: {name: claude-proxy-signing, namespace: "{{ agents_ns }}"}
           stringData: {key: "{{ proxy_keys.stdout_lines[-1] | regex_replace('^SIGNING=', '') }}"}
-      when: claude_proxy | bool and not ansible_check_mode
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
       no_log: true
 
     - name: Per-agent proxy key Secrets (agent-<name>-proxy), the only Claude-related value in an agent pod
@@ -500,6 +532,7 @@
           stringData: {ANTHROPIC_AUTH_TOKEN: "{{ item }}"}
       loop: "{{ proxy_keys.stdout_lines[:-1] if (claude_proxy | bool and not ansible_check_mode) else [] }}"
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Claude credential proxy
       kubernetes.core.k8s:
@@ -537,7 +570,7 @@
           stringData: "{{ dict(agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | map('split', '=', 1)) }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
-      when: agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0
+      when: secrets_mode == 'playbook' and (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0)
       no_log: true
 
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
@@ -552,6 +585,7 @@
       register: siem_secret
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: SIEM outputs Secret agentdev-api-siem
       vars:
@@ -571,7 +605,7 @@
           stringData: >-
             {{ siem_env | dict2items | rejectattr('value', 'equalto', '') | items2dict
                | combine(dict(siem_secret.stdout_lines | select('search', '=') | map('split', '=', 1))) }}
-      when: (security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0
+      when: secrets_mode == 'playbook' and ((security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0)
       no_log: true
 
     # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)

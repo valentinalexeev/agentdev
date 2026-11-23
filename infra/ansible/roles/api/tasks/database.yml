@@ -12,7 +12,7 @@
       {{ ('Secret Manager ' ~ api_sm_db_password) if api_secret_source == 'gcp' else (api_secrets_dir ~ '/pg-agentdev-api') }}
       must hold a hex password (openssl rand -hex 24)
     quiet: true
-  when: not ansible_check_mode and api_db_password is defined
+  when: not ansible_check_mode and api_playbook_secrets
   no_log: true
 
 - name: Job agentdev-db-init (roles, database, schema, retention, grants)
@@ -24,4 +24,5 @@
     db_init_files: "{{ api_db_init_files }}"
     db_init_env: "{{ api_db_init_env }}"
     # a new API password (agentdev-api-db changed) must reach the role: run the same Job again
-    db_init_rerun: "{{ api_secret_db is changed }}"
+    # secrets_mode external: no playbook Secret write here (api_secret_db not set); ESO keeps the name and key
+    db_init_rerun: "{{ api_secret_db | default({}) is changed }}"

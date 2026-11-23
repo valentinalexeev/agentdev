@@ -46,6 +46,16 @@ output "budget" {
   value       = one(google_billing_budget.monthly[*].name)
 }
 
+output "secrets_readers" {
+  description = "Google service accounts of the SecretStores agentdev-platform-secrets (#381): copy into instance.yml `external_secrets.gsa`."
+  value       = { for k, v in google_service_account.secrets_reader : k => v.email }
+}
+
+output "generated_secrets" {
+  description = "Secret Manager ids that Terraform generates (values only in Secret Manager and the state, never here)."
+  value       = sort(keys(local.generated_secrets))
+}
+
 # #384: what the playbook read from the cluster before, as instance values. Copy into ansible/instance.yml `platform`,
 # so the render mode (infra/ansible/render.yml) needs no cluster access. The preflight compares them with the cluster.
 output "platform" {

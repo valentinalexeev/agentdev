@@ -83,6 +83,14 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - claude-proxy-signing
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resourceNames:
   - executor-egress-proxy
   resources:
   - secrets

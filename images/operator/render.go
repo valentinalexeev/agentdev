@@ -55,6 +55,9 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	s.Annotations["agentdev/user"] = n
 	s.Annotations["agentdev/repos"] = a.Spec.Repo
 	s.Annotations["agentdev/forge"] = forge
+	// Stakater Reloader (#381): a change of one of these Secrets changes the pod template. The StatefulSet is OnDelete,
+	// so the operator's drain (#174) then replaces the pod after its jobs end: a rotation never kills a running job.
+	s.Annotations[reloaderAnnotation] = r.reloadSecrets(a, forgeSecret)
 
 	s.Spec.ServiceName = "agent-" + n
 	// #174: the operator replaces outdated pods itself after draining them (drain.go), never the StatefulSet controller
@@ -257,6 +260,23 @@ func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
 		// Claude Code telemetry and error reports are not on the allow-list; without this every run makes refusals
 		corev1.EnvVar{Name: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", Value: "1"})
 	return out
+}
+
+const reloaderAnnotation = "secret.reloader.stakater.com/reload"
+
+// reloadSecrets lists the Secrets an agent pod reads at start (env, file of the forge sidecar). The Claude credential
+// itself is only in the proxy pod when the proxy is on.
+func (r *AgentReconciler) reloadSecrets(a *v1.Agent, forgeSecret string) string {
+	names := []string{forgeSecret, "agent-" + a.Name + "-mcp"}
+	if r.D.EgressProxy != "" {
+		names = append(names, forgeProxySecret)
+	}
+	if r.D.ClaudeProxyURL != "" {
+		names = append(names, "agent-"+a.Name+"-proxy")
+	} else if a.Spec.ClaudeSecret != "" {
+		names = append(names, a.Spec.ClaudeSecret)
+	}
+	return strings.Join(names, ",")
 }
 
 // forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
