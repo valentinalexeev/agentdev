@@ -21,11 +21,16 @@ a cluster that already runs Flux.
    `flux-system/gotk-sync.yaml` to `sync/gotk-sync.yaml` and apply the changes of `sync/gotk-sync.yaml.example`.
 2. Make the Secret `agentdev` with the same deploy key:
    `kubectl -n flux-system get secret flux-system -o json | jq '.metadata={name:"agentdev",namespace:"flux-system"}' | kubectl apply -f -`
-3. Stop the old root sync from pruning: `kubectl -n flux-system patch kustomization flux-system --type merge -p '{"spec":{"prune":false,"suspend":true}}'`
-4. Apply the new sync: `kubectl apply -k gitops/flux/clusters/agentdev/sync`, then merge the tree into `main`.
-5. When `flux get kustomizations` shows `agentdev` Ready, remove the old objects:
-   `kubectl -n flux-system delete kustomization flux-system`, `kubectl -n flux-system delete gitrepository flux-system`,
-   `kubectl -n flux-system delete helmrepository external-secrets stakater`, `kubectl -n flux-system delete secret flux-system`.
+3. Stop the old root sync: `kubectl -n flux-system patch kustomization flux-system --type merge -p '{"spec":{"prune":false,"suspend":true}}'`
+4. Merge the new tree into `main`. Wait until the job `render` pushed the branch `gitops`.
+5. Apply the new sync: `kubectl apply -k gitops/flux/clusters/agentdev/sync`. The branch `gitops` now holds only the
+   new tree, so the old root `flux-system` never goes into the inventory of `agentdev`.
+6. When `flux get kustomizations` shows `agentdev` Ready, remove the old objects. Delete the old root while it is
+   still suspended. Some objects can already be pruned, so each delete uses `--ignore-not-found`:
+   `kubectl -n flux-system delete kustomization flux-system --ignore-not-found`,
+   `kubectl -n flux-system delete gitrepository flux-system --ignore-not-found`,
+   `kubectl -n flux-system delete helmrepository external-secrets stakater --ignore-not-found`,
+   `kubectl -n flux-system delete secret flux-system --ignore-not-found`.
 
 ## Description
 
