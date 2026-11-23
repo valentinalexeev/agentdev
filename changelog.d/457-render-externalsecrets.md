@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: Render mode writes the ExternalSecrets of secrets_mode external
 components: [ansible]
+pr: 458
 ---
 ## Summary
 
