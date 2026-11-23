@@ -40,7 +40,7 @@ proxy_token_settings() {
 if [[ "${CHAT_MODE:-}" == console ]]; then
   # #482: the forge sidecar is a regular container that starts next to this one (restartPolicy Never, no retry), so
   # wait for its /healthz before the first sync, as agent-loop does; the sync itself still fails closed after the wait
-  w="${CHAT_SIDECAR_WAIT_SECONDS:-60}"; [[ "${w}" =~ ^[0-9]{1,4}$ ]] || w=60
+  w="${CHAT_SIDECAR_WAIT_SECONDS:-60}"; [[ "${w}" =~ ^[0-9]{1,4}$ ]] && w=$((10#${w})) || w=60
   for (( i = 0; i < w; i++ )); do
     curl -fsS -m 2 "${FORGE_API:-http://127.0.0.1:7070}/healthz" >/dev/null 2>&1 && break
     sleep 1

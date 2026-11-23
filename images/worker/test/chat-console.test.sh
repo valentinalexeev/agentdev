@@ -93,7 +93,7 @@ check "push: a branch the sidecar refuses fails with its answer" "(( rc != 0 )) 
 # a sidecar that fails: the session ends with a clear log line, no repo
 rm -rf "${tmp}/state"; mkdir -p "${tmp}/state"; rm -f "${tmp}/sync.bundle" "${tmp}/healthz.n"
 PATH="${bin}:${PATH}" CHAT_MODE=console REPO=o/r FORGE_USER=alice FORGE_API=http://127.0.0.1:7070 CLAUDE_CONFIG_DIR="${tmp}/claude" \
-  HEALTHZ_FAILS=99999 CHAT_SIDECAR_WAIT_SECONDS=5 bash "${script}" > "${tmp}/out2" 2>&1; rc=$?
+  HEALTHZ_FAILS=99999 CHAT_SIDECAR_WAIT_SECONDS=08 bash "${script}" > "${tmp}/out2" 2>&1; rc=$?
 check "sidecar down: the session fails closed with a message" "(( rc != 0 )) && grep -q 'sync through the forge sidecar failed' '${tmp}/out2'"
-check "sidecar down: the wait is bounded (CHAT_SIDECAR_WAIT_SECONDS)" "[[ \$(cat '${tmp}/healthz.n') == 5 ]]"
+check "sidecar down: the wait is bounded (CHAT_SIDECAR_WAIT_SECONDS, leading zero is decimal)" "[[ \$(cat '${tmp}/healthz.n') == 8 ]]"
 exit "${fail}"
