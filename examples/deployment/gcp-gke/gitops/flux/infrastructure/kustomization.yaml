@@ -1,0 +1,11 @@
+# Infrastructure layer (agentdev #385): the prerequisites of the rendered output. Chart versions and values are the
+# ones of infra/ansible/roles/external_secrets (owner decision on #381): ESO chart 2.14.0, Reloader chart
+# 3.0.0-beta.5 (app v2.0.0-beta.2). authentik is rendered by render.yml (`helm template`, #451), so it is in the
+# platform layer, after its database.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - repositories.yaml
+  - external-secrets.yaml
+  - reloader.yaml

@@ -2819,7 +2819,8 @@ The render reads the cluster facts from the instance values in `platform`:
    ```
 5. With `external_secrets.mode: playbook`, make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`.
    With `external_secrets.mode: external`, go to the next step. The output contains the ExternalSecrets (#457).
-6. Give the directory to the GitOps engine. Apply the files in the order of their numbers.
+6. Give the directory to the GitOps engine. Apply the files in the order of their numbers. For Flux, use the
+   procedure "Install an instance with Flux".
 
 The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authentik and API objects (#447):
 
@@ -2854,6 +2855,72 @@ template. The preflight (`crds`) compares `platform` with the cluster.
 The render refuses bad values before it writes a file. It uses the same checks as `deploy.yml` (`tasks/checks.yml`):
 labels, executors, approvals, Claude budget and wake source. Thus the CI of a deployment repository finds them
 before a merge.
+
+### Install an instance with Flux
+
+Flux applies the manifests of an instance from its deployment repository (#385). The deploy workflow renders the
+manifests and pushes them to the branch `gitops`. Flux applies that branch. The workflow does not call the Flux API.
+
+The template `examples/deployment/gcp-gke/gitops/flux/` has three layers. Flux applies them in this order
+(`dependsOn`):
+
+| Layer | Flux Kustomization | Contents |
+|---|---|---|
+| infrastructure | `agentdev-infrastructure` | External Secrets Operator chart 2.14.0 and Stakater Reloader v2.0.0-beta.2 (chart 3.0.0-beta.5) |
+| platform | `agentdev-platform` | the `render.yml` output without the agents: CRDs, router, operator, platform, authentik, API, ingress, ExternalSecrets |
+| agents | `agentdev-agents` | the Agent and Executor objects (#58) |
+
+All layers use `prune: true`: Flux removes an object that is removed from Git. Flux also corrects drift: it applies
+the state of Git again at each interval, and the HelmReleases use drift detection. The Flux controllers, the External
+Secrets Operator and Reloader run on the `system` node pool. They never stop the agent pool from scaling to zero
+(#181). No StatefulSet has `replicas` in Git, because the router sets the replicas of the agents.
+
+Before you start:
+
+- You did steps 1 to 6 of `AGENTS.md` (Terraform applied, Secret Manager values filled in).
+- `ansible/instance.yml` has `platform` from `terraform output platform` and `external_secrets: {mode: external}`.
+- You have the `flux` CLI, at the version of `gotk-components.yaml`, and `kubectl` access to the cluster.
+
+1. Copy `examples/deployment/gcp-gke/gitops/` and `.github/workflows/deploy.yml` of the pinned release into the
+   deployment repository.
+2. Write the Flux controllers into the repository:
+   ```bash
+   flux install --export > gitops/flux/clusters/agentdev/flux-system/gotk-components.yaml
+   ```
+3. Copy `gitops/flux/clusters/agentdev/flux-system/gotk-sync.yaml.example` to `gotk-sync.yaml`.
+4. In `gotk-sync.yaml`, set `url` to the SSH address of the deployment repository.
+5. If `ingress.forwarder.deploy` is set, add the forwarder namespace to `reloader.namespaces` in
+   `gitops/flux/infrastructure/reloader.yaml`.
+6. Set the repository variable `DEPLOY_ENGINE` to `flux`. The workflow then runs the jobs `render` and `verify` in
+   place of the job `deploy`.
+7. Merge these changes into `main`. The job `render` pushes the branch `gitops`.
+8. Make a read-only deploy key and the Secret `flux-system`:
+   ```bash
+   kubectl create namespace flux-system
+   flux create secret git flux-system --url=ssh://git@github.com/<owner>/<deployment-repository>
+   ```
+   The command shows a public key.
+9. Add the public key as a read-only deploy key of the deployment repository.
+10. Install Flux and its sync:
+    ```bash
+    kubectl apply -k gitops/flux/clusters/agentdev/flux-system
+    ```
+11. Wait until all layers are ready:
+    ```bash
+    flux get kustomizations --watch
+    ```
+    `agentdev-infrastructure`, `agentdev-platform` and `agentdev-agents` show `Ready True`.
+12. Run the workflow `deploy` again on `main`. The job `verify` waits until Flux applied the new revision, then it does
+    the smoke test of the public hosts (`infra/ansible/smoke.yml`).
+
+The job `verify` reads the status of the engine with `scripts/gitops-status.sh`. A layer is ready when its `Ready`
+condition is `True` for the current generation and for the commit of the job `render`. A stalled layer stops the job
+at once. A stopped agent is ready (#386), thus the instance is healthy with all agents stopped.
+
+CAUTION: Do not run `deploy.yml` of Ansible on a cluster that Flux operates. Both change the same objects.
+
+NOTE: Flux does not make the Secrets. The External Secrets Operator makes them from Secret Manager. A change of an
+agent (for example a new image) does not start a stopped agent. The change applies when the agent starts next.
 
 ### Upgrade the local installation
 

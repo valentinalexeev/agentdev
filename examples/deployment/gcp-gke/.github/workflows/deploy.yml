@@ -3,7 +3,8 @@
 # PRs with the read-only plan identity (agentdev #291): terraform plan with -lock=false, posted as a PR comment.
 #   Needs repository variables GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT; without them the plan job is skipped.
 #   The plan account can read resources and the state, it cannot change them. No ansible --check on PRs.
-# main: terraform plan + apply, then the playbook.
+# main: terraform plan + apply, then the playbook (repository variable DEPLOY_ENGINE unset or `ansible`), or with
+#   DEPLOY_ENGINE=flux (agentdev #385): render, push the branch `gitops`, and verify (engine Ready, then smoke test).
 # Auth: Workload Identity Federation (no keys); values from `terraform output github_actions_auth`,
 # stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT (apply, main only) and
 # GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT (plan, PRs only).
@@ -164,6 +165,7 @@ jobs:
       - run: terraform apply -input=false plan.bin
   deploy:
     needs: infra
+    if: vars.DEPLOY_ENGINE == '' || vars.DEPLOY_ENGINE == 'ansible'
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: ansible}}
@@ -186,3 +188,64 @@ jobs:
           gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
       - name: ansible
         run: ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml
+  # GitOps (agentdev #385, DEPLOY_ENGINE=flux): render the manifests (no secret values) and push them to the branch
+  # `gitops`, which the engine reads. The commit is the deploy: the job never calls the engine API.
+  render:
+    needs: infra
+    if: vars.DEPLOY_ENGINE == 'flux'
+    permissions: {contents: write}
+    runs-on: ubuntu-latest
+    outputs: {revision: "${{ steps.push.outputs.revision }}"}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: agentdev checkout at the pinned release
+        run: |
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' ansible/instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible pyyaml
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+      - name: render and split into the layers (agentdev scripts/gitops-layout.py)
+        run: |
+          ansible-playbook ../agentdev/infra/ansible/render.yml -e @ansible/instance.yml -e render_dir="$RUNNER_TEMP/render"
+          python3 ../agentdev/scripts/gitops-layout.py "$RUNNER_TEMP/render" "$RUNNER_TEMP/rendered"
+      - name: push the branch gitops (the tree of main plus rendered/)
+        id: push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B gitops
+          git rm -r -q --ignore-unmatch rendered
+          cp -R "$RUNNER_TEMP/rendered" rendered
+          git add -A rendered
+          git commit -q --allow-empty -m "chore(gitops): render ${GITHUB_SHA::12}"
+          git push -f origin gitops
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  verify:
+    needs: render
+    permissions: {contents: read, id-token: write}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: "gke-gcloud-auth-plugin kubectl"}
+      - name: agentdev checkout at the pinned release
+        run: |
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' ansible/instance.yml)
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+          gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' ansible/instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: wait until the engine applied this revision and reports Ready (agentdev scripts/gitops-status.sh)
+        env: {REVISION: "${{ needs.render.outputs.revision }}", ENGINE: "${{ vars.DEPLOY_ENGINE }}"}
+        run: |
+          bash ../agentdev/scripts/gitops-status.sh --engine "$ENGINE" --revision "$REVISION" --timeout 1800 \
+            kustomization/agentdev-infrastructure kustomization/agentdev-platform kustomization/agentdev-agents
+      - name: smoke test of the public hosts (roles/ingress/tasks/smoke.yml)
+        working-directory: ansible
+        run: ansible-playbook ../../agentdev/infra/ansible/smoke.yml -e @instance.yml
