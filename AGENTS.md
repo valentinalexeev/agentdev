@@ -31,7 +31,8 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
    terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars    # see bootstrap/example.tfvars
    ```
 5. **Create the CI identity only** (the owner, one time; #471). The cluster and everything else are created by
-   the deployment CI on the first merge, so do not apply all of `terraform/` locally. Run
+   the deployment CI on the first merge, so do not apply all of `terraform/` locally. In `terraform/`, run
+   `terraform init -backend-config="bucket=<project_id>-tfstate"` and
    `terraform plan -var-file=instance.tfvars` to summarize the full plan for the owner (resources, rough
    monthly cost per `infra/terraform/README.md`), then the owner runs the targeted `terraform apply` from
    `docs/install.md` ("make only the CI identity"). Terraform warns that `-target` is for exceptional use:

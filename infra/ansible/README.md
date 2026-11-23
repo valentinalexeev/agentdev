@@ -173,7 +173,7 @@ deprecation notice and calls the playbook, for one MINOR release. All steps apar
 | 13 | `secrets` | `secrets_store`, then `operator` |
 | 99 (`99-teardown.sh`) | `teardown` (also `never`) | `kind_cluster` (`tasks/teardown.yml`) |
 
-Step 04 (Coder spike) is not ported: it is deprecated and removed together with `run.sh` and all wrappers in 1.2.0.
+Step 04 (Coder spike) is not ported: it is deprecated and removed together with `run.sh` and all wrappers in 1.3.0.
 `--tags prereqs` only checks the host (tools, engine VM, kind v0.24 or later); `--tags cluster` runs the same checks
 first. `--tags teardown` deletes the kind cluster and `.coder`; as it is tagged `never`, a plain run never deletes.
 
