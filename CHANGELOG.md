@@ -588,7 +588,7 @@ backwards compatible by default.
   Gitea already routed comments by the PR author; a router test now covers it.
 
 ### Security
-- R108 to R110 (#347): push subscription endpoints are limited to the allowed push hosts and public addresses,
+- R108, R109 and R120 (#347; first numbered R110): push subscription endpoints are limited to the allowed push hosts and public addresses,
   payloads hold no model text, and notification actions are Deny and Snooze only, with signed single-use tokens.
 - R107 (#352): with `claude_proxy_auth: token` the agent pod holds no long-lived credential for the Claude proxy, only
   a 10-minute token for the audience `claude-proxy`. A copied token is refused after its expiry and at any other
