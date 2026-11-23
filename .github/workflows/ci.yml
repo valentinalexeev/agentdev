@@ -50,7 +50,7 @@ jobs:
           fi
           printf '%s\n' "$files"
           has() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
-          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^infra/ansible/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^infra/ansible/|^scripts/|^examples/deployment/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "image=$(has '(^images/worker/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           # per component: its sources, or a workflow change (which can change how anything is checked)
           echo "router=$(has '(^images/router/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
