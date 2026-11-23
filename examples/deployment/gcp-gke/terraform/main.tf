@@ -55,6 +55,7 @@ module "agentdev" {
   # agent_names                 = var.agent_names
   # keep_existing_secret_values = var.keep_existing_secret_values
   # platform_extra_secret_ids   = var.platform_extra_secret_ids
+  # forge_init                  = var.forge_init   # agentdev #459: with forge_init.enabled in ansible/instance.yml
 }
 
 # Migration (agentdev #199): if this repository has the workaround resource
@@ -176,6 +177,10 @@ variable "keep_existing_secret_values" {
 variable "platform_extra_secret_ids" {
   type    = list(string)
   default = []
+}
+variable "forge_init" {
+  type    = bool
+  default = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's

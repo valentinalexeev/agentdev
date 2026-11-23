@@ -70,3 +70,23 @@ run "upgrade_keeps_values" {
     error_message = "kept secrets get no new version"
   }
 }
+
+# #459: the forge-init Job (#442) reads gitea-admin-token and the webhook secret through the platform store
+run "forge_init_reads_its_secrets" {
+  command = plan
+  variables {
+    forge_init = true
+  }
+  assert {
+    condition     = strcontains(google_project_iam_member.secrets_reader["platform"].condition[0].expression, "projects/123456789012/secrets/gitea-admin-token\"") && strcontains(google_project_iam_member.secrets_reader["platform"].condition[0].expression, "projects/123456789012/secrets/github-app-webhook-secret\"")
+    error_message = "with forge_init the platform reader reads gitea-admin-token and github-app-webhook-secret"
+  }
+}
+
+run "no_gitea_admin_token_by_default" {
+  command = plan
+  assert {
+    condition     = !strcontains(google_project_iam_member.secrets_reader["platform"].condition[0].expression, "gitea-admin-token")
+    error_message = "without forge_init the platform reader never reads the Gitea admin token"
+  }
+}

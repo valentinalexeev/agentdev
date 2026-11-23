@@ -2520,7 +2520,9 @@ the Ansible role `gitea_forge` is for kind only.
 6. Do one of these steps for collaborators, labels, the webhook and branch protection:
    - Set them by hand on Gitea (the same rules as the reference below), or
    - Set `forge_init: {enabled: true}` and put an admin token of Gitea in the Secret Manager entry
-     `gitea-admin-token`. The Job `forge-init-<hash>` in `agentdev-platform` uses the Gitea API only. It makes the
+     `gitea-admin-token`. This needs `external_secrets.mode: external`. In `terraform/instance.tfvars`, also set
+     `external_secrets = true` and `forge_init = true` and apply (#459). Then the store `agentdev-platform-secrets`
+     can read `gitea-admin-token` and `github-app-webhook-secret`. The Job `forge-init-<hash>` in `agentdev-platform` uses the Gitea API only. It makes the
      agents write collaborators, `agentdev-api` admin collaborator and `agentdev-router` read collaborator. It also
      makes the label `agent:<name>`, one webhook to the router, and the branch protection (one approval by
      `reviewer`). It does not make tokens or repositories. With `create_accounts: true` it also makes missing agent
