@@ -79,7 +79,7 @@ rules:
   - create
   - delete
   - get
-  - update
+  - patch
 - apiGroups:
   - ""
   resourceNames:
