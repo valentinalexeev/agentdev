@@ -1,0 +1,14 @@
+# Flux controllers (agentdev #385). `flux bootstrap` writes gotk-components.yaml and gotk-sync.yaml next to this file
+# and keeps this file when it exists. The patch puts every Flux controller on the GKE system pool: the engine must
+# never keep a node of the agent pool (agentdev/pool=sandboxes) awake, so that pool can scale to zero (#181).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gotk-components.yaml
+  - gotk-sync.yaml
+patches:
+  - target: {kind: Deployment, labelSelector: app.kubernetes.io/part-of=flux}
+    patch: |
+      - op: add
+        path: /spec/template/spec/nodeSelector/cloud.google.com~1gke-nodepool
+        value: system

@@ -9,6 +9,7 @@ terraform/main.tf                root module → agentdev//infra/terraform?ref=v
 terraform/instance.tfvars        your project, region, zone, billing account, this repo's name
 ansible/instance.yml             your project, zone, agentdev_ref (vX.Y.Z, git tag the CI clones), image_tag (X.Y.Z of the same release), reviewer, agents
 .github/workflows/deploy.yml     PR: fmt, validate, syntax-check; plan comment (read-only identity)   main: plan, apply, deploy (Workload Identity)
+gitops/flux/                     optional Flux install (agentdev #385, DEPLOY_ENGINE=flux): GitRepository and three layers
 AGENTS.md / CLAUDE.md            how an agent operates this instance
 ```
 

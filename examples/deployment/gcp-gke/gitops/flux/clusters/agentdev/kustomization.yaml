@@ -1,0 +1,6 @@
+# Root of the cluster sync (agentdev #385): the Flux controllers and the layer Kustomizations.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - layers.yaml
