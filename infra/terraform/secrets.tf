@@ -2,7 +2,7 @@
 #
 # 1. Generated secrets: Terraform makes each value once (random_id, hex so it is safe in SQL, env and URLs) and stores
 #    it as a Secret Manager version. The value is then also in the Terraform state: protect the state bucket like the
-#    secrets (docs/security.md R110). Upgrade from 1.1.x: the playbook made these secrets already. Import the
+#    secrets (docs/security.md R119). Upgrade from 1.1.x: the playbook made these secrets already. Import the
 #    containers and list them in keep_existing_secret_values (examples/deployment/gcp-gke/terraform/imports.tf.example),
 #    so Terraform keeps the existing values and adds no version.
 # 2. Readers: one Google service account per namespace that consumes secrets, each bound by Workload Identity to the
