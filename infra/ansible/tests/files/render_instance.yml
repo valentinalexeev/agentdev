@@ -8,7 +8,7 @@ agents:
   - {name: bob, user: bob, repos: my-org/my-repo, own_claude: true}
 agentdev_labels: {environment: prod}
 github_app: {app_id: 1012345}
-api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/"}
+notifications: {channels: [webpush], subject: "mailto:ops@example.com"}
 executors:
   - name: tf-prod
     environment: prod
@@ -20,6 +20,7 @@ executors:
 ingress:
   host: agentdev.example.com
   webhook_host: hooks.example.com
+  auth_host: auth.example.com
   certificate: agentdev-public
 platform:
   egress: {fqdn: gke}
