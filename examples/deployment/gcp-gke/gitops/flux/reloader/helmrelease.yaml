@@ -12,7 +12,7 @@ spec:
     spec:
       chart: reloader
       version: 3.0.0-beta.5
-      sourceRef: {kind: HelmRepository, name: stakater, namespace: flux-system}
+      sourceRef: {kind: HelmRepository, name: agentdev-stakater, namespace: flux-system}
   driftDetection: {mode: enabled}
   values:
     reloader:
