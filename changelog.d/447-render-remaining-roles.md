@@ -42,5 +42,4 @@ no secret values in the output.
 Checks: `tests/render_mode.yml` renders the example with authentik, the API and webpush, and runs `kubeconform` and
 `gitleaks`.
 
-Limits: `mcp-sync` (#383) and the authentik break-glass group (an authentik API call) stay in `deploy.yml`.
-ExternalSecret objects in the output come after #445.
+Limit: the output lists the Secrets by name only. ExternalSecret objects in the output come after #445.
