@@ -2890,22 +2890,43 @@ Before you start:
 - You have the `flux` CLI v2.10.1 (the version of the agentdev release check, `scripts/check-flux-tree.sh`) and
   `kubectl` access to the cluster.
 
+agentdev's Flux objects are named `agentdev`: the `GitRepository`, the root `Kustomization`, the deploy key Secret
+and the prefix `agentdev-` of the layers and the Helm repositories. `flux bootstrap` uses the name `flux-system`. Thus
+agentdev never changes the root sync of another tenant on the same cluster (#472).
+
+First, find out if Flux is already installed on the cluster:
+
+```bash
+kubectl get crd kustomizations.kustomize.toolkit.fluxcd.io
+```
+
+- The command shows `NotFound`: agentdev installs Flux. Do all the steps below.
+- The command shows the CRD: Flux is already installed. agentdev adds only its own objects and uses the Flux
+  controllers that are there. Do the extra part of step 1, skip steps 2 and 9, and skip the first command of step 10.
+
 1. Copy `examples/deployment/gcp-gke/gitops/` and `.github/workflows/deploy.yml` of the pinned release into the
    deployment repository.
+   Flux already installed only: remove the line `- flux-system` from
+   `gitops/flux/clusters/agentdev/kustomization.yaml`, and remove the directory
+   `gitops/flux/clusters/agentdev/flux-system`. The existing Flux must be v2.x with the APIs
+   `source.toolkit.fluxcd.io/v1`, `kustomize.toolkit.fluxcd.io/v1` and `helm.toolkit.fluxcd.io/v2`, and it must
+   watch the namespace `flux-system`.
 2. Make sure that `flux version --client` shows `v2.10.1`. Then write the Flux controllers into the repository:
    ```bash
    flux install --export > gitops/flux/clusters/agentdev/flux-system/gotk-components.yaml
    ```
-3. Copy `gitops/flux/clusters/agentdev/flux-system/gotk-sync.yaml.example` to `gotk-sync.yaml`.
+   The Flux controllers run on the node pool `system` (#181). If your cluster has no pool with this name, set
+   `value` in `gitops/flux/clusters/agentdev/flux-system/controller-nodepool.yaml` to the name of your system pool.
+3. Copy `gitops/flux/clusters/agentdev/sync/gotk-sync.yaml.example` to `gotk-sync.yaml`.
 4. In `gotk-sync.yaml`, set `url` to the SSH address of the deployment repository.
 5. Set the repository variable `DEPLOY_ENGINE` to `flux`. The workflow then runs the jobs `render` and `verify` in
    place of the job `deploy`.
-6. Merge these changes into `main`. The job `render` pushes the branch `gitops`. Flux is not installed yet, thus the
+6. Merge these changes into `main`. The job `render` pushes the branch `gitops`. If Flux is not installed yet, the
    job `verify` skips its checks and shows the notice "Flux not installed". This is expected.
-7. Make a read-only deploy key and the Secret `flux-system`:
+7. Make a read-only deploy key and the Secret `agentdev`:
    ```bash
-   kubectl create namespace flux-system
-   flux create secret git flux-system --url=ssh://git@github.com/<owner>/<deployment-repository>
+   kubectl create namespace flux-system    # only when Flux is not installed
+   flux create secret git agentdev --namespace flux-system --url=ssh://git@github.com/<owner>/<deployment-repository>
    ```
    The command shows a public key.
 8. Add the public key as a read-only deploy key of the deployment repository.
@@ -2914,15 +2935,18 @@ Before you start:
    kubectl apply -f gitops/flux/clusters/agentdev/flux-system/gotk-components.yaml
    kubectl wait --for condition=established --timeout=120s crd --all
    ```
-10. Install the Flux sync:
+10. Install the node pool patch of the Flux controllers (skip this command when Flux was already installed), then
+    agentdev's sync, the `GitRepository` and the root `Kustomization` named `agentdev`:
     ```bash
     kubectl apply -k gitops/flux/clusters/agentdev/flux-system
+    kubectl apply -k gitops/flux/clusters/agentdev/sync
     ```
 11. Wait until all layers are ready:
     ```bash
     flux get kustomizations --watch
     ```
-    `agentdev-infrastructure`, `agentdev-platform`, `agentdev-agents` and `agentdev-reloader` show `Ready True`.
+    `agentdev`, `agentdev-infrastructure`, `agentdev-platform`, `agentdev-agents` and `agentdev-reloader` show
+    `Ready True`. When Flux was already installed, the `Kustomization` objects of the other tenants do not change.
 12. Run the workflow `deploy` on `main`: in GitHub, open Actions, select `deploy`, then select "Run workflow". The job
     `verify` waits until Flux applied the new revision, then it does the smoke test of the public hosts
     (`infra/ansible/smoke.yml`).
@@ -2974,7 +2998,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 |---|---|---|
 | Host prerequisites (tools, engine, kind version) | 00 (`kind.yml --tags prereqs`) | not used |
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
-| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.2.0) | not used |
+| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.3.0) | not used |
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
@@ -2992,7 +3016,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
 
 NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
-`99-teardown.sh` are removed in 1.2.0. Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
+`99-teardown.sh` are removed in 1.3.0 (#470). Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.

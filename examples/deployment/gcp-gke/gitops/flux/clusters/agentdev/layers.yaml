@@ -1,5 +1,5 @@
 # The layers of an instance (agentdev #385). Order only between layers (dependsOn). All layers read the
-# GitRepository flux-system that `flux bootstrap` makes (branch `gitops`, written by the deploy workflow).
+# GitRepository agentdev (sync/gotk-sync.yaml) (branch `gitops`, written by the deploy workflow).
 #   infrastructure  External Secrets Operator and the Helm repositories (gitops/flux/infrastructure)
 #   platform        render.yml output without the agents: namespaces, CRDs, router, operator, platform, authentik, API
 #   agents          Agent and Executor objects (#58), rendered/agents
@@ -18,7 +18,7 @@ spec:
   interval: 10m
   retryInterval: 1m
   timeout: 10m
-  sourceRef: {kind: GitRepository, name: flux-system}
+  sourceRef: {kind: GitRepository, name: agentdev}
   path: ./gitops/flux/infrastructure
   prune: true
   wait: true
@@ -34,7 +34,7 @@ spec:
   interval: 10m
   retryInterval: 1m
   timeout: 15m
-  sourceRef: {kind: GitRepository, name: flux-system}
+  sourceRef: {kind: GitRepository, name: agentdev}
   path: ./rendered/platform
   prune: true
   wait: true
@@ -50,7 +50,7 @@ spec:
   interval: 10m
   retryInterval: 1m
   timeout: 5m
-  sourceRef: {kind: GitRepository, name: flux-system}
+  sourceRef: {kind: GitRepository, name: agentdev}
   path: ./rendered/agents
   prune: true
   # Ready of Agent and Executor (#386): a stopped agent is Ready, so all agents stopped is a healthy instance
@@ -67,7 +67,7 @@ spec:
   interval: 10m
   retryInterval: 1m
   timeout: 5m
-  sourceRef: {kind: GitRepository, name: flux-system}
+  sourceRef: {kind: GitRepository, name: agentdev}
   path: ./rendered/reloader
   prune: true
   wait: true
