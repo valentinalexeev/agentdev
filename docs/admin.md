@@ -2998,7 +2998,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 |---|---|---|
 | Host prerequisites (tools, engine, kind version) | 00 (`kind.yml --tags prereqs`) | not used |
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
-| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.2.0) | not used |
+| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.3.0) | not used |
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
@@ -3016,7 +3016,7 @@ a run.sh step or a manual `kubectl` command on GKE.
 | Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
 
 NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
-`99-teardown.sh` are removed in 1.2.0. Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
+`99-teardown.sh` are removed in 1.3.0 (#470). Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.

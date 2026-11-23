@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DEPRECATED (#106): this step is now the Ansible playbook infra/ansible/kind.yml (tag teardown, also tagged never).
-# This wrapper stays for one MINOR release, then it is removed (1.2.0). Use instead:
+# This wrapper stays for one MINOR release, then it is removed (1.3.0). Use instead:
 #   ansible-playbook infra/ansible/kind.yml --tags teardown
 source "$(dirname "$0")/lib.sh"
 

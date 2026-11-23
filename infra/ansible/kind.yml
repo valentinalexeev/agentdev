@@ -21,7 +21,7 @@
 #
 # Ported steps (tag: old run.sh step): prereqs: 00, cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, agents: 06,
 # botboard: 07, mcp: 08, authentik: 09, api: 10, ui: 11, operator: 12, secrets: 13, teardown: 99. 04-coder.sh (Coder spike) is
-# not ported and is removed with run.sh in 1.2.0. ./run.sh calls this playbook for the ported steps.
+# not ported and is removed with run.sh in 1.3.0. ./run.sh calls this playbook for the ported steps.
 - name: Deploy agentdev to kind
   hosts: localhost
   gather_facts: false
