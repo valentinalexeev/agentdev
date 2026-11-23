@@ -33,6 +33,13 @@ While the version is `0.x`, breaking changes bump MINOR.
   "Health checks for Flux and Argo CD".
 
 ### Changed
+- **McpProject controller no longer reads Secrets in the agents namespace (#452).** The operator Role there has
+  `create`, `patch` and `delete` on Secrets, no `get`, `list` or `watch`, so the operator cannot read `claude-shared`
+  or forge tokens. It writes `agent-<name>-mcp` by server-side apply and keeps the token id, virtual server and renew
+  time in the new `McpProject` status field `tokens`. Each resync finds a deleted `agent-<name>-mcp` Secret with a
+  dry-run create (no read) and makes it again with a new token. To repair an edited Secret, delete it. The first
+  reconcile after the upgrade mints new tokens once; revoke the old tokens with `scripts/mcp-revoke-legacy.sh`
+  (Upgrade, #452).
 - **Databases and the break-glass admin are set up by Jobs in the cluster, not by `kubectl exec` (#382, #388).** The
   role `api` applies the ConfigMap and Job `agentdev-db-init-<hash>` (roles, database `agentdev`, `schema.sql`,
   retention, `grants.sql`, then a schema version); the role `authentik` applies `authentik-db-init-<hash>` (login and
@@ -60,12 +67,25 @@ While the version is `0.x`, breaking changes bump MINOR.
   `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
 - **#383:**
   1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
-     `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets get/create/update/delete
+     `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets create/patch/delete (#452)
      in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
-  2. Existing `agent-<name>-mcp` Secrets made by the script are taken over as they are; no token is re-minted until the
-     project's virtual server changes or the token is in its last 30 days.
+  2. Existing `agent-<name>-mcp` Secrets made by the script are replaced with new tokens on the first reconcile (#452);
+     revoke the old tokens as the #452 step says.
   3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
   4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
+- **#452 (only if you use `McpProject`):** the new operator cannot read the old token ids, so you revoke them once.
+  Record the ids **before** the upgrade: the first reconcile replaces each Secret and its id annotation. Revoke them
+  **after** the upgrade: the agents keep MCP access until their new tokens are in place. Use the owner's `kubectl`
+  (it can read Secrets); the script prints token ids only, never a token or the admin password.
+  1. Before the upgrade: `scripts/mcp-revoke-legacy.sh list > legacy-mcp-token-ids.txt`
+  2. Upgrade as usual (playbook or `./run.sh 12`).
+  3. Wait until `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project.
+  4. `scripts/mcp-revoke-legacy.sh revoke legacy-mcp-token-ids.txt`. The last line must show `failed 0`. Ids that a
+     `McpProject` status records are kept. An agent session that started before step 2 still uses its old token;
+     do this step when the agents are idle.
+  5. `rm legacy-mcp-token-ids.txt`
+  If you forgot step 1, the old ids are lost from the cluster; the old tokens expire within one year. Set
+  `AGENTS_NS`, `PLATFORM_NS` or `CF_ADMIN_EMAIL` if your instance does not use the defaults.
 - **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
   the playbook (role `operator`) on GKE. No spec changes, no agent restart.
 

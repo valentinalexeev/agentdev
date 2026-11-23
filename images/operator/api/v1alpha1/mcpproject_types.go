@@ -59,6 +59,11 @@ type McpProjectStatus struct {
 	// Token Secrets this McpProject made (agent-<agent>-mcp); a Secret dropped from the spec is revoked and deleted.
 	// +optional
 	TokenSecrets []string `json:"tokenSecrets,omitempty"`
+	// What the operator knows of each token Secret, so it never reads a Secret (#452). No token value.
+	// +optional
+	// +listType=map
+	// +listMapKey=secret
+	Tokens []McpToken `json:"tokens,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
@@ -86,3 +91,19 @@ type McpProjectList struct {
 }
 
 func init() { SchemeBuilder.Register(&McpProject{}, &McpProjectList{}) }
+
+// McpToken is the operator's record of one agent token Secret (#452): the ContextForge token id (not the token), the
+// virtual server it is scoped to and when it is re-minted.
+type McpToken struct {
+	// Secret name, agent-<agent>-mcp.
+	Secret string `json:"secret"`
+	// ContextForge token id, used to revoke it.
+	// +optional
+	TokenID string `json:"tokenID,omitempty"`
+	// Virtual server the token is scoped to.
+	// +optional
+	ServerID string `json:"serverID,omitempty"`
+	// Unix time after which the token is re-minted.
+	// +optional
+	RenewAfter int64 `json:"renewAfter,omitempty"`
+}

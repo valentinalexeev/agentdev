@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
@@ -83,7 +85,19 @@ func mcpFixture(t *testing.T, p *v1.McpProject, objs ...client.Object) (*McpProj
 	admin := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: CFAdminSecret, Namespace: platformNS},
 		Data: map[string][]byte{cfAdminKey: []byte("Aa1!pw")}}
 	objs = append(objs, p, admin)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(p).Build()
+	// the fake client accepts every dry-run create; the API server answers AlreadyExists for a present object
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(p).
+		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, o client.Object, opts ...client.CreateOption) error {
+			co := &client.CreateOptions{}
+			co.ApplyOptions(opts)
+			if slices.Contains(co.DryRun, metav1.DryRunAll) {
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(o), o.DeepCopyObject().(client.Object)); err == nil {
+					return apierrors.NewAlreadyExists(corev1.Resource("secrets"), o.GetName())
+				}
+				return nil
+			}
+			return cl.Create(ctx, o, opts...)
+		}}).Build()
 	cf := newFakeCF()
 	now := time.Unix(1_800_000_000, 0)
 	r := &McpProjectReconciler{Client: c, Direct: c, NS: ns, PlatformNS: platformNS, CFURL: "http://cf:4444",
@@ -225,13 +239,58 @@ func TestMcpRenewsNearExpiryAndRevokesOld(t *testing.T) {
 	}
 }
 
-func TestMcpAdoptsScriptSecretOnlyOfSameProject(t *testing.T) {
-	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "agent-alice-mcp", Namespace: ns,
-		Labels: map[string]string{mcpLabelProject: "api"}}, Data: map[string][]byte{"CF_TOKEN": []byte("x")}}
-	r, c, _ := mcpFixture(t, mcpProject(docsServer, "alice"), other)
+func TestMcpNeverTakesAnotherProjectsSecret(t *testing.T) {
+	other := &v1.McpProject{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: ns},
+		Status: v1.McpProjectStatus{TokenSecrets: []string{"agent-alice-mcp"}}}
+	r, c, cf := mcpFixture(t, mcpProject(docsServer, "alice"), other)
 	p := reconcileMcp(t, r, c)
-	if cond := ready(p); cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, `project "api"`) {
-		t.Fatalf("Ready: %+v", cond)
+	if cond := ready(p); cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, `project "api"`) || cf.minted != 0 {
+		t.Fatalf("Ready: %+v, minted %d", cond, cf.minted)
+	}
+}
+
+// #452: the controller never gets, lists or watches a Secret in the agents namespace (so not claude-shared either).
+// Every Secret read there fails; create, renew, agent removal and delete still work.
+func TestMcpNeverReadsAgentSecrets(t *testing.T) {
+	r, c, cf := mcpFixture(t, mcpProject(docsServer, "alice", "bob"))
+	reads := 0
+	guard := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, k client.ObjectKey, o client.Object, opts ...client.GetOption) error {
+			if _, ok := o.(*corev1.Secret); ok && k.Namespace == ns {
+				reads++
+				return apierrors.NewForbidden(corev1.Resource("secrets"), k.Name, errors.New("no get"))
+			}
+			return cl.Get(ctx, k, o, opts...)
+		},
+		List: func(ctx context.Context, cl client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := l.(*corev1.SecretList); ok {
+				reads++
+				return apierrors.NewForbidden(corev1.Resource("secrets"), "", errors.New("no list"))
+			}
+			return cl.List(ctx, l, opts...)
+		},
+	}
+	gc := interceptor.NewClient(c.(client.WithWatch), guard)
+	r.Client, r.Direct = gc, gc
+	p := reconcileMcp(t, r, c)
+	if cond := ready(p); cond.Reason != "Synced" || len(p.Status.Tokens) != 2 {
+		t.Fatalf("Ready %+v tokens %+v", cond, p.Status.Tokens)
+	}
+	r.Now = func() time.Time { return time.Unix(1_800_000_000, 0).Add((mcpRenewDays + 1) * 24 * time.Hour) }
+	p = reconcileMcp(t, r, c)
+	p.Spec.Agents = []string{"alice"}
+	if err := c.Update(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	reconcileMcp(t, r, c)
+	if err := c.Delete(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if p := reconcileMcp(t, r, c); p != nil {
+		t.Fatalf("finalizer not removed")
+	}
+	if reads != 0 || cf.minted != 4 || len(cf.revoked) != 4 || len(cf.tokens) != 0 {
+		t.Fatalf("secret reads %d, minted %d, revoked %v, live %v", reads, cf.minted, cf.revoked, cf.tokens)
 	}
 }
 
@@ -334,5 +393,28 @@ func TestContextForgeHTTPClient(t *testing.T) {
 	}
 	if gotAuth[len(gotAuth)-1] != "Bearer adm" {
 		t.Fatalf("auth header %q", gotAuth[len(gotAuth)-1])
+	}
+}
+
+// #453 review: a deleted agent-<name>-mcp Secret comes back on the next reconcile (dry-run create probe, no read);
+// the old token is revoked. A present Secret mints nothing.
+func TestMcpRecreatesDeletedSecret(t *testing.T) {
+	r, c, cf := mcpFixture(t, mcpProject(docsServer, "alice"))
+	reconcileMcp(t, r, c)
+	reconcileMcp(t, r, c)
+	if cf.minted != 1 {
+		t.Fatalf("present Secret re-minted: %d", cf.minted)
+	}
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "agent-alice-mcp"}}
+	if err := c.Delete(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	p := reconcileMcp(t, r, c)
+	var got corev1.Secret
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-alice-mcp"}, &got); err != nil || string(got.Data["CF_TOKEN"]) != "secret-tok2" {
+		t.Fatalf("Secret not restored: %v", err)
+	}
+	if cf.minted != 2 || len(cf.revoked) != 1 || cf.revoked[0] != "tok1" || p.Status.Tokens[0].TokenID != "tok2" {
+		t.Fatalf("minted %d revoked %v status %+v", cf.minted, cf.revoked, p.Status.Tokens)
 	}
 }
