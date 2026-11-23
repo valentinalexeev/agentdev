@@ -1,12 +1,7 @@
----
-issue: 472
-type: fix
-section: Fixed
-status: done
-breaking: true
-title: The Flux template no longer collides with an existing Flux install
-components: [deployment]
----
+# The Flux template no longer collides with an existing Flux install (#472)
+
+Released in 1.2.0-rc.2 (2026-11-23). Type: fix. Section: Fixed. Components: deployment.
+
 ## Summary
 
 The Flux template names its `GitRepository`, root `Kustomization` and deploy key Secret `agentdev` (was `flux-system`),
