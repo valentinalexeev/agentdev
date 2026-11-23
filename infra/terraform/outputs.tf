@@ -55,3 +55,18 @@ output "generated_secrets" {
   description = "Secret Manager ids that Terraform generates (values only in Secret Manager and the state, never here)."
   value       = sort(keys(local.generated_secrets))
 }
+
+# #384: what the playbook read from the cluster before, as instance values. Copy into ansible/instance.yml `platform`,
+# so the render mode (infra/ansible/render.yml) needs no cluster access. The preflight compares them with the cluster.
+output "platform" {
+  description = "Cluster facts for instance.yml `platform` (Ansible render mode, #384): copy them as they are."
+  value = {
+    egress  = { fqdn = "gke" } # enable_fqdn_network_policy is always on in this module
+    ingress = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
+    # Service default/kubernetes: the first address of the services range, and the control plane private endpoint
+    kube_api_ips = compact([
+      cidrhost(one([for r in google_compute_subnetwork.nodes.secondary_ip_range : r.ip_cidr_range if r.range_name == "services"]), 1),
+      google_container_cluster.this.private_cluster_config[0].private_endpoint,
+    ])
+  }
+}
