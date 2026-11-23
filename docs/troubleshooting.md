@@ -101,6 +101,14 @@
 | No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
 | A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
 
+## Deployment CI (GKE)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The `preflight` job of the deployment CI stops at `get-credentials` or at `Required CRDs` with `NOT_FOUND` or `cluster agentdev not found`, and `infra` does not run. | The GKE cluster does not exist (a first install, or the cluster was deleted to stop the cost). The template from before #471 checks the cluster before `infra` can make it. | 1. Pin agentdev 1.2.0-rc.2 or later (`ref=`, `image_tag`, `agentdev_ref`). 2. Copy `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke` of that release. 3. Run the workflow again (Actions, deploy, Run workflow). `preflight` then does only the checks that need no cluster, `infra` makes the cluster, and `preflight-cluster` checks the CRDs. Do not apply `terraform/` locally. |
+| `preflight-cluster` shows the notice `no cluster` and `deploy` or `render` continues. | `infra` ran, but the cluster is not there (an apply that made no cluster). | Examine the log of the `infra` job. The `deploy` job stops at `get-credentials` if the cluster is missing. |
+| `preflight-cluster` stops with `cannot read the GKE cluster`. | `gcloud container clusters describe` failed for a reason that is not "not found" (permission, API). The checks are not skipped. | Examine the gcloud message in the log. Make sure that the automation account has `roles/container.admin`. |
+
 ## kind cluster (run.sh step 01)
 
 | Symptom | Cause | Procedure |
