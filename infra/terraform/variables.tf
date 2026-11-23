@@ -244,8 +244,14 @@ variable "keep_existing_secret_values" {
   default     = []
 }
 
+variable "forge_init" {
+  description = "The forge-init Job of an external Gitea runs (forge_init.enabled in instance.yml, #442). The platform reader may then read gitea-admin-token and github-app-webhook-secret (#459). Needs external_secrets = true."
+  type        = bool
+  default     = false
+}
+
 variable "platform_extra_secret_ids" {
-  description = "More Secret Manager ids the platform namespace may read (for example the forwarder pre-auth key funnel-sidecar-authkey, or gitea-admin-token of forge_init). A trailing * is a prefix."
+  description = "More Secret Manager ids the platform namespace may read (for example the forwarder pre-auth key funnel-sidecar-authkey). A trailing * is a prefix."
   type        = list(string)
   default     = []
 }

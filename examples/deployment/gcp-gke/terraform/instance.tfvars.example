@@ -28,3 +28,4 @@ labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service
 # agent_names = ["alice"]   # the agents of ansible/instance.yml; Terraform makes agent-<name>-wake-token
 # keep_existing_secret_values = []   # upgrade from 1.1.x: the names of imports.tf.example, so the values stay
 # platform_extra_secret_ids   = []   # e.g. ["funnel-sidecar-authkey"]
+# forge_init                  = false   # true with forge_init.enabled (external Gitea): reads gitea-admin-token

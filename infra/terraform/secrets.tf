@@ -36,6 +36,8 @@ locals {
       namespace = var.platform_namespace
       ids = concat(["platform-*", "agentdev-api-forge-token", "agentdev-api-chat-token-key", "agentdev-chat-issue-token",
         "security-siem", "github-app-private-key", "authentik-sso-*"],
+        # forge-init Job (#442, #459): the Gitea admin token and the router webhook secret, only with forge_init
+        var.forge_init ? ["gitea-admin-token", "github-app-webhook-secret"] : [],
       var.platform_extra_secret_ids)
     }
     agents = {
