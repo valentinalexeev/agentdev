@@ -14,7 +14,7 @@ pr: 449
 access and no secret values (`SECRETS.md` lists the Secret names). `deploy.yml` applies the same objects
 (`tasks/render_objects.yml`) and runs the same value checks (`tasks/checks.yml`). New Terraform output `platform` and
 instance value `platform` (`egress.fqdn`, `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace
-the reads of the cluster. The roles `platform`, `authentik`, `authentik_sso` and `api` are not rendered yet (#447).
+the reads of the cluster. The roles `platform`, `authentik`, `authentik_sso` and `api` render too (#447).
 Docs: `docs/admin.md`, "Render the manifests for a GitOps engine".
 
 ## Upgrade
@@ -52,5 +52,5 @@ manifests of an instance from git.
 Checks: `tests/render_mode.yml` (FQDN on and off, Gateway, own Claude Secret, executors, no `Secret` in the output,
 refusals before any file is written; renders `examples/deployment/gcp-gke` and runs `kubeconform` and `gitleaks`).
 
-Limits: the roles `platform`, `authentik`, `authentik_sso` and `api` are rendered by #447. An OCI artifact of the
+The roles `platform`, `authentik`, `authentik_sso` and `api` are rendered by #447. Limit: an OCI artifact of the
 rendered output (point 6 of #384) is not done.
