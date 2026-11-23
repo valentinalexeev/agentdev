@@ -11,7 +11,8 @@ components: [ansible, deployment]
 
 The GKE deployment template has a Flux tree (`examples/deployment/gcp-gke/gitops/flux/`): a GitRepository and three
 layers (infrastructure with ESO 2.14.0 and Reloader v2.0.0-beta.2, platform, agents) with `dependsOn`, prune and
-drift correction, Flux on the system pool. With `DEPLOY_ENGINE=flux` the template workflow renders, pushes the branch
+drift correction, Flux on the system pool, and a fourth layer for Reloader after the platform layer, which makes
+the namespaces that Reloader watches. With `DEPLOY_ENGINE=flux` the template workflow renders, pushes the branch
 `gitops`, waits for Flux Ready (`scripts/gitops-status.sh`) and runs the smoke test (`infra/ansible/smoke.yml`).
 Docs: `docs/admin.md`, "Install an instance with Flux".
 

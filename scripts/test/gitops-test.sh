@@ -74,6 +74,9 @@ lay "$r" "$work/out" >/dev/null
 grep -q replicas "$work/out/platform/01-platform.yaml" && fail "StatefulSet replicas in Git"
 [ ! -f "$work/out/platform/00-namespaces.yaml" ] && grep -q 'agentdev/role: executors' "$work/out/platform/02-ns-again.yaml" \
   || fail "duplicate Namespace merged into its last place"
+[ "$(yq '.patches[0].patch | from_json | .[0].value | join(",")' "$work/out/reloader/kustomization.yaml")" = ex ] \
+  || fail "reloader layer watches the rendered namespaces"
+grep -q 'agentdev-executors' "$work/out/reloader/kustomization.yaml" && fail "no executors namespace without executors"
 pass "layout"
 if command -v kustomize >/dev/null; then
   [ "$(kustomize build "$work/out/platform" | grep -c '^kind:')" = 2 ] || fail "kustomize build platform"

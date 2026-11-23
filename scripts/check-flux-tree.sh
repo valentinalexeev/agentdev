@@ -5,9 +5,10 @@
 #    example into a copy of examples/deployment/gcp-gke.
 # 2. kustomize build of clusters/agentdev and infrastructure; kubeconform -strict with the Flux CRD schemas.
 # 3. Checks: every Flux controller has nodeSelector system pool, every layer Kustomization has prune: true, the
-#    layers depend on each other, ESO 2.14.0 and Reloader chart 3.0.0-beta.5 (app v2.0.0-beta.2).
+#    layers depend on each other, the infrastructure layer uses only its own namespaces (fresh install), ESO 2.14.0 and Reloader chart 3.0.0-beta.5 (app v2.0.0-beta.2).
 # 4. With <render_dir> (render.yml output of the example): scripts/gitops-layout.py, kustomize build and kubeconform
-#    of rendered/platform and rendered/agents, and no StatefulSet replicas.
+#    of rendered/platform, rendered/agents and rendered/reloader, no StatefulSet replicas, and Reloader watches
+#    exactly the rendered namespaces.
 # Needs docker, kustomize, yq v4, python3 with PyYAML.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,6 +27,7 @@ cp "$f/clusters/agentdev/flux-system/gotk-sync.yaml.example" "$f/clusters/agentd
 
 kustomize build "$f/clusters/agentdev" > "$work/cluster.yaml"
 kustomize build "$f/infrastructure" > "$work/infra.yaml"
+{ echo ---; kustomize build "$f/reloader"; } >> "$work/infra.yaml"
 kc < "$work/cluster.yaml"
 kc < "$work/infra.yaml"
 
@@ -45,6 +47,17 @@ ks='select(.kind == "Kustomization" and .apiVersion == "kustomize.toolkit.fluxcd
   || fail "platform dependsOn infrastructure"
 [ "$(yq -N "$ks | select(.metadata.name == \"agentdev-agents\") | .spec.dependsOn[0].name" "$work/cluster.yaml")" = agentdev-platform ] \
   || fail "agents dependsOn platform"
+[ "$(yq -N "$ks | select(.metadata.name == \"agentdev-reloader\") | .spec.dependsOn[0].name" "$work/cluster.yaml")" = agentdev-platform ] \
+  || fail "reloader dependsOn platform (its Roles need the namespaces of the platform layer)"
+# namespace ordering (review of #463): the infrastructure layer runs first, on an empty cluster. Every namespace that
+# it writes into or that a HelmRelease there targets must be made by the infrastructure layer itself.
+infra_only=$(kustomize build "$f/infrastructure")
+own=$(yq -N 'select(.kind == "Namespace") | .metadata.name' <<<"$infra_only" | sort -u)
+used=$( { yq -N 'select(.kind != "Namespace") | .metadata.namespace // ""' <<<"$infra_only"
+          yq -N 'select(.kind == "HelmRelease") | (.spec.targetNamespace // ""), (.spec.values.reloader.namespaces // [] | .[])' <<<"$infra_only"
+        } | grep -vx -e '' -e flux-system | sort -u)
+missing=$(comm -23 <(printf '%s\n' "$used") <(printf '%s\n' "$own"))
+[ -z "$missing" ] || fail "the infrastructure layer uses namespaces that only a later layer makes: $missing"
 # pinned charts (owner decision on #381) and drift detection
 [ "$(yq -N 'select(.kind == "HelmRelease" and .metadata.name == "external-secrets") | .spec.chart.spec.version' "$work/infra.yaml")" = 2.14.0 ] \
   || fail "ESO chart 2.14.0"
@@ -58,14 +71,18 @@ grep -rqE 'kind: StatefulSet' "$f" && fail "a StatefulSet in the static tree"
 echo "PASS: Flux tree (controllers, layers, charts)"
 
 if [ -n "${1:-}" ]; then
-  "${PYTHON:-python3}" "$root/scripts/gitops-layout.py" "$1" "$work/rendered" >/dev/null
-  for layer in platform agents; do
-    kustomize build "$work/rendered/$layer" > "$work/$layer.yaml"
+  "${PYTHON:-python3}" "$root/scripts/gitops-layout.py" "$1" "$work/repo/rendered" >/dev/null
+  for layer in platform agents reloader; do
+    kustomize build "$work/repo/rendered/$layer" > "$work/$layer.yaml"
     kc < "$work/$layer.yaml"
   done
   [ "$(yq -N 'select(.kind == "StatefulSet" and .spec.replicas != null) | .metadata.name' "$work/platform.yaml")" = "" ] \
     || fail "StatefulSet replicas in Git"
   [ "$(yq -N 'select(.kind == "Secret") | .metadata.name' "$work/platform.yaml" "$work/agents.yaml")" = "" ] || fail "a Secret in Git"
   yq -N '.kind' "$work/agents.yaml" | grep -qx Agent || fail "no Agent in the agents layer"
+  # Reloader watches exactly the namespaces of the platform layer (no agentdev-executors without executors)
+  want=$(yq -N 'select(.kind == "Namespace") | .metadata.name' "$work/platform.yaml" | sort -u)
+  got=$(yq -N 'select(.kind == "HelmRelease") | .spec.values.reloader.namespaces[]' "$work/reloader.yaml" | sort -u)
+  [ "$got" = "$want" ] || fail "Reloader namespaces ($got) are not the rendered namespaces ($want)"
   echo "PASS: rendered layers of the example"
 fi

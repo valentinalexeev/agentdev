@@ -1,6 +1,7 @@
 # Stakater Reloader v2 (app v2.0.0-beta.2, chart 3.0.0-beta.5): the same values as
 # infra/ansible/roles/external_secrets. Scoped mode: a Role in each watched namespace, no ClusterRole.
-# The namespaces are the agentdev defaults. Add the forwarder namespace when ingress.forwarder.deploy is set.
+# Own layer agentdev-reloader, after the platform layer: the watched namespaces must exist first. The deploy workflow
+# (scripts/gitops-layout.py, rendered/reloader) replaces reloader.namespaces with the Namespaces of the render.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata: {name: reloader, namespace: reloader}
@@ -16,7 +17,7 @@ spec:
   values:
     reloader:
       watchGlobally: false
-      namespaces: [agentdev-platform, coding-agents, agentdev-executors]
+      namespaces: [agentdev-platform, coding-agents]   # replaced by rendered/reloader
       autoReloadAll: false
       reloadStrategy: annotations
       ignoreConfigMaps: true

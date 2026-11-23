@@ -14,6 +14,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:   # run the deploy of main again (for example after the Flux install, agentdev #385); main only
 concurrency: {group: deploy, cancel-in-progress: false}   # never two applies at once
 permissions: {contents: read}
 jobs:
@@ -114,7 +115,7 @@ jobs:
   # agentdev #314: read-only checks before anything changes (Claude secret formats, same release for playbook and
   # images, required CRDs, image_tag on ghcr.io). Only on main for now: on PRs it needs a read-only identity (#291).
   preflight:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: ansible}}
@@ -143,7 +144,7 @@ jobs:
           bash ../agentdev/scripts/upgrade-check.sh instance.yml
   infra:
     needs: preflight
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: terraform}}
@@ -241,11 +242,23 @@ jobs:
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' ansible/instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: is the engine installed? (the first run is before the Flux install, docs/admin.md)
+        id: engine
+        run: |
+          if kubectl get crd kustomizations.kustomize.toolkit.fluxcd.io >/dev/null 2>&1; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Flux not installed::the branch gitops is pushed; install Flux, then run this workflow again (Actions, deploy, Run workflow)"
+          fi
       - name: wait until the engine applied this revision and reports Ready (agentdev scripts/gitops-status.sh)
+        if: steps.engine.outputs.installed == 'true'
         env: {REVISION: "${{ needs.render.outputs.revision }}", ENGINE: "${{ vars.DEPLOY_ENGINE }}"}
         run: |
           bash ../agentdev/scripts/gitops-status.sh --engine "$ENGINE" --revision "$REVISION" --timeout 1800 \
-            kustomization/agentdev-infrastructure kustomization/agentdev-platform kustomization/agentdev-agents
+            kustomization/agentdev-infrastructure kustomization/agentdev-platform kustomization/agentdev-agents \
+            kustomization/agentdev-reloader
       - name: smoke test of the public hosts (roles/ingress/tasks/smoke.yml)
+        if: steps.engine.outputs.installed == 'true'
         working-directory: ansible
         run: ansible-playbook ../../agentdev/infra/ansible/smoke.yml -e @instance.yml
