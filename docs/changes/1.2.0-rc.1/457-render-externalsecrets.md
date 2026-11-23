@@ -1,13 +1,7 @@
----
-issue: 457
-type: feature
-section: Added
-status: done
-breaking: false
-title: Render mode writes the ExternalSecrets of secrets_mode external
-components: [ansible]
-pr: 458
----
+# Render mode writes the ExternalSecrets of secrets_mode external (#457)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: feature. Section: Added. Components: ansible. PR: #458.
+
 ## Summary
 
 With `external_secrets.mode: external`, `render.yml` writes the CEL policies, the SecretStores
