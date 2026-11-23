@@ -1,13 +1,7 @@
----
-issue: 454
-type: fix
-section: Fixed
-status: done
-breaking: false
-title: Duplicate risk id R110 in docs/security.md
-components: [docs]
-pr: 455
----
+# Duplicate risk id R110 in docs/security.md (#454)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: fix. Section: Fixed. Components: docs. PR: #455.
+
 ## Summary
 
 `docs/security.md` had risk id R110 twice, so `scripts/check-risk-ids.sh` failed. The job header risk (#196) keeps

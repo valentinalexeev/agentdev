@@ -1,13 +1,7 @@
----
-issue: 447
-type: feature
-section: Added
-status: done
-breaking: false
-title: Render mode covers the platform, authentik and API roles
-components: [ansible]
-pr: 451
----
+# Render mode covers the platform, authentik and API roles (#447)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: feature. Section: Added. Components: ansible. PR: #451.
+
 ## Summary
 
 The roles `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml`, so

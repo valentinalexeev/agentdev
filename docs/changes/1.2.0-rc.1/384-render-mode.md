@@ -1,13 +1,7 @@
----
-issue: 384
-type: feature
-section: Added
-status: done
-breaking: false
-title: Render mode for a GitOps engine
-components: [ansible, terraform]
-pr: 449
----
+# Render mode for a GitOps engine (#384)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: feature. Section: Added. Components: ansible, terraform. PR: #449.
+
 ## Summary
 
 `infra/ansible/render.yml` writes the manifests of one instance to a directory, with no cluster or Secret Manager

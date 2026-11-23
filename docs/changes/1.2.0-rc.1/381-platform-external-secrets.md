@@ -1,13 +1,7 @@
----
-issue: 381
-type: feature
-section: Added
-status: done
-breaking: false
-title: External secrets mode on GKE
-components: [terraform, ansible, operator, claude-proxy]
-pr: 445
----
+# External secrets mode on GKE (#381)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: feature. Section: Added. Components: terraform, ansible, operator, claude-proxy. PR: #445.
+
 ## Summary
 
 GKE: `external_secrets.mode: external`. Terraform generates the platform secrets once in Secret Manager, and the

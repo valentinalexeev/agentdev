@@ -6,6 +6,8 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.2.0-rc.1] - 2026-11-23
+
 ### Added
 - **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
   operate. The Gitea host goes into the forge sidecar's egress hosts by itself. Optional Job `forge-init-<hash>`
@@ -31,6 +33,31 @@ While the version is `0.x`, breaking changes bump MINOR.
   agent is Ready; a blocked or invalid agent is not, with the reason. `Agent` also shows `status.image` (the worker
   image of the next wake) and a `READY` column. Flux `healthChecks` and Argo CD Lua examples: `docs/admin.md`,
   "Health checks for Flux and Argo CD".
+- **External secrets mode on GKE (#381).** GKE: `external_secrets.mode: external`. Terraform generates the platform secrets once in Secret Manager, and the
+  External Secrets Operator 2.14.0 makes the Kubernetes Secrets with unchanged names and keys. Stakater Reloader
+  v2.0.0-beta.2 (chart 3.0.0-beta.5, scoped) restarts annotated workloads. The operator writes the `agent-<n>-proxy`
+  keys. The Claude proxy refuses a bad `claude-shared` at start. The default `playbook` mode is unchanged, and Terraform
+  makes nothing new unless `external_secrets = true`.
+- **Render mode for a GitOps engine (#384).** `infra/ansible/render.yml` writes the manifests of one instance to a directory, with no cluster or Secret Manager
+  access and no secret values (`SECRETS.md` lists the Secret names). `deploy.yml` applies the same objects
+  (`tasks/render_objects.yml`) and runs the same value checks (`tasks/checks.yml`). New Terraform output `platform` and
+  instance value `platform` (`egress.fqdn`, `ingress.gateway_api`, `ingress.certificate_domains`, `kube_api_ips`) replace
+  the reads of the cluster. The roles `platform`, `authentik`, `authentik_sso` and `api` render too (#447).
+  Docs: `docs/admin.md`, "Render the manifests for a GitOps engine".
+- **Install an instance with Flux (#385).** The GKE deployment template has a Flux tree (`examples/deployment/gcp-gke/gitops/flux/`): a GitRepository and three
+  layers (infrastructure with ESO 2.14.0 and Reloader v2.0.0-beta.2, platform, agents) with `dependsOn`, prune and
+  drift correction, Flux on the system pool, and a fourth layer for Reloader after the platform layer, which makes
+  the namespaces that Reloader watches. With `DEPLOY_ENGINE=flux` the template workflow renders, pushes the branch
+  `gitops`, waits for Flux Ready (`scripts/gitops-status.sh`) and runs the smoke test (`infra/ansible/smoke.yml`).
+  Docs: `docs/admin.md`, "Install an instance with Flux".
+- **Render mode covers the platform, authentik and API roles (#447).** The roles `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml`, so
+  `infra/ansible/render.yml` writes the whole instance: authentik as `helm template` output, the database and
+  break-glass steps as the Jobs `agentdev-db-init-<hash>`, `authentik-db-init-<hash>` and `authentik-breakglass-<hash>`
+  of #382, Secrets by name only (`SECRETS.md`). Docs: `docs/admin.md`, "Render the manifests for a GitOps engine".
+- **Render mode writes the ExternalSecrets of secrets_mode external (#457).** With `external_secrets.mode: external`, `render.yml` writes the CEL policies, the SecretStores
+  `agentdev-platform-secrets` and the ExternalSecrets of `deploy.yml` and its roles (names and Secret Manager ids
+  only), and the forge-init objects with `forge_init.enabled`. `SECRETS.md` stays for playbook mode. The ESO and
+  Reloader charts are prerequisites of the GitOps engine. Docs: `docs/admin.md`, "Render the manifests for a GitOps engine".
 
 ### Changed
 - **McpProject controller no longer reads Secrets in the agents namespace (#452).** The operator Role there has
@@ -50,9 +77,20 @@ While the version is `0.x`, breaking changes bump MINOR.
   (`startupProbe`, up to 15 minutes); `DATABASE_MIGRATE=true` keeps the old self-migrating mode for tests.
 - The role `platform` applies one `McpProject` per `mcp_projects` spec instead of running `scripts/mcp-sync.sh` with a
   temporary password file; `yq`, `jq` and `curl` are no longer needed on the operator machine for the sync.
+- **Changelog fragments in changelog.d (#448).** A PR now adds one file `changelog.d/<issue>-<slug>.md` instead of a line under `## [Unreleased]` in `CHANGELOG.md`
+  (format: `changelog.d/README.md`). `scripts/changelog.sh check|preview|release` validates and assembles them;
+  `scripts/release-lines.sh release X.Y.Z` cuts the release PR branch with them. The `Changelog` workflow fails a PR
+  that changes code without a fragment (label `no-changelog` to skip) or edits `## [Unreleased]` directly.
 
 ### Deprecated
 - `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
+
+### Fixed
+- **Duplicate risk id R110 in docs/security.md (#454).** `docs/security.md` had risk id R110 twice, so `scripts/check-risk-ids.sh` failed. The job header risk (#196) keeps
+  R110. The notification action risk (#347) is now R120.
+- **forge-init reads its secrets through the platform store (#459).** Terraform `forge_init = true` lets the platform reader read `gitea-admin-token` and `github-app-webhook-secret`, so
+  the ExternalSecret `forge-init` of #442 syncs. The playbook refuses `forge_init.enabled` without
+  `external_secrets.mode: external`. Docs: `docs/admin.md`, external Gitea.
 
 ### Upgrade
 - **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
@@ -88,6 +126,33 @@ While the version is `0.x`, breaking changes bump MINOR.
   `AGENTS_NS`, `PLATFORM_NS` or `CF_ADMIN_EMAIL` if your instance does not use the defaults.
 - **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
   the playbook (role `operator`) on GKE. No spec changes, no agent restart.
+
+**#381:**
+Nothing to do in the default `playbook` mode. To use external mode on an instance from 1.1.x, import the generated
+secrets first and list them in `keep_existing_secret_values` (`docs/admin.md`,
+`examples/deployment/gcp-gke/terraform/imports.tf.example`). Otherwise Terraform writes new database passwords. Then
+set `external_secrets = true` in Terraform and `external_secrets.mode: external` in `ansible/instance.yml`, and
+re-apply `infra/terraform` and `deploy.yml`.
+
+**#384:**
+No new step to run: apply `deploy.yml` as usual. Without `platform` the behaviour is the same. To use the render mode,
+re-apply `infra/terraform` and copy `terraform output platform` into `ansible/instance.yml`. The order of some tasks in
+`deploy.yml` changed:
+1. All reads of Secret Manager come first: platform, agent, executor, Gitea wake poll and GitHub App secrets, the
+   forge proxy credential, and the Claude proxy signing key and agent keys (made once, as before).
+2. A new check reads the FQDNNetworkPolicy and Gateway API CRDs, when the values need them. It stops with a clear
+   message, also under `--check`.
+3. The platform namespace is now made together with the agents namespace, before the CRDs (before: after the CRDs).
+4. The `webhook-router` Secret is a separate task, before the router objects.
+
+The objects themselves are the same. Re-run: `deploy.yml` only.
+
+**#385:**
+No change for an Ansible deployment: without the repository variable `DEPLOY_ENGINE`, the workflow runs `deploy.yml` as
+before. To change to Flux, copy the new `.github/workflows/deploy.yml` and `gitops/`, then follow the procedure.
+
+**#447:**
+Nothing to do. `deploy.yml` applies the same objects as before. To use the render mode, see #384.
 
 ## [1.1.0-rc.3] - 2026-11-17
 

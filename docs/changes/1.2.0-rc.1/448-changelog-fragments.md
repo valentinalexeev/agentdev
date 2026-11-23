@@ -1,11 +1,7 @@
----
-issue: 448
-type: task
-section: Changed
-status: done
-title: Changelog fragments in changelog.d
-components: [scripts, ci]
----
+# Changelog fragments in changelog.d (#448)
+
+Released in 1.2.0-rc.1 (2026-11-23). Type: task. Section: Changed. Components: scripts, ci.
+
 ## Summary
 
 A PR now adds one file `changelog.d/<issue>-<slug>.md` instead of a line under `## [Unreleased]` in `CHANGELOG.md`
