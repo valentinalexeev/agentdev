@@ -165,6 +165,34 @@ spec:
                 items:
                   type: string
                 type: array
+              tokens:
+                description: What the operator knows of each token Secret, so it never
+                  reads a Secret (#452). No token value.
+                items:
+                  description: |-
+                    McpToken is the operator's record of one agent token Secret (#452): the ContextForge token id (not the token), the
+                    virtual server it is scoped to and when it is re-minted.
+                  properties:
+                    renewAfter:
+                      description: Unix time after which the token is re-minted.
+                      format: int64
+                      type: integer
+                    secret:
+                      description: Secret name, agent-<agent>-mcp.
+                      type: string
+                    serverID:
+                      description: Virtual server the token is scoped to.
+                      type: string
+                    tokenID:
+                      description: ContextForge token id, used to revoke it.
+                      type: string
+                  required:
+                  - secret
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - secret
+                x-kubernetes-list-type: map
               tools:
                 description: Names of the tools in the virtual server.
                 items:

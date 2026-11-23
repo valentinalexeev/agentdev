@@ -152,7 +152,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   examples and docs in sync, in the same PR; if not, the PR links a follow-up issue.
 - **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
   adds or changes behaviour updates `docs/` (concepts, user guide, admin, troubleshooting as relevant), `README.md`
-  and `CHANGELOG.md` in the same PR. `docs/` is published to the wiki on merge.
+  and adds a changelog fragment `changelog.d/<issue>-<slug>.md` (#448) in the same PR. `docs/` is published to the wiki on merge.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
   given on: a push after the approval needs a new approval. Comments, `COMMENTED` reviews, chat messages, emoji and
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
@@ -194,7 +194,8 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
 
-- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** line in `CHANGELOG.md` lists
+- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** entry (a fragment with
+  `breaking: true`, its `## Upgrade` section) lists
   every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
   one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
 
@@ -209,7 +210,7 @@ The independent reviewer checks these items on every PR, and lists the result pe
    decision (limits, pause, reset, credentials). Telemetry comes through a channel the model cannot write.
 5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
    shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
-6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+6. **Docs:** `docs/`, `README.md` and a `changelog.d/` fragment change with the behaviour; manuals follow STE (`docs/writing.md`).
 7. **Internal interfaces:** a change to an internal interface (worker and forge images against router, operator,
    Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
    (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
@@ -252,15 +253,18 @@ required inputs.
 - **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
   alters behaviour). While the version is `0.x`, breaking changes bump **MINOR** instead.
 - **MINOR:** backwards-compatible features. **PATCH:** backwards-compatible fixes only.
-- Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
-  (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
-  **BREAKING** with the migration step.
+- Every PR that changes behaviour adds **one fragment file** `changelog.d/<issue>-<slug>.md` (#448; format in
+  [`changelog.d/README.md`](changelog.d/README.md)), never a direct edit of `## [Unreleased]` in `CHANGELOG.md`
+  (CI fails it). The fragment names its Keep a Changelog section (Added, Changed, Deprecated, Removed, Fixed,
+  Security); a breaking one has `breaking: true` and a `## Upgrade` section with the migration steps. A PR with no
+  user-visible change gets the label `no-changelog`. The lines already under `## [Unreleased]` before #448 stay.
 - Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
-- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
-  `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
+- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that assembles
+  the fragments and `Unreleased` into the new version with the date (`scripts/release-lines.sh release X.Y.Z`, which
+  runs `scripts/changelog.sh release`) and bumps any pinned examples. After the owner merges it, the owner
   (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward. An owner
   approval of the release PR on its current head is that permission for its one tag (§7a step 5).
-- `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
+- `CHANGELOG.md`: a fix's fragment goes to the lowest line's `changelog.d/`. A forward merge keeps the released sections
   of lower lines in version order.
 
 ### 7a. Milestone and release follow-up (regular, on every monitor check)
