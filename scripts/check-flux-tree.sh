@@ -4,7 +4,9 @@
 # 1. Writes gotk-components.yaml with the pinned flux CLI image (flux install --export) and gotk-sync.yaml from the
 #    example into a copy of examples/deployment/gcp-gke.
 # 2. kustomize build of clusters/agentdev and infrastructure; kubeconform -strict with the Flux CRD schemas.
-# 3. Checks: every Flux controller has nodeSelector system pool, every layer Kustomization has prune: true, the
+# 3. Checks: every Flux controller has nodeSelector system pool (and an override of controller-nodepool.yaml works),
+#    agentdev's GitRepository, root Kustomization and HelmRepositories never use a name of `flux bootstrap` or another
+#    tenant (#472), the tree without flux-system (cluster that already runs Flux) builds and has no controller, every layer Kustomization has prune: true, the
 #    layers depend on each other, the infrastructure layer uses only its own namespaces (fresh install), ESO 2.14.0 and Reloader chart 3.0.0-beta.5 (app v2.0.0-beta.2).
 # 4. With <render_dir> (render.yml output of the example): scripts/gitops-layout.py, kustomize build and kubeconform
 #    of rendered/platform, rendered/agents and rendered/reloader, no StatefulSet replicas, and Reloader watches
@@ -23,7 +25,7 @@ kc() { docker run --rm -i "$kc_img" -strict -summary -ignore-missing-schemas -sc
 cp -R "$root/examples/deployment/gcp-gke" "$work/repo"
 f="$work/repo/gitops/flux"
 docker run --rm "$flux_img" install --export > "$f/clusters/agentdev/flux-system/gotk-components.yaml"
-cp "$f/clusters/agentdev/flux-system/gotk-sync.yaml.example" "$f/clusters/agentdev/flux-system/gotk-sync.yaml"
+cp "$f/clusters/agentdev/sync/gotk-sync.yaml.example" "$f/clusters/agentdev/sync/gotk-sync.yaml"
 
 kustomize build "$f/clusters/agentdev" > "$work/cluster.yaml"
 kustomize build "$f/infrastructure" > "$work/infra.yaml"
@@ -40,6 +42,30 @@ bad=$(yq -N 'select(.kind == "Deployment" and .metadata.namespace == "flux-syste
 grep -q 'sandboxes' "$work/cluster.yaml" "$work/infra.yaml" && fail "the tree names the sandboxes pool"
 [ "$(yq -N 'select(.kind == "HelmRelease") | .spec.values | (.nodeSelector // .reloader.deployment.nodeSelector) | .["cloud.google.com/gke-nodepool"]' "$work/infra.yaml" | sort -u)" = system ] \
   || fail "ESO and Reloader on the system pool"
+# tenancy (#472): agentdev's own Flux objects never take the names of `flux bootstrap` or of a shared Helm repository
+src='select(.apiVersion | test("toolkit.fluxcd.io"))'
+[ "$(yq -N "$src | select(.metadata.name == \"flux-system\") | .kind" "$work/cluster.yaml")" = "" ] \
+  || fail "a Flux object named flux-system: it would replace the root sync of another tenant"
+[ "$(yq -N 'select(.kind == "GitRepository") | .metadata.name' "$work/cluster.yaml")" = agentdev ] || fail "GitRepository agentdev"
+[ "$(yq -N 'select(.kind == "GitRepository") | .spec.secretRef.name' "$work/cluster.yaml")" = agentdev ] || fail "deploy key Secret agentdev"
+[ "$(yq -N "$src | select(.kind == \"Kustomization\" and .spec.path == \"./gitops/flux/clusters/agentdev\") | .metadata.name" "$work/cluster.yaml")" = agentdev ] \
+  || fail "root Kustomization agentdev"
+[ "$(yq -N "$src | select(.spec.sourceRef.kind == \"GitRepository\") | .spec.sourceRef.name" "$work/cluster.yaml" | sort -u)" = agentdev ] \
+  || fail "every Kustomization reads the GitRepository agentdev"
+[ "$(yq -N 'select(.kind == "HelmRepository") | .metadata.name | select(test("^agentdev-") | not)' "$work/infra.yaml")" = "" ] \
+  || fail "a HelmRepository without the prefix agentdev-"
+# existing Flux (#472): without the line flux-system the tree adds only agentdev's objects, no controller, no CRD
+mkdir "$work/shared"; cp -R "$work/repo" "$work/shared/repo"
+yq -i '.resources -= ["flux-system"]' "$work/shared/repo/gitops/flux/clusters/agentdev/kustomization.yaml"
+rm -r "$work/shared/repo/gitops/flux/clusters/agentdev/flux-system"
+kustomize build "$work/shared/repo/gitops/flux/clusters/agentdev" > "$work/shared.yaml"
+[ "$(yq -N '.kind' "$work/shared.yaml" | sort | uniq -c | tr -s ' ' | sed 's/^ //' | tr '\n' ,)" = "1 GitRepository,5 Kustomization," ] \
+  || fail "the tree for an existing Flux must hold only the GitRepository and the Kustomizations of agentdev"
+# node pool override (#472): controller-nodepool.yaml is the one place of the pin
+yq -i '.[0].value = "pool-x"' "$f/clusters/agentdev/flux-system/controller-nodepool.yaml"
+[ "$(kustomize build "$f/clusters/agentdev" | yq -N 'select(.kind == "Deployment") | .spec.template.spec.nodeSelector["cloud.google.com/gke-nodepool"]' | sort -u)" = pool-x ] \
+  || fail "the node pool of the Flux controllers is not overridable in controller-nodepool.yaml"
+yq -i '.[0].value = "system"' "$f/clusters/agentdev/flux-system/controller-nodepool.yaml"
 # layers: prune, order
 ks='select(.kind == "Kustomization" and .apiVersion == "kustomize.toolkit.fluxcd.io/v1")'
 [ "$(yq -N "$ks | select(.spec.prune != true) | .metadata.name" "$work/cluster.yaml")" = "" ] || fail "a Kustomization without prune"
