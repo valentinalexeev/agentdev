@@ -54,10 +54,6 @@ While the version is `0.x`, breaking changes bump MINOR.
 ### Deprecated
 - `scripts/mcp-sync.sh`: still used by `scripts/bootstrap-project.sh`; removed after 1.2.0.
 
-### Fixed
-- docs/security.md had risk id R110 twice, so `scripts/check-risk-ids.sh` failed (#454). The job header risk (#196)
-  keeps R110. The notification action risk (#347) is now R120.
-
 ### Upgrade
 - **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
   (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
