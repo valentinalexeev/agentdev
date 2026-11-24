@@ -146,8 +146,7 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: spec.permission.autoMode needs mode auto
-                  rule: '!has(self.autoMode) || (has(self.mode) && self.mode ==
-                    ''auto'')'
+                  rule: '!has(self.autoMode) || (has(self.mode) && self.mode == ''auto'')'
               repo:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
