@@ -107,6 +107,29 @@ spec:
                   Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
                   Default true (#181): an Agent without the field scales to zero; set false to keep it running.
                 type: boolean
+              tools:
+                description: 'Claude Code tool allow-list of the agent (#496).
+                  Unset: the worker''s default list.'
+                properties:
+                  allow:
+                    description: Tools added to the default list (or to replace),
+                      for example Bash(npm ci:*).
+                    items:
+                      maxLength: 200
+                      pattern: ^[A-Za-z][A-Za-z0-9_-]*(\([^,()\x00-\x1f]+\))?$
+                      type: string
+                    maxItems: 50
+                    type: array
+                  replace:
+                    description: 'Replaces the worker''s default list. Unset or
+                      empty: the default list.'
+                    items:
+                      maxLength: 200
+                      pattern: ^[A-Za-z][A-Za-z0-9_-]*(\([^,()\x00-\x1f]+\))?$
+                      type: string
+                    maxItems: 100
+                    type: array
+                type: object
             required:
             - claudeSecret
             - repo

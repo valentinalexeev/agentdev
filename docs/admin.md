@@ -170,6 +170,21 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
    On GKE: set `max_turns`, or `agents[].max_turns` for one agent.
 2. Deploy again.
 
+The tool list is the list of Claude Code tools that the agent can use (#496). The worker image has a default list.
+The default list has no tool that installs packages, for example `npm ci` or `npm install`.
+
+WARNING: An install tool runs the install scripts of packages. A prompt injection or a bad dependency can then run
+code in the agent pod. Add an install tool only for a repository that you trust.
+
+1. On `kind`: set `kind_agents_tools` for the agent, for example `{alice: {allow: ["Bash(npm ci:*)"]}}`.
+   On GKE: set `agents[].tools` for the agent, for example `tools: {allow: ["Bash(npm ci:*)"]}`.
+2. To replace the default list, set `replace` with the full list instead of `allow`.
+3. Deploy again.
+4. Make sure that the Agent object has the list: `kubectl -n coding-agents get agent alice -o jsonpath='{.spec.tools}'`.
+
+NOTE: Each tool is a name, or a name with one rule in parentheses. A comma is not permitted. The operator does not
+start an agent with an incorrect tool. The phase of the agent is then `invalid`. The API cannot change the tool list.
+
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -157,7 +158,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
+		), append(r.claudeProxyEnv(n), toolsEnv(a)...)...),
 		VolumeMounts: append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, r.proxyTokenMounts()...),
@@ -194,6 +195,41 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// toolPattern is the CRD's pattern for one tool of spec.tools (#496): a name, optionally with one rule in parentheses,
+// no comma (the separator of --allowedTools) and no control character (the list is also in the system prompt).
+var toolPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(\([^,()\x00-\x1f]+\))?$`)
+
+// toolsValid is the operator's check behind the CRD rules: "" when spec.tools is unset or every entry is valid.
+func toolsValid(a *v1.Agent) string {
+	if a.Spec.Tools == nil {
+		return ""
+	}
+	for _, t := range append(append([]string{}, a.Spec.Tools.Replace...), a.Spec.Tools.Allow...) {
+		if len(t) > 200 || !toolPattern.MatchString(t) {
+			return fmt.Sprintf("spec.tools: %q is not a valid tool (name or name(rule), no comma)", t)
+		}
+	}
+	return ""
+}
+
+// toolsEnv passes spec.tools to the worker (#496): CLAUDE_TOOLS replaces the worker's default list, CLAUDE_TOOLS_ALLOW
+// is added to it. The default list stays in the worker only. Nothing without the field, so the pod template of an
+// agent without spec.tools is unchanged (no restart on upgrade).
+func toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	t := a.Spec.Tools
+	if t == nil {
+		return nil
+	}
+	var out []corev1.EnvVar
+	if len(t.Replace) > 0 {
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_TOOLS", Value: strings.Join(t.Replace, ",")})
+	}
+	if len(t.Allow) > 0 {
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_TOOLS_ALLOW", Value: strings.Join(t.Allow, ",")})
+	}
+	return out
 }
 
 // graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.

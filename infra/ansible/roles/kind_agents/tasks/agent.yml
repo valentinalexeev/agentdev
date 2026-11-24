@@ -105,6 +105,8 @@
         maxConcurrent: "{{ kind_agents_max_concurrent | int }}"
         maxTurns: "{{ kind_agents_max_turns | int }}"
         scaleToZero: "{{ kind_agents_scale_to_zero | bool }}"
+        # #496: {allow: [...], replace: [...]} for this agent; empty: the worker's default list
+        tools: "{{ kind_agents_tools[kind_agents_agent] | default({}) }}"
   register: kind_agents_agent_obj
 
 - name: Remember a blocked agent

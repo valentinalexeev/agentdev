@@ -90,6 +90,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
+	// same for the tool list (#496): an entry with a comma would split into other tools in --allowedTools
+	if msg := toolsValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidTools", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidTools", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
 
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {

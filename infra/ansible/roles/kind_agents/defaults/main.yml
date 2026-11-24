@@ -30,6 +30,8 @@ kind_agents_forge_admin_user: owner
 kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
 kind_agents_max_concurrent: 2
 kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; MAX_TURNS in config.env)
+# tool allow-list per agent (#496): {alice: {allow: ["Bash(npm ci:*)"]}}; an agent not named keeps the default list
+kind_agents_tools: {}
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true

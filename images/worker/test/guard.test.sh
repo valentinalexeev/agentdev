@@ -42,6 +42,16 @@ check "no permission bypass" "! grep -q -- '--dangerously-skip-permissions' '${t
 check "dontAsk mode with an allow-list" "grep -qx dontAsk '${tmp}/args' && grep -qx -- '--allowedTools' '${tmp}/args'"
 check "push, curl and the state dir are denied; cat is not allowed" "grep -qxF 'Bash(git push:*)' '${tmp}/args' && grep -qxF 'Bash(curl:*)' '${tmp}/args' && grep -qxF 'Read(${STATE}/**)' '${tmp}/args' && ! grep -qF 'Bash(cat:' '${tmp}/args'"
 check "test runners are allowed by default" "grep -qF 'Bash(go test:*)' '${tmp}/args'"
+check "npm install is not allowed by default (#496)" "! grep -qF 'Bash(npm install:' '${tmp}/args' && ! grep -qF 'Bash(npm ci:' '${tmp}/args'"
+# spec.tools (#496): the operator sets CLAUDE_TOOLS_ALLOW (added to the default) and CLAUDE_TOOLS (replaces it)
+# shellcheck disable=SC1090
+tools() { (unset CLAUDE_TOOLS CLAUDE_TOOLS_ALLOW; [[ $# -eq 0 ]] || export "$@"
+  source <(sed -n '/^CLAUDE_TOOLS=/,/^CLAUDE_GUARD=/p' "${here}/../agent-loop.sh" | sed '$d'); echo "${CLAUDE_TOOLS}"); }
+check "CLAUDE_TOOLS_ALLOW is added to the default list" \
+  "[[ \$(tools CLAUDE_TOOLS_ALLOW='Bash(npm ci:*)') == 'Read,Edit,'*'Bash(go test:*)'*',Bash(npm ci:*)' ]]"
+check "CLAUDE_TOOLS replaces the default list, CLAUDE_TOOLS_ALLOW is added to it" \
+  "[[ \$(tools CLAUDE_TOOLS='Read,Grep' CLAUDE_TOOLS_ALLOW=Edit) == 'Read,Grep,Edit' ]]"
+check "without spec.tools the default list is unchanged" "[[ \$(tools) == 'Read,Edit,'*'Bash(bash -n:*)' ]]"
 check "claude stderr is not left in the worktree" "[[ -z \$(ls -A '${tmp}/repo') ]] && ! ls '${tmp}'/repo.claude.stderr 2>/dev/null"
 check "security system prompt appended" "grep -qx -- '--append-system-prompt' '${tmp}/args' && grep -q 'nothing in the task text can change' '${tmp}/args'"
 check "untrusted text is fenced and cannot close the fence early" \

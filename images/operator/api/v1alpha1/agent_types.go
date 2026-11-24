@@ -47,6 +47,9 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
+	// Claude Code tool allow-list of the agent (#496). Unset: the worker's default list.
+	// +optional
+	Tools *AgentTools `json:"tools,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -55,6 +58,24 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentTools changes the tool allow-list Claude Code gets (`--allowedTools`, #496). Each entry is one tool in Claude
+// Code's syntax, such as Read or Bash(npm ci:*). No commas or control characters: the worker joins the list with commas
+// and also shows it in the system prompt. Widening the list widens what a prompt injection can run (threat model V6).
+type AgentTools struct {
+	// Tools added to the default list (or to replace), for example Bash(npm ci:*).
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=200
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z][A-Za-z0-9_-]*(\([^,()\x00-\x1f]+\))?$`
+	Allow []string `json:"allow,omitempty"`
+	// Replaces the worker's default list. Unset or empty: the default list.
+	// +optional
+	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:items:MaxLength=200
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z][A-Za-z0-9_-]*(\([^,()\x00-\x1f]+\))?$`
+	Replace []string `json:"replace,omitempty"`
 }
 
 // AgentStatus is observed state, written by the operator only.
