@@ -8,5 +8,5 @@ components: [ui]
 ---
 ## Summary
 
-On desktop width, the top bar does not show the page name again above the page heading. The page heading and
-its subtitle stay. The left rail marks the current page.
+The page name shows once, in the top bar, to the left of the project picker. The page body does not repeat it as
+a large heading. Each page keeps its subtitle. The left rail marks the current page.
