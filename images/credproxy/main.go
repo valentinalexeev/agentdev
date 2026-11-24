@@ -7,9 +7,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -70,6 +72,7 @@ type reqInfo struct {
 	job   string // X-Agentdev-Job, checked (jobs.go); "" = none
 	cred  credential
 	start time.Time
+	call  *classifierCall // auto mode classifier request (#506); nil for others
 }
 
 type server struct {
@@ -145,7 +148,11 @@ func (s *server) observe(resp *http.Response) error {
 		}
 		return nil
 	}
-	m := &tokenMeter{sse: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")}
+	sse := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
+	if info.call != nil && resp.StatusCode == http.StatusOK {
+		resp.Body = &classifierBody{ReadCloser: resp.Body, r: replyText{sse: sse}, agent: info.agent, call: info.call}
+	}
+	m := &tokenMeter{sse: sse}
 	resp.Body = &meteredBody{ReadCloser: resp.Body, m: m, done: func(t tokenCounts, model string) {
 		p := s.prices.get()
 		units := p.units(model, t)
@@ -232,7 +239,25 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusServiceUnavailable, "api_error", "claude-proxy: no Claude credential for agent "+agent)
 		return
 	}
-	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, job, cred, s.now()})))
+	call := s.readClassifier(r)
+	s.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, reqInfo{agent, job, cred, s.now(), call})))
+}
+
+// readClassifier reads the request body to find an auto mode classifier request (#506) and puts the same bytes back,
+// so the request goes upstream unchanged. A body over classifierBodyCap is passed through unread.
+func (s *server) readClassifier(r *http.Request) *classifierCall {
+	if r.URL.Path != "/v1/messages" || r.Body == nil || r.ContentLength > classifierBodyCap {
+		return nil
+	}
+	head, err := io.ReadAll(io.LimitReader(r.Body, classifierBodyCap+1))
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
+	if err != nil || len(head) > classifierBodyCap || r.Header.Get("Content-Encoding") != "" {
+		return nil
+	}
+	return detectClassifier(head)
 }
 
 // authenticate returns the agent and the kind of credential seen ("token", "key" or "credential" when none). A JWT
