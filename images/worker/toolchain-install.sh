@@ -3,8 +3,8 @@
 # /state/toolchain/<key> before the agent container starts. The agent container mounts /state/toolchain read-only.
 #
 # Input, from the operator only (the Agent object, never the repository or issue text):
-#   TOOLCHAIN_SPEC    canonical JSON: {"v":1,"image":..,"epoch":N,"path":[..],"presets":[{name,version,kind,arch:{amd64:
-#                     {url,sha256},arm64:{..}},bin,verify,args}]}
+#   TOOLCHAIN_SPEC    canonical JSON: {"v":1,"image":..,"epoch":N,"path":[..],"presets":[{name,version,arch:{amd64:
+#                     {url,sha256},arm64:{..}},..}]}; kind, bin and verify are this script's own (preset_rules)
 #   TOOLCHAIN_EXPECT  "<key>:<manifest hash>" from Agent.status.toolchain of the last start; empty on the first one
 #   TOOLCHAIN_DIR     default /state/toolchain
 # Output: one JSON object in the termination message (/dev/termination-log), read by the operator into
@@ -43,13 +43,42 @@ arch() {
   esac
 }
 
+# The setup proxy credential (EGRESS_SETUP_KEY, also inside the proxy URLs) reaches only curl and the official rustup
+# installer. Nothing the spec chooses runs with it (review of #537): kind, bin and verify come from this table per preset
+# name and never from TOOLCHAIN_SPEC, the download must be the preset's official URL, and unpacking and verify run with
+# the key and the proxy removed from the environment.
+# preset_rules <name> <version>: sets kind, bin, verify and url_ok; fails for an unknown preset or a malformed version
+preset_rules() {
+  local t
+  case "$1" in
+    go)
+      [[ "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+      kind=tar bin=go/bin verify=(go version)
+      url_ok="https://dl.google.com/go/go$2.linux-${ARCH}.tar.gz";;
+    rust)
+      [[ "$2" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+      case "${ARCH}" in amd64) t=x86_64-unknown-linux-gnu;; *) t=aarch64-unknown-linux-gnu;; esac
+      kind=rustup bin=cargo/bin verify=(cargo --version)
+      url_ok="https://static.rust-lang.org/rustup/archive/1.29.3/${t}/rustup-init";;
+    *) return 1;;
+  esac
+}
+
+# keyless <cmd..>: run without the setup proxy credential and without any proxy (so without egress)
+keyless() {
+  env -u EGRESS_SETUP_KEY -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy -u ALL_PROXY -u all_proxy "$@"
+}
+
 # install_preset <json> <dir>: download, check the pinned sha256, install under <dir>, verify
 install_preset() {
-  local p=$1 dir=$2 name kind url sum file
-  name=$(jq -r .name <<<"${p}"); kind=$(jq -r .kind <<<"${p}")
+  local p=$1 dir=$2 name version kind bin url_ok url sum file
+  local -a verify
+  name=$(jq -r .name <<<"${p}"); version=$(jq -r .version <<<"${p}")
+  preset_rules "${name}" "${version}" || { echo "${name}: not a preset of this image, or version ${version} is malformed"; return 1; }
   url=$(jq -r --arg a "${ARCH}" '.arch[$a].url // empty' <<<"${p}")
   sum=$(jq -r --arg a "${ARCH}" '.arch[$a].sha256 // empty' <<<"${p}")
   [[ -n "${url}" && "${sum}" =~ ^[0-9a-f]{64}$ ]] || { echo "${name}: no download for ${ARCH}"; return 1; }
+  [[ "${url}" == "${url_ok}" ]] || { echo "${name}: ${url} is not the official download ${url_ok}"; return 1; }
   # the URL's file name: rustup-init decides what it is from its own name
   mkdir -p "${TMPDIR:-/tmp}/${name}" || { echo "${name}: no temporary directory"; return 1; }
   file="${TMPDIR:-/tmp}/${name}/${url##*/}"
@@ -57,17 +86,15 @@ install_preset() {
   echo "${sum}  ${file}" | sha256sum -c --status - || { echo "${name}: sha256 mismatch for ${url}"; return 1; }
   case "${kind}" in
     tar)    # an archive with one top directory, unpacked as <dir>/<name> (go: <dir>/go/bin/go)
-      mkdir -p "${dir}/${name}" && tar -xzf "${file}" -C "${dir}/${name}" --strip-components=1 --no-same-owner || { echo "${name}: unpack failed"; return 1; };;
-    rustup) # rustup-init with a pinned toolchain, profile minimal; homes inside <dir>, no PATH changes
+      mkdir -p "${dir}/${name}" && keyless tar -xzf "${file}" -C "${dir}/${name}" --strip-components=1 --no-same-owner || { echo "${name}: unpack failed"; return 1; };;
+    rustup) # the official rustup-init (URL and sha256 checked above) with a pinned toolchain, profile minimal; homes
+      # inside <dir>, no PATH changes. It fetches the toolchain from static.rust-lang.org through the setup proxy.
       chmod +x "${file}" && RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" "${file}" -y --no-modify-path --profile minimal \
-        --default-toolchain "$(jq -r .version <<<"${p}")" >&2 || { echo "${name}: rustup-init failed"; return 1; };;
-    *) echo "${name}: unknown kind ${kind}"; return 1;;
+        --default-toolchain "${version}" >&2 || { echo "${name}: rustup-init failed"; return 1; };;
   esac
   rm -f "${file}"
-  local -a verify; mapfile -t verify < <(jq -r '.verify[]' <<<"${p}")
-  local bin; bin=$(jq -r '.bin // empty' <<<"${p}")
   local out
-  out=$(PATH="${dir}/${bin}:${PATH}" RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" "${verify[@]}" 2>&1) \
+  out=$(keyless PATH="${dir}/${bin}:${PATH}" RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" "${verify[@]}" 2>&1) \
     || { echo "${name}: verify '${verify[*]}' failed: ${out: -500}"; return 1; }
   echo "${name}: ${out}" >&2
 }
