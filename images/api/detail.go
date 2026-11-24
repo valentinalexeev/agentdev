@@ -44,6 +44,9 @@ type agentDetail struct {
 	WaitingOn  []waitingItem `json:"waitingOn"`
 	RecentJobs []job         `json:"recentJobs"`      // newest first, at most 10 (GET /api/jobs, #345); [] until then
 	Guide      string        `json:"guide,omitempty"` // harness guide, operator-written (trusted)
+	// Permission is spec.permission (#505), for the admin group only; absent for other users and for an agent
+	// without an Agent object
+	Permission *agentPermission `json:"permission,omitempty"`
 }
 
 // detailSource reads what the drawer needs beyond the agent list. kubeAgents implements it.
@@ -150,6 +153,13 @@ func (w *writer) agentDetail(rw http.ResponseWriter, r *http.Request) {
 			d.Guide = g
 		} else {
 			log.Printf("agent detail %s: guide: %v", name, err)
+		}
+	}
+	if a.Managed && w.isAdmin(id) {
+		if u, err := w.store.Get(r.Context(), name); err == nil {
+			d.Permission = permissionOf(u)
+		} else {
+			log.Printf("agent detail %s: permission: %v", name, err)
 		}
 	}
 	d.WaitingOn = w.waitingOn(r.Context(), *a)
