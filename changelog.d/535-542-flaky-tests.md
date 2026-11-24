@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: Two flaky Go tests in credproxy and forge are stable
 components: [credproxy, forge]
+pr: 543
 ---
 ## Summary
 
