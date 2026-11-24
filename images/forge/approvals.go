@@ -59,6 +59,11 @@ type approvalRequest struct {
 	TimeoutSec  int    `json:"timeoutSeconds"`
 	RequesterID int64  `json:"requesterId"` // the agent's forge account id (GET /user with its own token)
 	SecretHash  string `json:"secretHash"`  // sha256 of secret; only the sidecar knows secret
+	// #503: why the request exists. Guard is written by the sidecar from what it checked itself; Reason is what
+	// Claude Code and the model said (description, decision reason, blocked path, suggested rule): untrusted, cleaned,
+	// redacted and clipped, shown as quoted text and never used for a decision. Neither is in the content hash.
+	Guard  string `json:"guard,omitempty"`
+	Reason string `json:"reason,omitempty"`
 
 	secret    string // sent when reading the decision (X-Approval-Secret); never logged
 	fp        string // fingerprint: job + source + what is asked
@@ -139,7 +144,7 @@ func clipInput(s string) string {
 
 // request returns the record for fingerprint fp, creating it (log line + forge comment) only if there is none. A
 // push record whose input differs (a new commit on the same branch and paths) is superseded: voided, then replaced.
-func (a *approvals) request(job, source, tool, input, fp string) (*approvalRequest, error) {
+func (a *approvals) request(job, source, tool, input, fp string, why why) (*approvalRequest, error) {
 	want := clipInput(a.redact(input))
 	// One creator per fingerprint: a concurrent call with the same fp (parallel protected pushes, a repeated prompt)
 	// waits for the creator, then reuses its record instead of filing a second one (Reviewer on #107).
@@ -170,7 +175,7 @@ func (a *approvals) request(job, source, tool, input, fp string) (*approvalReque
 	if r != nil {
 		a.void(r, "superseded by a newer request")
 	}
-	r, err := a.open(job, source, tool, input)
+	r, err := a.open(job, source, tool, input, why)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +187,7 @@ func (a *approvals) request(job, source, tool, input, fp string) (*approvalReque
 }
 
 // open creates a request: prints the line and comments on the job. It does not wait.
-func (a *approvals) open(job, source, tool, input string) (*approvalRequest, error) {
+func (a *approvals) open(job, source, tool, input string, why why) (*approvalRequest, error) {
 	if !jobRe.MatchString(job) {
 		return nil, errors.New("no job: an approval needs the issue or PR the agent works on")
 	}
@@ -206,7 +211,8 @@ func (a *approvals) open(job, source, tool, input string) (*approvalRequest, err
 	sh := sha256.Sum256([]byte(hex.EncodeToString(sec[:])))
 	r := &approvalRequest{ID: hex.EncodeToString(rnd[:]), Repo: a.s.c.Repos[0], Forge: a.s.c.ForgeKind, Job: job,
 		Source: source, Tool: clip(tool, 128), Input: clipInput(a.redact(input)), TimeoutSec: int(a.timeout.Seconds()),
-		RequesterID: self, SecretHash: hex.EncodeToString(sh[:]), secret: hex.EncodeToString(sec[:]), state: "pending"}
+		RequesterID: self, SecretHash: hex.EncodeToString(sh[:]), secret: hex.EncodeToString(sec[:]), state: "pending",
+		Guard: clip(why.guard, 1000), Reason: a.cleanReason(why.reason)}
 	r.ContentHash = approvalHash(r.ID, a.s.c.AgentName, r.Repo, r.Job, r.Source, r.Tool, r.Input)
 	b, _ := json.Marshal(r)
 	eventMu.Lock()
@@ -214,6 +220,34 @@ func (a *approvals) open(job, source, tool, input string) (*approvalRequest, err
 	eventMu.Unlock()
 	r.commentID = a.postComment(r.Job, a.commentBody(r, ""))
 	return r, nil
+}
+
+// why explains a request (#503): guard from the sidecar, reason from Claude Code and the model (untrusted).
+type why struct{ guard, reason string }
+
+// ansiRe: CSI and OSC escape sequences; Claude Code's decision_reason may carry them.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.`)
+
+const reasonMax = 1500
+
+// cleanReason makes untrusted reason text safe to show: escapes and control characters out (newline and tab stay),
+// secrets redacted, valid UTF-8, at most reasonMax bytes.
+func (a *approvals) cleanReason(s string) string {
+	s = ansiRe.ReplaceAllString(strings.ToValidUTF8(s, "\uFFFD"), "")
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029' || r == '\u202e' || r == '\u202d' {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(a.redact(s))
+	if len(s) > reasonMax {
+		s = strings.ToValidUTF8(s[:reasonMax], "") + "..."
+	}
+	return s
 }
 
 func clip(s string, n int) string {
@@ -334,15 +368,19 @@ func (a *approvals) ownJob(job string) error {
 
 // commentBody is the forge comment of a request in its current state. The request text is quoted in a code block.
 func (a *approvals) commentBody(r *approvalRequest, status string) string {
-	fence := "```"
-	for strings.Contains(r.Input, fence) {
-		fence += "`"
-	}
+	fence := codeFence(r.Input)
 	head := fmt.Sprintf("🤖 agent `%s`: **waiting for approval** `%s`", a.s.c.AgentName, r.ID)
 	if status != "" {
 		head = fmt.Sprintf("🤖 agent `%s`: approval `%s` **%s**", a.s.c.AgentName, r.ID, status)
 	}
 	body := fmt.Sprintf("%s (%s `%s`)\n\n%s\n%s\n%s\n\n", head, r.Source, r.Tool, fence, r.Input, fence)
+	if r.Guard != "" {
+		body += "**Why it asks** (checked by agentdev): " + r.Guard + "\n\n"
+	}
+	if r.Reason != "" {
+		rf := codeFence(r.Reason)
+		body += fmt.Sprintf("**Reason given by Claude Code and the agent** (not checked):\n\n%s\n%s\n%s\n\n", rf, r.Reason, rf)
+	}
 	if status != "" && !strings.HasPrefix(status, "still open") {
 		return body + "This request is closed. A decision comment on it has no effect."
 	}
@@ -357,6 +395,15 @@ func (a *approvals) commentBody(r *approvalRequest, status string) string {
 		"The agent waits %d minutes, then continues without it. The request stays open until it is decided, the job "+
 		"ends or a newer request replaces it; asking again uses this request. The text above comes from the agent "+
 		"and is not checked.", r.ID, r.ID, r.ID, r.TimeoutSec/60)
+}
+
+// codeFence returns a backtick fence longer than any run of backticks in s, so s cannot close it.
+func codeFence(s string) string {
+	fence := "```"
+	for strings.Contains(s, fence) {
+		fence += "`"
+	}
+	return fence
 }
 
 // forgeSend sends a JSON body to the forge with the agent's token; out (optional) receives the answer.
@@ -591,17 +638,14 @@ func (a *approvals) mcp(w http.ResponseWriter, r *http.Request) {
 		}}}
 	case "tools/call":
 		var p struct {
-			Name      string `json:"name"`
-			Arguments struct {
-				ToolName string          `json:"tool_name"`
-				Input    json.RawMessage `json:"input"`
-			} `json:"arguments"`
+			Name      string     `json:"name"`
+			Arguments promptArgs `json:"arguments"`
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil || p.Name != "approve" {
 			writeRPC(w, req.ID, nil, &rpcError{-32602, "unknown tool"})
 			return
 		}
-		out := a.prompt(r.Context(), r.Header.Get("X-Agentdev-Job"), p.Arguments.ToolName, p.Arguments.Input)
+		out := a.prompt(r.Context(), r.Header.Get("X-Agentdev-Job"), p.Arguments)
 		b, _ := json.Marshal(out)
 		result = map[string]any{"content": []any{map[string]string{"type": "text", "text": string(b)}}}
 	default:
@@ -627,8 +671,52 @@ func writeRPC(w http.ResponseWriter, id json.RawMessage, result any, e *rpcError
 	_ = json.NewEncoder(w).Encode(m)
 }
 
+// promptArgs is a permission prompt. Claude Code 2.1.x sends tool_name, input and tool_use_id to the MCP prompt tool;
+// the other fields are those of its can_use_tool host request (#503) and are read when a caller passes them. All of
+// them come from the agent container and are only shown, never decided on.
+type promptArgs struct {
+	ToolName       string          `json:"tool_name"`
+	Input          json.RawMessage `json:"input"`
+	Description    string          `json:"description"`
+	DecisionReason string          `json:"decision_reason"`
+	ReasonType     string          `json:"decision_reason_type"`
+	BlockedPath    string          `json:"blocked_path"`
+	Suggestions    json.RawMessage `json:"permission_suggestions"`
+}
+
+// promptWhy builds the explanation of a prompt: the guard from the sidecar's own knowledge, the reason from the fields
+// Claude Code and the model wrote (the input's description first: Bash sets it).
+func promptWhy(p promptArgs) why {
+	w := why{guard: "Claude Code asked for permission: this call is not covered by an allow rule of the agent " +
+		"(`CLAUDE_TOOLS`) and was not refused by a deny rule, so a person decides."}
+	var lines []string
+	add := func(k, v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			lines = append(lines, k+": "+v)
+		}
+	}
+	var in struct {
+		Description string `json:"description"`
+	}
+	_ = json.Unmarshal(p.Input, &in)
+	desc := in.Description
+	if desc == "" {
+		desc = p.Description
+	}
+	add("description", desc)
+	add("reason", p.DecisionReason)
+	add("reason type", clip(p.ReasonType, 64))
+	add("blocked path", p.BlockedPath)
+	if len(p.Suggestions) > 0 && string(p.Suggestions) != "null" {
+		add("suggested rule", string(p.Suggestions))
+	}
+	w.reason = strings.Join(lines, "\n")
+	return w
+}
+
 // prompt answers one Claude permission prompt: {"behavior":"allow","updatedInput":...} or {"behavior":"deny",...}.
-func (a *approvals) prompt(ctx context.Context, job, tool string, input json.RawMessage) map[string]any {
+func (a *approvals) prompt(ctx context.Context, job string, p promptArgs) map[string]any {
+	tool, input := p.ToolName, p.Input
 	deny := func(msg string) map[string]any { return map[string]any{"behavior": "deny", "message": msg} }
 	if len(input) == 0 || string(input) == "null" {
 		input = json.RawMessage(`{}`)
@@ -644,7 +732,7 @@ func (a *approvals) prompt(ctx context.Context, job, tool string, input json.Raw
 	if ok {
 		return map[string]any{"behavior": "allow", "updatedInput": input}
 	}
-	req, err := a.request(job, "claude", tool, string(input), "claude\x00"+key)
+	req, err := a.request(job, "claude", tool, string(input), "claude\x00"+key, promptWhy(p))
 	if err != nil {
 		return deny("approval request failed: " + err.Error())
 	}
@@ -681,7 +769,9 @@ func (a *approvals) pushApproval(ctx context.Context, job, branch, tip string, p
 		return nil
 	}
 	a.mu.Unlock()
-	r, err := a.request(job, "push", "push", input, "push\x00"+job+"\x00"+branch+"\x00"+strings.Join(paths, ","))
+	guard := fmt.Sprintf("the push changes protected paths (%s); the protected paths of this agent are %s (`PROTECTED_PATHS`).",
+		"`"+strings.Join(paths, "`, `")+"`", "`"+strings.Join(a.s.c.Protected, "`, `")+"`")
+	r, err := a.request(job, "push", "push", input, "push\x00"+job+"\x00"+branch+"\x00"+strings.Join(paths, ","), why{guard: guard})
 	if err != nil {
 		return err
 	}
@@ -796,7 +886,8 @@ func (a *approvals) costApproval(w http.ResponseWriter, r *http.Request) {
 	input := fmt.Sprintf("job %s of agent %s used %d of %d cost units (soft limit, CLAUDE_JOB_APPROVAL_UNITS). "+
 		"Approval step %d allows %d more units, up to %d. The numbers come from claude-proxy, not from the agent. "+
 		"Without an approval the job stops as failed.", job, a.s.c.AgentName, used, limit, step, stepUnits, limit+stepUnits)
-	req, err := a.request(job, "cost", tool, input, "cost\x00"+key)
+	guard := fmt.Sprintf("claude-proxy reports that the job reached its cost soft limit: %d of %d units (`CLAUDE_JOB_APPROVAL_UNITS`).", used, limit)
+	req, err := a.request(job, "cost", tool, input, "cost\x00"+key, why{guard: guard})
 	if err != nil {
 		a.s.logf("cost approval %s: %v", job, err)
 		answer("pending")
