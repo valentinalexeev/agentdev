@@ -106,6 +106,13 @@ func TestPgAudit(t *testing.T) {
 	if err != nil || len(l) != 1 || !strings.Contains(string(l[0].Entry), `"pgaudit"`) {
 		t.Fatal(l, err)
 	}
+	// LastAudit (#505): the newest entry of one agent and action; nil when there is none
+	if b, err := su.LastAudit(ctx, "pgaudit", e.Action); err != nil || !strings.Contains(string(b), `"pgaudit"`) {
+		t.Fatal(string(b), err)
+	}
+	if b, err := su.LastAudit(ctx, "pgaudit", "permission-none"); err != nil || b != nil {
+		t.Fatal(string(b), err)
+	}
 	// even the superuser cannot change a row inside the retention (trigger)
 	for _, q := range []string{`UPDATE api_audit SET result='x'`, `DELETE FROM api_audit`} {
 		if _, err := su.db.Exec(ctx, q); err == nil {

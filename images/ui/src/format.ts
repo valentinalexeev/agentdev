@@ -1,5 +1,5 @@
 // Helpers shared by the pages (no components here, so fast refresh works).
-import type { Approval, AuditEntry, Job } from './api'
+import type { AgentPermission, Approval, AuditEntry, Job } from './api'
 
 // lane hue from the name: x = (x * 31 + charCode) >>> 0, lane x % 6 + 1 (design-system.md, "Agent identity")
 export function lane(name: string): number {
@@ -60,4 +60,12 @@ export function runLogHash(j: { id: string; agent: string; repo: string }): stri
   const name = j.id.split('/').pop() ?? ''
   const q = new URLSearchParams({ job: `${j.agent}/${name}`, jrepo: j.repo })
   return `#work?${q}`
+}
+
+// permissionText (#505): one line for a permission mode, e.g. "auto (2 allow, 1 soft deny, 0 environment rules)".
+export function permissionText(p?: AgentPermission): string {
+  if (!p) return 'unknown'
+  if (!p.autoMode) return p.mode === 'auto' ? 'auto (default rules)' : p.mode
+  const r = p.autoMode
+  return `${p.mode} (${r.allow.length} allow, ${r.softDeny.length} soft deny, ${r.environment.length} environment rules)`
 }

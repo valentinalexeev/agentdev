@@ -9,12 +9,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // auditRecord is one stored audit entry; Entry is the JSON of the AGENTDEV_AUDIT line.
@@ -34,6 +37,8 @@ type auditFilter struct {
 type auditStore interface {
 	InsertAudit(ctx context.Context, e auditEntry, raw []byte) error
 	ListAudit(ctx context.Context, f auditFilter) ([]auditRecord, error)
+	// LastAudit is the newest entry of agent with action (nil when there is none); permission.go (#505)
+	LastAudit(ctx context.Context, agent, action string) ([]byte, error)
 }
 
 // auditDB receives every audit entry; nil keeps the stdout line only. Set once by main before serving.
@@ -85,6 +90,16 @@ func (s *pgStore) ListAudit(ctx context.Context, f auditFilter) ([]auditRecord, 
 	return out, rows.Err()
 }
 
+func (s *pgStore) LastAudit(ctx context.Context, agent, action string) ([]byte, error) {
+	var b []byte
+	err := s.db.QueryRow(ctx, `SELECT entry FROM api_audit WHERE agent = $1 AND action = $2 ORDER BY id DESC LIMIT 1`,
+		agent, action).Scan(&b)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
+}
+
 // PruneAudit calls api_audit_prune() (SECURITY DEFINER, owner role); the API passes no retention value.
 func (s *pgStore) PruneAudit(ctx context.Context) (int64, error) {
 	var n int64
@@ -125,6 +140,17 @@ func (m *memAudit) ListAudit(_ context.Context, f auditFilter) ([]auditRecord, e
 		}
 	}
 	return out, nil
+}
+
+func (m *memAudit) LastAudit(_ context.Context, agent, action string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.rows) - 1; i >= 0; i-- {
+		if r := m.rows[i]; r.e.Agent == agent && r.e.Action == action {
+			return slices.Clone(r.rec.Entry), nil
+		}
+	}
+	return nil, nil
 }
 
 // listAudit serves GET /api/audit?agent=&result=&since=&limit=&cursor= (same paging as /api/security-events). Only
