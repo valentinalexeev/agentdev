@@ -239,7 +239,7 @@ func permissionEnv(a *v1.Agent) []corev1.EnvVar {
 	if p == nil || p.Mode != "auto" {
 		return nil
 	}
-	out := []corev1.EnvVar{env("CLAUDE_PERMISSION_MODE", "auto")}
+	out := []corev1.EnvVar{{Name: "CLAUDE_PERMISSION_MODE", Value: "auto"}}
 	if m := p.AutoMode; m != nil && len(m.Allow)+len(m.SoftDeny)+len(m.Environment) > 0 {
 		section := map[string][]string{}
 		for k, l := range map[string][]string{"allow": m.Allow, "soft_deny": m.SoftDeny, "environment": m.Environment} {
@@ -248,7 +248,7 @@ func permissionEnv(a *v1.Agent) []corev1.EnvVar {
 			}
 		}
 		b, _ := json.Marshal(section) // map keys are sorted: the same Agent gives the same pod template
-		out = append(out, env("CLAUDE_AUTO_MODE", string(b)))
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_AUTO_MODE", Value: string(b)})
 	}
 	return out
 }
