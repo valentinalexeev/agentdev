@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ApprovalDrawer } from './Approvals'
 import { ATTN_LABEL, ATTN_RANK, GROUPS, KIND_GROUP, type InboxItem, type ItemKind } from './model'
 import { useData } from './useData'
+import { useStoredChoice } from './stored'
 import { ago, CAP, GROUP_AT, left, short } from './format'
 import { AgentTag, Attention, Empty, Icon, Lamp, PageHead, type IconName } from './ui'
 
@@ -70,7 +71,7 @@ function InboxList({ items, by, now, onOpen }: { items: InboxItem[]; by: 'type' 
 export function TodayPage({ token, onExpired }: { token: string; onExpired: () => void }) {
   const d = useData()
   const [opened, setOpened] = useState<InboxItem | null>(null)
-  const [by, setBy] = useState<'type' | 'project'>('type')
+  const [by, setBy] = useStoredChoice('agd-today-by', ['type', 'project'] as const, 'type')
   const now = d.now
   const attn = d.agents.filter((a) => a.attn !== 'ok').sort((x, y) => ATTN_RANK[x.attn] - ATTN_RANK[y.attn])
   const stopped = attn.filter((a) => a.attn === 'guardrail' || a.attn === 'blocked')
