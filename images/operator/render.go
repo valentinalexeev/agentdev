@@ -159,7 +159,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(r.claudeProxyEnv(n), permissionEnv(a)...)...),
+		), append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...)...),
 		VolumeMounts: append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, r.proxyTokenMounts()...),
@@ -228,6 +228,37 @@ func permissionValid(a *v1.Agent) string {
 		}
 	}
 	return ""
+}
+
+// toolChars: one entry of spec.tools.allow, as the CRD pattern (#496): no control characters and no comma, since
+// CLAUDE_TOOLS is a comma-separated list.
+var toolChars = regexp.MustCompile(`^[^\x00-\x1f\x7f,]+$`)
+
+// toolsValid is the operator's check behind the CRD rules (#496): "" when spec.tools is unset or valid.
+func toolsValid(a *v1.Agent) string {
+	t := a.Spec.Tools
+	if t == nil {
+		return ""
+	}
+	if len(t.Allow) > 50 {
+		return "spec.tools.allow: more than 50 entries"
+	}
+	for _, s := range t.Allow {
+		if len(s) > 200 || !toolChars.MatchString(s) {
+			return "spec.tools.allow: an entry is empty, longer than 200 or has a comma or a control character"
+		}
+	}
+	return ""
+}
+
+// toolsEnv passes spec.tools.allow to the worker (#496, ADR 0010 D1) as CLAUDE_TOOLS_EXTRA, comma-joined; the worker
+// appends it to CLAUDE_TOOLS. Nothing without entries, so the pod template of an agent without the field is unchanged
+// (no restart on upgrade).
+func toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	if a.Spec.Tools == nil || len(a.Spec.Tools.Allow) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "CLAUDE_TOOLS_EXTRA", Value: strings.Join(a.Spec.Tools.Allow, ",")}}
 }
 
 // permissionEnv passes spec.permission to the worker (#500): CLAUDE_PERMISSION_MODE=auto and, with rules,

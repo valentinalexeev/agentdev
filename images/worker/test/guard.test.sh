@@ -7,6 +7,9 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
+# a known environment (#507): every variable the sourced loop code reads is unset here; a check that needs one sets it
+unset APPROVALS APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_TOOLS CLAUDE_EXIT_FILE \
+  ANTHROPIC_BASE_URL FORGE_API FORGE_PUBLIC_URL RESUMING GUIDE_FILE STATE_DIR PROXY_TOKEN_FILE
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"
 export MAX_TURNS=5 MCP_CONFIG="${STATE}/mcp.json"
 export FORGE_TOKEN=secret-forge WAKE_TOKEN=secret-wake REGISTER_TOKEN=secret-register

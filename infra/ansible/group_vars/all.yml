@@ -72,6 +72,7 @@ forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
 max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
+# Tools added to the default allow-list per agent only (#496): agents[].tools = {allow: ["Bash(npm ci:*)"]}.
 # Claude Code permission mode per agent only (#500): agents[].permission = {mode: auto, autoMode: {allow: [...],
 # softDeny: [...], environment: [...]}}. Unset: dontAsk. In mode auto a classifier decides calls outside the allow-list.
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero

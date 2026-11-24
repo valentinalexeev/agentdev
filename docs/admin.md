@@ -67,7 +67,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -216,6 +216,32 @@ after the retention removed the old entries, or after a restart of an API withou
 
 NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
 sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
+
+### Allow extra tools for an agent
+
+The allow-list of the worker has the tools that all agents can use without a question (#496). You can add tools to
+the list for one agent, for example `npm ci` for a repository that needs `node_modules`:
+
+- The entries are added to the default list, or to `CLAUDE_TOOLS` of the instance. You cannot remove or replace
+  entries of the default list.
+- The deny-list of the worker (`git push`, `curl`, `/state` and others) stays.
+- Use the Claude Code rule syntax, one rule in each entry, for example `Bash(npm ci:*)`. An entry has no commas and
+  no control characters, and is not longer than 200 characters. An agent has at most 50 entries.
+
+WARNING: Each entry widens what the agent can do without a question. `npm install` runs the install scripts of
+packages: a compromised dependency then runs in the agent pod (threat model V6). Add an entry only for an agent and
+a repository that need it.
+
+1. On `kind`: set `kind_agents_tools` for the agent, for example `{alice: ["Bash(npm ci:*)", "Bash(npm install:*)"]}`.
+   On GKE: set `agents[].tools` for the agent, for example `{allow: ["Bash(npm ci:*)"]}`.
+   In Git mode: set `spec.tools.allow` in the `Agent` manifest.
+2. Deploy again. The agent pod restarts with the new list.
+3. Do the command `kubectl -n coding-agents get statefulset agent-<name> -o yaml | grep -A1 CLAUDE_TOOLS_EXTRA` to
+   see the added entries.
+
+NOTE: The entries come from the `Agent` object only. The repository and the issue text cannot change them. The
+operator refuses an `Agent` with an invalid entry (phase `invalid`). An agent without entries has no
+`CLAUDE_TOOLS_EXTRA`, so its pod does not restart on upgrade.
 
 ### Set the poll interval
 

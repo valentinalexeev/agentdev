@@ -107,6 +107,8 @@
         scaleToZero: "{{ kind_agents_scale_to_zero | bool }}"
         # #500: {mode: auto, autoMode: {...}} for this agent; not named: dontAsk
         permission: "{{ kind_agents_permission[kind_agents_agent] | default({'mode': 'dontAsk'}) }}"
+        # #496: entries added to the default tool allow-list; not named: none (an empty list sets no env)
+        tools: {allow: "{{ kind_agents_tools[kind_agents_agent] | default([]) }}"}
   register: kind_agents_agent_obj
 
 - name: Remember a blocked agent
