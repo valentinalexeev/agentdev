@@ -5,7 +5,7 @@
 // - Everything the session writes (assistant text, tool input and output, permission input, drafts) is model output.
 //   React escapes it, nothing in it is parsed as HTML, and nothing in it becomes a link, an image or a button. The only
 //   buttons come from structured events (permission, draft) built by the console.
-// - Assistant text is shown as a safe Markdown subset (#492, markdown.ts): paragraphs, headings, bold, italic, lists,
+// - Assistant text is shown as a safe Markdown subset (#492, react-markdown with the options of markdown.ts): paragraphs, headings, bold, italic, lists,
 //   code, block quotes, tables, rules. Raw HTML stays text; a link or an image shows its text and address as text.
 //   A per-message toggle shows the exact text. Tool input and output, permission input and drafts stay plain text.
 // - A draft becomes an issue only when a person clicks Create issue. The API files it as that person.

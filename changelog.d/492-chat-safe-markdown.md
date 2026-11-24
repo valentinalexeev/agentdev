@@ -17,7 +17,7 @@ input and output, permission requests and drafts stay plain text. Docs: `docs/us
 
 ## Description
 
-The parser (`images/ui/src/markdown.ts`) has no dependencies. Its tree has node types for the allowed elements only,
-so a link, an image or HTML cannot appear in the output, also not by a later library update or option. A library
-such as `react-markdown` makes these nodes and needs a filter that must stay correct. Unit tests:
+The console uses `react-markdown` 10.1.0 with `remark-gfm` 4.0.1 (pinned, no `rehype-raw`). A remark step in
+`images/ui/src/markdown.ts` turns raw HTML, links, images, reference definitions and footnotes into text. A closed
+`allowedElements` list and a `urlTransform` that drops every address are a second guard. Unit tests:
 `images/ui/test/markdown.test.ts`, run with `npm test` in `images/ui` (`node --test`).
