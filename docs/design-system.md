@@ -217,7 +217,7 @@ with no work, not an error.
 
 | Component | Classes | Rule |
 |---|---|---|
-| App shell | `agd-shell`, `agd-rail`, `agd-topbar`, `agd-main` | Left rail on `panel` with the mark, navigation and counts; top bar with breadcrumbs, search, connection state, theme, user. Below 760px the rail becomes `agd-bottombar`. |
+| App shell | `agd-shell`, `agd-rail`, `agd-topbar`, `agd-main` | Left rail on `panel` with the mark, navigation and counts; top bar with the project picker, search, connection state, theme, user. Below 760px the rail becomes `agd-bottombar`. |
 | Navigation item | `agd-nav`, `aria-current="page"` | Gate tint and a gate edge on the current page. `agd-count` only for things that wait for a person. |
 | Connection state | `agd-conn`, `-stale`, `-waking`, `-down` | Always in the top bar. Not live adds a banner. Keep the last data and say its age (#339). |
 | Banner | `agd-banner`, `-warn`, `-down`, `-paused` | One per cause, under the top bar, with one action. Never more than two. |

@@ -129,7 +129,6 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
   const name = String(user.profile.preferred_username ?? user.profile.email ?? '')
   // #agents/<name> opens the agent drawer over the Agents page
   const [base, sub] = page.split('/') as [string, string | undefined]
-  const title = [...NAV, ...ADMIN_NAV].find(([id]) => id === base)?.[1] ?? 'Today'
   const count = (id: string) => id === 'today' ? (d.inbox.length > 0 && <span className="agd-count" aria-label={`${d.inbox.length} waiting for you`}>{d.inbox.length}</span>)
     : id === 'approvals' ? (d.pending.length > 0 && <span className="agd-count" aria-label={`${d.pending.length} pending`}>{d.pending.length}</span>)
       : id === 'agents' ? <span className="agd-nav-agentcount">{d.agents.filter((a) => a.life === 'running' || a.life === 'starting').length}/{d.agents.length}</span>
@@ -169,7 +168,6 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
           aria-label={`Projects shown: ${scopeLabel(d)}, ${d.projects.length}. Change`}>
           <span>{scopeLabel(d)}</span><span className="agd-data">{d.projects.length}</span><Icon name="down" />
         </button>
-        <div className="agd-crumbs agd-hide-phone"><strong>{title}</strong></div>
         <span style={{ marginLeft: 'auto' }} />
         <ConnState />
         <button className="agd-iconbtn agd-hide-phone" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>

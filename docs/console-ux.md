@@ -167,8 +167,9 @@ URLs stay hash-based so they work behind the strict nginx setup, and every view 
 
 ### Layout
 
-- **Desktop** (760 px and wider): left rail with the mark, the navigation and the counts; top bar with breadcrumbs,
-  search (`Ctrl+K`), connection state, theme and the user. Detail opens in a right drawer so the list keeps its
+- **Desktop** (760 px and wider): left rail with the mark, the navigation and the counts; top bar with the project
+  picker, search (`Ctrl+K`), connection state, theme and the user. The page name shows once, as the page heading
+  (#521); the rail marks the current page. Detail opens in a right drawer so the list keeps its
   place.
 - **Phone** (below 760 px, #338): a bottom bar with Today, Work, Agents, Usage and More. Drawers become full-screen
   sheets. Tables become two-line rows. The board scrolls one column at a time.
