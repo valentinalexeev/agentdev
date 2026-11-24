@@ -79,6 +79,40 @@ done
 FORGE_API=http://127.0.0.1:1 timeout 20 node "${host}" x "${tmp}/claude" >/dev/null
 check "fails closed when the sidecar is unreachable" "[[ \$(resp r1 | jq -r .response.behavior) == deny ]]"
 
+# ---- #540 review: chunks, trailing output, signals, line cap ----
+# fake claude 2 (node, so it controls chunk boundaries): MODE split sends a can_use_tool whose input has a 3-byte
+# character split across two writes, then a result and trailing lines after stdin closes; MODE signal kills itself;
+# MODE big prints one line over the cap without a newline and waits
+cat > "${tmp}/claude2" <<'JS'
+#!/usr/bin/env node
+const fs = require('fs'); const dir = process.env.TMPD; const mode = process.env.MODE;
+let inb = ''; process.stdin.setEncoding('utf8');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+process.stdin.on('data', async (c) => {
+  inb += c; fs.writeFileSync(dir + '/stdin2', inb);
+  if (mode === 'split' && !inb.includes('control_response') && inb.split('\n').length === 2) {
+    const line = Buffer.from(JSON.stringify({ type: 'control_request', request_id: 'u1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'echo €€' } } }) + '\n');
+    const cut = line.indexOf(Buffer.from('€')) + 1; // inside the 3-byte euro sign
+    process.stdout.write(line.subarray(0, cut)); await sleep(100); process.stdout.write(line.subarray(cut));
+  }
+  if (mode === 'split' && inb.includes('control_response')) process.stdout.write('{"type":"result","result":"done"}\n');
+});
+process.stdin.on('end', async () => { if (mode === 'split') { await sleep(50); process.stdout.write(Array.from({ length: 5000 }, (_, i) => `{"type":"tail","n":${i},"pad":"${'t'.repeat(80)}"}\n`).join('')); } });
+if (mode === 'signal') setTimeout(() => process.kill(process.pid, 'SIGKILL'), 100);
+if (mode === 'big') process.stdout.write('{"type":"x","pad":"' + 'p'.repeat(2000));
+JS
+chmod +x "${tmp}/claude2"
+echo '{"behavior":"allow"}' > "${tmp}/answer"; : > "${tmp}/requests"
+out=$(export MODE=split; timeout 20 node "${host}" x "${tmp}/claude2"); rc=$?
+check "a character split across chunks reaches the sidecar intact" "[[ \$(head -1 '${tmp}/requests' | jq -r .body.params.arguments.input.command) == 'echo €€' ]]"
+check "the allow returns the intact input" "grep 'control_response' '${tmp}/stdin2' | jq -r .response.response.updatedInput.command | grep -qx 'echo €€'"
+check "stdout passes through byte for byte across the split" "grep -q 'echo €€' <<<\"\${out}\""
+check "trailing output after the result is not dropped (waits for close)" "[[ \$(grep -c '\"type\":\"tail\"' <<<\"\${out}\") == 5000 && ${rc} == 0 ]]"
+MODE=signal timeout 20 node "${host}" x "${tmp}/claude2" >/dev/null; rc=$?
+check "killed by SIGKILL: exit code 128+9, not 143" "[[ ${rc} == 137 ]]"
+MODE=big PERMISSION_HOST_MAX_LINE=1000 timeout 20 node "${host}" x "${tmp}/claude2" >/dev/null 2>"${tmp}/err"; rc=$?
+check "a line over the cap stops the run (fail closed), not a hang or growth" "[[ ${rc} != 0 && ${rc} != 124 ]] && grep -q 'fail closed' '${tmp}/err'"
+
 # ---- the loop's wiring ----
 unset APPROVAL_HOST CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"

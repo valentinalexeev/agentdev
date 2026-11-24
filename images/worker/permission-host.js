@@ -22,6 +22,12 @@
 'use strict';
 const { spawn } = require('child_process');
 const http = require('http');
+const os = require('os');
+const { StringDecoder } = require('string_decoder');
+
+// MAX_LINE bounds one stdout line kept for parsing (a can_use_tool request with a large input stays far below it). A
+// longer line cannot be read, so a request in it could not be answered: the run fails closed (#540 review).
+const MAX_LINE = /^[0-9]{3,9}$/.test(process.env.PERMISSION_HOST_MAX_LINE || '') ? Number(process.env.PERMISSION_HOST_MAX_LINE) : 16 << 20;
 
 const FORWARD = ['tool_name', 'input', 'tool_use_id', 'description', 'decision_reason', 'decision_reason_type',
   'blocked_path', 'permission_suggestions'];
@@ -77,6 +83,8 @@ function main() {
   write({ type: 'user', message: { role: 'user', content: prompt }, parent_tool_use_id: null });
   let buf = '';
   let done = false;
+  let failed = false;
+  const dec = new StringDecoder('utf8'); // a character split across chunks is joined, not mangled (#540 review)
   const onLine = (line) => {
     let m;
     try { m = JSON.parse(line); } catch { return; }
@@ -96,14 +104,26 @@ function main() {
     }
   };
   claude.stdout.on('data', (c) => {
-    process.stdout.write(c);
-    buf += c.toString('utf8');
+    process.stdout.write(c); // the raw bytes, unchanged
+    if (failed) return;
+    buf += dec.write(c);
     let i;
     while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l.trim()) onLine(l); }
+    if (buf.length > MAX_LINE) {
+      failed = true; buf = '';
+      console.error(`permission-host: a line of Claude's output is over ${MAX_LINE} bytes; stopping the run (fail closed)`);
+      claude.kill('SIGTERM');
+    }
   });
   for (const s of ['SIGTERM', 'SIGINT']) process.on(s, () => claude.kill(s));
   claude.on('error', (e) => { console.error(`permission-host: ${e.message}`); process.exit(127); });
-  claude.on('exit', (code, sig) => process.exit(code === null ? (sig ? 128 + 15 : 1) : code));
+  // 'close', not 'exit': stdout is fully read and passed on; then flush our stdout before exiting (#540 review)
+  claude.on('close', (code, sig) => {
+    let rc = code;
+    if (rc === null) rc = sig && os.constants.signals[sig] ? 128 + os.constants.signals[sig] : 1;
+    if (failed && rc === 0) rc = 1;
+    process.stdout.write('', () => process.exit(rc));
+  });
 }
 
 if (require.main === module) main();
