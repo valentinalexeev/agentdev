@@ -6,68 +6,145 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
-## [1.2.0-rc.4] - 2026-11-24
+## [1.2.0] - 2026-11-24
 
-### Fixed
-- **Redeploy on GKE no longer stops at the API restart when no Secret changed (#488).** `deploy.yml` failed at `api : Restart the API after a Secret change` with `'api_load' is undefined` on every
-  non-kind redeploy without a Secret change, and the roles after `api` did not run. The workaround
-  `api_load: {changed: false}` in `instance.yml` can be removed.
-- **The ingress smoke test finds the forwarder pods (#489).** The post-deploy smoke test built the label selector as the literal `key=value`, so it never found the forwarder pods
-  of `ingress.mode: external` and failed every deploy. It now uses one `key=value` per label of
-  `ingress.forwarder.pod_selector`. The workaround `ingress.smoke: false` can be removed.
-- **The GKE deploy no longer waits 600 s for agents that are stopped (#491).** `deploy.yml` waits only for the pods of agents whose StatefulSet has replicas above 0. When all agents are stopped
-  (scale to zero), the wait is skipped and the deploy goes on at once. Before, the task waited its full 600 s timeout
-  and then passed without a check. The router wait does not change.
-
-## [1.2.0-rc.3] - 2026-11-24
-
-### Fixed
-- **A console chat session waits for the forge sidecar before its first sync (#482).** A console chat session no longer fails when its `chat` container starts before the forge sidecar listens. Before the
-  first sync, `agent-chat-session` waits for the sidecar's `/healthz`, as `agent-loop` does, for at most
-  `CHAT_SIDECAR_WAIT_SECONDS` (default 60). If the sidecar never answers, the session still fails closed with
-  "sync through the forge sidecar failed". The change is in the worker image, so the fix needs no new setting.
-
-## [1.2.0-rc.2] - 2026-11-23
-
-### Deprecated
-- **run.sh and the kind step wrappers are now removed in 1.3.0, not 1.2.0 (#470, #476).** `run.sh`, `04-coder.sh`, the numbered step wrappers and `99-teardown.sh` stay deprecated in 1.2.0 and are removed
-  in 1.3.0 (#470), not in 1.2.0 as the 1.1.0-rc notes said. Use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
-  `AGENTS.md` step 5 now matches `docs/install.md`: the owner applies only the CI identity, and the CI creates the
-  cluster (#471, #476).
-
-### Fixed
-- **First deploy and resume after a deleted cluster work through the deployment CI (#471).** The example deployment CI runs the checks that need no cluster before `infra` and the CRD checks in the new job
-  `preflight-cluster` after `infra`, so a first install or a resume after `gcloud container clusters delete` works on
-  both engines. `scripts/upgrade-check.sh` skips the cluster checks with a notice when the cluster is not found and has
-  `--phase no-cluster|cluster`. Docs: `docs/install.md`, `docs/troubleshooting.md`.
-- **BREAKING** **The Flux template no longer collides with an existing Flux install (#472).** The Flux template names its `GitRepository`, root `Kustomization` and deploy key Secret `agentdev` (was `flux-system`),
-  and its Helm repositories `agentdev-external-secrets` and `agentdev-stakater`. The sync moved to
-  `gitops/flux/clusters/agentdev/sync/`. The node pool of the Flux controllers is set in
-  `flux-system/controller-nodepool.yaml` (default `system`). docs/admin.md "Install an instance with Flux" has steps for
-  a cluster that already runs Flux.
+1.1.0 was never released as final, so the content of 1.1.0-rc.1, rc.2 and rc.3 is part of 1.2.0. There is no
+`v1.1.0` tag (#392). Upgrade from 1.0.1 directly to 1.2.0. This section also replaces the sections of
+1.2.0-rc.1 to rc.4. An instance on a 1.2.0 rc follows "Upgrade from a 1.2.0 release candidate" below.
 
 ### Upgrade
-**#471:**
-1. Copy `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke` of this release into the deployment
-   repository. An existing cluster is checked as before.
+From 1.0.x (1.0.0 or 1.0.1) to 1.2.0. Do the steps in this order. Only step 3 changes the behaviour of an existing
+instance without an opt-in (the lean cluster, **BREAKING** for Terraform defaults); every other new feature is off or
+backwards compatible by default. The Ansible path (`deploy.yml`) still works; Flux (step 18) is opt-in.
+1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.2.0` in `terraform/main.tf`
+   and `agentdev_ref: v1.2.0` and `image_tag: "1.2.0"` in `ansible/instance.yml`, in one PR. Images and manifests
+   must move together; the API, worker and forge must run the same `image_tag` (chat, #346, #424). New or changed
+   images: worker, forge, router, operator (also serves `obs-mcp`), claude-proxy, API and UI. They build with Go
+   1.27.4 (#431); anyone building agentdev's Go code needs Go 1.27.4 (the `toolchain` line in `go.mod` downloads it).
+2. **Copy the template workflow** `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment
+   repository. It adds the job `preflight` with the checks that need no cluster before `infra` (`terraform apply`,
+   #314), the job `preflight-cluster` with the CRD checks after `infra` (#471, so a first install or a resume after a
+   deleted cluster works), the PR `plan` job (#291), the `template-drift` job (#317) and the optional Flux engine
+   (#385; without the repository variable `DEPLOY_ENGINE` it runs `deploy.yml` as before). Check the rest of the template with `scripts/template-drift.sh <deployment repo dir>`.
+3. **Terraform (#208), owner.** Run `terraform plan` and read it before `terraform apply`. **BREAKING** lean cluster
+   (#208, a SemVer exception accepted by the owner: ADR 0009): Managed Prometheus and the Filestore CSI driver go
+   off, `monitoring_components` becomes `["SYSTEM_COMPONENTS"]`, and the load balancer and Gateway API are on only
+   with `public_hosts`. The plan shows in-place cluster updates, no node pool replacement. To keep the old cluster,
+   set `enable_managed_prometheus = true`, `enable_filestore_csi = true`, `monitoring_components = null` and
+   `gateway_enabled = true`. With no new inputs and the 1.0.x apply account roles, `terraform apply` completes.
+4. **Read-only plan identity (#291, #421), optional.** `create_plan_identity` defaults to `false`. To turn it on:
+   1. The owner gives the apply account `agentdev-automation` these one-time grants (it cannot grant them to itself):
+      ```bash
+      SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+      gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+        --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+      gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+        --role=roles/storage.admin
+      # only with create_budget = true (the default)
+      gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+        --role=roles/billing.admin
+      ```
+   2. Set `create_plan_identity = true` in the module block of `terraform/main.tf`, and `plan_identity: true` with
+      `plan_identity_billing_account: <billing_account_id>` (or `""` with `create_budget = false`) in
+      `ansible/instance.yml`. The preflight then checks the grants before `terraform apply`.
+   3. Apply, then set the repository variables `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT` from
+      `terraform output github_actions_auth` (`plan_workload_identity_provider`, `plan_service_account`; docs/admin.md
+      "Show the plan on deployment pull requests"). Until they are set, the `plan` job is skipped.
+5. **Run the preflight (#314)** from a checkout at `v1.2.0`:
+   `bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml` (or `deploy.yml --tags preflight`). It
+   only reads. It stops on a malformed Claude secret, a checkout tag other than `v<image_tag>`, a missing CRD
+   (Gateway API, FQDNNetworkPolicy) or an image that is not on ghcr.io at `image_tag`. Fix every finding first.
+   `--phase no-cluster|cluster` runs one half, as the two CI jobs do; when the cluster is not found, the cluster
+   checks are skipped with a notice (#471).
+6. **Claude budget in cost units (#196, #275).** Rename `claude_budget_tokens` to `claude_budget_units` in
+   `instance.yml` (`CLAUDE_BUDGET_TOKENS` to `CLAUDE_BUDGET_UNITS` on kind). The old name still works until 2.0.0
+   (1 token = 1 unit) and logs a warning. The same number now allows more traffic: consider dividing it by 4, or
+   start at 0 and set it after a day of `GET /status`. Per-agent values in ConfigMap `claude-proxy-budgets` are read
+   as units. Spend counted before the upgrade resets with the new proxy pod. Optional: `claude_prices` (new
+   ConfigMap `claude-proxy-prices`) for weights and a USD price.
+7. **Job limits (#310, #196 D6), optional.** `claude_job_budget_units` (hard limit per job) and
+   `claude_job_approval_units` / `claude_job_approval_step_units` (soft limit with an approval). The soft limit must
+   be lower than the hard limit; the playbook checks it. Keep the soft limit at 0 until every agent runs the 1.2
+   worker and forge: a 1.0 sidecar does not ask, so its job stops at the soft limit.
+8. **Claude proxy auth (#352).** Keep `claude_proxy_auth: both` (the default) during the upgrade: 1.0 workers keep
+   using the HMAC key, 1.2 workers send the projected token. Set `claude_proxy_auth: token` only after every agent
+   pod runs the 1.2 worker (check `kubectl -n coding-agents get pods -o yaml | grep image:`), then run `deploy.yml`
+   again. `scripts/e2e-gke-security.sh` then checks that the HMAC key gives 401.
+9. **New optional settings**, all off or unchanged by default: `rollout.grace_seconds`, `rollout.drain_max_minutes`
+   (#174), `api.max_agents`, `api.max_agents_per_user` (#27), `ingress.smoke` (default `true`),
+   `ingress.smoke_timeout` (#213), `ingress.forwarder.namespace` / `pod_selector` /
+   `ingress.forwarder_not_ready_minutes` (#213), `telemetry.*` (#196 D4), `obs_mcp.enabled` (#205). This upgrade
+   itself still replaces agent pods at once; later upgrades drain (#174).
+10. **Web Push notifications (#347), optional.** Set `notifications.channels` in `instance.yml` (see the example).
+    The playbook makes the VAPID key pair once in Secret Manager (`platform-notify-vapid`).
+11. **Console chat sessions (#346, #400, #424), optional.** Set `api.chat.enabled: true`. The playbook makes the
+    Secret Manager entry `agentdev-api-chat-token-key` once. On Gitea, the optional secret is
+    `agentdev-chat-issue-token`. A chat session runs as the agent's own pod. The Secret Manager entry
+    `agentdev-chat-clone-token` is not read; delete it if you made it for a 1.1.0 rc.
+12. **Funnel forwarder (#316), optional.** To let the playbook run the forwarder, set `ingress.forwarder.deploy`,
+    put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey`, and remove the old forwarder
+    manifest from the deployment repository (admin.md, "Deployed forwarder").
+13. **External secrets (#381), optional.** Nothing to do in the default `playbook` mode. For external mode: import
+    the generated secrets and list them in `keep_existing_secret_values` (`docs/admin.md`,
+    `examples/deployment/gcp-gke/terraform/imports.tf.example`), otherwise Terraform writes new database passwords.
+    Then set `external_secrets = true` in `terraform/instance.tfvars` and `external_secrets.mode: external` in
+    `ansible/instance.yml`.
+14. **Render mode (#384, #447), optional.** Re-apply `infra/terraform` and copy `terraform output platform` into
+    `ansible/instance.yml` as `platform`. Without `platform` the behaviour is the same.
+15. **External Gitea (#442, #459), only for Gitea.** `forge_url` must start with `https://` (the playbook stops
+    otherwise). For `forge-init`: put a Gitea admin token in the Secret Manager entry `gitea-admin-token`, set
+    `external_secrets = true` and `forge_init = true` in `terraform/instance.tfvars`, and
+    `external_secrets.mode: external` and `forge_init: {enabled: true}` in `ansible/instance.yml`.
+16. **McpProject token ids (#383, #452), only with `mcp_projects`.** Before the playbook run, record the old token
+    ids with the owner's `kubectl`: `scripts/mcp-revoke-legacy.sh list > legacy-mcp-token-ids.txt`. Set `AGENTS_NS`,
+    `PLATFORM_NS` or `CF_ADMIN_EMAIL` if your instance does not use the defaults. If you forget this, the old tokens
+    expire within one year.
+17. **Ansible path: run the playbook** `deploy.yml` (the deployment CI does it on merge; run it to the end, because a
+    new API does not serve until the role `api` ran its database Job, #382). It applies, among others: the CRDs
+    `Approval`, `NotificationChannel`, `ProjectSecret`, `McpProject` and the new status fields of `agents` and
+    `projectsecrets` (#386), the operator and API Roles, the chat admission policy and the database Jobs
+    `agentdev-db-init-<hash>` and `authentik-db-init-<hash>` (#382). The variables `api_db_pod` and
+    `authentik_db_pod` are gone; remove them from `instance.yml`. The Secret `agentdev-chat-clone` is removed.
+18. **Flux path (#385), opt-in, instead of step 17.** Follow docs/admin.md "Install an instance with Flux": it needs
+    `platform` (step 14), `external_secrets.mode: external` (step 13), the `gitops/` template of `v1.2.0`, `flux`
+    CLI v2.10.1 and the repository variable `DEPLOY_ENGINE=flux`. Do not run `deploy.yml` on a cluster that Flux
+    operates. The template's Flux root objects (`GitRepository`, root `Kustomization`, deploy key Secret) are named
+    `agentdev` and its HelmRepositories `agentdev-external-secrets` and `agentdev-stakater`, with the sync in
+    `gitops/flux/clusters/agentdev/sync/` (#472), so they do not collide with a Flux install the cluster already
+    has (admin.md has the steps for that case).
+19. **Agents in Git (#58), optional.** Nothing to do for `agents_source: api` (the default). To move to `git`: add
+    the Agent manifests (without `spec.paused`) to the deployment repository, set `agents_source: git`, run
+    `deploy.yml` (or let Flux apply the `agents/` layer).
+20. **Check.** Do `AGENTS.md` step 10 (pods, router `/status`, `scripts/e2e-gke-security.sh`). With `mcp_projects`,
+    `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project; then, with the agents idle, run
+    `scripts/mcp-revoke-legacy.sh revoke legacy-mcp-token-ids.txt` (the last line must show `failed 0`) and
+    `rm legacy-mcp-token-ids.txt`.
+21. **UI class rename (#423).** Custom CSS or browser userstyles that target `ad-*` classes must change to `agd-*`.
+22. **kind only (#106, #383).** `./run.sh` steps are wrappers for `ansible-playbook infra/ansible/kind.yml --tags
+    <tag>` and are deprecated; they are removed in 1.3.0 (#470). To apply this release on kind: `./run.sh 05 06 08 09 10 12 13` (step 12 after 08,
+    so the operator gets `MCP_ALLOWED_HOSTS`). For agents in Git: `AGENTS_SOURCE=git ./run.sh 10`. GKE does not
+    change.
 
-**#472:**
-1. Only for an instance that already runs the Flux template of 1.2.0-rc.1. Copy the new `gitops/flux/` tree. Move your
-   `flux-system/gotk-sync.yaml` to `sync/gotk-sync.yaml` and apply the changes of `sync/gotk-sync.yaml.example`.
-2. Make the Secret `agentdev` with the same deploy key:
-   `kubectl -n flux-system get secret flux-system -o json | jq '.metadata={name:"agentdev",namespace:"flux-system"}' | kubectl apply -f -`
-3. Stop the old root sync: `kubectl -n flux-system patch kustomization flux-system --type merge -p '{"spec":{"prune":false,"suspend":true}}'`
-4. Merge the new tree into `main`. Wait until the job `render` pushed the branch `gitops`.
-5. Apply the new sync: `kubectl apply -k gitops/flux/clusters/agentdev/sync`. The branch `gitops` now holds only the
-   new tree, so the old root `flux-system` never goes into the inventory of `agentdev`.
-6. When `flux get kustomizations` shows `agentdev` Ready, remove the old objects. Delete the old root while it is
-   still suspended. Some objects can already be pruned, so each delete uses `--ignore-not-found`:
-   `kubectl -n flux-system delete kustomization flux-system --ignore-not-found`,
-   `kubectl -n flux-system delete gitrepository flux-system --ignore-not-found`,
-   `kubectl -n flux-system delete helmrepository external-secrets stakater --ignore-not-found`,
-   `kubectl -n flux-system delete secret flux-system --ignore-not-found`.
-
-## [1.2.0-rc.1] - 2026-11-23
+### Upgrade from a 1.2.0 release candidate
+From 1.2.0-rc.1 to rc.4: pin `v1.2.0` / `1.2.0` (step 1) and copy the template workflow (step 2). Also:
+1. **Flux installs of rc.1 only (#472):** move the root objects to the `agentdev` names. An instance from rc.2 or
+   later has the new names. The same steps are in `docs/changes/1.2.0-rc.2/472-flux-tenancy.md`.
+   1. Copy the new `gitops/flux/` tree. Move your `flux-system/gotk-sync.yaml` to `sync/gotk-sync.yaml` and apply
+      the changes of `sync/gotk-sync.yaml.example`.
+   2. Make the Secret `agentdev` with the same deploy key:
+      `kubectl -n flux-system get secret flux-system -o json | jq '.metadata={name:"agentdev",namespace:"flux-system"}' | kubectl apply -f -`
+   3. Stop the old root sync: `kubectl -n flux-system patch kustomization flux-system --type merge -p '{"spec":{"prune":false,"suspend":true}}'`
+   4. Merge the new tree into `main`. Wait until the job `render` pushed the branch `gitops`.
+   5. Apply the new sync: `kubectl apply -k gitops/flux/clusters/agentdev/sync`. The branch `gitops` now holds only
+      the new tree, so the old root `flux-system` never goes into the inventory of `agentdev`.
+   6. When `flux get kustomizations` shows `agentdev` Ready, remove the old objects. Delete the old root while it is
+      still suspended. Some objects can already be pruned, so each delete uses `--ignore-not-found`:
+      `kubectl -n flux-system delete kustomization flux-system --ignore-not-found`,
+      `kubectl -n flux-system delete gitrepository flux-system --ignore-not-found`,
+      `kubectl -n flux-system delete helmrepository external-secrets stakater --ignore-not-found`,
+      `kubectl -n flux-system delete secret flux-system --ignore-not-found`.
+2. **Remove workarounds:** `api_load: {changed: false}` (#488) and `ingress.smoke: false` (#489) in
+   `ansible/instance.yml` are no longer needed. Keep `ingress.smoke: false` only if you want no smoke test.
 
 ### Added
 - **External Gitea on GKE (#442).** `forge_kind: gitea` with an `https://` `forge_url` connects to a Gitea you
@@ -110,7 +187,11 @@ While the version is `0.x`, breaking changes bump MINOR.
   drift correction, Flux on the system pool, and a fourth layer for Reloader after the platform layer, which makes
   the namespaces that Reloader watches. With `DEPLOY_ENGINE=flux` the template workflow renders, pushes the branch
   `gitops`, waits for Flux Ready (`scripts/gitops-status.sh`) and runs the smoke test (`infra/ansible/smoke.yml`).
-  Docs: `docs/admin.md`, "Install an instance with Flux".
+  The template names its `GitRepository`, root `Kustomization` and deploy key Secret `agentdev` and its Helm
+  repositories `agentdev-external-secrets` and `agentdev-stakater`, so it does not collide with an existing Flux
+  install (#472). The sync is in `gitops/flux/clusters/agentdev/sync/`; the node pool of the Flux controllers is set in
+  `flux-system/controller-nodepool.yaml` (default `system`). Docs: `docs/admin.md`, "Install an instance with Flux",
+  with steps for a cluster that already runs Flux.
 - **Render mode covers the platform, authentik and API roles (#447).** The roles `platform`, `authentik`, `authentik_sso` and `api` render through their `tasks/render.yml`, so
   `infra/ansible/render.yml` writes the whole instance: authentik as `helm template` output, the database and
   break-glass steps as the Jobs `agentdev-db-init-<hash>`, `authentik-db-init-<hash>` and `authentik-breakglass-<hash>`
@@ -152,81 +233,9 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **forge-init reads its secrets through the platform store (#459).** Terraform `forge_init = true` lets the platform reader read `gitea-admin-token` and `github-app-webhook-secret`, so
   the ExternalSecret `forge-init` of #442 syncs. The playbook refuses `forge_init.enabled` without
   `external_secrets.mode: external`. Docs: `docs/admin.md`, external Gitea.
-
-### Upgrade
-- **External Gitea (#442):** nothing to do for GitHub or kind. A Gitea deployment needs an `https://` `forge_url`
-  (the playbook stops otherwise). To use `forge-init`, create the Secret Manager entry `gitea-admin-token` and add it
-  to the ESO secret list (#381), then set `forge_init: {enabled: true}`.
-- **#382:** nothing to do by hand: the next playbook run applies the Jobs, the API waits for them. Jobs of an older hash are
-  removed. A new API image together with an old database (a playbook run that stopped before the role `api`) does not
-  serve until the role `api` ran: run the playbook to the end. The variables `api_db_pod` and `authentik_db_pod` are
-  gone.
-- **#58:** nothing to do for `agents_source: api` (the default). To move to `git`: add the Agent manifests (without
-  `spec.paused`) to the deployment repository, set `agents_source: git`, run the playbook (role `api` and
-  `deploy.yml`), then let Flux apply the `agents/` layer. On kind: `AGENTS_SOURCE=git ./run.sh 10`.
-- **#383:**
-  1. Pin the new release as usual. The playbook applies the `McpProject` CRD, the operator Roles (a new Role
-     `agentdev-operator-mcp` in the platform namespace: get on Secret `contextforge` only; Secrets create/patch/delete (#452)
-     in the agents namespace) and the ContextForge NetworkPolicy rule for the operator pod.
-  2. Existing `agent-<name>-mcp` Secrets made by the script are replaced with new tokens on the first reconcile (#452);
-     revoke the old tokens as the #452 step says.
-  3. Check: `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project in `mcp_projects`.
-  4. On kind, run `./run.sh 12` after `./run.sh 08` so the operator gets `MCP_ALLOWED_HOSTS`.
-- **#452 (only if you use `McpProject`):** the new operator cannot read the old token ids, so you revoke them once.
-  Record the ids **before** the upgrade: the first reconcile replaces each Secret and its id annotation. Revoke them
-  **after** the upgrade: the agents keep MCP access until their new tokens are in place. Use the owner's `kubectl`
-  (it can read Secrets); the script prints token ids only, never a token or the admin password.
-  1. Before the upgrade: `scripts/mcp-revoke-legacy.sh list > legacy-mcp-token-ids.txt`
-  2. Upgrade as usual (playbook or `./run.sh 12`).
-  3. Wait until `kubectl -n coding-agents get mcpp` shows `Ready` `True` for each project.
-  4. `scripts/mcp-revoke-legacy.sh revoke legacy-mcp-token-ids.txt`. The last line must show `failed 0`. Ids that a
-     `McpProject` status records are kept. An agent session that started before step 2 still uses its old token;
-     do this step when the agents are idle.
-  5. `rm legacy-mcp-token-ids.txt`
-  If you forgot step 1, the old ids are lost from the cluster; the old tokens expire within one year. Set
-  `AGENTS_NS`, `PLATFORM_NS` or `CF_ADMIN_EMAIL` if your instance does not use the defaults.
-- **#386:** the CRDs `agents` and `projectsecrets` change (new status fields only). Re-run `./run.sh 12` on kind, or
-  the playbook (role `operator`) on GKE. No spec changes, no agent restart.
-
-**#381:**
-Nothing to do in the default `playbook` mode. To use external mode on an instance from 1.1.x, import the generated
-secrets first and list them in `keep_existing_secret_values` (`docs/admin.md`,
-`examples/deployment/gcp-gke/terraform/imports.tf.example`). Otherwise Terraform writes new database passwords. Then
-set `external_secrets = true` in Terraform and `external_secrets.mode: external` in `ansible/instance.yml`, and
-re-apply `infra/terraform` and `deploy.yml`.
-
-**#384:**
-No new step to run: apply `deploy.yml` as usual. Without `platform` the behaviour is the same. To use the render mode,
-re-apply `infra/terraform` and copy `terraform output platform` into `ansible/instance.yml`. The order of some tasks in
-`deploy.yml` changed:
-1. All reads of Secret Manager come first: platform, agent, executor, Gitea wake poll and GitHub App secrets, the
-   forge proxy credential, and the Claude proxy signing key and agent keys (made once, as before).
-2. A new check reads the FQDNNetworkPolicy and Gateway API CRDs, when the values need them. It stops with a clear
-   message, also under `--check`.
-3. The platform namespace is now made together with the agents namespace, before the CRDs (before: after the CRDs).
-4. The `webhook-router` Secret is a separate task, before the router objects.
-
-The objects themselves are the same. Re-run: `deploy.yml` only.
-
-**#385:**
-No change for an Ansible deployment: without the repository variable `DEPLOY_ENGINE`, the workflow runs `deploy.yml` as
-before. To change to Flux, copy the new `.github/workflows/deploy.yml` and `gitops/`, then follow the procedure.
-
-**#447:**
-Nothing to do. `deploy.yml` applies the same objects as before. To use the render mode, see #384.
-
-## [1.1.0-rc.3] - 2026-11-17
-
-### Upgrade
-**From 1.0.x (1.0.0 or 1.0.1):** follow the 1.1.0-rc.2 section below (rc.1 steps with the opt-in plan identity),
-pinning `v1.1.0-rc.3` / `1.1.0-rc.3` instead.
-
-**From 1.1.0-rc.1:** do the steps of the 1.1.0-rc.2 section below, pinning rc.3 instead of rc.2.
-
-**From 1.1.0-rc.2:** pin rc.3 everywhere (ADR 0006): `ref=v1.1.0-rc.3` in `terraform/main.tf`,
-`agentdev_ref: v1.1.0-rc.3` and `image_tag: "1.1.0-rc.3"` in `ansible/instance.yml`, in one PR. New images only
-(Go 1.27 builds); no schema, value or `./run.sh` step. Anyone building agentdev's Go code needs Go 1.27.4 (the
-`toolchain` line in `go.mod` downloads it automatically).
+- **The GKE deploy no longer waits 600 s for agents that are stopped (#491).** `deploy.yml` waits only for the pods
+  of agents whose StatefulSet has replicas above 0. When all agents are stopped (scale to zero), the wait is skipped.
+  Before, the task waited its full 600 s timeout and then passed without a check. The router wait does not change.
 
 ### Security
 - Go 1.27 and dependencies (#431). The images build with `golang:1.27.4-alpine` (Go 1.25 gets no more fixes), every
@@ -238,50 +247,6 @@ pinning `v1.1.0-rc.3` / `1.1.0-rc.3` instead.
   `otel` and `grpc` advisories, and the Dependabot `x/crypto` alerts. Behaviour of `go 1.26`: TLS also offers the hybrid
   key exchange SecP256r1MLKEM768 (a larger ClientHello), and `url.Parse` refuses extra colons in a host. The API binary
   is larger (about 50 MB). New images; no `./run.sh` step.
-
-## [1.1.0-rc.2] - 2026-11-16
-
-### Upgrade
-**From 1.0.x (1.0.0 or 1.0.1):** do the Upgrade steps of the 1.1.0-rc.1 section below (the ADR 0009 lean cluster
-included), with two changes: pin `v1.1.0-rc.2` / `1.1.0-rc.2` instead of rc.1 in step 1, and in step 3 the
-read-only plan identity is **opt-in** (`create_plan_identity` defaults to `false`, #421): with no new inputs and the
-1.0.x apply account roles, `terraform apply` and the playbook complete. Then read the steps below from point 2 on.
-
-**From 1.1.0-rc.1:**
-1. **Pin rc.2 everywhere (ADR 0006).** `ref=v1.1.0-rc.2` in `terraform/main.tf`, `agentdev_ref: v1.1.0-rc.2` and
-   `image_tag: "1.1.0-rc.2"` in `ansible/instance.yml`, in one PR. New images: worker, forge, API and UI change
-   together.
-2. **Plan identity is opt-in (#421).** A deployment that applied rc.1 with the identity keeps it only with
-   `create_plan_identity = true`; without it the next apply removes the leftover `agentdev-plan` account and
-   `github-pr` pool. To keep or turn it on:
-   1. The owner gives the apply account `agentdev-automation` these one-time grants (it cannot grant them to itself):
-      ```bash
-      SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
-      gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
-        --role=roles/iam.workloadIdentityPoolAdmin --condition=None
-      gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
-        --role=roles/storage.admin
-      # only with create_budget = true (the default)
-      gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
-        --role=roles/billing.admin
-      ```
-   2. Set `create_plan_identity = true` in the module block of `terraform/main.tf`, and `plan_identity: true` with
-      `plan_identity_billing_account: <billing_account_id>` (or `""` with `create_budget = false`) in
-      `ansible/instance.yml`. The preflight then checks the grants before `terraform apply`.
-   3. Apply, then set `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT` (docs/admin.md "Show the plan on
-      deployment pull requests").
-3. **UI class rename (#423).** The UI CSS classes are renamed from `ad-*` to `agd-*`. Custom CSS or browser
-   userstyles that target `ad-*` classes must change to `agd-*`.
-4. **Chat (#424).** The playbook removes the Secret `agentdev-chat-clone`; the Secret Manager entry
-   `agentdev-chat-clone-token` is no longer read and can be deleted. `manifests/api.yaml.tmpl` has the new value
-   `CHAT_FORGE_IMAGE` (the playbook sets it from `forge_image`; on kind from `FORGE_IMAGE`); the API no longer reads
-   `CHAT_FORGE_URL`, `CHAT_IMAGE_PULL_POLICY`, `CHAT_CLAUDE_PROXY_URL` and `CHAT_EGRESS_PROXY`. A chat session is now
-   the agent's own pod, so it starts only after the operator has rendered the agent's StatefulSet. The API, worker
-   and forge images must run the same `image_tag`.
-5. **Run log (#425).** New table `job_events` and its grants (`images/api/schema.sql`, `grants.sql`): re-run
-   `deploy.yml` (or the role `api`; on kind `./run.sh 10`), nothing to do by hand. The API's internal listener
-   (port 8081) now runs also with approvals off. A 1.1.0-rc.1 worker sends no run log; a 1.1.0-rc.1 API answers 404
-   to the sidecar, which drops the events.
 
 ### Fixed
 - Terraform: the upgrade from 1.0.x to 1.1.0-rc.1 failed half way in `terraform apply` (403) because the apply
@@ -303,81 +268,13 @@ read-only plan identity is **opt-in** (`create_plan_identity` defaults to `false
   (`agent/<name>/*`), MCP tools, Claude identity and egress rules. Tool permissions stay the console's Allow/Deny.
   The admission policy `agentdev-api-chat-jobs` allows exactly this shape and only the agent's Secrets, each in its
   container; the chat container still holds no forge token and no egress key. The API's Role is unchanged.
+  Before its first sync, a session waits for the sidecar's `/healthz`, as `agent-loop` does, for at most
+  `CHAT_SIDECAR_WAIT_SECONDS` (default 60), then fails closed (#482).
 - **A running job can be watched (#425).** The job view of the console has a **Run** tab with the live run log: the
   agent's text, its tool calls and their results (clipped to 2 KB, secrets redacted, plain text only), the final
   turns and tokens, and a marker when the 2 MB cap of a job is reached. The worker streams it through the forge
   sidecar (`POST /run-events`) to the API (`GET /api/jobs/{agent}/{job}/events`, SSE `.../events/stream`, visibility
   of the job, R35); kept 30 days. Never posted on the forge or in notifications (security.md R118).
-
-## [1.1.0-rc.1] - 2026-11-16
-
-### Upgrade
-From 1.0.x (1.0.0 or 1.0.1). Do the steps in this order. Only step 3 changes behaviour of an existing instance
-without an opt-in (the lean cluster, **BREAKING** for Terraform defaults); every other new feature is off or
-backwards compatible by default.
-1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.1.0-rc.1` in
-   `terraform/main.tf` and `agentdev_ref: v1.1.0-rc.1` and `image_tag: "1.1.0-rc.1"` in `ansible/instance.yml`, in
-   one PR. Images and manifests must move together: the 1.1 playbook renders new Roles, CRDs and admission policies
-   that the 1.1 images expect, and the API and the worker must run the same `image_tag` for chat (#346). New or
-   changed images: worker, forge, router, operator (also serves `obs-mcp`), claude-proxy, API and UI.
-2. **Copy the template workflow** `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment
-   repository. It adds the preflight before `terraform apply` (#314), the PR `plan` job (#291) and the
-   `template-drift` job (#317). Check the rest of the template with
-   `scripts/template-drift.sh <deployment repo dir>`.
-3. **Terraform (#208, #291), owner.** Run `terraform plan` and read it before `terraform apply`.
-   - **BREAKING** lean cluster (#208, a SemVer exception accepted by the owner: ADR 0009): Managed Prometheus and the Filestore CSI driver go off, `monitoring_components`
-     becomes `["SYSTEM_COMPONENTS"]`, and the load balancer and Gateway API are on only with `public_hosts`. The plan
-     shows in-place cluster updates, no node pool replacement. To keep the old cluster, set
-     `enable_managed_prometheus = true`, `enable_filestore_csi = true`, `monitoring_components = null` and
-     `gateway_enabled = true`.
-   - Read-only plan identity (#291): new service account `agentdev-plan` and Workload Identity pool `github-pr`
-     (new inputs `create_plan_identity`, default `true`, and `plan_state_bucket`). After the apply,
-     `terraform output github_actions_auth` has `plan_workload_identity_provider` and `plan_service_account`: set
-     them as the repository variables `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT`. Until they are set,
-     the `plan` job is skipped. Docs: admin.md "Show the plan on deployment pull requests".
-4. **Run the preflight (#314)** from a checkout at `v1.1.0-rc.1`:
-   `bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml` (or `deploy.yml --tags preflight`). It
-   only reads. It stops on a malformed Claude secret, a checkout tag other than `v<image_tag>`, a missing CRD
-   (Gateway API, FQDNNetworkPolicy) or an image that is not on ghcr.io at `image_tag`. Fix every finding first.
-5. **Claude budget in cost units (#196, #275).** Rename `claude_budget_tokens` to `claude_budget_units` in
-   `instance.yml` (`CLAUDE_BUDGET_TOKENS` to `CLAUDE_BUDGET_UNITS` on kind). The old name still works until 2.0.0
-   (1 token = 1 unit) and logs a warning. The same number now allows more traffic: consider dividing it by 4, or
-   start at 0 and set it after a day of `GET /status`. Per-agent values in ConfigMap `claude-proxy-budgets` are read
-   as units. Spend counted before the upgrade resets with the new proxy pod. Optional: `claude_prices` (new
-   ConfigMap `claude-proxy-prices`) for weights and a USD price.
-6. **Job limits (#310, #196 D6), optional.** `claude_job_budget_units` (hard limit per job) and
-   `claude_job_approval_units` / `claude_job_approval_step_units` (soft limit with an approval). The soft limit must
-   be lower than the hard limit; the playbook checks it. Keep the soft limit at 0 until every agent runs the 1.1
-   worker and forge: a 1.0 sidecar does not ask, so its job stops at the soft limit. The playbook adds the Role
-   `agentdev-claude-proxy-approvals`.
-7. **Claude proxy auth (#352).** Keep `claude_proxy_auth: both` (the default) during the upgrade: 1.0 workers keep
-   using the HMAC key, 1.1 workers send the projected token. The playbook adds a ServiceAccount `agent-<name>` per
-   agent and the ClusterRole `agentdev-claude-proxy-tokenreview`. Set `token` only after every agent pod and chat
-   Job runs the 1.1 worker (check `kubectl -n coding-agents get pods -o yaml | grep image:`), then run `deploy.yml`
-   again. `scripts/e2e-gke-security.sh` then checks that the HMAC key gives 401.
-8. **New optional settings**, all off or unchanged by default: `rollout.grace_seconds`, `rollout.drain_max_minutes`
-   (#174), `api.max_agents`, `api.max_agents_per_user` (#27), `ingress.smoke` (default `true`),
-   `ingress.smoke_timeout` (#213), `ingress.forwarder.namespace` / `pod_selector` /
-   `ingress.forwarder_not_ready_minutes` (#213), `telemetry.*` (#196 D4), `obs_mcp.enabled` (#205). This upgrade
-   itself still replaces agent pods at once; later upgrades drain (#174).
-9. **Web Push notifications (#347), optional.** Set `notifications.channels` in `instance.yml` (see the example).
-   The playbook installs the `NotificationChannel` CRD, makes the VAPID key pair once in Secret Manager
-   (`platform-notify-vapid`), copies it to the Secret `agentdev-api-vapid` and adds the API tables and RBAC. The CRD
-   and RBAC are applied even when notifications are off.
-10. **Console chat sessions (#346, #400), optional.** Set `api.chat.enabled: true`. The playbook makes the Secret
-    Manager entry `agentdev-api-chat-token-key` once. Optional secrets: `agentdev-chat-clone-token` and, on Gitea,
-    `agentdev-chat-issue-token`. The API and the worker must run the same `image_tag`.
-11. **Funnel forwarder (#316), optional.** To let the playbook run the forwarder, set `ingress.forwarder.deploy`,
-    put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey`, and remove the old forwarder
-    manifest from the deployment repository (admin.md, "Deployed forwarder").
-12. **Run the playbook** `deploy.yml` (the deployment CI does it on merge). It applies, among others: the CRDs
-    `Approval` (cost source), `NotificationChannel` and `ProjectSecret`, the operator Role (`patch`/`delete` on pods,
-    `agentdev-guides`), the API Role (`agentdev-guides`, platform Deployments) and the chat admission policy. Then
-    do `AGENTS.md` step 10 (pods, router `/status`, `scripts/e2e-gke-security.sh`).
-13. **kind only (#106).** `./run.sh` steps are now wrappers for `ansible-playbook infra/ansible/kind.yml --tags
-    <tag>` and are deprecated; `run.sh`, `04-coder.sh` and the step wrappers are removed in 1.2.0. Move scripts to
-    the table in admin.md, "Reference: run.sh steps and the GKE playbook". To apply this release on kind:
-    `./run.sh 05 06 09 10 12 13`. GKE does not change.
 
 ### Added
 - Soft cost limit per job with an approval before the hard stop (#310). `claude-proxy` gets
@@ -529,8 +426,11 @@ backwards compatible by default.
   checkout is on a release tag other than `v<image_tag>` (#218), when the cluster does not serve a CRD the instance
   values need (Gateway API, FQDNNetworkPolicy), or when an image is not on ghcr.io at `image_tag`. Run it alone with
   `bash scripts/upgrade-check.sh <instance.yml>` or `deploy.yml --tags preflight`. The deployment example workflow
-  runs it on `main` before `terraform apply`, and clones the playbook at `agentdev_ref`. To apply: copy the
-  new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment repository.
+  runs it on `main` and clones the playbook at `agentdev_ref`: the checks that need no cluster in the job `preflight`
+  before `terraform apply`, the CRD checks in the job `preflight-cluster` after it, so a first install or a resume
+  after `gcloud container clusters delete` works on both engines (#471). `scripts/upgrade-check.sh` has
+  `--phase no-cluster|cluster` and skips the cluster checks with a notice when the cluster is not found. To apply:
+  copy the new `examples/deployment/gcp-gke/.github/workflows/deploy.yml` into the deployment repository.
 - Drain agents before an upgrade replaces their pods (#174). Agent StatefulSets use `updateStrategy: OnDelete`; the
   operator marks an outdated pod `agentdev/drain`, the loop starts no new job and reports through its forge sidecar
   when no job runs, and the operator then replaces the pod (at once when the pod does not run; after
@@ -550,7 +450,8 @@ backwards compatible by default.
   waits for the forwarder pods (`ingress.forwarder` with `namespace` and `pod_selector`) and asks the public hosts
   from the operator machine: `POST /hook` on the webhook host gives 401, `GET /status` there gives 404, and the UI and
   auth hosts answer without a proxy error. The run fails with the URL and the answer. New instance values
-  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). Not run with `--check`. Test:
+  `ingress.smoke` (default `true`) and `ingress.smoke_timeout` (seconds, default 300). The forwarder pods are found
+  with one `key=value` selector per label of `ingress.forwarder.pod_selector` (#489). Not run with `--check`. Test:
   `infra/ansible/tests/ingress_smoke.yml`. Docs: admin.md "Post-deploy smoke test", troubleshooting.md.
 - Compatibility e2e (#178, ADR 0006): `scripts/e2e-compat.sh` runs the previous release's worker and forge
   images against this checkout's router, operator and Claude proxy on kind. A fake Anthropic API
@@ -641,7 +542,7 @@ backwards compatible by default.
   same checks first). `99-teardown.sh` is now a wrapper for `ansible-playbook infra/ansible/kind.yml --tags teardown`
   (deletes the kind cluster and `.coder`); the play is also tagged `never`, so a plain run or any other tag never
   deletes. `04-coder.sh` (Coder spike) is not ported: it prints a `DEPRECATED` warning. `run.sh`, `04-coder.sh` and
-  all step wrappers are removed in 1.2.0. Migration: use `ansible-playbook infra/ansible/kind.yml --tags <tag>` (the
+  all step wrappers stay deprecated in 1.2.0 and are removed in 1.3.0 (#470, #476). Migration: use `ansible-playbook infra/ansible/kind.yml --tags <tag>` (the
   table in `docs/admin.md`, "Reference: run.sh steps and the GKE playbook"). GKE does not change.
 - `CLAUDE_BUDGET_TOKENS` (env, `config.env`) and `claude_budget_tokens` (Ansible instance var) are deprecated and will
   be removed in 2.0.0 (#196, owner decision on #196). Replacement: `CLAUDE_BUDGET_UNITS` / `claude_budget_units` (cost
