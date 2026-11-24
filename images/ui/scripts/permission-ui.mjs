@@ -41,6 +41,7 @@ check(perm && perm.inputs === 0, 'read-only (no inputs)', perm)
 await open('audit')
 const audit = await ev(`document.querySelector('main')?.innerText ?? document.body.innerText`)
 check(/permission mode of\s*alice\s*changed/i.test(audit) && audit.includes('dontAsk → auto (1 allow, 1 soft deny, 0 environment rules)'), 'audit story', audit.slice(0, 600))
+check(audit.includes('unknown → auto (default rules)') && audit.includes('first seen (no earlier entry)'), 'first seen story', audit.slice(0, 900))
 
 await fetch('http://localhost:'+P+'/mock/member')
 await open('agents/alice')

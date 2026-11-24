@@ -356,6 +356,8 @@ const AUDIT = (() => {
     { time: iso(now - 20 * min), who: { sub: '', username: '', forgeUser: '' }, action: 'permission', agent: 'alice', result: 'ok', reason: 'spec.permission of the Agent object changed',
       before: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'dontAsk' } },
       after: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'auto', autoMode: { allow: ['Install dependencies declared in the repository'], softDeny: ['Deploy to production'], environment: [] } } } },
+    { time: iso(now - 50 * min), who: { sub: '', username: '', forgeUser: '' }, action: 'permission', agent: 'dave', result: 'ok', reason: 'first seen (no earlier entry)',
+      before: null, after: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'auto' } } },
     e(55, 'valentinalexeev', 'patch', 'carol', 'ok', { request: { paused: true }, before: st('acme/web', false), after: st('acme/web', true), grant: 'admin-group' }),
     e(80, 'mia', 'delete', 'gus', 'denied', { reason: 'needs admin access' }),
     e(140, 'lee', 'patch', 'alice', 'ok', { request: { maxConcurrent: 2 }, before: st('acme/shop-api', false, 1), after: st('acme/shop-api', false, 2), grant: 'repo-write' }),

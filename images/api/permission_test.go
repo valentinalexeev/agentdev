@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,7 +62,7 @@ func TestPermissionAudit(t *testing.T) {
 		t.Fatalf("got %d entries, want 1", len(es))
 	}
 	e := es[0]
-	if e.Result != "ok" || e.Before.Permission.Mode != "dontAsk" || e.Before.Permission.AutoMode != nil ||
+	if e.Result != "ok" || e.Before != nil || e.Reason != firstSeenReason ||
 		e.After.Permission.Mode != "auto" || e.After.Permission.AutoMode.Allow[0] != "Install dependencies" ||
 		e.After.Permission.AutoMode.SoftDeny[0] != "Deploy to production" || len(e.After.Permission.AutoMode.Environment) != 0 {
 		t.Fatalf("%+v", e)
@@ -138,5 +141,104 @@ func TestAgentDetailPermission(t *testing.T) {
 	}
 	if _, ok := get("writer", "alice")["permission"]; ok {
 		t.Fatal("a repository writer sees the permission rules")
+	}
+}
+
+// TestPermissionAuditTwoProcesses: two API processes (two caches) on one store record one change once.
+func TestPermissionAuditTwoProcesses(t *testing.T) {
+	m := &memAudit{}
+	withAuditDB(t, m)
+	old := auditOut
+	auditOut = io.Discard
+	t.Cleanup(func() { auditOut = old })
+	a, b := &permissionAudit{}, &permissionAudit{}
+	u := withPermission(agentObj("alice", "owner/x", false), autoPerm("x"))
+	var wg sync.WaitGroup
+	for _, p := range []*permissionAudit{a, b, a, b} {
+		wg.Add(1)
+		go func() { defer wg.Done(); p.observe(context.Background(), u.DeepCopy()) }()
+	}
+	wg.Wait()
+	if n := len(permEntries(t, m, "alice")); n != 1 {
+		t.Fatalf("first value: %d entries, want 1", n)
+	}
+	u2 := withPermission(agentObj("alice", "owner/x", false), autoPerm("x", "y"))
+	a.observe(context.Background(), u2)
+	b.observe(context.Background(), u2.DeepCopy())
+	es := permEntries(t, m, "alice")
+	if len(es) != 2 || len(es[1].Before.Permission.AutoMode.Allow) != 1 || len(es[1].After.Permission.AutoMode.Allow) != 2 {
+		t.Fatalf("%+v", es)
+	}
+}
+
+// TestPermissionAuditStdout: the AGENTDEV_AUDIT line has the mode, the rule counts and a sha256, never the rule text;
+// the stored entry keeps the full rules.
+func TestPermissionAuditStdout(t *testing.T) {
+	m := &memAudit{}
+	withAuditDB(t, m)
+	buf := &bytes.Buffer{}
+	old := auditOut
+	auditOut = buf
+	t.Cleanup(func() { auditOut = old })
+	p := &permissionAudit{}
+	p.observe(context.Background(), withPermission(agentObj("alice", "owner/x", false), autoPerm("SECRET-RULE-ONE")))
+	p.observe(context.Background(), withPermission(agentObj("alice", "owner/x", false), autoPerm("SECRET-RULE-TWO")))
+	out := buf.String()
+	if strings.Count(out, "AGENTDEV_AUDIT ") != 2 {
+		t.Fatalf("want 2 lines: %s", out)
+	}
+	if strings.Contains(out, "SECRET-RULE") || strings.Contains(out, "Deploy to production") {
+		t.Fatalf("rule text on stdout: %s", out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	var l struct {
+		Action string `json:"action"`
+		Before struct {
+			Permission struct {
+				Mode  string         `json:"mode"`
+				Rules map[string]any `json:"rules"`
+			} `json:"permission"`
+		} `json:"before"`
+		After struct {
+			Permission struct {
+				Mode  string         `json:"mode"`
+				Rules map[string]any `json:"rules"`
+			} `json:"permission"`
+		} `json:"after"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "AGENTDEV_AUDIT ")), &l); err != nil {
+		t.Fatal(err)
+	}
+	if l.Action != "permission" || l.After.Permission.Mode != "auto" || l.After.Permission.Rules["allow"] != float64(1) ||
+		len(l.After.Permission.Rules["sha256"].(string)) != 64 || l.Before.Permission.Rules["sha256"] == l.After.Permission.Rules["sha256"] {
+		t.Fatalf("%+v", l)
+	}
+	es := permEntries(t, m, "alice")
+	if len(es) != 2 || es[1].After.Permission.AutoMode.Allow[0] != "SECRET-RULE-TWO" {
+		t.Fatalf("stored entry lost the rules: %+v", es)
+	}
+}
+
+// TestPermissionAuditFirstSeen: no earlier entry (a pruned table, a restarted in-memory store) and a value other than
+// the default: before null, reason "first seen"; the default makes no entry.
+func TestPermissionAuditFirstSeen(t *testing.T) {
+	m := &memAudit{}
+	withAuditDB(t, m)
+	old := auditOut
+	auditOut = io.Discard
+	t.Cleanup(func() { auditOut = old })
+	p := &permissionAudit{}
+	p.observe(context.Background(), agentObj("bob", "owner/y", false))
+	if n := len(permEntries(t, m, "bob")); n != 0 {
+		t.Fatalf("default: %d entries", n)
+	}
+	p.observe(context.Background(), withPermission(agentObj("carol", "owner/z", false), map[string]any{"mode": "auto"}))
+	es := permEntries(t, m, "carol")
+	if len(es) != 1 || es[0].Before != nil || es[0].Reason != firstSeenReason || es[0].After.Permission.Mode != "auto" {
+		t.Fatalf("%+v", es)
+	}
+	raw, _ := m.ListAudit(context.Background(), auditFilter{Agent: "carol", Limit: 1})
+	if !strings.Contains(string(raw[0].Entry), `"before":null`) {
+		t.Fatal(string(raw[0].Entry))
 	}
 }

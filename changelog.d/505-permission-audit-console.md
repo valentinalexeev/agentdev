@@ -21,3 +21,8 @@ a restart writes no duplicate and a change made while the API was stopped is rec
 that always had the default (`dontAsk`, no rules) makes no entry. The API does not know who changed the object: the
 entry has no person; the Git history or the Kubernetes audit log names them. Editing stays in the Agent object
 (Ansible or Git).
+
+The store reads the last entry and inserts in one transaction with an advisory lock per agent, so two API
+processes write one entry. Without an earlier entry and with a value other than the default, the entry has
+`before: null` and the reason `first seen (no earlier entry)`. The container log line has the mode, rule counts and
+a sha256 of the rules only, never the rule text.

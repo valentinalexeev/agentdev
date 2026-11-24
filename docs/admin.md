@@ -206,7 +206,16 @@ Each change of `spec.permission` makes one entry in the audit log (#505): action
 new mode and rules in `before.permission` and `after.permission`. Open the **Audit** page and select the action
 `permission`, or do `curl -H "Authorization: Bearer <token>" "https://<api host>/api/audit?agent=<name>"`. The API
 does not know who changed the `Agent` object, so the entry has no person. Look in the Git history or the Kubernetes
-audit log for the person. The API records a change that happened while it was stopped when it starts again.
+audit log for the person. The API records a change that happened while it was stopped when it starts again. Two
+API processes write one entry for one change.
+
+If the audit log has no earlier `permission` entry of the agent, and the mode is not the default (`dontAsk` without
+rules), the entry has `before: null` and the reason `first seen (no earlier entry)`. This occurs for a new agent,
+after the retention removed the old entries, or after a restart of an API without a database. The console shows
+`unknown → <new mode>`.
+
+NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
+sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
 
 ### Set the poll interval
 

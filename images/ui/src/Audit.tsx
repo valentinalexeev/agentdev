@@ -14,8 +14,9 @@ const SINCE: [string, string][] = [['24h', '24 h'], ['168h', '7 days'], ['720h',
 const PAST: Record<string, string> = { pause: 'paused', resume: 'resumed', change: 'changed the settings of', create: 'created', delete: 'deleted' }
 
 function changes(e: AuditEntry): string {
+  // a permission entry with before null: first seen, the old value is not known (#505)
+  if (e.action === 'permission') return `${permissionText(e.before?.permission)} → ${permissionText(e.after?.permission)}`
   if (!e.before || !e.after) return ''
-  if (e.action === 'permission') return `${permissionText(e.before.permission)} → ${permissionText(e.after.permission)}`
   const out: string[] = []
   for (const k of ['maxConcurrent', 'scaleToZero', 'paused', 'repo'] as const) {
     if (e.before[k] !== e.after[k]) out.push(`${k} ${String(e.before[k])} → ${String(e.after[k])}`)
@@ -40,6 +41,7 @@ function PermissionStory({ e }: { e: AuditEntry }) {
     <span>
       The permission mode of {e.agent ? <AgentTag name={e.agent} /> : 'an agent'} changed in the Agent object
       <span className="agd-muted"> · {changes(e)}</span>
+      {e.reason && !e.before && <span className="agd-muted"> ({e.reason})</span>}
       {rules('Old', e.before)}
       {rules('New', e.after)}
     </span>
