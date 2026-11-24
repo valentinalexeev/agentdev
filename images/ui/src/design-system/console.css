@@ -368,12 +368,12 @@ a.agd-kpi:hover { border-color: var(--line-strong); }
 @media (prefers-reduced-motion: reduce) { .agd-working .agd-lamp-dot { animation: none; opacity: .5; } }
 
 /* Composer */
-.agd-composer { border-top: 1px solid var(--line); padding: var(--space-3) var(--space-5) var(--space-3); background: var(--panel); }
+.agd-composer { border-top: 1px solid var(--line); padding: var(--space-4) var(--space-5) var(--space-5); background: var(--panel); }
 .agd-composer-box { max-width: 760px; margin-inline: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--panel); display: flex; flex-direction: column; }
 .agd-composer-box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
 .agd-composer textarea { all: unset; box-sizing: border-box; width: 100%; min-height: 48px; max-height: 30vh; padding: var(--space-3); font: 400 15px/22px var(--font-sans); color: var(--ink); white-space: pre-wrap; overflow-y: auto; }
 .agd-composer textarea::placeholder { color: var(--ink-muted); }
-.agd-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
+.agd-composer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
 .agd-composer-bar .agd-btn { height: 30px; font-size: 13px; padding: 0 var(--space-3); }
 .agd-composer-bar .agd-btn-primary { margin-left: auto; }
 .agd-ctx { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--ground); font: 400 12px/16px var(--font-mono); color: var(--ink); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -389,7 +389,7 @@ a.agd-kpi:hover { border-color: var(--line-strong); }
   .agd-shell-fill .agd-main { padding-block: 0; }
   .agd-chat { border-radius: 0; border-inline: 0; margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); }
   .agd-thread-body { padding: var(--space-4) max(16px, env(safe-area-inset-right, 0px)) var(--space-3) max(16px, env(safe-area-inset-left, 0px)); }
-  .agd-composer { padding: var(--space-2) max(12px, env(safe-area-inset-right, 0px)) var(--space-2) max(12px, env(safe-area-inset-left, 0px)); }
+  .agd-composer { padding: var(--space-3) max(16px, env(safe-area-inset-right, 0px)) max(var(--space-3), env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
   .agd-thread-head { padding: var(--space-2) var(--space-3); }
   .agd-thread-actions { margin-left: 0; }
   .agd-msg-person .agd-msg-text { max-width: 92%; }
