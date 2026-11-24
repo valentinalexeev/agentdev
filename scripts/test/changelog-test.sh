@@ -124,5 +124,11 @@ check "gate: docs only passes" 0 "$(gate f4 'mkdir -p docs; echo x > docs/a.md')
 check "gate: Unreleased edit fails" 1 "$(gate f5 'sed -i.b "s/Existing fix/Edited fix/" CHANGELOG.md; rm CHANGELOG.md.b')"
 check "gate: edit of a released section passes" 0 "$(gate f6 'sed -i.b "s/^- Old\./- Old, fixed typo./" CHANGELOG.md; rm CHANGELOG.md.b')"
 check "gate: release branch may edit Unreleased" 0 "$(gate chore/release-1.1.0 'sed -i.b "s/Existing fix/Edited fix/" CHANGELOG.md; rm CHANGELOG.md.b')"
+# #510: the agent/<name>/ forms a sandboxed agent can push
+check "gate: agent release branch may edit Unreleased" 0 "$(gate agent/agentdev/release-1.1.0 'sed -i.b "s/Existing fix/Edited fix/" CHANGELOG.md; rm CHANGELOG.md.b')"
+check "gate: agent merge branch needs no fragment" 0 "$(gate agent/agentdev/merge-release-1.0-into-main 'echo y > b.go')"
+check "gate: merge/ branch needs no fragment" 0 "$(gate merge/release-1.0-into-main 'echo z > c.go')"
+check "gate: other agent branch still needs a fragment" 1 "$(gate agent/agentdev/issue-510 'echo w > d.go')"
+check "gate: release- deeper than agent/<name>/ is not exempt" 1 "$(gate agent/agentdev/x/release-1.1.0 'echo v > e.go')"
 
 exit "$fail"
