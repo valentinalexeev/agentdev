@@ -31,6 +31,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - agentdev-toolchains
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - agentdev-usage
   resources:
   - configmaps
@@ -84,6 +93,14 @@ rules:
   - ""
   resourceNames:
   - claude-proxy-signing
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resourceNames:
+  - egress-setup-proxy
   resources:
   - secrets
   verbs:
