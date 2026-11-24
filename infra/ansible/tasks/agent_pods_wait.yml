@@ -1,0 +1,22 @@
+---
+# Wait for the agent pods that are expected to run (#491). The operator sets an agent's StatefulSet to 0 replicas when
+# it is stopped, paused or blocked (scale to zero). Only agents with replicas above 0 are waited for; with none, the
+# wait is skipped, because k8s_info with wait and no matching pod waits its full timeout and then passes.
+# Input: agent_pods_wait_statefulsets (StatefulSets with label app=coding-agent). Used by deploy.yml and
+# tests/agent_pods_wait.yml.
+- name: Find the agents expected to run
+  ansible.builtin.set_fact:
+    agent_pods_wait_names: >-
+      {{ agent_pods_wait_statefulsets | selectattr('spec.replicas', 'defined')
+         | selectattr('spec.replicas', 'gt', 0) | map(attribute='metadata.labels.agent') | select | sort | list }}
+
+- name: Wait for the running agents
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Pod
+    namespace: "{{ agents_ns }}"
+    wait: true
+    wait_condition: {type: Ready, status: "True"}
+    wait_timeout: "{{ agent_pods_wait_timeout | default(600) }}"
+    label_selectors: ["app=coding-agent", "agent in ({{ agent_pods_wait_names | join(',') }})"]
+  when: agent_pods_wait_names | length > 0
