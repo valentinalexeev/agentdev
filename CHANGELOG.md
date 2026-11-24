@@ -6,6 +6,29 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.2.0-rc.4] - 2026-11-24
+
+### Fixed
+- **Redeploy on GKE no longer stops at the API restart when no Secret changed (#488).** `deploy.yml` failed at `api : Restart the API after a Secret change` with `'api_load' is undefined` on every
+  non-kind redeploy without a Secret change, and the roles after `api` did not run. The workaround
+  `api_load: {changed: false}` in `instance.yml` can be removed.
+- **The ingress smoke test finds the forwarder pods (#489).** The post-deploy smoke test built the label selector as the literal `key=value`, so it never found the forwarder pods
+  of `ingress.mode: external` and failed every deploy. It now uses one `key=value` per label of
+  `ingress.forwarder.pod_selector`. The workaround `ingress.smoke: false` can be removed.
+- **The GKE deploy no longer waits 600 s for agents that are stopped (#491).** `deploy.yml` waits only for the pods of agents whose StatefulSet has replicas above 0. When all agents are stopped
+  (scale to zero), the wait is skipped and the deploy goes on at once. Before, the task waited its full 600 s timeout
+  and then passed without a check. The router wait does not change.
+
+### Upgrade
+Not breaking. The three fixes are in the Ansible playbooks only. The images do not change in behaviour, and images
+and manifests do not have to move together.
+
+1. Set `agentdev_ref: v1.2.0-rc.4` and `image_tag: "1.2.0-rc.4"` in `instance.yml`, and `ref=v1.2.0-rc.4` in the
+   Terraform module source.
+2. Run the deploy (`infra/ansible/deploy.yml`) again.
+3. Optional: remove the workarounds `api_load: {changed: false}` (#488) and `ingress.smoke: false` (#489) from
+   `instance.yml`.
+
 ## [1.2.0-rc.3] - 2026-11-24
 
 ### Fixed
