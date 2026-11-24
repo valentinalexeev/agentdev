@@ -72,8 +72,10 @@ spec:
   step, the exit code and the last lines (reason `StepFailed`). The console shows it. A download or step failure is
   an operational event. A hash mismatch (D3) is a security event.
 - **Refresh.** An init container runs only at pod start, so `refresh` is part of the key (D3): the refresh epoch,
-  `floor(now / refresh)`, is hashed in. When the epoch changes, the operator updates the pod template annotation,
-  the pod restarts, and the toolchain is installed again. A change to the spec does the same at once.
+  `floor((now + offset) / refresh)`, is hashed in. `offset` is derived from a hash of the agent name, so agents do
+  not all refresh at the same moment. When the epoch changes, the operator updates the pod template annotation
+  only while the agent is idle (no job running), the same as other pod changes. The pod then restarts and the
+  toolchain is installed again. A change to the spec waits for idle in the same way.
 
 ### D3. Toolchain cache
 
@@ -86,23 +88,32 @@ Three layers. Each one is optional and falls back to the one below it.
    - **The agent container mounts `/state/toolchain` read-only**, as a separate `subPath` mount, and its `/state`
      read-write mount does not include it. The pod runs as one UID, so without the read-only mount Claude or the
      repository's code could rewrite `bin/go` and the next pod would trust it.
-   - As a second check, the init container records the SHA-256 of a manifest (every file path, mode and hash) in
-     `status.toolchain` and checks it on every start before it reuses the directory. A mismatch is a security event
-     and triggers a fresh install.
+   - As a second check, the init container compares the toolchain's manifest hash (the SHA-256 of every file path,
+     mode and hash) with the expected hash on every start, before it reuses the directory. The init container has no
+     Kubernetes API credential. It reports the hash in its termination message. The operator reads that, records it
+     in `status.toolchain`, and passes the expected hash back as an environment variable on the next pod. A mismatch
+     is a security event and triggers a fresh install.
+   - Every other container that mounts the agent PVC gets `/state/toolchain` read-only too: the forge sidecar, and
+     the chat Jobs that copy the agent pod.
    - The init container deletes old keys after a successful install.
    - A wake from scale-to-zero only verifies the manifest: no download and no install.
 
 2. **Shared toolchain store, per instance.** A content-addressed, write-once store of finished toolchain
    directories, keyed the same way. A new agent, a recreated PVC or a pod on another node unpacks the entry instead
    of running the steps.
-   - **Serving:** the operator serves entries over the cluster network (an `agentdev-toolchains` Service backed by
-     the operator). The init container therefore needs no cloud storage host in its egress, which removes the R97
-     exfiltration path a `storage.googleapis.com` rule would open. It is the same path on GKE and kind.
+   - **Serving:** the operator serves entries over the cluster network through an `agentdev-toolchains` Service
+     backed by the operator. It has two ports:
+     - a read-only port that agent pods' NetworkPolicy allows;
+     - an upload port that only build Jobs (by label and NetworkPolicy) can reach.
+     The init container therefore needs no cloud storage host in its egress, which removes the R97 exfiltration path
+     a `storage.googleapis.com` rule would open. It is the same path on GKE and kind.
    - **Backing storage:** a GCS bucket `<project>-toolchains` on GKE, written and read only by the operator's
      Workload Identity. On kind, a PVC of the operator. No agent pod can write to the store.
    - **Build:** on a cache miss the operator starts a build Job for that key. It runs the same image, the same init
      container shape and the setup proxy credential. It has no PVC shared with any agent, and no forge or Claude
-     credential. It streams the result to the operator.
+     credential. The operator mounts a single-use upload token in the Job, bound to that key. The Job streams the
+     result to the upload port with that token. Without a valid token, or above `toolchain_max_size` (default 2 GiB),
+     the upload is refused. So no other pod can be the first writer of a key.
    - **Integrity:** the operator computes the SHA-256 itself while it receives the entry, and stores it with the
      entry. The Job's own report is not trusted. A second upload under an existing key is refused (write-once). The
      init container checks the SHA-256 before unpacking. A mismatch is refused and is a security event.
@@ -153,7 +164,8 @@ with the same spec unpacks a cached entry in a few seconds. A wake of an existin
   - layer-1 poisoning: a write to `/state/toolchain` from the agent container fails, and a changed manifest is
     detected;
   - setup egress: the agent container cannot use the step hosts;
-  - store integrity: a hash mismatch and a second upload are refused;
+  - store integrity: a hash mismatch, a second upload, an upload without a token and an oversized upload are
+    refused, and an agent pod cannot reach the upload port;
   - R97 residual for step hosts.
 - **Docs:** admin.md "Give an agent a toolchain" (with the PVC size guidance), threat-model V6.
 
