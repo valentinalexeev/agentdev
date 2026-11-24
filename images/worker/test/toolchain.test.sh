@@ -83,6 +83,22 @@ run "$(specf "${sum}" | jq -c '.epoch = 7 | .presets[0].arch |= map_values(.url 
 check "a non-official download URL is refused" "[[ ${rc} != 0 && \$(rep message) == *'not the official download'* ]]"
 run "$(specf "${sum}" '1.0.0/../x' | jq -c '.epoch = 8')"; rc=$?
 check "a malformed version is refused" "[[ ${rc} != 0 && \$(rep message) == *malformed* ]]"
+# review of #537: rustup-init runs in the private temporary directory, not in a cwd the agent can write (a planted
+# rust-toolchain.toml), with RUSTUP_TOOLCHAIN pinned and inherited rustup overrides removed. The fake rustup-init
+# records what it sees and installs a cargo that prints its version.
+cat > "${tmp}/rustup-init" <<EOS
+#!/bin/sh
+{ echo "cwd=\$(pwd)"; echo "tc=\${RUSTUP_TOOLCHAIN:-}"; echo "dist=\${RUSTUP_DIST_SERVER:-}"; } > "${tmp}/rustup-seen"
+mkdir -p "\${CARGO_HOME}/bin"; printf '#!/bin/sh\necho cargo 1.85.0\n' > "\${CARGO_HOME}/bin/cargo"; chmod +x "\${CARGO_HOME}/bin/cargo"
+EOS
+rsum=$(sha256sum "${tmp}/rustup-init" | cut -d' ' -f1)
+rspec=$(jq -nc --arg s "${rsum}" '{v:1,image:"worker:test",epoch:9,path:[],presets:[{name:"rust",version:"1.85.0",arch:{
+  amd64:{url:"https://static.rust-lang.org/rustup/archive/1.29.3/x86_64-unknown-linux-gnu/rustup-init",sha256:$s},
+  arm64:{url:"https://static.rust-lang.org/rustup/archive/1.29.3/aarch64-unknown-linux-gnu/rustup-init",sha256:$s}}}]}')
+mkdir -p "${tmp}/agentcwd"; printf '[toolchain]\npath = "/evil"\n' > "${tmp}/agentcwd/rust-toolchain.toml"
+(cd "${tmp}/agentcwd" && RUSTUP_TOOLCHAIN=evil RUSTUP_DIST_SERVER=https://evil.test run "${rspec}"); rc=$?
+check "rustup-init runs in the private tmp dir with RUSTUP_TOOLCHAIN pinned, not in a planted cwd" \
+  "[[ ${rc} == 0 ]] && grep -qx 'cwd=${tmp}/t/rust' '${tmp}/rustup-seen' && grep -qx 'tc=1.85.0' '${tmp}/rustup-seen' && grep -qx 'dist=' '${tmp}/rustup-seen'"
 run 'not json'; rc=$?
 check "an invalid spec fails closed" "[[ ${rc} != 0 && \$(rep reason) == Invalid ]]"
 ln -s /etc "${TOOLCHAIN_DIR}/planted"

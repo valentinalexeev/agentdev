@@ -64,9 +64,15 @@ preset_rules() {
   esac
 }
 
-# keyless <cmd..>: run without the setup proxy credential and without any proxy (so without egress)
+# keyless [env options] <cmd..>: run without the setup proxy credential and without any proxy (so without egress)
 keyless() {
   env -u EGRESS_SETUP_KEY -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy -u ALL_PROXY -u all_proxy "$@"
+}
+
+# rustclean <cmd..>: run without inherited rustup and cargo settings (the caller sets the ones it wants)
+rustclean() {
+  env -u RUSTUP_HOME -u CARGO_HOME -u RUSTUP_TOOLCHAIN -u RUSTUP_DIST_SERVER -u RUSTUP_UPDATE_ROOT -u RUSTC \
+    -u RUSTC_WRAPPER -u CARGO_BUILD_RUSTC -u CARGO_BUILD_RUSTC_WRAPPER -u RUSTFLAGS "$@"
 }
 
 # install_preset <json> <dir>: download, check the pinned sha256, install under <dir>, verify
@@ -80,8 +86,9 @@ install_preset() {
   [[ -n "${url}" && "${sum}" =~ ^[0-9a-f]{64}$ ]] || { echo "${name}: no download for ${ARCH}"; return 1; }
   [[ "${url}" == "${url_ok}" ]] || { echo "${name}: ${url} is not the official download ${url_ok}"; return 1; }
   # the URL's file name: rustup-init decides what it is from its own name
-  mkdir -p "${TMPDIR:-/tmp}/${name}" || { echo "${name}: no temporary directory"; return 1; }
-  file="${TMPDIR:-/tmp}/${name}/${url##*/}"
+  local work="${TMPDIR:-/tmp}/${name}"
+  mkdir -p "${work}" || { echo "${name}: no temporary directory"; return 1; }
+  file="${work}/${url##*/}"
   curl -fsSL --proto '=https' --retry 3 -o "${file}" "${url}" || { echo "${name}: download failed: ${url}"; return 1; }
   echo "${sum}  ${file}" | sha256sum -c --status - || { echo "${name}: sha256 mismatch for ${url}"; return 1; }
   case "${kind}" in
@@ -89,12 +96,18 @@ install_preset() {
       mkdir -p "${dir}/${name}" && keyless tar -xzf "${file}" -C "${dir}/${name}" --strip-components=1 --no-same-owner || { echo "${name}: unpack failed"; return 1; };;
     rustup) # the official rustup-init (URL and sha256 checked above) with a pinned toolchain, profile minimal; homes
       # inside <dir>, no PATH changes. It fetches the toolchain from static.rust-lang.org through the setup proxy.
-      chmod +x "${file}" && RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" "${file}" -y --no-modify-path --profile minimal \
-        --default-toolchain "${version}" >&2 || { echo "${name}: rustup-init failed"; return 1; };;
+      # Review of #537: it runs in the private temporary directory (not /state, where a planted rust-toolchain.toml
+      # could select a path toolchain) with RUSTUP_TOOLCHAIN pinned and no inherited rustup or cargo overrides.
+      chmod +x "${file}" && (cd "${work}" && rustclean RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" \
+        RUSTUP_TOOLCHAIN="${version}" "${file}" -y --no-modify-path --profile minimal --default-toolchain "${version}") >&2 \
+        || { echo "${name}: rustup-init failed"; return 1; };;
   esac
   rm -f "${file}"
   local out
-  out=$(keyless PATH="${dir}/${bin}:${PATH}" RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" "${verify[@]}" 2>&1) \
+  out=$(cd "${work}" && keyless -u RUSTUP_HOME -u CARGO_HOME -u RUSTUP_TOOLCHAIN -u RUSTUP_DIST_SERVER -u RUSTUP_UPDATE_ROOT \
+    -u RUSTC -u RUSTC_WRAPPER -u CARGO_BUILD_RUSTC -u CARGO_BUILD_RUSTC_WRAPPER -u RUSTFLAGS \
+    PATH="${dir}/${bin}:${PATH}" RUSTUP_HOME="${dir}/rustup" CARGO_HOME="${dir}/cargo" \
+    RUSTUP_TOOLCHAIN="${version}" "${verify[@]}" 2>&1) \
     || { echo "${name}: verify '${verify[*]}' failed: ${out: -500}"; return 1; }
   echo "${name}: ${out}" >&2
 }
