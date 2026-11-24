@@ -384,8 +384,8 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
 A job is the work of an agent on one issue or one pull request. The proxy can stop a job that uses too many cost
 units (#196, #310). There are two limits per job:
 
-- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent writes
-  a comment "waiting for approval" with the source `cost` on its issue or pull request. One approval gives the job
+- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent adds
+  a request with the source `cost` to the approvals comment on its issue or pull request. One approval gives the job
   one more step of units (`CLAUDE_JOB_APPROVAL_STEP_UNITS`). Then the agent continues in the same Claude session.
 - The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
 

@@ -16,12 +16,14 @@ package main
 // On GitHub (#87) the calls go through the driver (GitHub API, installation token), the requester is the App bot and
 // the job check uses the label agent:<name>; the API decides and checks the issue/PR state as on Gitea. A void the sidecar cannot deliver (API unreachable,
 // 3 attempts) leaves the record pending until the pod-gone check; a pod that serves several jobs keeps it until restart.
-// The sidecar edits its forge comment on each change of state.
+// Forge comments (#523): one approvals comment for each job, a table of its requests, edited on each new request and
+// each change of state. A request goes to the forge only when Web Push reaches nobody who can decide it (the API's
+// GET /internal/approvals/{agent}/reach), or when the agent stopped waiting for it without a decision.
 //
 // A request is one line on stdout, `AGENTDEV_APPROVAL_REQUEST {json}`; the operator turns it into an Approval (it
-// trusts that line only from this container). The sidecar comments "waiting for approval <id>" on the job's issue or
-// PR, then polls agentdev-api's internal endpoint for the decision, which the API takes from the forge comments after
-// checking the commenter (images/api/approvals.go). The sidecar acts only on a decision for the content hash it
+// trusts that line only from this container). The sidecar lists it in the job's approvals comment (above), then polls
+// agentdev-api's internal endpoint for the decision, which the API takes from the console or from the forge comments
+// after checking the commenter (images/api/approvals.go). The sidecar acts only on a decision for the content hash it
 // computed itself, and fails closed: an error, a timeout or an unknown answer is a denial.
 
 import (
@@ -69,9 +71,18 @@ type approvalRequest struct {
 
 	secret    string // sent when reading the decision (X-Approval-Secret); never logged
 	fp        string // fingerprint: job + source + what is asked
-	commentID int64  // the "waiting for approval" comment, edited on each change of state
+	onForge   bool   // listed in the job's approvals comment
 	state     string // last known: pending | allowed | denied | void
+	status    string // last state text shown on the forge ("allowed by bob", "void: the job ended")
 	waitedOut bool   // the agent stopped waiting once (comment says so)
+}
+
+// jobComment is the one approvals comment on a job's issue or PR (#523): a table of the job's requests, edited on each
+// new request and each change of state. Gitea and GitHub send no notification for an edit.
+type jobComment struct {
+	mu   sync.Mutex // one post or edit at a time, in order
+	id   int64      // 0: not posted yet, or the post failed (the next change posts again)
+	reqs []*approvalRequest
 }
 
 // decision is the API's internal answer (GET {APPROVALS_URL}/internal/approvals/{agent}/{id}).
@@ -102,6 +113,7 @@ type approvals struct {
 	jobTools map[string]bool             // job + tool + exact input: allowed again in this job (allow_job)
 	reqs     map[string]*approvalRequest // fingerprint -> the one record of that request (pending or denied)
 	inflight map[string]chan struct{}    // fingerprint -> closed when the request being created for it is in reqs
+	jobs     map[string]*jobComment      // job -> its approvals comment; dropped when the job ends
 	voidWait time.Duration               // first pause between void attempts (doubles each time)
 	now      func() time.Time
 	selfID   int64  // the agent's forge account id, looked up once
@@ -115,7 +127,7 @@ func newApprovals(s *server, apiURL string, timeout time.Duration) *approvals {
 	}
 	return &approvals{s: s, apiURL: strings.TrimRight(apiURL, "/"), timeout: timeout, pushHold: hold, poll: 10 * time.Second,
 		jobTools: map[string]bool{}, reqs: map[string]*approvalRequest{}, inflight: map[string]chan struct{}{},
-		voidWait: 2 * time.Second, now: time.Now}
+		jobs: map[string]*jobComment{}, voidWait: 2 * time.Second, now: time.Now}
 }
 
 // secretRe matches common credential shapes; redact replaces them before the request text leaves the sidecar (forge
@@ -220,7 +232,7 @@ func (a *approvals) open(job, source, tool, input string, why why) (*approvalReq
 	eventMu.Lock()
 	fmt.Fprintf(eventOut, "%s%s\n", approvalPrefix, b)
 	eventMu.Unlock()
-	r.commentID = a.postComment(r.Job, a.commentBody(r, ""))
+	a.announce(r)
 	return r, nil
 }
 
@@ -343,6 +355,74 @@ func (a *approvals) codeList(xs []string) string {
 	return strings.Join(out, ", ")
 }
 
+// announce shows a new request on the forge, unless Web Push brings it to a person who can decide it (#523). Once a
+// job has its approvals comment, every later request of the job is listed there too: an edit notifies nobody.
+func (a *approvals) announce(r *approvalRequest) {
+	a.mu.Lock()
+	listed := a.jobs[r.Job] != nil
+	a.mu.Unlock()
+	if !listed && a.pushReaches(r) {
+		a.s.logf("approval %s: sent by Web Push, no forge comment", r.ID)
+		return
+	}
+	a.show(r)
+}
+
+// pushReaches asks the API whether Web Push brings a new request to a person who can decide it (#523). Any error, or
+// an API without the endpoint (an older release, or Web Push off), is false: the request goes to the forge.
+func (a *approvals) pushReaches(r *approvalRequest) bool {
+	q := url.Values{"repo": {r.Repo}, "forge": {r.Forge}, "source": {r.Source}}
+	u := fmt.Sprintf("%s/internal/approvals/%s/reach?%s", a.apiURL, url.PathEscape(a.s.c.AgentName), q.Encode())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := a.s.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Push bool `json:"push"`
+	}
+	return resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&out) == nil && out.Push
+}
+
+// show adds r to its job's approvals comment, posting the comment if the job has none yet.
+func (a *approvals) show(r *approvalRequest) {
+	a.mu.Lock()
+	if r.onForge {
+		a.mu.Unlock()
+		return
+	}
+	r.onForge = true
+	jc := a.jobs[r.Job]
+	if jc == nil {
+		jc = &jobComment{}
+		a.jobs[r.Job] = jc
+	}
+	jc.reqs = append(jc.reqs, r)
+	a.mu.Unlock()
+	a.sync(r.Job, jc)
+}
+
+// sync writes the current table of jc to the forge: a new comment the first time, an edit after that.
+func (a *approvals) sync(job string, jc *jobComment) {
+	jc.mu.Lock()
+	defer jc.mu.Unlock()
+	body := a.commentBody(jc)
+	if jc.id == 0 {
+		jc.id = a.postComment(job, body)
+		return
+	}
+	if err := a.forgeSend(http.MethodPatch, fmt.Sprintf("/repos/%s/issues/comments/%d", a.s.c.Repos[0], jc.id),
+		map[string]string{"body": body}, nil); err != nil {
+		a.s.logf("approvals comment on %s: edit: %v", job, err)
+	}
+}
+
 func clip(s string, n int) string {
 	if len(s) > n {
 		return s[:n]
@@ -459,35 +539,97 @@ func (a *approvals) ownJob(job string) error {
 	return nil
 }
 
-// commentBody is the forge comment of a request in its current state. The request text is quoted in a code block.
-func (a *approvals) commentBody(r *approvalRequest, status string) string {
-	fence := codeFence(r.Input)
-	head := fmt.Sprintf("🤖 agent `%s`: **waiting for approval** `%s`", a.s.c.AgentName, r.ID)
-	if status != "" {
-		head = fmt.Sprintf("🤖 agent `%s`: approval `%s` **%s**", a.s.c.AgentName, r.ID, status)
+const (
+	maxClosedRows = 50    // closed requests shown in the table; older ones are counted
+	maxCommentLen = 60000 // below the GitHub limit (65536); a longer request text is left to the console
+)
+
+// unsafeToolRe: characters not shown of a tool name (the name comes from the agent).
+var unsafeToolRe = regexp.MustCompile(`[^A-Za-z0-9_.:-]`)
+
+// cell makes a text safe for one table cell: no line break, pipe, backtick or HTML.
+func cell(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ", "|", "/", "`", "'", "<", "(", ">", ")").Replace(s)
+}
+
+// commentBody is the job's approvals comment (#523): one table row for each request, then the text of each waiting
+// request in a code block, then the instructions in <details>. A closed request is one row.
+func (a *approvals) commentBody(jc *jobComment) string {
+	a.mu.Lock()
+	reqs := make([]approvalRequest, 0, len(jc.reqs))
+	closed := 0
+	for _, r := range jc.reqs {
+		reqs = append(reqs, *r)
+		if r.state != "pending" {
+			closed++
+		}
 	}
-	body := fmt.Sprintf("%s (%s `%s`)\n\n%s\n%s\n%s\n\n", head, r.Source, r.Tool, fence, r.Input, fence)
-	if r.Guard != "" {
-		body += "**Why it asks** (checked by agentdev): " + r.Guard + "\n\n"
+	a.mu.Unlock()
+	var b strings.Builder
+	fmt.Fprintf(&b, "🤖 agent `%s`: approval requests of this job. This comment is edited on each change.\n\n", a.s.c.AgentName)
+	if hidden := closed - maxClosedRows; hidden > 0 {
+		fmt.Fprintf(&b, "%d older closed requests are not shown here. The console (Approvals) shows them.\n\n", hidden)
 	}
-	if r.Reason != "" {
-		rf := codeFence(r.Reason)
-		body += fmt.Sprintf("**Reason given by Claude Code and the agent** (not checked):\n\n%s\n%s\n%s\n\n", rf, r.Reason, rf)
+	b.WriteString("| Request | Type | State |\n|---|---|---|\n")
+	skip := closed - maxClosedRows
+	var waiting []approvalRequest
+	for _, r := range reqs {
+		state := cell(r.status)
+		switch {
+		case r.state == "pending" && r.waitedOut:
+			state = "**waiting** (the agent continued without it)"
+		case r.state == "pending":
+			state = "**waiting**"
+		case skip > 0:
+			skip--
+			continue
+		}
+		if r.state == "pending" {
+			waiting = append(waiting, r)
+		}
+		fmt.Fprintf(&b, "| `%s` | %s `%s` | %s |\n", r.ID, r.Source, unsafeToolRe.ReplaceAllString(r.Tool, "_"), state)
 	}
-	if status != "" && !strings.HasPrefix(status, "still open") {
-		return body + "This request is closed. A decision comment on it has no effect."
+	if len(waiting) == 0 {
+		b.WriteString("\nNo request waits. A decision comment on a closed request has no effect.")
+		return b.String()
 	}
-	if r.Source == "cost" { // #310: one step of cost units for this job; approve-job counts as approve
-		return body + fmt.Sprintf("The job reached its cost limit. A person with write access to this repository can answer "+
-			"with one of these comments:\n- `/approve %s`: allow one more step of cost units for this job\n- `/deny %s`: stop "+
-			"the job\n\nThe agent waits %d minutes, then the job stops as failed.", r.ID, r.ID, r.TimeoutSec/60)
+	for _, r := range waiting {
+		fmt.Fprintf(&b, "\n**`%s`** (%s `%s`). This text comes from the agent and is not checked:\n\n", r.ID, r.Source,
+			unsafeToolRe.ReplaceAllString(r.Tool, "_"))
+		if b.Len()+len(r.Input) > maxCommentLen {
+			b.WriteString("The text is too long for this comment. The console (Approvals) shows it.\n")
+			continue
+		}
+		fence := codeFence(r.Input)
+		fmt.Fprintf(&b, "%s\n%s\n%s\n", fence, r.Input, fence)
+		// #503: why it asks (from the sidecar) and the reason of Claude Code and the agent (untrusted, cleaned)
+		if r.Guard != "" {
+			fmt.Fprintf(&b, "\n**Why it asks** (checked by agentdev): %s\n", r.Guard)
+		}
+		if r.Reason != "" && b.Len()+len(r.Reason) <= maxCommentLen {
+			rf := codeFence(r.Reason)
+			fmt.Fprintf(&b, "\n**Reason given by Claude Code and the agent** (not checked):\n\n%s\n%s\n%s\n", rf, r.Reason, rf)
+		}
 	}
-	return body + fmt.Sprintf("A person with write access to this repository can answer with one of these comments:\n"+
-		"- `/approve %s`: allow once\n- `/approve-job %s`: allow exactly this request again until the job ends "+
-		"(the same tool with the same input; any other input asks again)\n- `/deny %s`: deny\n\n"+
-		"The agent waits %d minutes, then continues without it. The request stays open until it is decided, the job "+
-		"ends or a newer request replaces it; asking again uses this request. The text above comes from the agent "+
-		"and is not checked.", r.ID, r.ID, r.ID, r.TimeoutSec/60)
+	b.WriteString("\n<details><summary>How to decide</summary>\n\nA person with write access to this repository can " +
+		"decide in the console (Approvals), or answer with one comment for each request:\n\n")
+	cost := false
+	for _, r := range waiting {
+		if r.Source == "cost" { // #310: one step of cost units for this job; approve-job counts as approve
+			cost = true
+			fmt.Fprintf(&b, "- `/approve %s`: allow one more step of cost units for this job\n- `/deny %s`: stop the job\n", r.ID, r.ID)
+			continue
+		}
+		fmt.Fprintf(&b, "- `/approve %s`: allow once\n- `/approve-job %s`: allow exactly this request again until the "+
+			"job ends (the same tool with the same input; any other input asks again)\n- `/deny %s`: deny\n", r.ID, r.ID, r.ID)
+	}
+	fmt.Fprintf(&b, "\nThe agent waits %d minutes, then continues without it.", int(a.timeout.Minutes()))
+	if cost {
+		b.WriteString(" A request at the cost limit then stops the job as failed.")
+	}
+	b.WriteString(" A request stays open until it is decided, the job ends or a newer request replaces it. Asking " +
+		"again uses the same request. A decision comment on a closed request has no effect.\n\n</details>")
+	return b.String()
 }
 
 // codeFence returns a backtick fence longer than any run of backticks in s, so s cannot close it.
@@ -541,21 +683,23 @@ func (a *approvals) postComment(job, body string) int64 {
 	return c.ID
 }
 
-// setState records a new state and edits the request's comment (once per state).
+// setState records a new state and edits the job's approvals comment (once per state). A request sent by Web Push
+// only goes to the forge when the agent stopped waiting for it: nobody decided in time (#523).
 func (a *approvals) setState(r *approvalRequest, state, status string) {
 	a.mu.Lock()
 	changed := r.state != state || (state == "pending" && !r.waitedOut)
-	r.state = state
+	r.state, r.status = state, status
 	if state == "pending" {
 		r.waitedOut = true
 	}
+	onForge, jc := r.onForge, a.jobs[r.Job]
 	a.mu.Unlock()
-	if !changed || r.commentID == 0 {
-		return
-	}
-	if err := a.forgeSend(http.MethodPatch, fmt.Sprintf("/repos/%s/issues/comments/%d", a.s.c.Repos[0], r.commentID),
-		map[string]string{"body": a.commentBody(r, status)}, nil); err != nil {
-		a.s.logf("approval %s: edit comment: %v", r.ID, err)
+	switch {
+	case !changed:
+	case !onForge && state == "pending":
+		a.show(r)
+	case onForge && jc != nil:
+		a.sync(r.Job, jc)
 	}
 }
 
@@ -634,6 +778,9 @@ func (a *approvals) jobDone(w http.ResponseWriter, r *http.Request) {
 	for _, q := range open {
 		a.void(q, "the job ended")
 	}
+	a.mu.Lock()
+	delete(a.jobs, job) // a later run of the same issue or PR posts a new comment
+	a.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
