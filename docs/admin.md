@@ -67,7 +67,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -223,6 +223,58 @@ a repository that need it.
 NOTE: The entries come from the `Agent` object only. The repository and the issue text cannot change them. The
 operator refuses an `Agent` with an invalid entry (phase `invalid`). An agent without entries has no
 `CLAUDE_TOOLS_EXTRA`, so its pod does not restart on upgrade.
+
+### Give an agent a toolchain
+
+An agent can get a language toolchain that the worker image does not have, for example Go or Rust (#499). agentdev
+installs it before the agent starts, and the agent can use it but not change it.
+
+- The presets and their versions are in the operator (`images/operator/toolchain.go`). Each download has a pinned
+  SHA-256. A new version is an agentdev release.
+- The init container `toolchain` installs the toolchain into `/state/toolchain` on the agent volume. The agent
+  container mounts that directory read-only, and gets it on its search path.
+- A wake only checks the installed files. A change of the toolchain, of the worker image or of the refresh period
+  installs again, after the running jobs end.
+- The commands of the preset (for example `go mod`, `cargo build`) are added to the tool allow-list of the agent.
+
+| Preset | Versions | Download hosts | Agent environment |
+|--------|----------|----------------|-------------------|
+| `go` | 1.27.4, 1.26.11 | `dl.google.com` | `GOTOOLCHAIN=local`, `GOPATH` and `GOMODCACHE` under `/state/cache/go` |
+| `rust` | 1.100.0 (rustup, profile minimal) | `static.rust-lang.org` | `RUSTUP_HOME` read-only, `CARGO_HOME=/state/cache/cargo` |
+
+1. On `kind`: set `kind_agents_toolchain` for the agent, for example `{alice: {presets: {go: "1.27.4"}}}`.
+   On GKE: set `agents[].toolchain` for the agent, for example `{presets: {go: "1.27.4", rust: "1.100.0"}}`.
+   In Git mode: set `spec.toolchain` in the `Agent` manifest.
+2. Optional: set `refresh`, for example `168h` (at least `1h`), to install again regularly. Each agent has its own
+   offset, so the agents do not all install at the same time.
+3. Optional: add `path` entries below `$TOOLCHAIN`, for example `$TOOLCHAIN/go/bin`.
+4. Make sure the agent volume is large enough (see below).
+5. Deploy again.
+6. Do the command `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.toolchain}'` to see the result.
+   `reason` is `Installed` or `Verified` when the toolchain is ready.
+
+**Disk.** The toolchain and the caches are on the agent volume (`AGENT_STATE_STORAGE`, default 10 GiB):
+
+| Toolchain | Toolchain size | Caches (modules, build) | Volume |
+|-----------|----------------|-------------------------|--------|
+| Go | about 250 MB | 1 to 3 GB | 10 GiB is enough |
+| Rust | about 550 MB | 2 to 6 GB (`CARGO_HOME`, `target/`) | 20 GiB or more |
+
+A new size applies to new agents. To grow the volume of an existing agent, resize its PVC `state-agent-<name>-0`
+(the StorageClass must allow volume expansion).
+
+**When the install fails.** The pod stays in `Init`, so the agent does not run without its toolchain.
+`status.toolchain.reason` is `StepFailed` (a download, a checksum or the check of the toolchain failed) or `Invalid`
+(for example a symbolic link in `/state/toolchain`). `message` has the details. Do the command
+`kubectl -n coding-agents logs agent-<name>-0 -c toolchain` to see the full output.
+
+WARNING: A `Reinstalled` reason means that the installed files changed since the last start. The operator records
+a high-severity security event `toolchain-manifest`. Find out what changed it (see "Find the security events of an
+agent").
+
+NOTE: The download hosts are open only for the init container, with the credential `egress-setup-proxy` (generated
+by the playbook, or by Terraform with `external_secrets`). The agent container cannot use them. The toolchain comes
+from the `Agent` object only. The repository and the issue text cannot change it.
 
 ### Set the poll interval
 

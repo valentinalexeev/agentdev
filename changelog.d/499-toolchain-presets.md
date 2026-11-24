@@ -2,7 +2,7 @@
 issue: 499
 type: feature
 section: Added
-status: in-progress
+status: done
 breaking: false
 title: Per-agent toolchain presets (go, rust) installed read-only before the agent starts
 components: [operator, worker]

@@ -285,3 +285,83 @@ func TestChatJobAdmission(t *testing.T) {
 		}
 	}
 }
+
+// #499: an agent with a toolchain has the init container toolchain with its own setup proxy key, and chat and forge
+// mount /state/toolchain read-only. Anything that weakens that is refused.
+func TestChatJobAdmissionToolchain(t *testing.T) {
+	pol := chatPolicy(t)
+	if f := admit(t, pol, chatJobFor(t, "toolchain")); len(f) != 0 {
+		t.Fatalf("the chat Job of an agent with a toolchain is refused: %v", f)
+	}
+	init := func(p *corev1.PodSpec, n string) *corev1.Container {
+		for i := range p.InitContainers {
+			if p.InitContainers[i].Name == n {
+				return &p.InitContainers[i]
+			}
+		}
+		t.Fatalf("no init container %s", n)
+		return nil
+	}
+	cases := []struct {
+		name string
+		mut  func(*corev1.PodSpec)
+	}{
+		{"another agent's setup key", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if r := c.Env[i].ValueFrom; r != nil && r.SecretKeyRef != nil {
+					r.SecretKeyRef.Name = "agent-bob-setup-proxy"
+				}
+			}
+		}},
+		{"the setup key in the chat container", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "K", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-alice-setup-proxy"}, Key: "password"}}})
+		}},
+		{"the forge token in toolchain", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "T", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-alice"}, Key: "token"}}})
+		}},
+		{"another agent's toolchain hash", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if r := c.Env[i].ValueFrom; r != nil && r.ConfigMapKeyRef != nil {
+					r.ConfigMapKeyRef.Key = "bob"
+				}
+			}
+		}},
+		{"toolchain as root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.RunAsUser = ptr(int64(0)) }},
+		{"toolchain with a writable root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.ReadOnlyRootFilesystem = ptr(false) }},
+		{"toolchain with another image", func(p *corev1.PodSpec) { init(p, "toolchain").Image = "busybox:latest" }},
+		{"two toolchain init containers", func(p *corev1.PodSpec) {
+			p.InitContainers = append(p.InitContainers, *init(p, "toolchain").DeepCopy())
+		}},
+		{"/state/toolchain writable in chat", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			for i := range c.VolumeMounts {
+				if c.VolumeMounts[i].MountPath == "/state/toolchain" {
+					c.VolumeMounts[i].ReadOnly = false
+				}
+			}
+		}},
+		{"no /state/toolchain mount in forge", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "forge")
+			ms := c.VolumeMounts[:0]
+			for _, m := range c.VolumeMounts {
+				if m.MountPath != "/state/toolchain" {
+					ms = append(ms, m)
+				}
+			}
+			c.VolumeMounts = ms
+		}},
+	}
+	for _, tc := range cases {
+		j := chatJobFor(t, "toolchain")
+		tc.mut(&j.Spec.Template.Spec)
+		if f := admit(t, pol, j); len(f) == 0 {
+			t.Errorf("admitted: %s", tc.name)
+		}
+	}
+}
