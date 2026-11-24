@@ -91,6 +91,10 @@ func (s *pgStore) ListAudit(ctx context.Context, f auditFilter) ([]auditRecord, 
 	return out, rows.Err()
 }
 
+// afterPermissionRead is a test hook (nil in production): TestPgAudit pauses here to widen the race window between
+// the read of the newest row and the insert.
+var afterPermissionRead func()
+
 // RecordPermission: a transaction-scoped advisory lock per agent (the pattern of Insert in events.go) serialises the
 // read of the newest "permission" row and the insert, so two API processes that see the same change write one entry.
 func (s *pgStore) RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
@@ -107,6 +111,9 @@ func (s *pgStore) RecordPermission(ctx context.Context, agent string, cur *agent
 		agent, permissionAction).Scan(&last)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, err
+	}
+	if afterPermissionRead != nil {
+		afterPermissionRead()
 	}
 	e := permissionEntry(agent, last, cur)
 	if e == nil {

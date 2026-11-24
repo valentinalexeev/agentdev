@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -117,6 +118,40 @@ func TestPgAudit(t *testing.T) {
 	if pe, _, err := su.RecordPermission(ctx, "pgperm", &agentPermission{Mode: "dontAsk"}); err != nil || pe == nil ||
 		pe.Before.Permission.Mode != "auto" {
 		t.Fatal(pe, err)
+	}
+	// concurrent processes: 8 callers with the same new value at once make exactly one row. The hook holds each
+	// transaction after its read, so without the lock all 8 would read "no row" and insert.
+	afterPermissionRead = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { afterPermissionRead = nil })
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		stored  int
+		callErr error
+	)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pe, _, err := su.RecordPermission(ctx, "pgrace", &agentPermission{Mode: "auto"})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				callErr = err
+			}
+			if pe != nil {
+				stored++
+			}
+		}()
+	}
+	wg.Wait()
+	afterPermissionRead = nil
+	var rows int
+	if err := su.db.QueryRow(ctx, `SELECT count(*) FROM api_audit WHERE agent = 'pgrace' AND action = 'permission'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if callErr != nil || stored != 1 || rows != 1 {
+		t.Fatalf("concurrent RecordPermission: err %v, %d returned an entry, %d rows; want 1 and 1", callErr, stored, rows)
 	}
 	// even the superuser cannot change a row inside the retention (trigger)
 	for _, q := range []string{`UPDATE api_audit SET result='x'`, `DELETE FROM api_audit`} {
