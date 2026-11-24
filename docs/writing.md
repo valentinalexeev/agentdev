@@ -111,7 +111,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
+| init container | a container of a pod that runs to its end before the other containers start |
 | instance | one installation of agentdev |
+| toolchain | the tools that the operator installs for one agent before the agent starts (#499) |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |

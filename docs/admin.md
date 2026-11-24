@@ -67,7 +67,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero`, `spec.toolchain` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -172,6 +172,54 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
 
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
+
+### Install tools for one agent (toolchain)
+
+The worker image has no Go, no C compiler, no `make` and no Rust (#499). A toolchain installs more tools for one
+agent. The operator runs the steps in the init container `toolchain` before the agent starts. The init container
+uses the worker image and runs as UID 1000. It has the egress proxy, but no forge credential and no Claude
+credential. The tools go to `/state/toolchain` on the volume of the agent, so a wake does not install them again.
+
+The fields of `spec.toolchain` in the Agent (or `agents[].toolchain` in `instance.yml`) are:
+
+| Field | Meaning |
+|---|---|
+| `steps[].name` | The name of the step, a DNS label. |
+| `steps[].run` | The command, as a list of arguments. There is no shell; use `["sh", "-c", "..."]` for one. |
+| `steps[].verify` | Optional. A command that shows the tool version. A failure of this command fails the step. |
+| `steps[].timeoutSeconds` | Optional. The time limit of `run` and `verify` together. The default is 600, the maximum is 3600. |
+| `path` | Optional. Directories below `/state/toolchain` that go first in the `PATH` of the agent. |
+| `refresh` | Optional. After this time (for example `24h`), the next start of the pod runs the steps again. |
+| `failurePolicy` | `Fail` (the default): a failed step stops the start of the pod. `Continue`: the agent starts. |
+
+The operator runs the steps again when the steps or `path` change, or when a step failed at the last start.
+
+WARNING: The steps run with the egress proxy. Each step can run code from the internet, for example the install
+scripts of packages. Use only steps that you trust. Never copy steps from the repository or from issue text.
+
+1. On GKE: add `toolchain` to the agent in `instance.yml`. For example:
+
+   ```yaml
+   agents:
+     - name: alice
+       repos: owner/repo
+       toolchain:
+         steps:
+           - name: go
+             run: ["sh", "-c", "curl -fsSL https://go.dev/dl/go1.26.11.linux-amd64.tar.gz | tar -C /state/toolchain -xz"]
+             verify: ["/state/toolchain/go/bin/go", "version"]
+         path: ["/state/toolchain/go/bin"]
+         refresh: 24h
+   ```
+
+   On `kind`: add `spec.toolchain` to the Agent with `kubectl edit agent alice -n coding-agents`.
+2. Add each host of the steps to `egress_extra_hosts` (for example `go.dev` and `dl.google.com`).
+3. Deploy again.
+4. Make sure that the setup is correct: `kubectl logs agent-alice-0 -c toolchain -n coding-agents`.
+   The result of each step is also in `/state/toolchain/status.json` of the agent.
+
+NOTE: A failed step with `failurePolicy: Fail` keeps the pod in `Init:Error`. Read the log of the `toolchain`
+container, correct the step, and deploy again.
 
 ### Set the poll interval
 

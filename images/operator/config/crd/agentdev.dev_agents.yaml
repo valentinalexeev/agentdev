@@ -107,6 +107,75 @@ spec:
                   Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
                   Default true (#181): an Agent without the field scales to zero; set false to keep it running.
                 type: boolean
+              toolchain:
+                description: |-
+                  Tools to install for this agent (#499), in an init container of the worker image before the agent starts. No
+                  toolchain: no setup container (the earlier behaviour).
+                properties:
+                  failurePolicy:
+                    default: Fail
+                    description: |-
+                      Fail: a failed step stops the pod start, so the agent never works with a broken toolchain. Continue: the agent
+                      starts; the result is in the setup container's log and /state/toolchain/status.json.
+                    enum:
+                    - Fail
+                    - Continue
+                    type: string
+                  path:
+                    description: Directories put in front of PATH in the agent
+                      container, below /state/toolchain.
+                    items:
+                      pattern: ^/state/toolchain(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$
+                      type: string
+                    maxItems: 20
+                    type: array
+                  refresh:
+                    description: |-
+                      Run the steps again after this time, at the next pod start (wake). Go duration, for example 24h. Unset: only
+                      when the steps change or a step failed.
+                    pattern: ^([0-9]+(\.[0-9]+)?(h|m|s))+$
+                    type: string
+                  steps:
+                    description: Commands, in order. A step runs in /state/toolchain
+                      with HOME=/state/toolchain/home.
+                    items:
+                      description: ToolchainStep is one setup command (#499).
+                        Commands are argument lists, run without a shell (use
+                        sh -c for one).
+                      properties:
+                        name:
+                          maxLength: 40
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        run:
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                        timeoutSeconds:
+                          description: 'Time limit of Run plus Verify. 0 or unset:
+                            600.'
+                          format: int32
+                          maximum: 3600
+                          minimum: 1
+                          type: integer
+                        verify:
+                          description: Command whose first output line is recorded
+                            as the tool version, run after Run; a failure fails
+                            the step.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - name
+                      - run
+                      type: object
+                    maxItems: 20
+                    minItems: 1
+                    type: array
+                required:
+                - steps
+                type: object
             required:
             - claudeSecret
             - repo

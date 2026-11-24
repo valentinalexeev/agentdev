@@ -55,6 +55,54 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+	// Tools to install for this agent (#499), in an init container of the worker image before the agent starts. No
+	// toolchain: no setup container (the earlier behaviour).
+	// +optional
+	Toolchain *Toolchain `json:"toolchain,omitempty"`
+}
+
+// Toolchain is the per-agent setup phase (#499). The steps run as UID 1000 with the worker image's own tools (npm,
+// python3, curl + tar, ...) and install into /state/toolchain on the agent's volume, so a wake does not repeat them.
+// The setup container has the egress proxy but no forge or Claude credential. Administrators set it (Agent object,
+// instance.yml), never the repository or issue text.
+type Toolchain struct {
+	// Commands, in order. A step runs in /state/toolchain with HOME=/state/toolchain/home.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=20
+	Steps []ToolchainStep `json:"steps"`
+	// Directories put in front of PATH in the agent container, below /state/toolchain.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:Pattern=`^/state/toolchain(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$`
+	// +optional
+	Path []string `json:"path,omitempty"`
+	// Run the steps again after this time, at the next pod start (wake). Go duration, for example 24h. Unset: only
+	// when the steps change or a step failed.
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(h|m|s))+$`
+	// +optional
+	Refresh string `json:"refresh,omitempty"`
+	// Fail: a failed step stops the pod start, so the agent never works with a broken toolchain. Continue: the agent
+	// starts; the result is in the setup container's log and /state/toolchain/status.json.
+	// +kubebuilder:validation:Enum=Fail;Continue
+	// +kubebuilder:default=Fail
+	// +optional
+	FailurePolicy string `json:"failurePolicy,omitempty"`
+}
+
+// ToolchainStep is one setup command (#499). Commands are argument lists, run without a shell (use sh -c for one).
+type ToolchainStep struct {
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=40
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinItems=1
+	Run []string `json:"run"`
+	// Command whose first output line is recorded as the tool version, run after Run; a failure fails the step.
+	// +optional
+	Verify []string `json:"verify,omitempty"`
+	// Time limit of Run plus Verify. 0 or unset: 600.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
 // AgentStatus is observed state, written by the operator only.
