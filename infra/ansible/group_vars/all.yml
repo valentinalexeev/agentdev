@@ -162,7 +162,7 @@ obs_mcp:
   rate_burst: 10
 approvals:                          # #67: agents ask a project member on the forge (docs/security-model.md)
   enabled: true                     # default on GKE (the API is expected there); needs api.oidc_issuer (#115),
-                                    # deploy.yml checks it. kind keeps APPROVALS=false (config.env): no API by default
+                                    # deploy.yml checks it. kind keeps it false (kind.yml, kind.vars.yml): no API by default
   timeout_minutes: 30               # no decision in this time: denied (expired)
   retention_days: 90                # Approval objects; decisions stay in the audit log
 rollout:                            # #174: upgrades while agents work (docs/admin.md, Upgrade an instance)

@@ -116,7 +116,7 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 
 Status: **implemented** in #65, pending an e2e pass on GKE. As built:
 
-- `manifests/egress.yaml.tmpl` (rendered by `06-agents.sh` and the Ansible playbook) holds a Squid forward proxy
+- `manifests/egress.yaml.tmpl` (rendered by the Ansible playbooks `kind.yml` and `deploy.yml`) holds a Squid forward proxy
   (`egress-proxy`, pinned `ubuntu/squid` image, non-root, read-only root) and the NetworkPolicy `agent-egress`. Agent
   pods may connect only to DNS, the proxy, the webhook router, the in-cluster forge (Gitea, kind), botboard and
   ContextForge. The internet, the metadata server and every other cluster service are denied.
@@ -632,7 +632,7 @@ restarted container keeps its pod UID and name, so the position carries over, bu
 current instance: lines the old instance wrote after the operator's last read are not read again. They remain in the
 cluster log pipeline (the log line is the source of truth); this gap is accepted for #70.
 
-**Postgres roles.** `10-api.sh` creates `agentdev_owner` (no login), which owns the database, `security_events`,
+**Postgres roles.** The Ansible role `api` creates `agentdev_owner` (no login), which owns the database, `security_events`,
 `security_settings` (the retention, set from `SECURITY_DB_RETENTION_DAYS`) and `security_events_prune()`. The API logs
 in as `agentdev_api`, which has only `INSERT` and `SELECT` on `security_events` and `EXECUTE` on the prune function
 (`images/api/grants.sql`). The prune function is `SECURITY DEFINER`, takes no argument and deletes only rows past the

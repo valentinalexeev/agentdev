@@ -1,0 +1,114 @@
+# Settings of the kind playbook (#417): they replace the config.env values that run.sh and the step scripts passed
+# with -e. Copy this file to kind.vars.yml in the repository root (gitignored), change what you need, and pass it:
+#   ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml [--tags <step>]
+# Every value below is the default; remove a line to keep it. The comment names the former config.env variable.
+# Secrets are never here: FORGE_ADMIN_PASSWORD, the Claude API key and the OAuth token stay in the environment
+# (set -a; source .env; set +a) or in .secrets/. scripts/ still read config.env: keep the namespaces the same there.
+
+# ---- shared by several steps (play variables of kind.yml) ----
+kind_cluster_name: agentdev                   # CLUSTER_NAME
+kind_engine: docker                           # CONTAINER_ENGINE: docker | podman (podman: KIND_EXPERIMENTAL_PROVIDER=podman)
+agents_ns: coding-agents                      # AGENTS_NS
+platform_ns: agentdev-platform                # PLATFORM_NS
+kind_forge_ns: forge                          # FORGE_NS
+kind_forge_url: http://localhost:3000         # FORGE_HOST_URL
+kind_forge_admin_user: owner                  # FORGE_ADMIN_USER
+kind_repo: owner/playground                   # REPO
+kind_agent_names: [alice, bob]                # AGENTS (a list now, not a space-separated string)
+kind_worker_image: agentdev/worker:mvp        # WORKER_IMAGE
+kind_forge_image: agentdev/forge:mvp          # FORGE_IMAGE
+kind_service_cidr: 10.96.0.0/16               # SERVICE_CIDR
+kind_botboard_ns: botboard                    # BOTBOARD_NS
+operator_image: agentdev-operator:dev         # OPERATOR_IMAGE
+approvals: {enabled: false}                   # APPROVALS
+
+# ---- cluster, spike sandbox (tags cluster, sandbox, sandbox-test) ----
+# kind_cluster_gvisor_version: "20261012.0"   # GVISOR_VERSION
+# agent_sandbox_version: v1.0.8               # AGENT_SANDBOX_VERSION
+# agent_sandbox_ns: agents                    # SANDBOX_NS
+# sandbox_test_ns: agents                     # SANDBOX_NS
+# agent_sandbox_image: agentdev/claude-agent:spike   # AGENT_IMAGE
+
+# ---- agents (tag agents) ----
+# kind_agents_forge_kind: gitea               # FORGE_KIND: gitea | github
+# kind_agents_github_installation_id: ""      # GITHUB_INSTALLATION_ID
+# kind_agents_router_image: agentdev/router:mvp          # ROUTER_IMAGE
+# kind_agents_credproxy_image: agentdev/credproxy:mvp    # CLAUDE_PROXY_IMAGE
+# kind_agents_max_concurrent: 2               # MAX_CONCURRENT
+# kind_agents_max_turns: 40                   # MAX_TURNS
+# kind_agents_scale_to_zero: true             # SCALE_TO_ZERO
+# kind_agents_wake_poll_seconds: 300          # WAKE_POLL_SECONDS
+# kind_agents_claude_proxy: true              # CLAUDE_PROXY (also operator_claude_proxy)
+# kind_agents_claude_proxy_auth: both         # CLAUDE_PROXY_AUTH
+# kind_agents_claude_budget_units: null       # CLAUDE_BUDGET_UNITS
+# kind_agents_claude_prices: ""               # CLAUDE_PRICES
+# kind_agents_claude_job_budget_units: 0      # CLAUDE_JOB_BUDGET_UNITS
+# kind_agents_claude_job_approval_units: 0    # CLAUDE_JOB_APPROVAL_UNITS
+# kind_agents_claude_job_approval_step_units: 0   # CLAUDE_JOB_APPROVAL_STEP_UNITS
+# kind_agents_approvals: false                # APPROVALS
+# kind_agents_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
+#                            files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
+#                                             # EGRESS_HOSTS (also operator_egress_hosts)
+# kind_agents_egress_extra_hosts: []          # EGRESS_EXTRA_HOSTS (also operator_egress_extra_hosts)
+# kind_agents_forge_egress_hosts: [api.github.com, github.com]   # FORGE_EGRESS_HOSTS
+# kind_agents_telemetry: {otlp_url: "", instance: agentdev, scraper_ns: monitoring,
+#   scraper_selector: {app.kubernetes.io/name: prometheus, app.kubernetes.io/component: server}}
+#                                             # TELEMETRY_* (also operator_telemetry)
+
+# ---- operator (tags operator, secrets) ----
+# operator_exec_ns: agentdev-executors        # EXEC_NS
+# operator_botboard_url: ""                   # BOTBOARD_URL
+# operator_poll_seconds: 20                   # POLL_SECONDS
+# operator_idle_seconds: 900                  # IDLE_SECONDS
+# operator_agent_storage_class: ""            # AGENT_STORAGE_CLASS
+# operator_agent_state_storage: 10Gi          # AGENT_STATE_STORAGE
+# operator_cost_labels: {service: agentdev, environment: dev}   # COST_LABELS
+# operator_security: {pause_after: 5, retention_days: 30, max_per_agent: 500, rate_per_min: 10, rate_burst: 20}
+#                                             # SECURITY_PAUSE_AFTER, SECURITY_RETENTION_DAYS, SECURITY_MAX_PER_AGENT, SECURITY_RATE_*
+# operator_approvals: {enabled: false, timeout_minutes: 30, retention_days: 90}   # APPROVALS, APPROVAL_*
+# operator_executor: {poll_seconds: 60, retention_days: 30, apply_start_minutes: 30}   # EXECUTOR_*
+# operator_executor_egress_hosts: [registry.terraform.io, releases.hashicorp.com]     # EXECUTOR_EGRESS_HOSTS
+# operator_usage: {five_hour: 80, weekly: 90}  # USAGE_FIVE_HOUR, USAGE_WEEKLY (also usage for the API)
+# operator_rollout: {grace_seconds: 300, drain_max_minutes: 60}   # AGENT_GRACE_SECONDS, DRAIN_MAX_MINUTES
+# operator_secrets_store_enabled: true        # SECRETS_STORE_ENABLED (also secrets_store_enabled)
+# operator_mcp_admin_email: admin@agentdev.dev   # CF_ADMIN_EMAIL
+# mcp_allowed_hosts: []                       # MCP_ALLOWED_HOSTS
+
+# ---- scoped secrets store (tag secrets) ----
+# secrets_store_enabled: true                 # SECRETS_STORE_ENABLED
+# secrets_store_eso_chart_version: 2.14.0     # ESO_CHART_VERSION
+# secrets_store_eso_ns: external-secrets      # ESO_NS
+# secrets_store_eso_sa: external-secrets      # ESO_SA
+# secrets_store_values_ns: agentdev-secret-values   # SECRETS_VALUES_NS
+
+# ---- botboard (tag botboard) ----
+# botboard_image: ghcr.io/valentinalexeev/botboard:sha-ce7d0f9   # BOTBOARD_IMAGE
+
+# ---- Postgres, ContextForge, obs-mcp (tag mcp) ----
+# platform_postgres_image: postgres:17.11     # POSTGRES_IMAGE
+# platform_contextforge_image: ghcr.io/ibm/mcp-context-forge:v1.1.0   # CONTEXTFORGE_IMAGE
+# platform_cf_admin_email: admin@agentdev.dev # CF_ADMIN_EMAIL
+# mcp_projects: []                            # MCP_PROJECTS (paths of project specs with mcp:)
+# obs_mcp: {enabled: false, prometheus_url: "", loki_url: "", loki_tenant: "", max_output: 16384, rate_per_min: 30,
+#           rate_burst: 10}                   # OBS_MCP, PROMETHEUS_URL, LOKI_URL, LOKI_TENANT, OBS_MCP_*
+
+# ---- authentik (tag authentik) ----
+# authentik: {version: 2026.8.5, admin_email: admin@agentdev.dev}   # AUTHENTIK_VERSION, AUTHENTIK_ADMIN_EMAIL
+# authentik_kind_sso_standin: true            # the company SSO stand-in (#122); false: none
+# authentik_kind_sso_check: true              # the sign-in check of that stand-in
+
+# ---- API and web UI (tags api, ui) ----
+# api_image: agentdev-api:dev                 # API_IMAGE
+# api_ui_image: agentdev-ui:dev               # UI_IMAGE
+# api_oidc_issuer: https://localhost:9443/application/o/agentdev/   # API_OIDC_ISSUER
+# api_db_retention_days: 365                  # SECURITY_DB_RETENTION_DAYS
+# api_max_agents: 0                           # MAX_AGENTS
+# api_max_agents_per_user: 0                  # MAX_AGENTS_PER_USER
+# agents_source: api                          # AGENTS_SOURCE: api | git
+# api_approval_deny_accounts: []              # APPROVAL_DENY_ACCOUNTS (a list now)
+# usage: {five_hour: 80, weekly: 90}          # USAGE_FIVE_HOUR, USAGE_WEEKLY
+# notifications: {channels: [], subject: "mailto:admin@agentdev.local"}   # NOTIFY_CHANNELS, NOTIFY_SUBJECT
+# api: {chat: {enabled: false, idle_minutes: 30, retention_days: 30, max_sessions: 0, max_sessions_per_user: 0}}
+#                                             # CHAT_SESSIONS, CHAT_IDLE_MINUTES, CHAT_RETENTION_DAYS, CHAT_MAX_SESSIONS*
+# forge_kind: gitea                           # FORGE_KIND (the API)
+# github_url: https://github.com              # GITHUB_URL

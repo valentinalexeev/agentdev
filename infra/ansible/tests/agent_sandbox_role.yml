@@ -29,9 +29,9 @@
           - "\"lookup('env', 'ANTHROPIC_API_KEY')\" in sandbox_defaults"
         quiet: true
 
-    - name: The wrapper never passes the key on the command line
+    - name: The kind settings file never holds the key (it stays in the environment, #417)
       ansible.builtin.assert:
-        that: "'ANTHROPIC_API_KEY=' not in lookup('ansible.builtin.file', playbook_dir ~ '/../../../02-agent-sandbox.sh')"
+        that: "'ANTHROPIC_API_KEY' not in lookup('ansible.builtin.file', playbook_dir ~ '/../kind.example.vars.yml')"
         quiet: true
 
     # Second run is idempotent (#143 review): the build and kind load are skipped when the hash label matches, and

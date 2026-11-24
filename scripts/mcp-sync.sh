@@ -16,7 +16,7 @@
 #   - one API token per agent, scoped to that virtual server (server_id), stored as Secret agent-<agent>-mcp
 #     {CF_URL, CF_TOKEN}. The agent's pod reads it (optional secretRef); a token never leaves the cluster.
 # CF_ADMIN_FILE overrides the admin password file (the GKE playbook, #51, reads it from Secret Manager).
-# MCP_ALLOWED_HOSTS (config.env; the GKE playbook passes mcp_allowed_hosts) lists the trusted MCP server hosts
+# MCP_ALLOWED_HOSTS (config.env, same list as mcp_allowed_hosts in kind.vars.yml; the GKE playbook passes mcp_allowed_hosts) lists the trusted MCP server hosts
 # (host or host:port). A server URL on any other host stops the sync before anything is registered: tool metadata and
 # tool outputs of a server reach the model (prompt injection, docs/security.md R51).
 # Never prints a token: the GKE playbook (#51) runs this script; errors name the step, not the response.
@@ -32,7 +32,7 @@ project=$(yq -r '.project' "${spec}")
 has_mcp=1; [[ "$(yq -r '.mcp.servers // [] | length' "${spec}")" != 0 ]] || has_mcp=0
 if ! k -n "${PLATFORM_NS}" get svc contextforge >/dev/null 2>&1; then
   [[ ${has_mcp} == 0 ]] && { ok "no mcp.servers in ${spec}: nothing to do"; exit 0; }
-  die "${spec} has mcp: but ContextForge is not deployed: add the spec to MCP_PROJECTS and run ./run.sh 08 (mcp_projects on GKE)"
+  die "${spec} has mcp: but ContextForge is not deployed: add the spec to mcp_projects in kind.vars.yml and run ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp (mcp_projects on GKE)"
 fi
 # allow-list check, before any change in ContextForge
 if [[ ${has_mcp} == 1 ]]; then

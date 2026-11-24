@@ -7,14 +7,15 @@
 #   2. process pack: files missing from the repo are proposed in ONE PR (branch agentdev/bootstrap), never pushed to
 #      the default branch; files the repo already has are left alone
 #   3. a "agentdev: project connected" issue that the agents report readiness on
-#   4. agents deployed (06-agents.sh with the spec's values), router webhook registered
+#   4. agents deployed (ansible-playbook infra/ansible/kind.yml --tags agents with the spec's values; KIND_VARS=<your
+#      kind.vars.yml> adds your other settings), router webhook registered
 #   5. waits until every agent posted "ready" on that issue (acceptance check of #31)
 #
 # Spec format: examples/project.yaml. Secrets are never in the spec: forge admin password from the env
-# (FORGE_ADMIN_PASSWORD), Claude credentials as for 06-agents.sh (.secrets/<agent>.claude or .env).
+# (FORGE_ADMIN_PASSWORD), Claude credentials as for kind.yml --tags agents (.secrets/<agent>.claude or .env).
 # v1 scope (decided in #31): Gitea, forge issues as tracker. GitHub follows #2.
 source "$(dirname "$0")/../lib.sh"
-# credentials as run.sh loads them (Claude token, forge password); never in the spec
+# credentials from .env (Claude token, forge password); never in the spec
 # shellcheck disable=SC1091
 [[ -f "${SPIKE_DIR}/.env" ]] && { set -a; source "${SPIKE_DIR}/.env"; set +a; }
 need yq; need jq; need envsubst
@@ -118,7 +119,23 @@ log "MCP tools (#14)"
 "${SPIKE_DIR}/scripts/mcp-sync.sh" "${spec}"
 
 log "4. Agents and webhook"
-"${SPIKE_DIR}/06-agents.sh"
+[[ "${MAX_CONCURRENT}" =~ ^[0-9]{1,3}$ ]] || die "spec: max_concurrent must be a whole number"
+# the spec's values and the config.env values shared with scripts/ (#417: was 06-agents.sh); JSON is valid YAML
+vars_file=$(mktemp "${TMPDIR:-/tmp}/bootstrap-vars.XXXXXX")
+# shellcheck disable=SC2086  # AGENTS is a space-separated list
+jq -n --arg cn "${CLUSTER_NAME}" --arg en "${CONTAINER_ENGINE}" --arg an "${AGENTS_NS}" --arg pn "${PLATFORM_NS}" \
+  --arg fn "${FORGE_NS}" --arg fu "${FORGE_HOST_URL}" --arg fa "${FORGE_ADMIN_USER}" --arg repo "${REPO}" \
+  --argjson ag "$(printf '%s\n' ${AGENTS} | jq -R . | jq -sc .)" --argjson mc "${MAX_CONCURRENT}" \
+  --arg wi "${WORKER_IMAGE}" --arg fi "${FORGE_IMAGE}" --arg bn "${BOTBOARD_NS}" \
+  '{kind_cluster_name: $cn, kind_engine: $en, agents_ns: $an, platform_ns: $pn, kind_forge_ns: $fn, kind_forge_url: $fu,
+    kind_forge_admin_user: $fa, kind_repo: $repo, kind_agent_names: $ag, kind_agents_max_concurrent: $mc,
+    kind_worker_image: $wi, kind_forge_image: $fi, kind_botboard_ns: $bn}' > "${vars_file}"
+# secrets stay in the environment: the role reads them with lookup('env'), never from a vars file
+export FORGE_ADMIN_PASSWORD ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+# KIND_VARS: your kind.vars.yml, when you use one, so the rest of your settings stay as they are (the spec wins)
+ANSIBLE_CONFIG="${SPIKE_DIR}/infra/ansible/ansible.cfg" ansible-playbook "${SPIKE_DIR}/infra/ansible/kind.yml" \
+  --tags agents ${KIND_VARS:+-e "@${KIND_VARS}"} -e "@${vars_file}" || { rm -f "${vars_file}"; die "kind.yml --tags agents failed"; }
+rm -f "${vars_file}"
 
 log "5. Waiting for every agent to report ready on #${ready}"
 want=$(wc -w <<<"${AGENTS}")

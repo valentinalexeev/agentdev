@@ -20,10 +20,11 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 
 A Kubernetes setup that runs a team of Claude Code CLI agents. Each agent has its own forge account
 (and optionally its own Claude account) and loops over issues assigned to it and feedback on its PRs.
-The MVP runs on kind with gVisor and an in-cluster Gitea (`README.md`). Steps `02`–`04` are the earlier
-spike (agent-sandbox, Coder) and are kept for reference only.
+The MVP runs on kind with gVisor and an in-cluster Gitea (`README.md`). The tags `sandbox` and `sandbox-test`
+are the earlier spike (agent-sandbox) and are kept for reference only.
 
-Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shared helpers),
+Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in `kind.vars.yml`, a copy of
+`infra/ansible/kind.example.vars.yml`), `config.env` (knobs of the helper scripts in `scripts/`), `lib.sh` (shared helpers),
 `images/worker/` (the agent loop), `manifests/` (cluster objects), `seed/` (playground repo content).
 
 ## 2. Status lives in GitHub Issues only
@@ -124,7 +125,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   also carry `Refs #NN` / `Closes #NN` and `Co-authored-by:`. The PR title follows the same format, because the
   squash commit takes it.
 - Commit and push as you go.
-- Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `./run.sh` steps, e2e
+- Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `kind.yml` tags, e2e
   observations), what remains open, files shared with other open PRs.
 - **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
   `gh api -X POST repos/valentinalexeev/agentdev/pulls/NN/requested_reviewers -f "reviewers[]=valentinalexeev"`
@@ -171,7 +172,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 ## 5. Incidents
 
 An incident is something that already went wrong: red CI on `main`, a leaked or expired secret, an agent that
-damaged work, a broken `./run.sh` on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
+damaged work, a broken `infra/ansible/kind.yml` run on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
 what happened, when and how found, impact, immediate actions. Never paste secrets, even partially. Fix in
 `hotfix/NN-…` with `Closes #NN`; the closing comment states the root cause, the fix, and what prevents a repeat
 (test, CI check, rule change). A leaked secret: tell the owner at once; revoking it and rewriting history are owner actions.
@@ -179,12 +180,14 @@ what happened, when and how found, impact, immediate actions. Never paste secret
 ## 6. Engineering rules for this repo
 
 - **Secrets never enter git, issues or logs.** Claude credentials and forge tokens live in `.env` and `.secrets/`
-  (gitignored). `config.env` holds only local demo defaults.
-- **Every step script is re-runnable** (idempotent) and records its result with `record`. A change to a step is
-  checked by re-running that step on a live cluster; a change to the agent loop by an e2e pass (issue → PR → review → reply).
+  (gitignored). `config.env`, `infra/ansible/kind.example.vars.yml` and `kind.vars.yml` hold only local demo
+  defaults, never secrets.
+- **Every `kind.yml` tag is re-runnable** (idempotent): a second run reports `changed=0`. A change to a role or tag
+  is checked by re-running that tag (`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags <tag>`) on a
+  live cluster; a change to the agent loop by an e2e pass (issue → PR → review → reply).
 - **Ready-made before custom.** Prefer a maintained component over writing one; a PR that adds custom
   infrastructure says why the ready one does not fit.
-- **Pinned versions** in `config.env` / Dockerfiles; bump them in their own commit.
+- **Pinned versions** in the Ansible role defaults / `config.env` / Dockerfiles; bump them in their own commit.
 - Shell: `bash`, `set -euo pipefail` via `lib.sh`, passes `shellcheck -S warning` (CI enforces it).
 - No em dashes in prose written by agents.
 - **Manuals use ASD-STE100 Simplified Technical English** (`user-guide.md`, `install.md`, `admin.md`,
@@ -194,10 +197,10 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
 
-- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** entry (a fragment with
+- **Each BREAKING entry names every tag or role to re-run** (#110): a **BREAKING** entry (a fragment with
   `breaking: true`, its `## Upgrade` section) lists
-  every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
-  one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
+  every `kind.yml` tag and every Ansible role or Terraform module the operator must apply again, not only the main
+  one. The author checks that list by applying exactly those tags on a live cluster and says so in the PR.
 
 ## Reviewer checklist
 

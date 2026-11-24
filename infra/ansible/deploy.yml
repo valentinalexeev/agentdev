@@ -181,7 +181,7 @@
       vars: {wake_poll_token: "{{ router_poll_token.stdout | default('') }}"}
       when: secrets_mode == 'playbook' and (forge_kind == 'gitea' and (wake_poll_seconds | int) > 0)
 
-    # ---------- Claude credential proxy (#66, same template as 06-agents.sh) ----------
+    # ---------- Claude credential proxy (#66, same template as kind.yml tag agents) ----------
     - name: Claude proxy signing key (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -378,7 +378,7 @@
     - name: "Postgres + ContextForge, then one McpProject per project (#51, #383)"
       ansible.builtin.include_role: {name: platform}
 
-    # authentik (#114): same chart, values and blueprints as ./run.sh 09; before the API, which uses it as the issuer
+    # authentik (#114): same chart, values and blueprints as kind.yml --tags authentik; before the API, which uses it as the issuer
     - name: Identity provider authentik (blueprints, break-glass admin)
       ansible.builtin.include_role: {name: authentik}
       when: authentik_enabled | bool
@@ -576,7 +576,7 @@
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
     # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
     # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl); same
-    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The role api reads it (#104).
+    # keys as .secrets/platform/siem-webhook on kind (kind.yml tag api). The role api reads it (#104).
     - name: Read the SIEM output secrets (optional)
       ansible.builtin.shell: |
         if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then
@@ -608,7 +608,7 @@
       when: secrets_mode == 'playbook' and ((security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0)
       no_log: true
 
-    # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)
+    # same checks as kind.yml --tags agents,operator (rollout status): a Deployment that does not become ready fails the run (#121)
     - name: Wait for the operator, router, egress proxies and Claude proxy
       ansible.builtin.command: >-
         kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s

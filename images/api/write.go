@@ -164,8 +164,8 @@ type writer struct {
 //   - PerUser: the Agent objects that one person made through the API (annotation agentdev/created-by = OIDC
 //     subject). Members of the admin group are not limited by it. Objects made outside the API count only for Total.
 //
-// Admins set them on the instance (Ansible api.max_agents / api.max_agents_per_user, config.env MAX_AGENTS /
-// MAX_AGENTS_PER_USER). The ResourceQuota from the project spec stays the Kubernetes backstop.
+// Admins set them on the instance (Ansible api.max_agents / api.max_agents_per_user; on kind api_max_agents /
+// api_max_agents_per_user in kind.vars.yml). The ResourceQuota from the project spec stays the Kubernetes backstop.
 type agentLimits struct {
 	Total   int
 	PerUser int

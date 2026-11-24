@@ -1,10 +1,10 @@
 ---
-# agentdev API on GKE (#104): the same manifests/api.yaml.tmpl, schema.sql and grants.sql as ./run.sh 10.
+# agentdev API on GKE (#104): the same manifests/api.yaml.tmpl, schema.sql and grants.sql as kind.yml --tags api.
 # Instance values go into instance.yml under `api` (example.vars.yml). The role is skipped without api.oidc_issuer.
 api_image: "{{ image_registry }}/agentdev-api:{{ image_tag }}"
 # OIDC: issuer = the URL users log in through (it is in the tokens); discovery = where the API fetches the keys.
 # With authentik on GKE (#114, group_vars authentik_enabled) both default to authentik: the public issuer on
-# ingress.auth_host and the in-cluster discovery URL (same as 10-api.sh). An explicit api.oidc_issuer wins.
+# ingress.auth_host and the in-cluster discovery URL (same as on kind). An explicit api.oidc_issuer wins.
 api_oidc_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer | default('')) }}"
 api_oidc_discovery_url: >-
   {{ api.oidc_discovery_url | default(api.oidc_issuer if api.oidc_issuer is defined
@@ -99,7 +99,7 @@ api_chat_worker_image: "{{ worker_image | default(image_registry ~ '/agentdev-wo
 api_chat_forge_image: "{{ forge_image | default(image_registry ~ '/agentdev-forge:' ~ image_tag) }}"
 api_sm_chat_key: agentdev-api-chat-token-key        # generated once
 api_sm_chat_issue_token: agentdev-chat-issue-token  # optional, Gitea only
-# The agents namespace (#357): the API manifest has objects in it. Steps 06 and 12 (GKE: deploy.yml) create it, the
+# The agents namespace (#357): the API manifest has objects in it. The tags agents and operator (GKE: deploy.yml) create it, the
 # role makes it too so that `kind.yml --tags api` works alone. Labels as deploy.yml (#184); kind.yml sets the same
 # cost labels as the operator role.
 api_ns_labels: "{{ agentdev_effective_labels }}"

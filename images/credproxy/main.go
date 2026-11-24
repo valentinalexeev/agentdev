@@ -42,8 +42,8 @@ func readKey(dir, key string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// lookup returns claude-<agent> if it holds a credential, else claude-shared (same rule as 06-agents.sh and the
-// playbook). The values never leave this process except in the upstream request header.
+// lookup returns claude-<agent> if it holds a credential, else claude-shared (same rule as the playbooks kind.yml
+// and deploy.yml). The values never leave this process except in the upstream request header.
 func (c credStore) lookup(agent string) (credential, bool) {
 	for _, name := range []string{"claude-" + agent, "claude-shared"} {
 		d := filepath.Join(c.dir, name)

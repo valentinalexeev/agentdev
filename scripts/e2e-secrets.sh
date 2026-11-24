@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with ./run.sh 13 done (and 12).
+# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with kind.yml --tags secrets done
+# (it also runs the operator).
 #   CLUSTER_NAME=t14 scripts/e2e-secrets.sh
 # Checks: ProjectSecret -> ExternalSecret -> ps-<n> sync, rotation, CRD CEL, admission policies, deletion.
 # The test value is random and never printed.

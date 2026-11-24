@@ -1,8 +1,14 @@
 # Administration
 
 This guide is for the administrator of an agentdev instance. The local paths refer to the `kind` installation
-(`config.env`, `.secrets/`, `run.sh`). On GKE, the same settings are Ansible variables in the deployment repository
-(`ansible/instance.yml`). On GKE, the secrets are in Secret Manager.
+(`kind.vars.yml`, `.env`, `.secrets/`, the playbook `infra/ansible/kind.yml`). On GKE, the same settings are Ansible
+variables in the deployment repository (`ansible/instance.yml`). On GKE, the secrets are in Secret Manager.
+
+On `kind`, this guide gives a setting by its former `config.env` name, for example `AGENTS`. Set its Ansible variable
+in `kind.vars.yml`. The file `infra/ansible/kind.example.vars.yml` shows the Ansible variable for each `config.env`
+name. To deploy one part again on `kind`, run the playbook with the tag of that part, for example:
+`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents`. Before each playbook run, load the
+secrets: `set -a; source .env; set +a`.
 
 ## Projects
 
@@ -39,9 +45,9 @@ Limits of v1:
 
 ### Add an agent
 
-1. On `kind`: add the agent to `AGENTS` in `config.env`, for example `AGENTS="alice bob carol"`.
+1. On `kind`: add the agent to the agent list (`AGENTS`) in `kind.vars.yml`.
    On GKE: add the agent to the `agents:` list in `instance.yml`.
-2. On `kind`: run `./run.sh 05 06`.
+2. On `kind`: run `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags forge,agents`.
    On GKE: open a pull request in the deployment repository.
 
 ### Remove an agent
@@ -49,7 +55,8 @@ Limits of v1:
 CAUTION: Step 3 deletes the work data of the agent.
 
 1. Remove the agent from the agent list (`AGENTS` or `agents:`).
-2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+2. Deploy again: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents` on `kind`, or a pull
+   request in the deployment repository.
 3. Delete the StatefulSet, the volumes and the forge account of the agent.
 
 ### Keep the agents in Git (Flux)
@@ -75,7 +82,7 @@ Each field has one owner:
 CAUTION: Do not put `spec.paused` in the Git manifest. If you do, Flux owns the field and resumes an agent that the
 security pause stopped.
 
-1. Set `agents_source: git` in `instance.yml`. On `kind`, set `AGENTS_SOURCE=git` in `config.env`.
+1. Set `agents_source: git` in `instance.yml`. On `kind`, set `AGENTS_SOURCE` to `git` in `kind.vars.yml`.
 2. Put one `Agent` manifest for each agent in the `agents/` directory of the deployment repository:
    ```yaml
    apiVersion: agentdev.dev/v1alpha1
@@ -93,7 +100,7 @@ security pause stopped.
 4. Add a Flux `Kustomization` for `agents/` (see "Health checks for Flux and Argo CD").
 5. Deploy again.
 
-NOTE: On `kind`, step 06 applies the `Agent` objects in both modes. It does the work of Flux.
+NOTE: On `kind`, the playbook tag `agents` applies the `Agent` objects in both modes. It does the work of Flux.
 
 For Argo CD, add `ignoreDifferences` for `spec.paused`, or `selfHeal` resumes a paused agent:
 
@@ -112,7 +119,8 @@ WARNING: Do not put the credential in git or in an issue.
 1. Get a credential for the Claude subscription: `claude setup-token`.
 2. On `kind`: write `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` in `.secrets/<agent>.claude`.
    On GKE: write the `KEY=VALUE` lines in Secret Manager `agent-<agent>-claude`.
-3. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+3. Deploy again: on `kind`, run the playbook with the tag `agents`. On GKE, open a pull request in the deployment
+   repository.
 
 NOTE: Each agent uses one Claude credential. It uses its own credential if it has one. If not, it uses the shared
 credential (#5). The shared credential is `.env` on `kind` and Secret Manager `claude-shared` on GKE.
@@ -124,7 +132,8 @@ NOTE: Only the Claude proxy reads the credential. The agent pod gets a proxy key
 Use this task to replace a Claude credential or a forge token.
 
 1. Replace the file or the secret.
-2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+2. Deploy again: on `kind`, run the playbook with the tag `agents`. On GKE, open a pull request in the deployment
+   repository.
 
 NOTE: With `external_secrets.mode: external` on GKE (#381), step 2 is not needed. Add a new version of the
 Secret Manager secret. The External Secrets Operator copies it within `external_secrets_refresh` (default 15
@@ -185,7 +194,7 @@ Agents read the forge at this interval when webhooks do not operate.
 Each agent has one volume (PVC `state-agent-<name>-0`). The volume keeps the clones, the cursors and the Claude
 state (`/home/node/.claude` is the `claude` directory of the volume).
 
-1. On `kind`: set `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` in `config.env`, then `./run.sh 12`.
+1. On `kind`: set `AGENT_STORAGE_CLASS` and `AGENT_STATE_STORAGE` in `kind.vars.yml`, then run the playbook with the tag `operator`.
    On GKE: set `agent_storage_class` and `agent_state_storage` in `instance.yml`, then deploy.
 2. A new size applies to new agents only. To make the volume of an agent larger, edit its PVC.
 
@@ -211,7 +220,7 @@ it does not give it. The loop adds the guide to the system prompt of each Claude
    `kubectl -n coding-agents get configmap agentdev-guides -o jsonpath='{.data.<name>}'`
    The output shows the guide of the agent `<name>`.
 2. To change the list of hosts in the guide, change the egress allow-list. Refer to *Egress allow-list*.
-   Then deploy the operator again: on `kind`, run `./run.sh 12`. On GKE, run the Ansible playbook.
+   Then deploy the operator again: on `kind`, run the playbook with the tag `operator`. On GKE, run the Ansible playbook.
    The operator writes the guides again when it starts.
 
 The fixed part of the guide is in the operator image. You cannot edit it.
@@ -229,11 +238,11 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Security events | each refusal (in the sidecar or the loop) is an `AGENTDEV_SECURITY_EVENT` JSON line. Rules: [security-model.md](security-model.md#phase-1-forge-sidecar-fixes-r4) |
 | Egress | through `egress-proxy` only (`HTTPS_PROXY`), to the hosts of the allow-list. Refer to *Egress allow-list* |
 | Harness guide (#206) | ConfigMap `agentdev-guides`, key `<name>`, mounted read-only at `/etc/agentdev/guide/guide.md` in the `agent` container only |
-| Sidecar image | on `kind`, `./run.sh 06` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
+| Sidecar image | on `kind`, the playbook tag `agents` builds it (`FORGE_IMAGE`). Ansible uses `forge_image` (the same `image_tag`) |
 
 | Setting | `kind` | GKE (Ansible) |
 |---|---|---|
-| Agent list | `AGENTS` in `config.env`, then `./run.sh 05 06` | `agents:` in `instance.yml` |
+| Agent list | `AGENTS` in `kind.vars.yml`, then the playbook tags `forge,agents` | `agents:` in `instance.yml` |
 | Own Claude credential | `.secrets/<agent>.claude` | Secret Manager `agent-<agent>-claude` (`KEY=VALUE` lines) |
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
@@ -275,15 +284,16 @@ than raw tokens (often less than 20 %).
 
 The budget is the number of cost units that one agent can use in 24 hours.
 
-1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `config.env`. On GKE: set `claude_budget_units` in `instance.yml`.
-2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `kind.vars.yml`. On GKE: set `claude_budget_units` in `instance.yml`.
+2. Deploy again: on `kind`, run the playbook with the tag `agents`. On GKE, open a pull request in the deployment
+   repository.
 
 NOTE: The value 0 means no limit. This is the default.
 
 NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` are deprecated since 1.2.0 and will be removed in 2.0.0.
 Until then they still work: when only the old variable is set, its value is used as cost units (1 token = 1 unit).
-When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy, `./run.sh 06` and the playbook
-show a warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
+When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy and the playbook show a
+warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
 tokens, so you can lower the value (see the CHANGELOG, 1.2.0 Deprecated).
 
 ### Set the budget of one agent
@@ -301,7 +311,7 @@ The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w
 6 decimals. The proxy ignores a bad key or value, keeps the built-in value and writes a `proxy-price-invalid`
 security event.
 
-1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
+1. On `kind`: set `CLAUDE_PRICES` in `kind.vars.yml`, for example to `usd_per_million_units=3`. On GKE:
    set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`. With 3, the USD
    estimate follows the list prices, because one unit is priced at 3 USD per million.
 2. Deploy again. The proxy reads the ConfigMap again within one minute.
@@ -320,15 +330,16 @@ units (#196, #310). There are two limits per job:
 - The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
 
 1. On `kind`: set `CLAUDE_JOB_APPROVAL_UNITS`, `CLAUDE_JOB_APPROVAL_STEP_UNITS` and `CLAUDE_JOB_BUDGET_UNITS` in
-   `config.env`. On GKE: set `claude_job_approval_units`, `claude_job_approval_step_units` and
+   `kind.vars.yml`. On GKE: set `claude_job_approval_units`, `claude_job_approval_step_units` and
    `claude_job_budget_units` in `instance.yml`.
-2. On `kind`, set `APPROVALS=true`. On GKE, approvals are on by default.
-3. Deploy again: `./run.sh 06` and `./run.sh 12`, or a pull request in the deployment repository.
+2. On `kind`, set `APPROVALS` to `true`. On GKE, approvals are on by default.
+3. Deploy again: on `kind`, run the playbook with the tags `agents,operator`. On GKE, open a pull request in the
+   deployment repository.
 
 NOTE: The value 0 means off. This is the default for all three settings. A step of 0 is the same as the soft limit.
 
-NOTE: The soft limit must be lower than the hard limit when you set both. `./run.sh 06`, the playbook and the proxy
-stop with an error if it is not.
+NOTE: The soft limit must be lower than the hard limit when you set both. The playbook and the proxy stop with an
+error if it is not.
 
 NOTE: A denial, a void request or no answer within the approval timeout (`APPROVAL_TIMEOUT_MINUTES`, default 30)
 ends the job as failed, as at the hard limit.
@@ -374,21 +385,21 @@ If you use another scraper, set both: the namespace and the labels of its pods.
 Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
 it, one external Prometheus and Grafana can show many instances.
 
-1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+1. On `kind`: set `TELEMETRY_INSTANCE` in `kind.vars.yml`, then run the playbook with the tags `agents,operator`.
 2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
 
 The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
 
 The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
 with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
-`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
-`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
+`TELEMETRY_OTLP_URL` in `kind.vars.yml` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run the playbook (on kind, with the tags `agents,operator`).
 
 ### Reference: the Claude proxy
 
 | Item | Value |
 |---|---|
-| Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
+| Image | `agentdev-credproxy`. On `kind`, the playbook tag `agents` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
 | Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
 | Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
@@ -423,8 +434,9 @@ To accept only the token:
 1. Make sure that each agent runs a worker of 1.1 or later:
    `kubectl -n coding-agents get pods -l app=coding-agent -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'`
 2. Make sure that no `proxy-key-invalid` security event shows `wrong agent token` after the upgrade.
-3. On `kind`: set `CLAUDE_PROXY_AUTH=token` in `config.env`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
-4. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+3. On `kind`: set `CLAUDE_PROXY_AUTH` to `token` in `kind.vars.yml`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
+4. Deploy again: on `kind`, run the playbook with the tag `agents`. On GKE, open a pull request in the deployment
+   repository.
 5. Run `scripts/e2e-gke-security.sh`. Make sure that the proxy key check shows PASS.
 
 CAUTION: Do not set `token` while an agent runs an older worker. The proxy then refuses all calls of that agent.
@@ -460,7 +472,7 @@ proxy reaches the API server.
 
 ### Settings
 
-| Setting | `kind` (`config.env`) | GKE (`instance.yml`) | Default |
+| Setting | `kind` (`kind.vars.yml`) | GKE (`instance.yml`) | Default |
 |---|---|---|---|
 | Scale to zero, all agents | `SCALE_TO_ZERO` | `scale_to_zero` | `true` |
 | Scale to zero, one agent | (not available) | `agents[].scale_to_zero` | the value for all agents |
@@ -470,7 +482,7 @@ proxy reaches the API server.
 The wake poll uses a read-only forge credential in the Secret `webhook-router-poll`. Only the router pod reads it.
 
 - GitHub: the router uses the GitHub App. It asks for installation tokens with read access only.
-- Gitea on `kind`: step 06 (role `kind_agents`) makes the account `agentdev-router` (read access to the repository) and its token.
+- Gitea on `kind`: the playbook tag `agents` (role `kind_agents`) makes the account `agentdev-router` (read access to the repository) and its token.
 - Gitea on GKE: put a read-only token (scopes `read:repository`, `read:issue`) in the Secret Manager entry
   `router-poll-forge-token`.
 
@@ -641,10 +653,10 @@ of the agents. It shows one card for each issue.
 
 ### Deploy botboard
 
-1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml --tags botboard`
-   The playbook deploys botboard in the namespace `botboard`. The old command `./run.sh 07` does the same (deprecated, #106).
-2. Run run.sh step 06 again: `./run.sh 06`
-   The script finds botboard and sets `BOTBOARD_URL` on each agent.
+1. Run the playbook with the tag `botboard`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags botboard`
+   The playbook deploys botboard in the namespace `botboard`. A plain run does not deploy botboard.
+2. Run the playbook with the tag `agents` again: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents`
+   The playbook finds botboard and sets `BOTBOARD_URL` on each agent.
 
 ### Open botboard
 
@@ -671,22 +683,20 @@ cluster.
 
 ## MCP tools
 
-MCP tools give the agents of a project more tools through ContextForge. On `kind`, run.sh step 08 deploys
-ContextForge. On GKE, the Ansible playbook deploys it.
+MCP tools give the agents of a project more tools through ContextForge. On `kind`, the playbook tag `mcp`
+deploys ContextForge. On GKE, the Ansible playbook deploys it.
 
 ### Deploy the platform namespace
 
-1. Optional: in `config.env`, set `CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE` and `CF_ADMIN_EMAIL`.
-2. To use MCP tools, in `config.env`, set `MCP_PROJECTS` to the paths of the project specifications.
-   Separate the paths with spaces.
-3. Run run.sh step 08: `./run.sh 08`
-   The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
+1. Optional: in `kind.vars.yml`, set `CONTEXTFORGE_IMAGE`, `POSTGRES_IMAGE` and `CF_ADMIN_EMAIL`.
+2. To use MCP tools, in `kind.vars.yml`, set `MCP_PROJECTS` to the list of paths of the project specifications.
+3. Run the playbook with the tag `mcp`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp`
    The playbook deploys the namespace `agentdev-platform` with Postgres.
-   If `MCP_PROJECTS` is set, the step also deploys ContextForge and makes one `McpProject` for each specification.
-   The operator (step 12) syncs each `McpProject` to ContextForge.
+   If `MCP_PROJECTS` is set, the playbook also deploys ContextForge and makes one `McpProject` for each specification.
+   The operator (tag `operator`) syncs each `McpProject` to ContextForge.
 
-NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
-the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
+NOTE: If `MCP_PROJECTS` is empty, the playbook does not deploy ContextForge. If ContextForge is already deployed,
+the playbook removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
 
 NOTE: Postgres has the databases `contextforge` and `agentdev`. The generated passwords and keys are in
 `.secrets/platform/`, never in git.
@@ -732,7 +742,7 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
    ```
 
 2. Add the host of each server to the allow-list. Use `host` or `host:port`.
-   - On kind: `MCP_ALLOWED_HOSTS` in `config.env` (separate the hosts with spaces).
+   - On kind: `MCP_ALLOWED_HOSTS` in `kind.vars.yml` (a list of hosts).
    - On GKE: `mcp_allowed_hosts` in `ansible/instance.yml`.
 
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
@@ -740,12 +750,12 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
 
    The operator makes no changes in ContextForge if a server is on a host that is not in the list. The
    `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
-3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
+3. Run the playbook (on kind, with the tag `mcp`). The operator syncs the `McpProject`.
    You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
    `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
-NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
+NOTE: If a specification has `mcp:` and you did not run the playbook tag `mcp`, the bootstrap stops before it deploys the
 agents. The bootstrap tells you the cause.
 
 ### Give agents the observability tools
@@ -763,7 +773,7 @@ The agent pod never gets a backend credential.
 Before you start, make sure that Prometheus or Loki operates in the cluster. agentdev does not install them.
 
 1. Set the backend addresses:
-   - On kind: in `config.env`, set `OBS_MCP=true`, `PROMETHEUS_URL` and `LOKI_URL`.
+   - On kind: in `kind.vars.yml`, set `OBS_MCP` to `true`, and set `PROMETHEUS_URL` and `LOKI_URL`.
    - On GKE: in `ansible/instance.yml`, set `obs_mcp.enabled: true`, `obs_mcp.prometheus_url` and `obs_mcp.loki_url`.
 
    Use addresses in the cluster Service range, for example `http://prometheus-server.monitoring.svc.cluster.local`.
@@ -774,7 +784,7 @@ Before you start, make sure that Prometheus or Loki operates in the cluster. age
 
    WARNING: Use a token that can only read. Do not use an admin token.
 3. Deploy the tools:
-   - On kind: run run.sh step 08: `./run.sh 08`
+   - On kind: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp`
    - On GKE: run the playbook.
 4. In the project specification, add the server:
 
@@ -785,7 +795,7 @@ Before you start, make sure that Prometheus or Loki operates in the cluster. age
    ```
 
 5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
-6. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the project.
+6. Run the playbook (on kind, with the tag `mcp`). The operator syncs the project.
 7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
@@ -896,16 +906,16 @@ database `authentik` on the platform Postgres, with no Redis. On GKE, the playbo
 
 ### Deploy authentik
 
-Do this task after run.sh step 08.
+Do this task after the playbook tag `mcp`.
 
-1. Optional: in `config.env`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
-2. Run run.sh step 09: `./run.sh 09`
-   The step runs the playbook `infra/ansible/kind.yml` with the tag `authentik` (#106), with the values from `config.env`.
+1. Optional: in `kind.vars.yml`, set `AUTHENTIK_VERSION` and `AUTHENTIK_ADMIN_EMAIL`.
+2. Run the playbook with the tag `authentik`:
+   `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags authentik`
    The playbook installs [authentik](https://goauthentik.io) with its Helm chart (`manifests/authentik-values.yaml`).
 
 ### Deploy authentik on GKE
 
-The playbook deploys authentik with the same Helm chart, values and blueprints as run.sh step 09 (#114). The role
+The playbook deploys authentik with the same Helm chart, values and blueprints as the `kind` tag `authentik` (#114). The role
 `authentik` runs after the platform Postgres and before the API.
 
 1. In Terraform `instance.tfvars`, add the login host to `public_hosts`, for example `auth.example.com`.
@@ -1115,8 +1125,8 @@ namespace `agentdev-platform`.
 On kind, a local OIDC server is used in place of Google Workspace (`manifests/kind/sso-standin.yaml`). It accepts
 any user name and any claims. The same blueprint configures it as an OIDC source.
 
-1. Run `./run.sh 09`.
-   The step signs in a test user two times and makes sure that the rules above are obeyed. It shows
+1. Run the playbook with the tag `authentik`.
+   The playbook signs in a test user two times and makes sure that the rules above are obeyed. It shows
    `SSO check passed`.
 2. Optional: to sign in yourself, run
    `kubectl -n agentdev-platform port-forward svc/sso-standin 18080:8080`.
@@ -1124,23 +1134,24 @@ any user name and any claims. The same blueprint configures it as an OIDC source
 4. Type a user name. In **claims**, type for example
    `{"groups": ["agentdev-admins@example.com"], "githubLogin": "alice"}`.
 
-The step also re-applies all agentdev blueprints and makes sure that a member added by hand stays in
+The playbook also re-applies all agentdev blueprints and makes sure that a member added by hand stays in
 `agentdev-admins`. It also makes sure that a sign-in from another domain is refused. On kind, the company domain
 is `example.com` (`SSO_ALLOWED_DOMAINS`).
 
-To skip the stand-in, set `SSO_STANDIN=0`. To skip only the test, set `SSO_CHECK=0`.
+To skip the stand-in, set `authentik_kind_sso_standin: false` in `kind.vars.yml`. To skip only the test, set
+`authentik_kind_sso_check: false`.
 
 WARNING: Do not use the stand-in outside kind. Anyone who can open it can sign in as any person.
 
 ### Give a person admin rights for agents
 
-The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of step
-09 makes this group. On `kind`, step 09 also adds `akadmin` to the group once. On GKE, the playbook does the same
+The members of the authentik group `agentdev-admins` can pause, add and remove all agents. The blueprint of the tag
+`authentik` makes this group. On `kind`, the tag `authentik` also adds `akadmin` to the group once. On GKE, the playbook does the same
 (#114).
 
 IMPORTANT: No automated process changes the members of `agentdev-admins`. The blueprints create the group, but never
-set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, step 09 only adds `akadmin`
-and never removes a member. Step 09 checks this each run: it adds a test user, re-applies the blueprints, and fails
+set its members, so a re-apply of a blueprint keeps the admins you add here. On `kind`, the tag `authentik` only adds
+`akadmin` and never removes a member. The tag `authentik` checks this each run: it adds a test user, re-applies the blueprints, and fails
 if a member is gone. Add and remove members by hand in authentik only.
 
 1. Log in to authentik as an administrator.
@@ -1153,11 +1164,11 @@ CAUTION: Give this group to platform operators only. A member can add an agent t
 
 ### Reference: authentik
 
-- The configuration is the Secret `authentik`. The script generates it from `.secrets/platform/`.
+- The configuration is the Secret `authentik`. The playbook generates it from `.secrets/platform/`.
 - The first admin is you: the user `akadmin`, with the email `AUTHENTIK_ADMIN_EMAIL`.
 - The agentdev API and web UI (#46, #48) are OIDC applications in authentik.
 - The blueprint `manifests/authentik-blueprint-agentdev.yaml` makes the OIDC application and the group
-  `agentdev-admins`, without members. On `kind`, `09-authentik.sh` adds `akadmin` to the group through the authentik
+  `agentdev-admins`, without members. On `kind`, the playbook tag `authentik` adds `akadmin` to the group through the authentik
   API (add only, never remove).
 - The platform namespace denies all traffic by default. The API and the web UI add a NetworkPolicy rule to connect
   to authentik.
@@ -1169,12 +1180,12 @@ agents (#57). On GKE, the Ansible playbook deploys it when `instance.yml` sets `
 
 ### Deploy the API
 
-Do this task after run.sh step 09.
+Do this task after the playbook tag `authentik`.
 
-1. Set `API_OIDC_ISSUER` in `config.env` to the URL that you use to log in to authentik.
+1. Set `API_OIDC_ISSUER` in `kind.vars.yml` to the URL that you use to log in to authentik.
    On `kind`, with the 9443 port-forward, this URL is `https://localhost:9443/application/o/agentdev/`.
-2. Run run.sh step 10: `./run.sh 10`
-   The script builds the API and deploys it in `agentdev-platform`. On `kind`, it also gives the API access to the
+2. Run the playbook with the tag `api`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api`
+   The playbook builds the API and deploys it in `agentdev-platform`. On `kind`, it also gives the API access to the
    forge. Refer to "Give the API access to the forge".
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
@@ -1204,8 +1215,8 @@ bearer token.
 
 ### Deploy the API on GKE
 
-The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
-step 10. The playbook does not deploy authentik yet (#114). Thus, you must use an OIDC provider that you have.
+The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as the
+`kind` tag `api`. The playbook does not deploy authentik yet (#114). Thus, you must use an OIDC provider that you have.
 
 WARNING: Do not put secret values in `instance.yml`. Put them only in Secret Manager.
 
@@ -1244,7 +1255,7 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 
 ### Reference: the API settings on GKE
 
-| `instance.yml` | Default | `kind` (`config.env`) |
+| `instance.yml` | Default | `kind` (`kind.vars.yml`) |
 |---|---|---|
 | `api.oidc_issuer` | none (the API is not deployed) | `API_OIDC_ISSUER` |
 | `api.oidc_discovery_url` | `api.oidc_issuer` | the authentik Service in the cluster |
@@ -1279,8 +1290,8 @@ types and mutes projects in **Settings**. The instance value turns the channel o
      channels: [webpush]
      subject: mailto:ops@example.com
    ```
-   On `kind`, set `NOTIFY_CHANNELS=webpush` and `NOTIFY_SUBJECT` in `config.env`.
-2. Run the playbook (`deploy.yml`), or `ansible-playbook infra/ansible/kind.yml --tags api` on `kind`.
+   On `kind`, set `NOTIFY_CHANNELS` to `webpush` and set `NOTIFY_SUBJECT` in `kind.vars.yml`.
+2. Run the playbook (`deploy.yml`), or `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api` on `kind`.
 3. Check the result: `kubectl -n agentdev-platform get notificationchannels`.
    The list shows `webpush` with the type `webpush`.
 4. Check the API log: `kubectl -n agentdev-platform logs deploy/agentdev-api | grep "web push"`.
@@ -1328,7 +1339,7 @@ subscribe again.
 
 ### Reference: the API
 
-- A blueprint in run.sh step 09 makes the application `agentdev`. It is a public client with the authorization code
+- A blueprint of the playbook tag `authentik` makes the application `agentdev`. It is a public client with the authorization code
   and PKCE.
 - The API gets the keys from authentik in the cluster.
 - The API reads the agents and writes Agent objects with a Role on the agents namespace.
@@ -1361,11 +1372,11 @@ Gitea tells the permission of another user only to a site admin or to an admin o
 token, each change gives 503. Thus, the token user must have admin rights. Use a dedicated service account (for
 example `agentdev-api`) that is admin of the agent repositories only, or a site admin if you accept that.
 
-On `kind`, `./run.sh 10` (`kind.yml --tags api`) does this task for you. The playbook makes the Gitea user `agentdev-api` and makes it admin
+On `kind`, the playbook tag `api` (`kind.yml --tags api`) does this task for you. The playbook makes the Gitea user `agentdev-api` and makes it admin
 of `REPO` and of the repository of each Gitea agent. It makes a token with the scopes `read:repository` and
 `read:user` and puts it in the Secret `agentdev-api-forge`. If the Secret has a token of `agentdev-api` that
 works, the playbook keeps it. The playbook does not show the token. After you add an agent on a new repository, run
-`./run.sh 10` again.
+the playbook with the tag `api` again.
 
 On GKE, do these steps manually. The playbook does not do them yet (#104).
 
@@ -1386,7 +1397,7 @@ makes installation tokens that can only read (metadata, issues, pull requests).
 
 - On GKE with `forge_kind: github`, the playbook puts `github_app.app_id` and the Secret Manager secret
   `github-app-private-key` in the Secret `agentdev-api-github`. You do not do other steps.
-- On `kind` with `FORGE_KIND=github`, `./run.sh 10` puts `.secrets/github-app/app-id` and
+- On `kind` with `FORGE_KIND=github`, the playbook tag `api` puts `.secrets/github-app/app-id` and
   `.secrets/github-app/private-key.pem` in the Secret `agentdev-api-github`.
 - If you do not use the App, you can put a token in the Secret `agentdev-api-github` with the key
   `GITHUB_API_TOKEN`. Use a fine-grained token that can only read metadata, issues and pull requests of the agent
@@ -1429,8 +1440,8 @@ An administrator can set two limits for agents that people add in the web UI or 
 
 1. Set the limits. For GKE, in `ansible/instance.yml`:
    `api: {max_agents: 2, max_agents_per_user: 1}`
-   For `kind`, in `.env`: `MAX_AGENTS=2` and `MAX_AGENTS_PER_USER=1`.
-2. Deploy again. For GKE, run the playbook. For `kind`, run `./run.sh 10`.
+   For `kind`, in `kind.vars.yml`: set `MAX_AGENTS` to 2 and `MAX_AGENTS_PER_USER` to 1.
+2. Deploy again. For GKE, run the playbook. For `kind`, run the playbook with the tag `api`.
 3. Make sure that the API log shows `agent limits: max 2 in total, 1 per user`.
 
 When a limit is reached, the API refuses a new agent with 403 and a message that gives the limit. The audit line has
@@ -1486,13 +1497,16 @@ pod stops.
 ## Agents as resources (operator)
 
 With the operator, an agent is one Agent object in the agents namespace. The operator makes the Service and the
-StatefulSet of the agent. These are the same objects that run.sh step 06 makes. The operator keeps them the same as
-the spec, and shows the phase in `status.phase`.
+StatefulSet of the agent. The operator keeps them the same as the spec, and shows the phase in
+`status.phase`.
 
 ### Install the operator
 
-1. Run run.sh step 12: `./run.sh 12`
-   The script installs the `Agent` CRD (`agentdev.dev/v1alpha1`) and the operator (#47).
+A plain run of the playbook installs the operator. To install only the operator again, do this step:
+
+1. Run the playbook with the tag `operator`:
+   `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags operator`
+   The playbook installs the `Agent` CRD (`agentdev.dev/v1alpha1`) and the operator (#47).
 
 ### Add an agent with an Agent object
 
@@ -1531,7 +1545,7 @@ CAUTION: This procedure removes the pod of the agent. The volumes stay.
 - Blocked agents (`scripts/agent-block.sh`) stay stopped.
 - With `scaleToZero`, the router (not the operator) starts and stops the pod.
 - Field reference: [`images/operator/README.md`](../images/operator/README.md).
-- run.sh step 06 makes Agent objects (#57). The API reads them (`managed: true`).
+- The playbook tag `agents` makes Agent objects (#57). The API reads them (`managed: true`).
 - The API adds, pauses and removes agents (#57). The next work: buttons in the UI (#57 step 4, #4).
 - Agents in the deployment repository with Argo CD or Flux: #58.
 
@@ -1543,11 +1557,11 @@ makes it available on HTTPS (refer to [Public HTTPS entry point (GKE)](#public-h
 
 ### Deploy the web UI
 
-Do this task after run.sh step 10 (the API).
+Do this task after the playbook tag `api` (the API).
 
-1. Run run.sh step 11: `./run.sh 11`
+1. Run the playbook with the tag `ui`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags ui`
 
-The script builds the web UI image and deploys it to the cluster.
+The playbook builds the web UI image and deploys it to the cluster.
 
 ### Open the web UI
 
@@ -1842,13 +1856,14 @@ IMPORTANT: Approvals need agentdev-api, which decides the requests. On GKE, appr
 `api.oidc_issuer` is empty, the playbook stops with an error. Set `api.oidc_issuer` in `instance.yml`. To turn off
 approvals, set `approvals.enabled: false`. Optional: set `approvals.timeout_minutes`.
 
-NOTE: On kind, approvals are off by default (`APPROVALS=false`), because `./run.sh` does not install the API by
-default. To turn on approvals on kind, do the steps that follow.
+NOTE: On kind, approvals are off by default (`APPROVALS=false`), because a plain run of the playbook does not
+install the API. To turn on approvals on kind, do the steps that follow.
 
-1. Set `APPROVALS=true` in `.env`.
+1. Set `APPROVALS` to `true` in `kind.vars.yml`.
 2. Optional: set the time that the agent waits for a decision with `APPROVAL_TIMEOUT_MINUTES`. The default is 30
    minutes. After this time, the agent continues without the action, but the request stays open.
-3. Run `./run.sh 10` and then `./run.sh 12`.
+3. Run the playbook with the tags `api,operator`:
+   `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api,operator`
    The operator starts the agent pods again with the new setting.
 
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`). The
@@ -1900,8 +1915,8 @@ WARNING: Do not put the webhook secret in git. Keep the secret only in the insta
    SECURITY_WEBHOOK_URL=https://siem.example.com/agentdev
    SECURITY_WEBHOOK_SECRET=<the secret>
    ```
-3. Run run.sh step 10: `./run.sh 10`
-   The script puts the file into the Secret `agentdev-api-siem` and starts the API again.
+3. Run the playbook with the tag `api`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api`
+   The playbook puts the file into the Secret `agentdev-api-siem` and starts the API again.
 4. On the SIEM, do a check of each request:
    - Calculate HMAC-SHA256 with the secret over `<X-Agentdev-Timestamp>.<body>`.
    - Compare the result with the value in `X-Agentdev-Signature` (`sha256=<hex>`).
@@ -1943,7 +1958,7 @@ WARNING: Do not put the keys or the certificates in git. Keep them only in the i
    file.
 5. If the server requires a client certificate, add `SECURITY_SYSLOG_CLIENT_CERT` and `SECURITY_SYSLOG_CLIENT_KEY`
    (PEM) to the same file.
-6. Run run.sh step 10: `./run.sh 10`
+6. Run the playbook with the tag `api`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api`
    The API starts again. The API log shows no `security outputs` error.
 
 NOTE: When the syslog server is not available, the API stops all syslog messages. The API tries each message 4 times.
@@ -1969,7 +1984,7 @@ WARNING: Do not put the API key of the collector in git. Keep it only in the ins
    `SECURITY_OTLP_HEADERS=Authorization=Bearer%20<key>`
 3. If a private CA signed the certificate of the collector, add `SECURITY_OTLP_CA` (PEM) to the same file.
    If the name in the certificate is not the name in the URL, add `SECURITY_OTLP_SERVER_NAME` to the same file.
-4. Run run.sh step 10: `./run.sh 10`
+4. Run the playbook with the tag `api`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api`
    The API starts again. The API log shows no `security outputs` error.
 
 NOTE: The API accepts only an `https://` URL for the webhook and for OTLP. You can use the webhook, syslog and OTLP
@@ -2002,16 +2017,16 @@ first event of an agent can have a `prev` that you do not have. This is correct.
 
 | Setting | Default | Where |
 |---|---|---|
-| `SECURITY_PAUSE_AFTER` | 5 | `config.env`; Ansible `security.pause_after` |
-| `SECURITY_RETENTION_DAYS` (SecurityEvent objects) | 30 | `config.env`; Ansible `security.retention_days` |
-| `SECURITY_MAX_PER_AGENT` (SecurityEvent objects) | 500 | `config.env`; Ansible `security.max_per_agent` |
-| `SECURITY_RATE_PER_MIN` (events per minute per container) | 10 | `config.env`; Ansible `security.rate_per_min` |
-| `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `config.env`; Ansible `security.rate_burst` |
-| `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `config.env`; `./run.sh 10` writes it to the database |
+| `SECURITY_PAUSE_AFTER` | 5 | `kind.vars.yml`; Ansible `security.pause_after` |
+| `SECURITY_RETENTION_DAYS` (SecurityEvent objects) | 30 | `kind.vars.yml`; Ansible `security.retention_days` |
+| `SECURITY_MAX_PER_AGENT` (SecurityEvent objects) | 500 | `kind.vars.yml`; Ansible `security.max_per_agent` |
+| `SECURITY_RATE_PER_MIN` (events per minute per container) | 10 | `kind.vars.yml`; Ansible `security.rate_per_min` |
+| `SECURITY_RATE_BURST` (events above the rate for a short time) | 20 | `kind.vars.yml`; Ansible `security.rate_burst` |
+| `SECURITY_DB_RETENTION_DAYS` (Postgres table) | 365 | `kind.vars.yml`; the playbook tag `api` writes it to the database |
 
 SIEM outputs: the API reads these keys from the Secret `agentdev-api-siem`. All keys are optional.
 
-| Key | Secret | kind (`./run.sh 10`) | GKE (Ansible) |
+| Key | Secret | kind (tag `api`) | GKE (Ansible) |
 |---|---|---|---|
 | `SECURITY_WEBHOOK_URL` | no | `.secrets/platform/siem-webhook` | `security.siem.webhook_url` |
 | `SECURITY_WEBHOOK_SECRET` | yes | `.secrets/platform/siem-webhook` | Secret Manager `security-siem` |
@@ -2046,11 +2061,11 @@ registry.
 WARNING: Add only a host that you trust. An agent can send data to each host on the list.
 
 1. Add the host to the list:
-   - On `kind`: set `EGRESS_EXTRA_HOSTS` in `.env`, for example `EGRESS_EXTRA_HOSTS="repo.maven.apache.org .example.com"`.
+   - On `kind`: set `EGRESS_EXTRA_HOSTS` in `kind.vars.yml`, for example to `repo.maven.apache.org` and `.example.com`.
    - On GKE: add the host to `egress_extra_hosts` in `instance.yml`.
 2. Write a dot before the name to also allow all subdomains: `.example.com`.
 3. Apply the change:
-   - On `kind`: run `./run.sh 06`.
+   - On `kind`: run the playbook with the tag `agents`.
    - On GKE: run the playbook (open a pull request in the deployment repository).
    The proxy starts again with the new list.
    NOTE: During the restart of the proxy, the agents cannot connect to the internet for some seconds.
@@ -2071,7 +2086,7 @@ NOTE: The event shows only the method, the host and the port. The event does not
 
 | Setting | Default | Where |
 |---|---|---|
-| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `config.env`; Ansible `egress_hosts` |
+| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
@@ -2179,7 +2194,7 @@ send data to each host on the list of the executor.
      If the list does not exist, use `--type=merge -p '{"spec":{"egressHosts":["sts.googleapis.com"]}}'`.
    - On GKE: add the host to `egress_hosts` of the executor in `instance.yml`, then run the playbook (open a pull
      request in the deployment repository). The playbook also adds the host to the FQDN policy of the proxy.
-   - For a host that all executors need: set `EXECUTOR_EGRESS_HOSTS` in `.env` and run `./run.sh 12` (`kind`), or
+   - For a host that all executors need: set `EXECUTOR_EGRESS_HOSTS` in `kind.vars.yml` and run the tag `operator` (`kind`), or
      set `executor_egress_hosts` in `instance.yml` (GKE).
 3. Write a dot before the name to also allow all subdomains: `.googleapis.com`. On GKE, the FQDN policy of the
    proxy allows only one level of subdomains for a dot entry.
@@ -2194,7 +2209,7 @@ NOTE: The operator does not pause an executor because of egress events.
 NOTE: If an executor cannot connect to anything (for example, the proxy is not ready), the run fails and the pull
 request shows the failure. The executor never gets a direct connection. To stop the egress limit for a test only,
 delete the NetworkPolicy `executor-egress` (`kubectl -n agentdev-executors delete networkpolicy executor-egress`).
-The next `./run.sh 12` or playbook run makes it again.
+The next playbook run (on `kind`, the tag `operator`) makes it again.
 
 ### Find the runs of an executor
 
@@ -2211,13 +2226,13 @@ The next `./run.sh 12` or playbook run makes it again.
 
 | Setting | Default | Where |
 |---|---|---|
-| `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `config.env`; Ansible `exec_ns` |
-| `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `config.env`; Ansible `executor_poll_seconds` |
-| `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `config.env`; Ansible `executor_retention_days` |
-| `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `config.env`; Ansible `executor_apply_start_minutes` |
+| `EXEC_NS` (namespace of the executors) | `agentdev-executors` | `kind.vars.yml`; Ansible `exec_ns` |
+| `EXECUTOR_POLL_SECONDS` (time between forge polls) | 60 | `kind.vars.yml`; Ansible `executor_poll_seconds` |
+| `EXECUTOR_RETENTION_DAYS` (finished runs; minimum 8) | 30 | `kind.vars.yml`; Ansible `executor_retention_days` |
+| `EXECUTOR_APPLY_START_MINUTES` (an allowed apply starts within this time after the decision, else nothing is applied) | 30 | `kind.vars.yml`; Ansible `executor_apply_start_minutes` |
 | `spec.approvalHours` (a decision counts only within this time after the request) | 24 | `Executor` |
 | `spec.allowForkPRs` (also plan pull requests from forks) | false | `Executor`; Ansible `allow_fork_prs` |
-| `EXECUTOR_EGRESS_HOSTS` (hosts that all executors can connect to) | `registry.terraform.io releases.hashicorp.com` | `config.env`; Ansible `executor_egress_hosts` |
+| `EXECUTOR_EGRESS_HOSTS` (hosts that all executors can connect to) | `registry.terraform.io releases.hashicorp.com` | `kind.vars.yml`; Ansible `executor_egress_hosts` |
 | `spec.egressHosts` (more hosts for one executor, maximum 64) | none | `Executor`; Ansible `egress_hosts` of the executor |
 | Executor egress proxy | `http://executor-egress-proxy.agentdev-executors.svc.cluster.local:3128` | operator env `EXECUTOR_EGRESS_PROXY` |
 
@@ -2263,7 +2278,7 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
 1. Install External Secrets Operator, the store and the rules:
 
    ```bash
-   ./run.sh 13
+   ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags secrets
    ```
 
 2. Make sure that the store is ready:
@@ -2274,7 +2289,7 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
 
    The column `READY` shows `True`.
 
-To turn the store off, set `SECRETS_STORE_ENABLED=false` in `config.env`.
+To turn the store off, set `SECRETS_STORE_ENABLED` to `false` in `kind.vars.yml`.
 
 ### Add a project secret (kind, before the API part)
 
@@ -2368,7 +2383,7 @@ You must be in the authentik group `agentdev-admins`.
    The API records the change as an `AGENTDEV_AUDIT` line with the action `set-limits`.
 
 NOTE: The default limits are 80 % for the 5-hour window and 90 % for the weekly window. To change the defaults, set
-`USAGE_FIVE_HOUR` and `USAGE_WEEKLY` in `config.env`, or `usage.five_hour` and `usage.weekly` in the Ansible
+`USAGE_FIVE_HOUR` and `USAGE_WEEKLY` in `kind.vars.yml`, or `usage.five_hour` and `usage.weekly` in the Ansible
 `instance.yml`. A value that an administrator sets in the web UI replaces the default.
 
 NOTE: You can also send `PUT /api/usage/global` with `{"fiveHour": 80, "weekly": 90}`.
@@ -2388,7 +2403,7 @@ NOTE: The operator keeps this data in the ConfigMap `agentdev-usage`. The agent 
 | Global limits | ConfigMap `agentdev-usage-settings`, key `settings.json`. Only the API writes it. |
 | Project limit | Lower than the global limit, or not set. The operator ignores a higher value. |
 | Effective limit | The lower value of the global limit and the project limit. For an agent with more than one repository, the lowest value of all its repositories. |
-| Default limits | `USAGE_FIVE_HOUR` (80) and `USAGE_WEEKLY` (90): `config.env`; Ansible `usage.five_hour`, `usage.weekly`. |
+| Default limits | `USAGE_FIVE_HOUR` (80) and `USAGE_WEEKLY` (90): `kind.vars.yml`; Ansible `usage.five_hour`, `usage.weekly`. |
 | Scope of a rate-limit pause | All agents on the same Claude Secret. |
 | Who can read the usage | `GET /api/usage`: an `agentdev-admins` member sees all. Other users see the global limits and only the projects and agents where they have write access on the forge. Claude Secret names and windows are for admins only (R35). |
 | State and pauses | ConfigMap `agentdev-usage`. Only the operator writes it. Each agent pod mounts it read-only. |
@@ -2456,8 +2471,8 @@ On GKE:
 
 On kind:
 
-1. In `config.env`, set `FORGE_KIND=github` and set `REPO` to the GitHub repository (`owner/name`).
-2. Run `./run.sh 06`.
+1. In `kind.vars.yml`, set `FORGE_KIND` to `github` and set `REPO` to the GitHub repository (`owner/name`).
+2. Run the playbook with the tag `agents`: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents`
    The agents poll GitHub. Webhooks need a public URL.
 
 ### Make the agent labels
@@ -2489,7 +2504,7 @@ permission. The agent examines this before each start. Else it does not do the w
 | Account on Gitea | one account for each agent (the agent name) |
 | Work | open issues assigned to the agent by a person with write access |
 | Branches | `agent/<agent>/...` |
-| Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (`./run.sh 05`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
+| Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (the `kind.yml` tag `forge`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
 | Router | finds the agent from the logins in the event and from the label `agent:<agent>` |
 | Not permitted | merge, other labels, issue changes |
 
@@ -2551,8 +2566,8 @@ different pod in this namespace must also declare them.
 
 ### Block an agent
 
-A blocked agent stays stopped. Events do not start it (scale to zero). Deployments (`./run.sh 06` and the Ansible
-playbook) keep it at 0.
+A blocked agent stays stopped. Events do not start it (scale to zero). Deployments (the playbooks `kind.yml` and
+`deploy.yml`) keep it at 0.
 
 1. Run `scripts/agent-block.sh block <agent> [reason]`.
    The agent stops.
@@ -2604,7 +2619,7 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 | `REMOTE_CONTROL` | false | Not available. The Claude app (#26) must have a full claude.ai login in the session pod, and the session pod has no Claude credential (#118). The script stops when the value is `true`. |
 | `IMAGE_PULL_POLICY` | Never | Use `IfNotPresent` on a cluster that is not `kind`. |
 
-If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
+If botboard runs (`kind.yml --tags botboard`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
 when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, it will go to the chat page of the UI.
 
 ### Console chat sessions
@@ -2671,7 +2686,7 @@ Notes:
 
 ## Webhooks
 
-Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
+Each repository has one webhook to the router. The playbook tag `agents` or the bootstrap registers it.
 
 ### Show the state of the router
 
@@ -2964,59 +2979,97 @@ agent (for example a new image) does not start a stopped agent. The change appli
 
 Do this task after you pull a new `main` into an existing `kind` cluster.
 
-1. Read the **BREAKING** entries in `CHANGELOG.md` to find the run.sh steps.
+1. Read the **BREAKING** entries in `CHANGELOG.md` to find the playbook tags that you must run again.
 
-CAUTION: Do not run only step 10. The API needs the CRDs from step 12, and the agent pods need the forge image from
-step 06. If you remove Docker images (for example with `docker image prune`), run step 06 again.
+CAUTION: Do not run only the tag `api`. The API needs the CRDs from the tag `operator`, and the agent pods need the
+forge image from the tag `agents`. If you remove Docker images (for example with `docker image prune`), run the tag
+`agents` again.
 
-2. Run these steps in this sequence: `./run.sh 06 10 12`
-   - Step 06 builds the worker, forge and router images and loads them into `kind`.
-   - Step 10 builds the API and applies the database grants.
-   - Step 12 builds the operator and applies the CRDs, for example `SecurityEvent`.
-3. Make sure that the agent pods show `2/2 Running`:
+2. Load the secrets: `set -a; source .env; set +a`
+3. Run the playbook with these tags:
+   `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents,api,operator`
+   - The tag `agents` builds the worker, forge and router images and loads them into `kind`.
+   - The tag `api` builds the API and applies the database grants.
+   - The tag `operator` builds the operator and applies the CRDs, for example `SecurityEvent`.
+4. Make sure that the agent pods show `2/2 Running`:
    `kubectl --context kind-agentdev -n coding-agents get pods`
    The agent pods start with the new worker and forge images.
 
-NOTE: The run.sh steps are deprecated (#106). A step that moved to the Ansible playbook `infra/ansible/kind.yml`
-shows a `DEPRECATED` message and runs the playbook. You must install `ansible-playbook` (ansible-core 2.17 or later).
-The shell wrapper of a step is removed one MINOR release after the step moved. Then use the playbook command in the
-message.
+NOTE: The tag `agents` restarts the router, the Claude proxy and the agents only when an image or a Secret changed.
+The tag `agents` needs the operator. A plain run of the playbook installs it.
 
-NOTE: Step 06 runs the playbook `infra/ansible/kind.yml` with the tag `agents` (#106). The playbook restarts the
-router, the Claude proxy and the agents only when an image or a Secret changed. Step 06 runs step 12 only when the
-operator is not installed. On an existing cluster, step 12 must come after
-step 06 to update the CRDs.
+### Move from run.sh to the playbook (1.3.0)
+
+`run.sh`, the numbered step scripts `00-prereqs.sh` to `13-secrets.sh` and `99-teardown.sh` are removed in 1.3.0
+(#417). They were deprecated in 1.1.0 (#106). The Coder spike (`04-coder.sh`) is removed and has no tag. The
+playbook `infra/ansible/kind.yml` does all the other steps. It does not read `config.env`.
+
+Before you start, install `ansible-playbook` (ansible-core 2.17 or later).
+
+1. Copy the example settings to the repository root:
+   `cp infra/ansible/kind.example.vars.yml kind.vars.yml`
+2. Find each value that you changed in `config.env`.
+   The example file shows the Ansible variable next to each `config.env` name.
+3. Write each changed value to its Ansible variable in `kind.vars.yml`.
+4. Keep the namespaces in `config.env` the same as in `kind.vars.yml`.
+   The scripts in `scripts/` still read `config.env`.
+5. Load the secrets: `set -a; source .env; set +a`
+6. Run the playbook: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml`
+
+WARNING: Do not put a secret in `kind.vars.yml`. Keep `FORGE_ADMIN_PASSWORD`, `ANTHROPIC_API_KEY` and
+`CLAUDE_CODE_OAUTH_TOKEN` in `.env`.
+
+NOTE: `kind.vars.yml` is in `.gitignore`. The files in `.secrets/` do not change. The playbook does not write
+`results.md`.
+
+| Old command | New command (`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml ...`) |
+|---|---|
+| `./run.sh` (steps 00, 01, 05, 06 and the operator) | no tags (a plain run: prereqs, cluster, forge, operator, agents) |
+| `./run.sh 00` | `--tags prereqs` |
+| `./run.sh 01` | `--tags cluster` |
+| `./run.sh 02` | `--tags sandbox` |
+| `./run.sh 03` | `--tags sandbox-test` |
+| `./run.sh 04` | removed, no tag |
+| `./run.sh 05` | `--tags forge` |
+| `./run.sh 06` | `--tags agents` |
+| `./run.sh 07` | `--tags botboard` |
+| `./run.sh 08` | `--tags mcp` |
+| `./run.sh 09` | `--tags authentik` |
+| `./run.sh 10` | `--tags api` |
+| `./run.sh 11` | `--tags ui` |
+| `./run.sh 12` | `--tags operator` |
+| `./run.sh 13` | `--tags secrets` |
+| `./99-teardown.sh` | `--tags teardown` |
+
+A plain run does not run the tags `sandbox`, `sandbox-test`, `botboard`, `mcp`, `authentik`, `api`, `ui`, `secrets`
+and `teardown`. Run them with `--tags`.
 
 ## Remove agentdev
 
-### Reference: run.sh steps and the GKE playbook
+### Reference: the kind playbook and the GKE playbook
 
-The playbook `infra/ansible/deploy.yml` does the run.sh steps on GKE. It uses the same manifests. You do not need
-a run.sh step or a manual `kubectl` command on GKE.
+The playbook `infra/ansible/deploy.yml` does on GKE what `infra/ansible/kind.yml` does on `kind`. It uses the same
+manifests. You do not need a manual `kubectl` command on GKE.
 
-| Component | `kind` (run.sh step) | GKE (playbook) |
+| Component | `kind` (`kind.yml` tag) | GKE (playbook) |
 |---|---|---|
-| Host prerequisites (tools, engine, kind version) | 00 (`kind.yml --tags prereqs`) | not used |
-| Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
-| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.3.0) | not used |
-| agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
-| Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
-| Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
-| botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
-| Webhook router | 06 (`kind.yml --tags agents`, role `kind_agents`) | `deploy.yml` |
-| Egress proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` |
-| Claude credential proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` (`claude_proxy: true`) |
-| Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
-| Scoped secrets store (External Secrets Operator, policies, store) | 13 (`kind.yml --tags secrets`, role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
-| Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
-| authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
-| API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
-| Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
+| Host prerequisites (tools, engine, kind version) | `prereqs` | not used |
+| Cluster with gVisor | `cluster` | `infra/terraform` |
+| agent-sandbox and warm pool (evaluation) | `sandbox` | not used |
+| Checks of the warm pool, suspend and resume (evaluation) | `sandbox-test` | not used |
+| Gitea forge, accounts, seeded repo | `forge` | not used (GitHub, #2) |
+| botboard (optional) | `botboard` | not used (`botboard_url`, an external botboard) |
+| Webhook router | `agents` (role `kind_agents`) | `deploy.yml` |
+| Egress proxy | `agents` | `deploy.yml` |
+| Claude credential proxy | `agents` | `deploy.yml` (`claude_proxy: true`) |
+| Operator and CRDs | `operator` | `deploy.yml` |
+| Scoped secrets store (External Secrets Operator, policies, store) | `secrets` (role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
+| Platform namespace | `mcp` (role `platform`) | role `platform` |
+| authentik | `authentik` (roles `authentik` and `authentik_kind`) | role `authentik` |
+| API | `api` (role `api`) | role `api` (`api.oidc_issuer`) |
+| Web UI | `ui` (role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
-| Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
-
-NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
-`99-teardown.sh` are removed in 1.3.0 (#470). Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
+| Delete the cluster | `teardown` (tagged `never`) | `terraform destroy` |
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.
@@ -3028,7 +3081,7 @@ NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh
 
 CAUTION: This procedure deletes the cluster and all data in it.
 
-1. Run `ansible-playbook infra/ansible/kind.yml --tags teardown` (or the deprecated `./99-teardown.sh`).
+1. Run `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags teardown`.
    The tag `teardown` is also tagged `never`: no other run of `kind.yml` deletes the cluster.
 
 ### Remove a GKE instance

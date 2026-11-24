@@ -1,6 +1,6 @@
 ---
 # The role gitea_forge (#106, was 05-forge.sh): kind.yml --tags forge runs only that role, every write is guarded by a
-# read (idempotent), the password and tokens are under no_log, and the wrapper calls kind.yml.
+# read (idempotent), the password and tokens are under no_log, and the password is never a setting in a vars file.
 # Run: ansible-playbook infra/ansible/tests/gitea_forge_role.yml
 - name: Role gitea_forge (#106)
   hosts: localhost
@@ -52,12 +52,11 @@
           1    owner    owner@agents.local   true      true     false
           2    alice    alice@agents.local   true      false    false
 
-    - name: The wrapper prints the deprecation notice, calls kind.yml and keeps the password out of -e
+    - name: The kind settings file keeps the password out of -e (it stays in the environment, #417)
       ansible.builtin.assert:
         that:
-          - "'deprecated 05 forge' in wrapper"
-          - "'kind.yml\" --tags forge' in wrapper"
-          - "'gitea_forge_admin_password' not in wrapper"
+          - "'gitea_forge_admin_password' not in settings"
+          - "'FORGE_ADMIN_PASSWORD' not in settings"
         quiet: true
       vars:
-        wrapper: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../05-forge.sh') }}"
+        settings: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../kind.example.vars.yml') }}"

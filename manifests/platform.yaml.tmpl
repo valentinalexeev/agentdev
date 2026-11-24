@@ -1,5 +1,5 @@
 # agentdev platform (#14, ADR 0001): the instance's Postgres and the ContextForge MCP gateway, in namespace ${PLATFORM_NS}.
-# Rendered by 08-mcp.sh (envsubst). Postgres is shared: one database and login per component (contextforge now, the
+# Rendered by the role platform (kind.yml tag mcp, deploy.yml). Postgres is shared: one database and login per component (contextforge now, the
 # agentdev API in #12). Secret values come from .secrets/platform/ (kind) or Secret Manager (GKE); never from git.
 apiVersion: v1
 kind: Namespace
