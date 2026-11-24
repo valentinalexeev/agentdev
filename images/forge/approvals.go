@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const approvalPrefix = "AGENTDEV_APPROVAL_REQUEST "
@@ -212,7 +214,7 @@ func (a *approvals) open(job, source, tool, input string, why why) (*approvalReq
 	r := &approvalRequest{ID: hex.EncodeToString(rnd[:]), Repo: a.s.c.Repos[0], Forge: a.s.c.ForgeKind, Job: job,
 		Source: source, Tool: clip(tool, 128), Input: clipInput(a.redact(input)), TimeoutSec: int(a.timeout.Seconds()),
 		RequesterID: self, SecretHash: hex.EncodeToString(sh[:]), secret: hex.EncodeToString(sec[:]), state: "pending",
-		Guard: clip(why.guard, 1000), Reason: a.cleanReason(why.reason)}
+		Guard: a.cleanGuard(why.guard), Reason: a.cleanReason(why.reason)}
 	r.ContentHash = approvalHash(r.ID, a.s.c.AgentName, r.Repo, r.Job, r.Source, r.Tool, r.Input)
 	b, _ := json.Marshal(r)
 	eventMu.Lock()
@@ -233,21 +235,75 @@ const reasonMax = 1500
 // cleanReason makes untrusted reason text safe to show: escapes and control characters out (newline and tab stay),
 // secrets redacted, valid UTF-8, at most reasonMax bytes.
 func (a *approvals) cleanReason(s string) string {
+	// invisible characters go before redaction: a zero-width space inside a token would hide it from secretRe
+	return clipRunes(strings.TrimSpace(a.redact(stripInvisible(s, true))), reasonMax)
+}
+
+// cleanGuard: the guard line is written by the sidecar, but it can name agent-chosen paths. Same cleaning as the
+// reason, on one line.
+func (a *approvals) cleanGuard(s string) string {
+	return clipRunes(strings.TrimSpace(a.redact(stripInvisible(s, false))), guardMax)
+}
+
+const guardMax = 1000
+
+// stripInvisible removes ANSI escapes, control characters, format characters (Unicode Cf: zero-width, bidi
+// embeddings and isolates, BOM) and bidi controls; keepLines keeps newline and tab, otherwise they become spaces.
+func stripInvisible(s string, keepLines bool) string {
 	s = ansiRe.ReplaceAllString(strings.ToValidUTF8(s, "\uFFFD"), "")
-	s = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
-			return r
-		}
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029' || r == '\u202e' || r == '\u202d' {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			if keepLines {
+				return r
+			}
+			return ' '
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029':
+			return -1
+		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r):
 			return -1
 		}
 		return r
 	}, s)
-	s = strings.TrimSpace(a.redact(s))
-	if len(s) > reasonMax {
-		s = strings.ToValidUTF8(s[:reasonMax], "") + "..."
+}
+
+// clipRunes clips s to at most n bytes at a rune boundary and marks the cut.
+func clipRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return s
+	i := n
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i] + "..."
+}
+
+// inlineCode quotes s as Markdown inline code that s cannot close: a backtick run longer than any in s, padded with
+// spaces. s is put on one line first.
+func inlineCode(s string) string {
+	s = strings.Join(strings.Fields(stripInvisible(s, false)), " ")
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	f := strings.Repeat("`", longest+1)
+	return f + " " + s + " " + f
+}
+
+func codeList(xs []string) string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = inlineCode(x)
+	}
+	return strings.Join(out, ", ")
 }
 
 func clip(s string, n int) string {
@@ -769,8 +825,9 @@ func (a *approvals) pushApproval(ctx context.Context, job, branch, tip string, p
 		return nil
 	}
 	a.mu.Unlock()
+	// the paths come from the agent's commit: each is quoted as inline code it cannot close (#536 review)
 	guard := fmt.Sprintf("the push changes protected paths (%s); the protected paths of this agent are %s (`PROTECTED_PATHS`).",
-		"`"+strings.Join(paths, "`, `")+"`", "`"+strings.Join(a.s.c.Protected, "`, `")+"`")
+		codeList(paths), codeList(a.s.c.Protected))
 	r, err := a.request(job, "push", "push", input, "push\x00"+job+"\x00"+branch+"\x00"+strings.Join(paths, ","), why{guard: guard})
 	if err != nil {
 		return err
