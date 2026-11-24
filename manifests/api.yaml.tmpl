@@ -236,6 +236,9 @@ spec:
   - {name: forgeSecrets, expression: "['agent-' + variables.agent, 'egress-forge-proxy']"}
   - {name: setupSecret, expression: "'agent-' + variables.agent + '-setup-proxy'"}
   - {name: toolchain, expression: "variables.inits.exists(c, c.name == 'toolchain')"}
+  # #499: the toolchain init container's environment, exactly as the operator renders it (toolchain.go toolchainInit)
+  - {name: setupProxy, expression: "'http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.${AGENTS_NS}.svc.cluster.local:3128'"}
+  - {name: noProxy, expression: "'localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local'"}
   validations:
   - expression: "object.metadata.name.startsWith('chat-') && object.metadata.labels['app'] == 'agent-chat' && object.metadata.labels['agentdev/console'] == 'true' && variables.agent.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
     message: "the API creates only console chat Jobs (chat-*, app=agent-chat, agentdev/console=true)"
@@ -249,6 +252,19 @@ spec:
   # the state volume gets /state/toolchain read-only (ADR 0010 D3)
   - expression: "variables.inits.all(c, c.name != 'toolchain' || (has(c.securityContext) && has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem && has(c.securityContext.runAsUser) && c.securityContext.runAsUser == 1000))"
     message: "the toolchain init container runs as UID 1000 with a read-only root filesystem"
+  # review of #537: the init containers run exactly the operator's commands with exactly its mounts and environment, so
+  # no other command can copy the setup key or write into another volume, and neither is a restartable sidecar (a
+  # restartPolicy would keep it running next to chat, with the setup egress)
+  - expression: "variables.inits.all(c, !has(c.restartPolicy) && !has(c.args) && !has(c.envFrom) && !has(c.volumeDevices) && !has(c.lifecycle) && !has(c.workingDir))"
+    message: "the init containers set no restartPolicy (no sidecars), args, envFrom, volumeDevices, lifecycle or workingDir"
+  - expression: "variables.inits.all(c, c.name != 'state-init' || ((c.command == ['mkdir', '-p', '/state/claude'] || c.command == ['mkdir', '-p', '/state/claude', '/state/toolchain', '/state/cache']) && !has(c.env) && size(c.volumeMounts) == 1 && c.volumeMounts[0].name == 'state' && c.volumeMounts[0].mountPath == '/state' && !has(c.volumeMounts[0].subPath) && !has(c.volumeMounts[0].subPathExpr)))"
+    message: "state-init only creates the state directories and mounts only the state volume at /state"
+  - expression: "variables.inits.all(c, c.name != 'toolchain' || (c.command == ['toolchain-install'] && size(c.volumeMounts) == 2 && c.volumeMounts.all(m, !has(m.subPath) && !has(m.subPathExpr) && ((m.name == 'state' && m.mountPath == '/state') || (m.name == 'toolchain-tmp' && m.mountPath == '/tmp'))) && c.volumeMounts.exists(m, m.name == 'state') && c.volumeMounts.exists(m, m.name == 'toolchain-tmp')))"
+    message: "the toolchain init container runs toolchain-install and mounts only the state volume at /state and toolchain-tmp at /tmp"
+  - expression: "variables.inits.all(c, c.name != 'toolchain' || (has(c.env) && c.env.all(e, size(c.env.filter(x, x.name == e.name)) == 1 && ((e.name == 'TOOLCHAIN_SPEC' && has(e.value) && !has(e.valueFrom)) || (e.name == 'TOOLCHAIN_DIR' && has(e.value) && e.value == '/state/toolchain') || (e.name in ['TMPDIR', 'HOME'] && has(e.value) && e.value == '/tmp') || (e.name in ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'] && has(e.value) && e.value == variables.setupProxy) || (e.name in ['NO_PROXY', 'no_proxy'] && has(e.value) && e.value == variables.noProxy) || (e.name == 'TOOLCHAIN_EXPECT' && has(e.valueFrom) && has(e.valueFrom.configMapKeyRef)) || (e.name == 'EGRESS_SETUP_KEY' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.key == 'password'))) && c.env.exists(e, e.name == 'TOOLCHAIN_SPEC')))"
+    message: "the toolchain init container has exactly the operator's environment (spec, directories, setup proxy)"
+  - expression: "!variables.toolchain || variables.pod.volumes.exists(v, v.name == 'toolchain-tmp' && has(v.emptyDir))"
+    message: "toolchain-tmp is an emptyDir"
   - expression: "!variables.toolchain || variables.pod.containers.all(c, !has(c.volumeMounts) || !c.volumeMounts.exists(m, m.name == 'state') || c.volumeMounts.exists(m, m.name == 'state' && m.mountPath == '/state/toolchain' && has(m.readOnly) && m.readOnly))"
     message: "with a toolchain, chat and forge mount /state/toolchain read-only"
   - expression: "variables.pod.runtimeClassName == 'gvisor' && variables.pod.automountServiceAccountToken == false && (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) && (!has(variables.pod.shareProcessNamespace) || !variables.pod.shareProcessNamespace)"

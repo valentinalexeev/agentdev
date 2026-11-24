@@ -91,7 +91,7 @@
       when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
-    - name: Toolchain setup egress credential (generated once, kept in Secret Manager, #499)
+    - name: "Toolchain setup egress credential (generated once, kept in Secret Manager, #499)"
       ansible.builtin.shell: |
         set -euo pipefail
         name="{{ sm_egress_setup_proxy }}"
