@@ -96,7 +96,8 @@ func main() {
 		events: store, source: mustAgentsSource()}
 	agents.source = wr.source
 	log.Printf("agents source: %s (#58)", wr.source)
-	wr.jobs = newJobCache(forgeJobs{gitea: gp, github: gh}, 30*time.Second) // #345, jobs.go
+	// #345, jobs.go; #519: fresh for 90 s (longer than the Work board's 60 s poll), served stale up to 10 min
+	wr.jobs = newJobCache(forgeJobs{gitea: gp, github: gh}, 90*time.Second, 10*time.Minute)
 	wr.platform = newPlatformChecker(agents, forgeProbeFrom(gp, gh), cfg.Namespace, env("PLATFORM_NS", "agentdev-platform"))
 	if wr.limits.Total > 0 || wr.limits.PerUser > 0 {
 		log.Printf("agent limits: max %d in total, %d per user (0 = none)", wr.limits.Total, wr.limits.PerUser)
