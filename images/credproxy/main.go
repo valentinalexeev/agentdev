@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -246,7 +247,11 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // readClassifier reads the request body to find an auto mode classifier request (#506) and puts the same bytes back,
 // so the request goes upstream unchanged. A body over classifierBodyCap is passed through unread.
 func (s *server) readClassifier(r *http.Request) *classifierCall {
-	if r.URL.Path != "/v1/messages" || r.Body == nil || r.ContentLength > classifierBodyCap {
+	if r.URL.Path != "/v1/messages" || r.Body == nil {
+		return nil
+	}
+	if r.ContentLength > classifierBodyCap {
+		classifierLogOnce("large", "request over the 4 MiB inspection cap")
 		return nil
 	}
 	head, err := io.ReadAll(io.LimitReader(r.Body, classifierBodyCap+1))
@@ -254,7 +259,29 @@ func (s *server) readClassifier(r *http.Request) *classifierCall {
 		io.Reader
 		io.Closer
 	}{io.MultiReader(bytes.NewReader(head), r.Body), r.Body}
-	if err != nil || len(head) > classifierBodyCap || r.Header.Get("Content-Encoding") != "" {
+	if err != nil {
+		return nil
+	}
+	if len(head) > classifierBodyCap {
+		classifierLogOnce("large", "request over the 4 MiB inspection cap")
+		return nil
+	}
+	switch enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); enc {
+	case "", "identity":
+	case "gzip":
+		zr, err := gzip.NewReader(bytes.NewReader(head))
+		if err != nil {
+			classifierLogOnce("encoded", "gzip request body not readable")
+			return nil
+		}
+		plain, err := io.ReadAll(io.LimitReader(zr, classifierBodyCap+1))
+		if err != nil || len(plain) > classifierBodyCap {
+			classifierLogOnce("large", "request over the 4 MiB inspection cap")
+			return nil
+		}
+		head = plain // only for detection; the compressed bytes go upstream
+	default:
+		classifierLogOnce("encoded", "request with Content-Encoding "+clip(enc, 40))
 		return nil
 	}
 	return detectClassifier(head)

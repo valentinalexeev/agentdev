@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"log"
@@ -283,5 +284,99 @@ func TestClassifierVerdict(t *testing.T) {
 		if got := classifierVerdict(in); got != want {
 			t.Errorf("%q: %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestClassifierSeverityMode(t *testing.T) {
+	f := newFixture(t, 0)
+	logs := captureLog(t)
+	body := classifierRequest(t, `{"Bash":"terraform apply"}`)
+	sevEvents := func() []classifierEvent {
+		var evs []classifierEvent
+		for _, l := range strings.Split(logText(f.logs), "\n") {
+			if j, ok := strings.CutPrefix(l, eventPrefix); ok {
+				var e classifierEvent
+				json.Unmarshal([]byte(j), &e)
+				if e.Rule == "classifier-severity" {
+					evs = append(evs, e)
+				}
+			}
+		}
+		return evs
+	}
+	for _, c := range []struct {
+		name, reply string
+		want        int
+	}{
+		{"one severity", "<thinking>infra change</thinking><severity>72</severity><category>prod</category>", 1},
+		{"unclosed severity", "<severity> 15.5", 1},
+		{"several severities", "<severity>10</severity><severity>90</severity>", 0},
+		{"unclosed thinking", "<severity>10</severity><thinking>hmm", 0},
+		{"mixed block and severity", "<block>no</block><severity>5</severity>", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			logReset(f.logs)
+			f.upstream = jsonReply(c.reply)
+			f.send("alice", body)
+			evs := sevEvents()
+			if len(evs) != c.want || len(classifierEvents(t, f.logs)) != 0 {
+				t.Fatalf("%d severity events, want %d: %s", len(evs), c.want, logText(f.logs))
+			}
+			if c.want == 1 && (evs[0].Agent != "alice" || evs[0].Severity != "low" || !strings.Contains(evs[0].Action, "terraform apply")) {
+				t.Fatalf("event %+v", evs[0])
+			}
+		})
+	}
+	if !strings.Contains(logs.String(), "both <block> and <severity>") {
+		t.Fatalf("mixed reply not logged: %s", logs.String())
+	}
+	logReset(f.logs)
+	f.upstream = sseReply("<sever", "ity>8", "0</severity>")
+	f.send("alice", body)
+	if evs := sevEvents(); len(evs) != 1 || !strings.Contains(evs[0].Action, "severity 80 ") {
+		t.Fatalf("streaming severity %+v", evs)
+	}
+}
+
+func TestClassifierGzipRequest(t *testing.T) {
+	f := newFixture(t, 0)
+	logs := captureLog(t)
+	f.upstream = jsonReply("<block>no")
+	var zb bytes.Buffer
+	zw := gzip.NewWriter(&zb)
+	zw.Write([]byte(classifierRequest(t, `{"Bash":"zipped"}`)))
+	zw.Close()
+	f.post("/v1/messages", agentKey(testSigning, "alice"), zb.String(), map[string]string{"Content-Encoding": "gzip"}).Body.Close()
+	if evs := classifierEvents(t, f.logs); len(evs) != 1 || !strings.Contains(evs[0].Action, "zipped") {
+		t.Fatalf("events %+v", evs)
+	}
+	if f.gotBody != zb.String() {
+		t.Fatal("compressed body changed")
+	}
+	logReset(f.logs)
+	for i := 0; i < 2; i++ {
+		f.post("/v1/messages", agentKey(testSigning, "alice"), "opaque", map[string]string{"Content-Encoding": "br"}).Body.Close()
+		if f.gotBody != "opaque" {
+			t.Fatalf("br body %q", f.gotBody)
+		}
+	}
+	if n := strings.Count(logs.String(), "Content-Encoding br"); n != 1 || len(classifierEvents(t, f.logs)) != 0 {
+		t.Fatalf("logged %d: %s", n, logs.String())
+	}
+}
+
+func TestClassifierLargeRequestPassesThrough(t *testing.T) {
+	f := newFixture(t, 0)
+	logs := captureLog(t)
+	f.upstream = jsonReply("<block>no")
+	big := classifierRequest(t, `{"Bash":"ls"}`, mustJSON(map[string]string{"pad": strings.Repeat("p", classifierBodyCap)}))
+	for i := 0; i < 2; i++ {
+		f.send("alice", big)
+		if f.gotBody != big {
+			t.Fatal("large body changed")
+		}
+	}
+	if n := strings.Count(logs.String(), "4 MiB"); n != 1 || len(classifierEvents(t, f.logs)) != 0 {
+		t.Fatalf("logged %d: %s", n, logs.String())
 	}
 }

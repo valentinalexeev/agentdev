@@ -27,6 +27,8 @@ import (
 //     last `</transcript>` is the action.
 //   - The reply holds `<block>yes` (block) or `<block>no` (allow), after an optional `<thinking>` part; stage 1 stops at
 //     the `</block>` stop sequence. Claude Code reads a reply with both verdicts as no verdict, and so does this file.
+//     In severity mode the reply is `<severity>N</severity>` instead: every score is a `classifier-severity` event.
+//     Any other reply format is logged once and gives no event until it is supported.
 //
 // Trust (docs/security.md R121): the agent cannot suppress an allow, because Claude Code makes the request itself,
 // not the model. The agent holds its proxy key (R60), so it can send a look-alike request and create false events,
@@ -34,7 +36,7 @@ import (
 
 const (
 	classifierMarker   = "You are a security monitor for autonomous AI coding agents"
-	classifierBodyCap  = 32 << 20 // a request larger than this is passed through unread
+	classifierBodyCap  = 4 << 20 // classifier transcripts are bounded; a larger request is passed through unread
 	classifierReplyCap = 256 << 10
 	classifierInputMax = 300
 )
@@ -171,6 +173,23 @@ func classifierVerdict(text string) string {
 	}
 }
 
+var severityRe = regexp.MustCompile(`<severity>\s*(\d+(?:\.\d+)?)\s*(</severity>)?`)
+
+// classifierSeverity mirrors Claude Code's severity mode (2.1.328, on by default for some models): closed thinking is
+// removed, an unclosed <thinking> gives no verdict, and exactly one <severity>N must remain. The block threshold is
+// in the client configuration, which the proxy cannot see, so every score becomes an event and the admin judges it.
+func classifierSeverity(text string) (string, bool) {
+	t := thinkingRe.ReplaceAllString(text, "")
+	if strings.Contains(t, "<thinking>") {
+		return "", false
+	}
+	m := severityRe.FindAllStringSubmatch(t, -1)
+	if len(m) != 1 {
+		return "", false
+	}
+	return m[0][1], true
+}
+
 // replyText collects the text of a reply, JSON or server-sent events, up to classifierReplyCap.
 type replyText struct {
 	sse  bool
@@ -257,11 +276,17 @@ func (b *classifierBody) finish() {
 			classifierLogOnce("reply", "classifier reply not readable")
 			return
 		}
-		switch classifierVerdict(text) {
-		case "allow":
-			emitEvent(b.agent, "classifier-allow", "low", "auto mode classifier allowed "+clip(b.call.tool, 100)+": "+
-				clip(redactSecrets(b.call.input), classifierInputMax))
-		case "":
+		verdict := classifierVerdict(text)
+		sev, hasSev := classifierSeverity(text)
+		what := clip(b.call.tool, 100) + ": " + clip(redactSecrets(b.call.input), classifierInputMax)
+		switch {
+		case verdict != "" && hasSev: // a reply has one format; both means an unknown one
+			classifierLogOnce("mixed", "classifier reply with both <block> and <severity>")
+		case verdict == "allow":
+			emitEvent(b.agent, "classifier-allow", "low", "auto mode classifier allowed "+what)
+		case hasSev:
+			emitEvent(b.agent, "classifier-severity", "low", "auto mode classifier severity "+sev+" for "+what)
+		case verdict == "":
 			classifierLogOnce("verdict", "classifier reply without a verdict")
 		}
 	})
