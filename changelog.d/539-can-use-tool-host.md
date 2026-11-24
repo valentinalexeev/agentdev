@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: Approval prompts use Claude Code's can_use_tool host protocol
 components: [worker]
+pr: 540
 ---
 ## Summary
 

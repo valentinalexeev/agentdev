@@ -16,7 +16,8 @@
 // Fails closed: a sidecar error, an unreadable answer or anything but behavior allow/deny is a deny. The fields from
 // Claude Code are only forwarded; the sidecar treats them as untrusted text (images/forge/approvals.go).
 // stdin is closed after the first `result` event, which ends the run; the exit code is Claude's.
-// Verified against Claude Code 2.1.328 and 2.1.312, the pinned version (control_request/control_response envelopes, can_use_tool fields,
+// Verified against Claude Code 2.1.328 and 2.1.312, the pinned version (control_request/control_response envelopes,
+// can_use_tool fields,
 // behavior allow {updatedInput} | deny {message}).
 'use strict';
 const { spawn } = require('child_process');
