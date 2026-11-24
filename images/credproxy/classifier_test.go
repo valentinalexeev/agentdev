@@ -81,7 +81,13 @@ func classifierEvents(t *testing.T, buf *bytes.Buffer) []classifierEvent {
 
 // send posts as the agent and reads the whole reply, returning the body the client saw.
 func (f *fixture) send(agent, body string) string {
-	resp := f.post("/v1/messages", agentKey(testSigning, agent), body, nil)
+	return drain(f.post("/v1/messages", agentKey(testSigning, agent), body, nil))
+}
+
+// drain reads the whole response before returning. The proxy logs its
+// events when it finishes the response, so asserting before the body is
+// read races with that (#535).
+func drain(resp *http.Response) string {
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	return string(b)
@@ -164,7 +170,7 @@ func TestClassifierForgedAttributedToKeyOnly(t *testing.T) {
 	}
 	// without a valid key nothing reaches the detector
 	logReset(f.logs)
-	f.post("/v1/messages", "alice.forged", classifierRequest(t, `{"Bash":"x"}`), nil).Body.Close()
+	drain(f.post("/v1/messages", "alice.forged", classifierRequest(t, `{"Bash":"x"}`), nil))
 	if evs := classifierEvents(t, f.logs); len(evs) != 0 {
 		t.Fatalf("event without a key: %+v", evs)
 	}
@@ -344,7 +350,7 @@ func TestClassifierGzipRequest(t *testing.T) {
 	zw := gzip.NewWriter(&zb)
 	zw.Write([]byte(classifierRequest(t, `{"Bash":"zipped"}`)))
 	zw.Close()
-	f.post("/v1/messages", agentKey(testSigning, "alice"), zb.String(), map[string]string{"Content-Encoding": "gzip"}).Body.Close()
+	drain(f.post("/v1/messages", agentKey(testSigning, "alice"), zb.String(), map[string]string{"Content-Encoding": "gzip"}))
 	if evs := classifierEvents(t, f.logs); len(evs) != 1 || !strings.Contains(evs[0].Action, "zipped") {
 		t.Fatalf("events %+v", evs)
 	}
@@ -353,7 +359,7 @@ func TestClassifierGzipRequest(t *testing.T) {
 	}
 	logReset(f.logs)
 	for i := 0; i < 2; i++ {
-		f.post("/v1/messages", agentKey(testSigning, "alice"), "opaque", map[string]string{"Content-Encoding": "br"}).Body.Close()
+		drain(f.post("/v1/messages", agentKey(testSigning, "alice"), "opaque", map[string]string{"Content-Encoding": "br"}))
 		if f.gotBody != "opaque" {
 			t.Fatalf("br body %q", f.gotBody)
 		}
