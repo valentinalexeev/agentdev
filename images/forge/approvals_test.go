@@ -470,6 +470,31 @@ func TestApprovalGuardPathsQuoted(t *testing.T) {
 	if strings.Contains(g, "\n") {
 		t.Fatalf("guard has a new line: %q", g)
 	}
+	// one path longer than the whole line budget: clipped before quoting, so the fence closes (spider on #536)
+	long := ".github/workflows/" + strings.Repeat("`x", 1500)
+	if err := s.appr.pushApproval(context.Background(), "issue-3", "agent/alice/y", "def456", []string{long, "b", "c"}); err != nil {
+		t.Fatal(err)
+	}
+	g = lastRequest(t, lines).Guard
+	if len(g) > guardMax || strings.Contains(g, "too long") || !strings.HasSuffix(g, "(`PROTECTED_PATHS`).") {
+		t.Fatalf("long path guard (%d bytes): %q", len(g), g)
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(strings.SplitN(g, "(", 2)[1], ")"), ", ") {
+		if strings.HasPrefix(part, "and ") {
+			continue
+		}
+		f := part[:strings.Index(part, " ")]
+		if !strings.HasSuffix(strings.SplitN(part, ")", 2)[0], " "+f) {
+			t.Fatalf("fence %q not closed in %q", f, part)
+		}
+	}
+	many := make([]string, 200)
+	for i := range many {
+		many[i] = strings.Repeat("p", 100) + strconv.Itoa(i)
+	}
+	if got := s.appr.codeList(many); len(got) > guardListMax || !strings.Contains(got, "more") {
+		t.Fatalf("codeList over budget: %d", len(got))
+	}
 	if got := inlineCode("a``b"); got != "``` a``b ```" {
 		t.Fatalf("inlineCode: %q", got)
 	}
@@ -480,9 +505,16 @@ func TestApprovalInvisibleCharsStripped(t *testing.T) {
 	s, _, _ := approvalSetup(t)
 	a := s.appr
 	tok := "ghp_" + strings.Repeat("A", 18) + "\u200b" + strings.Repeat("B", 18)
-	for _, in := range []string{tok, "token=se\u200bcret-value", "x\u202ay\u202bz\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200e\u200f\ufeff\u00ad\u2060w"} {
-		for name, got := range map[string]string{"reason": a.cleanReason(in), "guard": a.cleanGuard(in)} {
-			if strings.ContainsFunc(got, func(r rune) bool { return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) }) {
+	ins := []string{tok, "token=se\u200bcret-value", "x\u202ay\u202bz\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200e\u200f\ufeff\u00ad\u2060w"}
+	// default-ignorable, not Cf (spider on #536): combining grapheme joiner, Hangul fillers, variation selectors
+	for _, c := range []string{"\u034f", "\u115f", "\u1160", "\u3164", "\uffa0", "\ufe0f", "\U000e0100", "\u180b"} {
+		ins = append(ins, "ghp_"+strings.Repeat("A", 18)+c+strings.Repeat("B", 18))
+	}
+	for _, in := range ins {
+		for name, got := range map[string]string{"reason": a.cleanReason(in), "guard path": a.codeList([]string{in})} {
+			if strings.ContainsFunc(got, func(r rune) bool {
+				return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) || unicode.Is(defaultIgnorable, r)
+			}) {
 				t.Errorf("%s keeps an invisible character: %q", name, got)
 			}
 			if strings.Contains(got, "AAAA") || strings.Contains(got, "secret-value") {
@@ -496,7 +528,7 @@ func TestApprovalInvisibleCharsStripped(t *testing.T) {
 func TestApprovalClipRuneBoundary(t *testing.T) {
 	s, _, _ := approvalSetup(t)
 	long := strings.Repeat("é", 2000) // 2 bytes each: an odd limit falls inside a character
-	for name, got := range map[string]string{"guard": s.appr.cleanGuard("x" + long), "reason": s.appr.cleanReason("x" + long)} {
+	for name, got := range map[string]string{"guard path": strings.Trim(s.appr.codeList([]string{"x" + long}), "` "), "reason": s.appr.cleanReason("x" + long)} {
 		if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") || strings.Contains(got, "\uFFFD") {
 			t.Errorf("%s clipped badly: ...%q", name, got[len(got)-10:])
 		}

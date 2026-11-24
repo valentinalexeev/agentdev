@@ -239,16 +239,27 @@ func (a *approvals) cleanReason(s string) string {
 	return clipRunes(strings.TrimSpace(a.redact(stripInvisible(s, true))), reasonMax)
 }
 
-// cleanGuard: the guard line is written by the sidecar, but it can name agent-chosen paths. Same cleaning as the
-// reason, on one line.
+// cleanGuard: the guard line is written by the sidecar from fixed text and values it checked; agent-chosen parts
+// (push paths) are already cleaned, redacted, clipped and quoted by codeList. It is never cut (a cut could drop a
+// closing fence, #536 review): a line over guardMax is replaced by a fixed text.
 func (a *approvals) cleanGuard(s string) string {
-	return clipRunes(strings.TrimSpace(a.redact(stripInvisible(s, false))), guardMax)
+	s = strings.TrimSpace(stripInvisible(s, false))
+	if len(s) > guardMax {
+		return "the request hit a guard of the sidecar (details too long to show)."
+	}
+	return s
 }
 
-const guardMax = 1000
+// guardMax bounds the guard line; codeList keeps each list under guardListMax, so a push guard (two lists and fixed
+// text) always fits.
+const (
+	guardMax     = 1500
+	guardListMax = 600
+	guardItemMax = 120
+)
 
 // stripInvisible removes ANSI escapes, control characters, format characters (Unicode Cf: zero-width, bidi
-// embeddings and isolates, BOM) and bidi controls; keepLines keeps newline and tab, otherwise they become spaces.
+// embeddings and isolates, BOM), bidi controls and every default-ignorable code point; keepLines keeps newline and tab, otherwise they become spaces.
 func stripInvisible(s string, keepLines bool) string {
 	s = ansiRe.ReplaceAllString(strings.ToValidUTF8(s, "\uFFFD"), "")
 	return strings.Map(func(r rune) rune {
@@ -260,11 +271,28 @@ func stripInvisible(s string, keepLines bool) string {
 			return ' '
 		case r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == '\u2028' || r == '\u2029':
 			return -1
-		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r):
+		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) || unicode.Is(unicode.Zl, r) ||
+			unicode.Is(unicode.Zp, r) || unicode.Is(defaultIgnorable, r):
 			return -1
 		}
 		return r
 	}, s)
+}
+
+// defaultIgnorable is Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1): characters a
+// renderer shows as nothing, Cf and others such as U+034F, U+115F, U+3164 and the variation selectors. Go's unicode
+// package has no table for it (#536 review).
+var defaultIgnorable = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{Lo: 0x00ad, Hi: 0x00ad, Stride: 1}, {Lo: 0x034f, Hi: 0x034f, Stride: 1}, {Lo: 0x061c, Hi: 0x061c, Stride: 1},
+		{Lo: 0x115f, Hi: 0x1160, Stride: 1}, {Lo: 0x17b4, Hi: 0x17b5, Stride: 1}, {Lo: 0x180b, Hi: 0x180f, Stride: 1},
+		{Lo: 0x200b, Hi: 0x200f, Stride: 1}, {Lo: 0x202a, Hi: 0x202e, Stride: 1}, {Lo: 0x2060, Hi: 0x206f, Stride: 1},
+		{Lo: 0x3164, Hi: 0x3164, Stride: 1}, {Lo: 0xfe00, Hi: 0xfe0f, Stride: 1}, {Lo: 0xfeff, Hi: 0xfeff, Stride: 1},
+		{Lo: 0xffa0, Hi: 0xffa0, Stride: 1}, {Lo: 0xfff0, Hi: 0xfff8, Stride: 1},
+	},
+	R32: []unicode.Range32{
+		{Lo: 0x1bca0, Hi: 0x1bca3, Stride: 1}, {Lo: 0x1d173, Hi: 0x1d17a, Stride: 1}, {Lo: 0xe0000, Hi: 0xe0fff, Stride: 1},
+	},
 }
 
 // clipRunes clips s to at most n bytes at a rune boundary and marks the cut.
@@ -298,10 +326,19 @@ func inlineCode(s string) string {
 	return f + " " + s + " " + f
 }
 
-func codeList(xs []string) string {
-	out := make([]string, len(xs))
+// codeList quotes agent-chosen names for the guard line: each is cleaned, redacted and clipped BEFORE quoting, so
+// the fence is never cut and redaction never touches it; items are added while the list stays under guardListMax.
+func (a *approvals) codeList(xs []string) string {
+	var out []string
+	n := 0
 	for i, x := range xs {
-		out[i] = inlineCode(x)
+		q := inlineCode(clipRunes(a.redact(strings.Join(strings.Fields(stripInvisible(x, false)), " ")), guardItemMax))
+		if n+len(q)+2 > guardListMax-20 {
+			out = append(out, fmt.Sprintf("and %d more", len(xs)-i))
+			break
+		}
+		out = append(out, q)
+		n += len(q) + 2
 	}
 	return strings.Join(out, ", ")
 }
@@ -827,7 +864,7 @@ func (a *approvals) pushApproval(ctx context.Context, job, branch, tip string, p
 	a.mu.Unlock()
 	// the paths come from the agent's commit: each is quoted as inline code it cannot close (#536 review)
 	guard := fmt.Sprintf("the push changes protected paths (%s); the protected paths of this agent are %s (`PROTECTED_PATHS`).",
-		codeList(paths), codeList(a.s.c.Protected))
+		a.codeList(paths), a.codeList(a.s.c.Protected))
 	r, err := a.request(job, "push", "push", input, "push\x00"+job+"\x00"+branch+"\x00"+strings.Join(paths, ","), why{guard: guard})
 	if err != nil {
 		return err
