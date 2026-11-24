@@ -105,6 +105,8 @@
         maxConcurrent: "{{ kind_agents_max_concurrent | int }}"
         maxTurns: "{{ kind_agents_max_turns | int }}"
         scaleToZero: "{{ kind_agents_scale_to_zero | bool }}"
+        # #500: {mode: auto, autoMode: {...}} for this agent; not named: dontAsk
+        permission: "{{ kind_agents_permission[kind_agents_agent] | default({'mode': 'dontAsk'}) }}"
   register: kind_agents_agent_obj
 
 - name: Remember a blocked agent

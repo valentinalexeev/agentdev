@@ -47,6 +47,10 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
+	// How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
+	// approvals).
+	// +optional
+	Permission *AgentPermission `json:"permission,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -55,6 +59,45 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentPermission is the Claude Code permission mode of the agent (#500). Only the administrator sets it (the Agent
+// object); never the repository or issue text. The classifier of mode auto is a model's judgment, not a boundary: the
+// pod stays the boundary (threat model V6). bypassPermissions is not supported.
+// +kubebuilder:validation:XValidation:rule="!has(self.autoMode) || (has(self.mode) && self.mode == 'auto')",message="spec.permission.autoMode needs mode auto"
+type AgentPermission struct {
+	// dontAsk (default): a call outside the allow-list is refused, or asked through approvals. auto: Claude Code's
+	// classifier decides it; a call the classifier blocks is refused, or asked through approvals.
+	// +kubebuilder:validation:Enum=dontAsk;auto
+	// +kubebuilder:default=dontAsk
+	Mode string `json:"mode,omitempty"`
+	// Rules for the classifier of mode auto, the autoMode section of the Claude Code settings. Unset: Claude Code's
+	// defaults (`claude auto-mode defaults`).
+	// +optional
+	AutoMode *AgentAutoMode `json:"autoMode,omitempty"`
+}
+
+// AgentAutoMode holds the classifier rules (#500), in prose, one rule per entry. The hard deny rules stay Claude Code's
+// own: an Agent cannot change them. No control characters: one rule is one line.
+type AgentAutoMode struct {
+	// Actions the classifier allows (autoMode.allow).
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=500
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f]+$`
+	Allow []string `json:"allow,omitempty"`
+	// Actions the classifier blocks unless the task clearly asks for them (autoMode.soft_deny).
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=500
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f]+$`
+	SoftDeny []string `json:"softDeny,omitempty"`
+	// Facts about the environment for the classifier, for example trusted repositories (autoMode.environment).
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=500
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f]+$`
+	Environment []string `json:"environment,omitempty"`
 }
 
 // AgentStatus is observed state, written by the operator only.

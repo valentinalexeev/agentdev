@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -157,7 +159,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
+		), append(r.claudeProxyEnv(n), permissionEnv(a)...)...),
 		VolumeMounts: append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, r.proxyTokenMounts()...),
@@ -194,6 +196,61 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// ruleChars: one rule of spec.permission.autoMode, as the CRD pattern (#500): no control characters.
+var ruleChars = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
+
+// permissionValid is the operator's check behind the CRD rules (#500): "" when spec.permission is unset or valid.
+func permissionValid(a *v1.Agent) string {
+	p := a.Spec.Permission
+	if p == nil {
+		return ""
+	}
+	if p.Mode != "" && p.Mode != "dontAsk" && p.Mode != "auto" {
+		return fmt.Sprintf("spec.permission.mode: %q is not dontAsk or auto", p.Mode)
+	}
+	m := p.AutoMode
+	if m == nil {
+		return ""
+	}
+	if p.Mode != "auto" {
+		return "spec.permission.autoMode needs mode auto"
+	}
+	for name, l := range map[string][]string{"allow": m.Allow, "softDeny": m.SoftDeny, "environment": m.Environment} {
+		if len(l) > 50 {
+			return fmt.Sprintf("spec.permission.autoMode.%s: more than 50 rules", name)
+		}
+		for _, s := range l {
+			if len(s) > 500 || !ruleChars.MatchString(s) {
+				return fmt.Sprintf("spec.permission.autoMode.%s: a rule is empty, longer than 500 or has a control character", name)
+			}
+		}
+	}
+	return ""
+}
+
+// permissionEnv passes spec.permission to the worker (#500): CLAUDE_PERMISSION_MODE=auto and, with rules,
+// CLAUDE_AUTO_MODE, the autoMode section of the Claude Code settings as JSON. Built here from the Agent only, never
+// from the repository or issue text. Nothing for dontAsk, so the pod template of an agent without the field is
+// unchanged (no restart on upgrade).
+func permissionEnv(a *v1.Agent) []corev1.EnvVar {
+	p := a.Spec.Permission
+	if p == nil || p.Mode != "auto" {
+		return nil
+	}
+	out := []corev1.EnvVar{{Name: "CLAUDE_PERMISSION_MODE", Value: "auto"}}
+	if m := p.AutoMode; m != nil && len(m.Allow)+len(m.SoftDeny)+len(m.Environment) > 0 {
+		section := map[string][]string{}
+		for k, l := range map[string][]string{"allow": m.Allow, "soft_deny": m.SoftDeny, "environment": m.Environment} {
+			if len(l) > 0 {
+				section[k] = l
+			}
+		}
+		b, _ := json.Marshal(section) // map keys are sorted: the same Agent gives the same pod template
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_AUTO_MODE", Value: string(b)})
+	}
+	return out
 }
 
 // graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.

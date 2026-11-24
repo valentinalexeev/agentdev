@@ -97,6 +97,56 @@ spec:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'
                 type: boolean
+              permission:
+                description: |-
+                  How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
+                  approvals).
+                properties:
+                  autoMode:
+                    description: |-
+                      Rules for the classifier of mode auto, the autoMode section of the Claude Code settings. Unset: Claude Code's
+                      defaults (`claude auto-mode defaults`).
+                    properties:
+                      allow:
+                        description: Actions the classifier allows (autoMode.allow).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                      environment:
+                        description: Facts about the environment for the classifier,
+                          for example trusted repositories (autoMode.environment).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                      softDeny:
+                        description: Actions the classifier blocks unless the task
+                          clearly asks for them (autoMode.soft_deny).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                    type: object
+                  mode:
+                    default: dontAsk
+                    description: |-
+                      dontAsk (default): a call outside the allow-list is refused, or asked through approvals. auto: Claude Code's
+                      classifier decides it; a call the classifier blocks is refused, or asked through approvals.
+                    enum:
+                    - dontAsk
+                    - auto
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: spec.permission.autoMode needs mode auto
+                  rule: '!has(self.autoMode) || (has(self.mode) && self.mode == ''auto'')'
               repo:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
