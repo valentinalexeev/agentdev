@@ -51,6 +51,9 @@ type AgentSpec struct {
 	// approvals).
 	// +optional
 	Permission *AgentPermission `json:"permission,omitempty"`
+	// Tools added to the worker's default allow-list for this agent (#496, ADR 0010 D1). Unset: the default only.
+	// +optional
+	Tools *AgentTools `json:"tools,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -59,6 +62,19 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentTools holds the per-agent tool allow-list (#496, ADR 0010 D1). Only the administrator sets it (the Agent object),
+// never the repository or issue text. It only adds to the default list: there is no replace, so a list cannot be
+// shrunk to nothing or quietly swapped. The deny-list of the worker stays. The pod stays the boundary (threat model V6).
+type AgentTools struct {
+	// Claude Code permission rules added to the allow-list, for example "Bash(npm ci:*)". One rule per entry, no
+	// commas and no control characters.
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=200
+	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f,]+$`
+	Allow []string `json:"allow,omitempty"`
 }
 
 // AgentPermission is the Claude Code permission mode of the agent (#500). Only the administrator sets it (the Agent
