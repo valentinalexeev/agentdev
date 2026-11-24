@@ -42,9 +42,9 @@ test('raw HTML, links and images render no element: only text with the address',
     '[ref]: https://evil.example/ref',
     '[^1]: https://evil.example/note',
   ].join('\n\n'))
-  assert.doesNotMatch(out, /<(a|img|script|iframe|input|sup|section)[\s/>]/)
+  assert.doesNotMatch(out, /<(a|img|script|iframe|input|sup|section)[\s/>]/i)
   // an attribute has a quoted value in the markup; escaped text has &quot; instead
-  assert.doesNotMatch(out, /\s(href|src|on\w+)="/)
+  assert.doesNotMatch(out, /\s(href|src|on\w+)="/i)
   for (const s of [
     '<script>alert(1)</script>', '<img src=https://evil.example/a.png onerror=alert(1)>',
     '<a href="https://evil.example/x">', '<iframe src="https://evil.example/f">',
