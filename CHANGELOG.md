@@ -6,6 +6,14 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.2.0-rc.3] - 2026-11-24
+
+### Fixed
+- **A console chat session waits for the forge sidecar before its first sync (#482).** A console chat session no longer fails when its `chat` container starts before the forge sidecar listens. Before the
+  first sync, `agent-chat-session` waits for the sidecar's `/healthz`, as `agent-loop` does, for at most
+  `CHAT_SIDECAR_WAIT_SECONDS` (default 60). If the sidecar never answers, the session still fails closed with
+  "sync through the forge sidecar failed". The change is in the worker image, so the fix needs no new setting.
+
 ## [1.2.0-rc.2] - 2026-11-23
 
 ### Deprecated
