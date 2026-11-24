@@ -1,13 +1,18 @@
 {#- Agent objects (#57, #384): own Claude Secret claude-<name> when agent_own_claude[name] is true, else claude-shared
-    (#5). Blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0. -#}
+    (#5). Blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0.
+    agents[].permission (#500): {mode: auto, autoMode: {allow, softDeny, environment}}, the Agent's spec.permission;
+    unset keeps dontAsk. -#}
 {%- set out = [] -%}
 {%- for a in agents -%}
-{%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
-        'metadata': {'name': a.name, 'namespace': agents_ns},
-        'spec': {'repo': a.repos, 'forge': forge_kind,
+{%-   set spec = {'repo': a.repos, 'forge': forge_kind,
                  'claudeSecret': ('claude-' ~ a.name) if (agent_own_claude | default({}))[a.name] | default(false) | bool else 'claude-shared',
                  'maxConcurrent': (a.max_concurrent | default(max_concurrent)) | int,
                  'maxTurns': (a.max_turns | default(max_turns)) | int,
-                 'scaleToZero': (a.scale_to_zero | default(scale_to_zero)) | bool}}) -%}
+                 'scaleToZero': (a.scale_to_zero | default(scale_to_zero)) | bool} -%}
+{%-   if a.permission | default({}) -%}
+{%-     set _ = spec.update({'permission': a.permission}) -%}
+{%-   endif -%}
+{%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
+        'metadata': {'name': a.name, 'namespace': agents_ns}, 'spec': spec}) -%}
 {%- endfor -%}
 {{ out | to_json }}

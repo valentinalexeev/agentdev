@@ -67,7 +67,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -172,6 +172,31 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
 
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
+
+### Set the permission mode of an agent
+
+The permission mode decides a tool call that is not on the allow-list of the agent (#500). Each agent has its own mode:
+
+- `dontAsk` (default): Claude Code refuses the call. With approvals on, a project member must approve the call.
+- `auto`: a classifier of Claude Code decides the call. The classifier uses its default rules and your rules. With
+  approvals on, a project member must approve a call that the classifier blocks.
+
+The deny-list of the worker (`git push`, `curl`, `/state` and others) stays in both modes. `bypassPermissions` is
+not available.
+
+WARNING: The classifier is the judgment of a model. It is not a security boundary. Use `auto` only for agents that
+you trust with packages that the classifier installs (threat model V6).
+
+1. On `kind`: set `kind_agents_permission` for the agent, for example
+   `{alice: {mode: auto, autoMode: {allow: ["Install dependencies declared in the repository"]}}}`.
+   On GKE: set `agents[].permission` for the agent, for example `{mode: auto}`.
+   In Git mode: set `spec.permission` in the `Agent` manifest.
+2. Optional: add rules in `autoMode`. Use `allow`, `softDeny` and `environment`, one rule on each line.
+3. Deploy again.
+4. Do the command `claude auto-mode defaults` in an agent pod to see the default rules.
+
+NOTE: The rules come from the `Agent` object only. The repository and the issue text cannot change them. The
+classifier sends more requests through `claude-proxy`. They count against the token budget of the agent.
 
 ### Set the poll interval
 
