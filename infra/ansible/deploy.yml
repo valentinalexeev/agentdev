@@ -619,7 +619,7 @@
       changed_when: false
       when: not ansible_check_mode
 
-    - name: Wait for the router and agents
+    - name: Wait for the router
       kubernetes.core.k8s_info:
         <<: *k8s
         kind: Pod
@@ -627,8 +627,22 @@
         wait: true
         wait_condition: {type: Ready, status: "True"}
         wait_timeout: 600
-        label_selectors: ["{{ item }}"]
-      loop: ["app=webhook-router", "app=coding-agent"]
+        label_selectors: ["app=webhook-router"]
+      when: not ansible_check_mode
+
+    # only agents with replicas above 0: stopped agents (scale to zero) have no pod to wait for (#491)
+    - name: Read the agent StatefulSets
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: StatefulSet
+        namespace: "{{ agents_ns }}"
+        label_selectors: ["app=coding-agent"]
+      register: agent_statefulsets
+      when: not ansible_check_mode
+
+    - name: Wait for the running agents
+      ansible.builtin.include_tasks: tasks/agent_pods_wait.yml
+      vars: {agent_pods_wait_statefulsets: "{{ agent_statefulsets.resources }}"}
       when: not ansible_check_mode
 
     # post-deploy smoke test (#213): the public hosts answer from outside and the forwarder is Ready. Last, after the
