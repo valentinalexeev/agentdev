@@ -289,7 +289,6 @@ func TestClassifierVerdict(t *testing.T) {
 
 func TestClassifierSeverityMode(t *testing.T) {
 	f := newFixture(t, 0)
-	logs := captureLog(t)
 	body := classifierRequest(t, `{"Bash":"terraform apply"}`)
 	sevEvents := func() []classifierEvent {
 		var evs []classifierEvent
@@ -306,29 +305,28 @@ func TestClassifierSeverityMode(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name, reply string
-		want        int
+		want, allow int
 	}{
-		{"one severity", "<thinking>infra change</thinking><severity>72</severity><category>prod</category>", 1},
-		{"unclosed severity", "<severity> 15.5", 1},
-		{"several severities", "<severity>10</severity><severity>90</severity>", 0},
-		{"unclosed thinking", "<severity>10</severity><thinking>hmm", 0},
-		{"mixed block and severity", "<block>no</block><severity>5</severity>", 0},
+		{"one severity", "<thinking>infra change</thinking><severity>72</severity><category>prod</category>", 1, 0},
+		{"unclosed severity", "<severity> 15.5", 1, 0},
+		{"several severities", "<severity>10</severity><severity>90</severity>", 0, 0},
+		{"unclosed thinking", "<severity>10</severity><thinking>hmm", 0, 0},
+		// #532 review: CC reads only its mode's format, so a mixed reply is a verdict in either mode: both events
+		{"mixed block and severity", "<block>no</block><severity>5</severity>", 1, 1},
+		{"mixed block yes and severity", "<block>yes</block><severity>95</severity>", 1, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			logReset(f.logs)
 			f.upstream = jsonReply(c.reply)
 			f.send("alice", body)
 			evs := sevEvents()
-			if len(evs) != c.want || len(classifierEvents(t, f.logs)) != 0 {
+			if len(evs) != c.want || len(classifierEvents(t, f.logs)) != c.allow {
 				t.Fatalf("%d severity events, want %d: %s", len(evs), c.want, logText(f.logs))
 			}
 			if c.want == 1 && (evs[0].Agent != "alice" || evs[0].Severity != "low" || !strings.Contains(evs[0].Action, "terraform apply")) {
 				t.Fatalf("event %+v", evs[0])
 			}
 		})
-	}
-	if !strings.Contains(logs.String(), "both <block> and <severity>") {
-		t.Fatalf("mixed reply not logged: %s", logs.String())
 	}
 	logReset(f.logs)
 	f.upstream = sseReply("<sever", "ity>8", "0</severity>")

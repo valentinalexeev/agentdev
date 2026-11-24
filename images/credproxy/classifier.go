@@ -279,14 +279,15 @@ func (b *classifierBody) finish() {
 		verdict := classifierVerdict(text)
 		sev, hasSev := classifierSeverity(text)
 		what := clip(b.call.tool, 100) + ": " + clip(redactSecrets(b.call.input), classifierInputMax)
-		switch {
-		case verdict != "" && hasSev: // a reply has one format; both means an unknown one
-			classifierLogOnce("mixed", "classifier reply with both <block> and <severity>")
-		case verdict == "allow":
+		// Claude Code parses only the format of its configured mode, which the proxy cannot see. So each format present
+		// is read on its own and gives its event: a reply with <block>no and <severity>N is an allow in either mode.
+		if verdict == "allow" {
 			emitEvent(b.agent, "classifier-allow", "low", "auto mode classifier allowed "+what)
-		case hasSev:
+		}
+		if hasSev {
 			emitEvent(b.agent, "classifier-severity", "low", "auto mode classifier severity "+sev+" for "+what)
-		case verdict == "":
+		}
+		if verdict == "" && !hasSev {
 			classifierLogOnce("verdict", "classifier reply without a verdict")
 		}
 	})
