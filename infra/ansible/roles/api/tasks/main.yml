@@ -100,7 +100,8 @@
 # NetworkPolicy: restart on every Secret change so the API reads the new values
 - name: Restart the API after a Secret change
   ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-api
-  when: ((api_secrets_changed | default(false)) or (api_load is changed)) and not ansible_check_mode
+  # api_load is registered only on kind (kind_image.yml); undefined elsewhere (#488)
+  when: ((api_secrets_changed | default(false)) or (api_load is defined and api_load is changed)) and not ansible_check_mode
   changed_when: true
 
 # The API reads the OIDC discovery document at start and exits when it fails (#334). An external issuer (one that the

@@ -42,6 +42,9 @@ ingress_smoke_delay: 10   # seconds between two tries of one check
 ingress_smoke_forwarder_pods: >-
   {{ ingress_forwarder_on | bool and (ingress_forwarder.namespace | default('')) | length > 0
      and (ingress_forwarder.pod_selector | default({})) | length > 0 }}
+# label selectors of the forwarder pods, one "key=value" per label (#489)
+ingress_smoke_label_selectors: >-
+  {{ (ingress_forwarder.pod_selector | default({})).items() | map('join', '=') | list }}
 # any answer of the application, no proxy error (502, 503, 504) and no connection error
 ingress_smoke_scheme: "{{ (ingress | default({})).smoke_scheme | default('https') }}"   # http only in tests/ingress_smoke.yml
 ingress_smoke_page_codes: [200, 301, 302, 303, 307, 308, 401, 403]
