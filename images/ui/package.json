@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint && node scripts/check-class-prefix.mjs",
+    "test": "node --test test/*.test.ts",
     "preview": "vite preview",
     "mock-api": "node scripts/mock-api.mjs",
     "postbuild": "node scripts/check-class-prefix.mjs --dist",

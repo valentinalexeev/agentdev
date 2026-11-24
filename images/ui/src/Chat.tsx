@@ -3,8 +3,11 @@
 //
 // Rules:
 // - Everything the session writes (assistant text, tool input and output, permission input, drafts) is model output.
-//   It is shown as plain text only: React escapes it, nothing is parsed as Markdown or HTML, and nothing in it becomes
-//   a link or a button. The only buttons come from structured events (permission, draft) built by the console.
+//   React escapes it, nothing in it is parsed as HTML, and nothing in it becomes a link, an image or a button. The only
+//   buttons come from structured events (permission, draft) built by the console.
+// - Assistant text is shown as a safe Markdown subset (#492, markdown.ts): paragraphs, headings, bold, italic, lists,
+//   code, block quotes, tables, rules. Raw HTML stays text; a link or an image shows its text and address as text.
+//   A per-message toggle shows the exact text. Tool input and output, permission input and drafts stay plain text.
 // - A draft becomes an issue only when a person clicks Create issue. The API files it as that person.
 // - The event stream is read with a bearer fetch (stream.ts) and reconnects with backoff; it resumes after the last
 //   event id it has, so nothing shows twice.
@@ -15,6 +18,7 @@ import {
   type ChatEvent, type ChatSession,
 } from './api'
 import { ago, kTokens, short } from './format'
+import { Markdown } from './Markdown.tsx'
 import { openStream } from './stream'
 import { useData } from './useData'
 import { AgentTag, Empty, Icon, PersonTag, Untrusted } from './ui'
@@ -340,10 +344,7 @@ function Item({ it, s, token, writer, canCreate, act, busy }: {
       <div className="agd-msg agd-msg-person"><span className="agd-msg-who"><PersonTag name={it.who} /></span>
         <div className="agd-msg-text agd-plain">{it.text}</div></div>
     )
-    case 'assistant': return (
-      <div className="agd-msg"><span className="agd-msg-who"><AgentTag name={s.agent} /><span>session · plain text, not checked</span></span>
-        <div className="agd-msg-text agd-plain">{it.text}</div></div>
-    )
+    case 'assistant': return <Assistant text={it.text} agent={s.agent} />
     case 'tool': return (
       <details className="agd-tool">
         <summary><Icon name="down" /><span className="agd-label">{it.name}</span><span className="agd-code">{firstLine(it.input)}</span>
@@ -355,6 +356,15 @@ function Item({ it, s, token, writer, canCreate, act, busy }: {
     case 'permission': return <Permission it={it} s={s} token={token} writer={writer} act={act} busy={busy} />
     case 'draft': return <Draft it={it} s={s} token={token} canCreate={canCreate} act={act} busy={busy} />
   }
+}
+
+function Assistant({ text, agent }: { text: string; agent: string }) {
+  const [plain, setPlain] = useState(false)
+  return (
+    <div className="agd-msg"><span className="agd-msg-who"><AgentTag name={agent} /><span>session · not checked</span>
+      <button className="agd-btn agd-btn-quiet" type="button" aria-pressed={plain} onClick={() => setPlain(!plain)}>{plain ? 'Formatted' : 'Plain text'}</button></span>
+      {plain ? <div className="agd-msg-text agd-plain">{text}</div> : <Markdown text={text} />}</div>
+  )
 }
 
 function firstLine(t: string): string {
