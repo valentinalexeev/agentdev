@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: Security event for every auto mode classifier allow
 components: [credproxy]
+pr: 532
 ---
 ## Summary
 
