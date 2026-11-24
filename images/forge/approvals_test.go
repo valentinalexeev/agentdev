@@ -23,6 +23,8 @@ type fakeAPI struct {
 	comments []string
 	edits    []string
 	voids    []string
+	push     bool     // answer of the reach endpoint (#523)
+	reaches  []string // reach queries
 }
 
 func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
@@ -44,6 +46,11 @@ func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
 			return
 		case strings.HasPrefix(r.URL.Path, "/api/v1/repos/o/r/pulls/"):
 			_, _ = io.WriteString(w, `{"head":{"ref":"agent/alice/x"}}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/reach") {
+			fa.reaches = append(fa.reaches, r.URL.Path+"?"+r.URL.RawQuery)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"push": fa.push})
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/void") {
@@ -184,7 +191,7 @@ func TestApprovalPushHeld(t *testing.T) {
 	if lastRequest(t, lines).ID != first || len(fa.comments) != 1 {
 		t.Fatalf("a retry after the wait opened a new request: %d comments", len(fa.comments))
 	}
-	if len(fa.edits) != 1 || !strings.Contains(fa.edits[0], "still open") {
+	if len(fa.edits) != 1 || !strings.Contains(fa.edits[0], "continued without it") {
 		t.Fatalf("comment not updated once: %v", fa.edits)
 	}
 	// a new commit on the same branch and paths supersedes the old request: void, then a new one
@@ -225,11 +232,12 @@ func TestApprovalPromptDedupAndJobDone(t *testing.T) {
 	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
 		t.Fatalf("decision on open record not used: %v", out)
 	}
-	// another input is another request
+	// another input is another request, in the same approvals comment (#523)
 	fa.state = "pending"
 	_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"make"}`)
-	if lastRequest(t, lines).ID == first || len(fa.comments) != 2 {
-		t.Fatalf("other input did not open a request: %d", len(fa.comments))
+	if lastRequest(t, lines).ID == first || len(fa.comments) != 1 ||
+		!strings.Contains(fa.edits[len(fa.edits)-1], lastRequest(t, lines).ID) {
+		t.Fatalf("other input did not open a request: %d %v", len(fa.comments), fa.edits)
 	}
 	// the job ends: the open record becomes void and its comment says so
 	req := httptest.NewRequest("POST", "/job-done?job=issue-3", nil)
@@ -346,6 +354,88 @@ func TestApprovalConcurrentDedup(t *testing.T) {
 	defer fa.mu.Unlock()
 	if len(fa.comments) != 1 {
 		t.Fatalf("comments: %d", len(fa.comments))
+	}
+}
+
+// #523 acceptance: one job with five approvals makes one bot comment. The comment is a table edited in place, the
+// instructions are in <details>, a closed request is one row without its text, and no line is a decision command.
+func TestApprovalOneCommentPerJob(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	s.appr.timeout = 20 * time.Millisecond
+	h := s.routes()
+	var ids []string
+	for i := 0; i < 5; i++ {
+		_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"step-`+strconv.Itoa(i)+`"}`)
+		ids = append(ids, lastRequest(t, lines).ID)
+	}
+	fa.mu.Lock()
+	if len(fa.comments) != 1 || len(fa.edits) == 0 {
+		t.Fatalf("comments %d, edits %d", len(fa.comments), len(fa.edits))
+	}
+	last := fa.edits[len(fa.edits)-1]
+	fa.mu.Unlock()
+	var body struct{ Body string }
+	_ = json.Unmarshal([]byte(last[strings.Index(last, " ")+1:]), &body)
+	for _, id := range ids {
+		if !strings.Contains(body.Body, "| `"+id+"` | claude `Bash` | **waiting** (the agent continued without it) |") {
+			t.Fatalf("row of %s missing:\n%s", id, body.Body)
+		}
+	}
+	if !strings.Contains(body.Body, "<details><summary>How to decide</summary>") || decisionCmdRe.MatchString(body.Body) {
+		t.Fatalf("instructions:\n%s", body.Body)
+	}
+	// the job ends: every request is one closed row, no request text and no instructions are left
+	req := httptest.NewRequest("POST", "/job-done?job=issue-3", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	fa.mu.Lock()
+	last = fa.edits[len(fa.edits)-1]
+	n := len(fa.comments)
+	fa.mu.Unlock()
+	_ = json.Unmarshal([]byte(last[strings.Index(last, " ")+1:]), &body)
+	if n != 1 || strings.Contains(body.Body, "step-") || strings.Contains(body.Body, "<details>") ||
+		strings.Count(body.Body, "void: the job ended") != 5 {
+		t.Fatalf("closed comment (%d comments):\n%s", n, body.Body)
+	}
+	if len(s.appr.jobs) != 0 {
+		t.Fatal("job comment kept after the job ended")
+	}
+}
+
+// #523: when Web Push reaches a person who can decide, the request does not go to the forge; it goes there when the
+// agent stopped waiting without a decision.
+func TestApprovalPushFirst(t *testing.T) {
+	s, fa, _ := approvalSetup(t)
+	s.appr.timeout = 20 * time.Millisecond
+	fa.push = true
+	h := s.routes()
+	fa.state = "allowed"
+	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
+		t.Fatalf("allow: %v", out)
+	}
+	fa.mu.Lock()
+	if len(fa.comments) != 0 || len(fa.edits) != 0 || len(fa.reaches) != 1 ||
+		!strings.Contains(fa.reaches[0], "/internal/approvals/alice/reach?") || !strings.Contains(fa.reaches[0], "repo=o%2Fr") ||
+		!strings.Contains(fa.reaches[0], "source=claude") {
+		t.Fatalf("decided by push: comments %v, reaches %v", fa.comments, fa.reaches)
+	}
+	fa.mu.Unlock()
+	fa.state = "pending"
+	_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"make"}`)
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if len(fa.comments) != 1 || !strings.Contains(fa.comments[0], "continued without it") {
+		t.Fatalf("no forge fallback after the wait: %v", fa.comments)
+	}
+}
+
+func TestApprovalCommentSafeCells(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	r := &approvalRequest{ID: "0123456789abcdef", Source: "claude", Tool: "Bash`|<b>\n/approve x", Input: "```\nx", state: "denied",
+		status: "denied by a|b\n/approve 0123456789abcdef"}
+	body := s.appr.commentBody(&jobComment{reqs: []*approvalRequest{r}})
+	if decisionCmdRe.MatchString(body) || strings.Contains(body, "<b>") || strings.Count(body, "\n") != 6 {
+		t.Fatalf("unsafe body:\n%s", body)
 	}
 }
 

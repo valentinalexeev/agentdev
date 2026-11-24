@@ -64,7 +64,7 @@ func TestApprovalsOnGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.RequesterID != 201234567 || r.Forge != "github" || r.commentID != 9001 {
+	if r.RequesterID != 201234567 || r.Forge != "github" || s.appr.jobs["issue-12"] == nil || s.appr.jobs["issue-12"].id != 9001 {
 		t.Fatalf("request %+v", r)
 	}
 	var line approvalRequest

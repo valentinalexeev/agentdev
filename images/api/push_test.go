@@ -432,3 +432,52 @@ func TestPushSnapshotTrust(t *testing.T) {
 		t.Fatalf("refreshed snapshot not notified")
 	}
 }
+
+// #523: the forge sidecar asks whether Web Push reaches a person who can decide; only then it skips the forge comment.
+func TestInternalReach(t *testing.T) {
+	e := newPushEnv(t)
+	h := internalReach(e.p, e.k, fakePodIPs{"carol": {"10.0.0.5"}})
+	ask := func(from, query string) (int, string) {
+		r := httptest.NewRequest("GET", "/internal/approvals/carol/reach?"+query, nil)
+		r.SetPathValue("agent", "carol")
+		r.RemoteAddr = from + ":4000"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code, strings.TrimSpace(w.Body.String())
+	}
+	// only a reader is subscribed: nobody who can decide
+	e.subscribe(t, "reader", "https://fcm.googleapis.com/fcm/send/r")
+	if c, b := ask("10.0.0.5", "repo=owner/x&source=claude"); c != 200 || b != `{"push":false}` {
+		t.Fatalf("reader only: %d %s", c, b)
+	}
+	e.subscribe(t, "writer", "https://fcm.googleapis.com/fcm/send/w")
+	for _, c := range []struct {
+		from, query string
+		code        int
+		body        string
+	}{
+		{"10.0.0.5", "repo=owner/x&source=claude", 200, `{"push":true}`},
+		{"10.0.0.5", "repo=owner/x&source=push", 200, `{"push":true}`},
+		// cost requests are never pushed
+		{"10.0.0.5", "repo=owner/x&source=cost", 200, `{"push":false}`},
+		// not a pod of carol, not a repository of carol, an unknown forge
+		{"10.0.0.9", "repo=owner/x&source=claude", 403, ""},
+		{"10.0.0.5", "repo=owner/y&source=claude", 403, ""},
+		{"10.0.0.5", "repo=owner/x&forge=gitlab&source=claude", 400, ""},
+	} {
+		code, body := ask(c.from, c.query)
+		if code != c.code || (c.body != "" && body != c.body) {
+			t.Errorf("%s %s: %d %s", c.from, c.query, code, body)
+		}
+	}
+	// the writer mutes approvals of the project: nobody is reached
+	e.call(t, "PUT", "/api/notify/settings", "writer", `{"mutes":[{"project":"owner/x","type":"approvals"}]}`)
+	if c, b := ask("10.0.0.5", "repo=owner/x&source=claude"); c != 200 || b != `{"push":false}` {
+		t.Fatalf("muted: %d %s", c, b)
+	}
+	// Web Push off: false
+	e.ch = nil
+	if c, b := ask("10.0.0.5", "repo=owner/x&source=claude"); c != 200 || b != `{"push":false}` {
+		t.Fatalf("channel off: %d %s", c, b)
+	}
+}
