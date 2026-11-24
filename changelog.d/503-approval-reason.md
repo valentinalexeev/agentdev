@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: Approval requests explain why the agent asks
 components: [forge]
+pr: 536
 ---
 ## Summary
 
