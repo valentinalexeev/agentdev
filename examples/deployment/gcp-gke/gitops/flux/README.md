@@ -19,7 +19,7 @@ gitops/flux/
 rendered/                            only on the branch gitops, written by the deploy workflow
   platform/                          render.yml output without Agent and Executor objects (authentik included)
   agents/                            Agent and Executor objects (#58)
-  reloader/                          ../gitops/flux/reloader with the namespaces of the render
+  reloader/                          ../gitops/flux/reloader with the namespaces of the rendered SecretStores
 ```
 
 Procedure: agentdev `docs/admin.md`, "Install an instance with Flux".
