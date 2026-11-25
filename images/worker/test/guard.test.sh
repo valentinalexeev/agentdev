@@ -8,7 +8,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 # a known environment (#507): every variable the sourced loop code reads is unset here; a check that needs one sets it
-unset APPROVALS APPROVAL_HOST PERMISSION_HOST APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_TOOLS CLAUDE_EXIT_FILE \
+unset APPROVALS APPROVAL_HOST PERMISSION_HOST APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_MODEL CLAUDE_EFFORT CLAUDE_TOOLS CLAUDE_EXIT_FILE \
   ANTHROPIC_BASE_URL FORGE_API FORGE_PUBLIC_URL RESUMING GUIDE_FILE STATE_DIR PROXY_TOKEN_FILE
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"
 export MAX_TURNS=5 MCP_CONFIG="${STATE}/mcp.json"
@@ -51,7 +51,7 @@ check "security system prompt appended" "grep -qx -- '--append-system-prompt' '$
 check "untrusted text is fenced and cannot close the fence early" \
   "grep -q '<untrusted>' '${tmp}/args' && [[ \$(grep -c '</untrusted>\$' '${tmp}/args') == 1 ]] && grep -q '</untrusted_>' '${tmp}/args'"
 # spec.permission (#500): the operator sets CLAUDE_PERMISSION_MODE and CLAUDE_AUTO_MODE; the deny-list stays
-perm() { (unset APPROVALS CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE; export "$@"; run_claude "${tmp}/repo" x >/dev/null 2>&1); }
+perm() { (unset APPROVALS CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_MODEL CLAUDE_EFFORT; export "$@"; run_claude "${tmp}/repo" x >/dev/null 2>&1); }
 nextarg() { grep -A1 -x -- "$1" "${tmp}/args" | tail -n1; }
 perm CLAUDE_PERMISSION_MODE=auto
 check "mode auto without rules: no settings, deny-list kept" \
@@ -65,6 +65,17 @@ for bad in '{"hard_deny":["nothing"]}' '{"allow":"x"}' '[1]' 'not json'; do
 done
 perm CLAUDE_PERMISSION_MODE=bypassPermissions
 check "an unknown mode runs in dontAsk" "[[ \$(nextarg --permission-mode) == dontAsk ]] && ! grep -qx bypassPermissions '${tmp}/args'"
+# spec.model and spec.effort (#570): the operator sets CLAUDE_MODEL and CLAUDE_EFFORT; unset: no flags
+perm
+check "no model and no effort by default (#570)" "! grep -qx -- '--model' '${tmp}/args' && ! grep -qx -- '--effort' '${tmp}/args'"
+perm CLAUDE_MODEL=sonnet CLAUDE_EFFORT=high
+check "model and effort reach claude" "[[ \$(nextarg --model) == sonnet && \$(nextarg --effort) == high ]]"
+perm CLAUDE_MODEL=claude-opus-5-5
+check "a full model name of a family is passed" "[[ \$(nextarg --model) == claude-opus-5-5 ]] && ! grep -qx -- '--effort' '${tmp}/args'"
+for bad in 'sonet' 'gpt-5' '--dangerously-skip-permissions' 'opus --verbose'; do
+  perm CLAUDE_MODEL="${bad}" CLAUDE_EFFORT=ultra
+  check "invalid model ${bad} and effort: no flags (default model)" "! grep -qx -- '--model' '${tmp}/args' && ! grep -qx -- '--effort' '${tmp}/args' && ! grep -qxF -- '${bad}' '${tmp}/args'"
+done
 cat > "${tmp}/bin/curl" <<'EOF2'
 #!/usr/bin/env bash
 exit 7

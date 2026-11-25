@@ -1,4 +1,4 @@
-# Render checks of templates/agents.j2 (#496, #499): agents[].tools.allow becomes the Agent's spec.tools.allow; an agent
+# Render checks of templates/agents.j2 (#496, #499, #570): agents[].tools.allow becomes the Agent's spec.tools.allow; an agent
 # without it gets no spec.tools (no new env, no restart on upgrade).
 # Run: ansible-playbook infra/ansible/tests/agents_render.yml
 - name: Agent objects from agents[] (#496)
@@ -15,6 +15,8 @@
       - {name: bob, repos: [o/b], tools: {allow: []}}
       - {name: carol, repos: [o/c], tools: {allow: ["Bash(npm ci:*)", "Bash(npm install:*)"]}}
       - {name: dave, repos: [o/d], toolchain: {presets: {go: "1.27.4"}, refresh: 168h}}
+      - {name: erin, repos: [o/e], model: sonnet, effort: high}
+      - {name: frank, repos: [o/f], model: claude-opus-5-5, effort: ""}
   tasks:
     - name: Render the Agent objects
       ansible.builtin.set_fact:
@@ -36,3 +38,12 @@
           - "'toolchain' not in t_agents.alice"
           - "'toolchain' not in t_agents.carol"
           - "t_agents.dave.toolchain == {'presets': {'go': '1.27.4'}, 'refresh': '168h'}"
+
+    - name: Only an agent with a model or effort gets spec.model or spec.effort (#570)
+      ansible.builtin.assert:
+        that:
+          - "'model' not in t_agents.alice and 'effort' not in t_agents.alice"
+          - t_agents.erin.model == 'sonnet'
+          - t_agents.erin.effort == 'high'
+          - t_agents.frank.model == 'claude-opus-5-5'
+          - "'effort' not in t_agents.frank"

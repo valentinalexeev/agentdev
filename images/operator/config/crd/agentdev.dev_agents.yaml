@@ -63,6 +63,17 @@ spec:
                   Only claude-* names (claude-shared or claude-<agent>), for the same reason.
                 pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              effort:
+                description: |-
+                  Effort level of the agent's runs and the default of its chat sessions (`claude --effort`, #570). Unset: the
+                  default of Claude Code.
+                enum:
+                - low
+                - medium
+                - high
+                - xhigh
+                - max
+                type: string
               forge:
                 default: gitea
                 description: Forge kind.
@@ -93,6 +104,14 @@ spec:
                 maximum: 500
                 minimum: 1
                 type: integer
+              model:
+                description: |-
+                  Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #570): an alias (opus,
+                  sonnet, haiku, fable) or a full name of one of these families, so the claude-proxy price table always has a
+                  multiplier for it. Unset: the default of Claude Code.
+                maxLength: 80
+                pattern: ^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$
+                type: string
               paused:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'

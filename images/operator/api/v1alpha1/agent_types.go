@@ -47,6 +47,18 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
+	// Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #570): an alias (opus,
+	// sonnet, haiku, fable) or a full name of one of these families, so the claude-proxy price table always has a
+	// multiplier for it. Unset: the default of Claude Code.
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$`
+	// +optional
+	Model string `json:"model,omitempty"`
+	// Effort level of the agent's runs and the default of its chat sessions (`claude --effort`, #570). Unset: the
+	// default of Claude Code.
+	// +kubebuilder:validation:Enum=low;medium;high;xhigh;max
+	// +optional
+	Effort string `json:"effort,omitempty"`
 	// How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
 	// approvals).
 	// +optional

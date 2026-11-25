@@ -172,7 +172,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...)...),
+		), append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), modelEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...)...),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
@@ -234,6 +234,39 @@ func (d Defaults) qty(v, def string) resource.Quantity {
 		return q
 	}
 	return resource.MustParse(def)
+}
+
+// modelRe and efforts: spec.model and spec.effort, as the CRD rules (#570). A model is an alias or a full name of a
+// family that the claude-proxy price table knows (images/credproxy/prices.go), so the cost units of a run never fall
+// back to the highest multiplier through a typo.
+var (
+	modelRe = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$`)
+	efforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+)
+
+// modelValid is the operator's check behind the CRD rules (#570): "" when spec.model and spec.effort are unset or valid.
+func modelValid(a *v1.Agent) string {
+	if m := a.Spec.Model; m != "" && (len(m) > 80 || !modelRe.MatchString(m)) {
+		return fmt.Sprintf("spec.model: %q is not opus, sonnet, haiku, fable or a claude-<family>-... name", m)
+	}
+	if e := a.Spec.Effort; e != "" && !efforts[e] {
+		return fmt.Sprintf("spec.effort: %q is not low, medium, high, xhigh or max", e)
+	}
+	return ""
+}
+
+// modelEnv passes spec.model and spec.effort to the worker (#570) as CLAUDE_MODEL and CLAUDE_EFFORT; agent-loop passes
+// them as --model and --effort, and a chat session (the same pod spec) starts with them. Nothing when unset, so the pod
+// template of an agent without the fields is unchanged (no restart on upgrade).
+func modelEnv(a *v1.Agent) []corev1.EnvVar {
+	var out []corev1.EnvVar
+	if a.Spec.Model != "" {
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_MODEL", Value: a.Spec.Model})
+	}
+	if a.Spec.Effort != "" {
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_EFFORT", Value: a.Spec.Effort})
+	}
+	return out
 }
 
 // ruleChars: one rule of spec.permission.autoMode, as the CRD pattern (#500): no control characters.

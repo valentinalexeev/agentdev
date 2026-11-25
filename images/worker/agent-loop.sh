@@ -416,6 +416,24 @@ permission_mode() {
   echo dontAsk
 }
 
+# Model and effort (#570): the operator sets CLAUDE_MODEL and CLAUDE_EFFORT from the Agent's spec.model and spec.effort,
+# never from the repository or issue text. model_args prints the flags one per line; a value outside the operator's
+# rules (images/operator/render.go modelValid) is dropped with a log line, and the run uses Claude Code's default.
+model_args() {
+  local m="${CLAUDE_MODEL:-}" e="${CLAUDE_EFFORT:-}"
+  if [[ -n "${m}" ]]; then
+    if [[ ${#m} -le 80 && "${m}" =~ ^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$ ]]; then
+      printf '%s\n' --model "${m}"
+    else log "CLAUDE_MODEL is not a known model family: running with the default model" >&2; fi
+  fi
+  if [[ -n "${e}" ]]; then
+    case "${e}" in
+      low|medium|high|xhigh|max) printf '%s\n' --effort "${e}";;
+      *) log "CLAUDE_EFFORT is not low, medium, high, xhigh or max: running with the default effort" >&2;;
+    esac
+  fi
+}
+
 # Harness guide (#206): what agentdev gives this agent and what it does not, written by the operator from its own
 # configuration and mounted read-only (/etc/agentdev/guide/guide.md, this agent's key of ConfigMap agentdev-guides).
 # Read on every run, so a changed guide applies without a restart. It follows the security rules, which stay first and
@@ -523,7 +541,8 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   local pm settings=() cfg="${MCP_CONFIG}" runner=(claude) pflag=(-p "${prompt}")
   pm=$(permission_mode)
   [[ "${pm}" == auto && -n "$(auto_settings)" ]] && settings=(--settings "$(auto_settings)")
-  local mode=(--permission-mode "${pm}")
+  local mode=(--permission-mode "${pm}") model=()
+  mapfile -t model < <(model_args)
   if [[ "${APPROVALS:-false}" == true && -n "${JOB:-}" ]]; then
     # approvals (#67): a tool outside the allow-list asks a project member through the forge sidecar's MCP tool,
     # instead of being refused. The config is per job (the sidecar needs the job to comment on the issue or PR).
@@ -545,7 +564,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${jenv[@]}" \
           "${runner[@]}" "${CLAUDE_AUTH[@]}" "${pflag[@]}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
-          "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
+          "${mode[@]}" "${settings[@]}" "${model[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
           "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)

@@ -597,6 +597,58 @@ func TestPermissionFromSpec(t *testing.T) {
 	}
 }
 
+// #570: spec.model and spec.effort reach the agent container as CLAUDE_MODEL and CLAUDE_EFFORT; unset: neither.
+func TestModelFromSpec(t *testing.T) {
+	r, c := setup(t, agent("alice", nil),
+		agent("bob", func(a *v1.Agent) { a.Spec.Model, a.Spec.Effort = "sonnet", "high" }),
+		agent("carol", func(a *v1.Agent) { a.Spec.Model = "claude-opus-5-5" }))
+	for _, n := range []string{"alice", "bob", "carol"} {
+		reconcile(t, r, n)
+	}
+	for _, tc := range []struct{ agent, model, effort string }{
+		{"alice", "<unset>", "<unset>"}, {"bob", "sonnet", "high"}, {"carol", "claude-opus-5-5", "<unset>"},
+	} {
+		s := getSTS(t, c, tc.agent)
+		if got := envOf(s, "CLAUDE_MODEL"); got != tc.model {
+			t.Errorf("%s: CLAUDE_MODEL = %q, want %q", tc.agent, got, tc.model)
+		}
+		if got := envOf(s, "CLAUDE_EFFORT"); got != tc.effort {
+			t.Errorf("%s: CLAUDE_EFFORT = %q, want %q", tc.agent, got, tc.effort)
+		}
+		for _, e := range s.Spec.Template.Spec.Containers[1].Env {
+			if e.Name == "CLAUDE_MODEL" || e.Name == "CLAUDE_EFFORT" {
+				t.Errorf("%s: forge container has %s", tc.agent, e.Name)
+			}
+		}
+	}
+}
+
+// #570: a model outside the price families or an unknown effort is refused (phase invalid), never run at the highest
+// multiplier.
+func TestModelInvalidRefused(t *testing.T) {
+	for name, f := range map[string]func(a *v1.Agent){
+		"typo":       func(a *v1.Agent) { a.Spec.Model = "sonet" },
+		"other":      func(a *v1.Agent) { a.Spec.Model = "gpt-5" },
+		"flag":       func(a *v1.Agent) { a.Spec.Model = "--dangerously-skip-permissions" },
+		"upper":      func(a *v1.Agent) { a.Spec.Model = "Opus" },
+		"long":       func(a *v1.Agent) { a.Spec.Model = "claude-opus-" + strings.Repeat("a", 80) },
+		"effort":     func(a *v1.Agent) { a.Spec.Effort = "ultra" },
+		"effort-arg": func(a *v1.Agent) { a.Spec.Effort = "high --verbose" },
+	} {
+		r, c := setup(t, agent("mallory", f))
+		reconcile(t, r, "mallory")
+		var s appsv1.StatefulSet
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
+			t.Errorf("%s: rendered a pod", name)
+		}
+		var a v1.Agent
+		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
+		if a.Status.Phase != "invalid" {
+			t.Errorf("%s: phase = %q, want invalid", name, a.Status.Phase)
+		}
+	}
+}
+
 // #500: the operator refuses what the CRD rules would refuse: another mode, rules without mode auto, control characters.
 func TestPermissionInvalidRefused(t *testing.T) {
 	for name, p := range map[string]*v1.AgentPermission{
