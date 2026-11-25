@@ -6,6 +6,31 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.3.0-rc.2] - 2026-11-25
+
+### Added
+- **Per-agent Claude model and reasoning effort (#564).** `Agent` has `spec.model` (an alias such as `opus`, or a full model name) and `spec.effort` (`low`, `medium`, `high`,
+  `xhigh`, `max`). The worker passes them to Claude Code as `--model` and `--effort`. Set them with `claude_model`,
+  `claude_effort`, `agents[].model`, `agents[].effort` (GKE) or `kind_agents_model`, `kind_agents_effort` (kind).
+  Unset: the Claude Code CLI's own default, as before. Docs: `docs/admin.md`, "Set the concurrency".
+
+### Changed
+- **Shorter compat e2e (authentik in the background, 15 s idle timeout with the stub) (#566).** `scripts/e2e-compat.sh` with `COMPAT_API=1` deploys Postgres and authentik in the background while the agents are
+  deployed and checked, and joins them before `--tags api`. The stubbed run uses a 15 s idle timeout (45 s with
+  `CLAUDE_REAL=1`, `IDLE_SECONDS` overrides). `COMPAT_SSO=0` skips the SSO stand-in and its sign-in check.
+
+### Fixed
+- **An agent works on any pull request assigned to it, whatever its author or branch (#573).** The agent now also works on a pull request that it did not open: the label `agent:<name>` (GitHub) or an assignment
+  (Gitea), set by a person with write access. It never pushes to another author's branch: it pushes to
+  `agent/<name>/pr-<n>` and opens a stacked PR into the head, or posts a patch when the head is the default branch.
+  A fork, or a label by a person without write access, gets one comment that says why. A wake that starts no job
+  writes `wake: no job started` in the log. Docs: `docs/concepts.md`, "Who may give work".
+- **A security pause for many low or medium events lets the running jobs finish (#577).** A `TooManyEvents` security pause now drains the agent first: the loop starts no new job, the running jobs finish
+  (at most `DRAIN_MAX_MINUTES`), then the pod stops. A high-severity event still stops the pod at once. Repeats of
+  one `run-events-invalid` refusal count once per job toward `SECURITY_PAUSE_AFTER`. The event names the refused repo,
+  the number of events and a hash of the first event. The `Resumed` condition and the operator log name who resumed
+  the agent. Docs: `docs/admin.md`, "Resume an agent that the operator paused"; `docs/security-model.md`.
+
 ## [1.3.0-rc.1] - 2026-11-25
 
 ### Added
