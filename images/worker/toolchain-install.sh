@@ -11,8 +11,9 @@
 # Agent.status.toolchain: {"key","hash","reason","message"}. reason: Installed, Verified, Reinstalled (after a manifest
 # mismatch, a security event), StepFailed, Invalid. Exits non-zero on any failure, so the pod stays in Init (fail closed).
 #
-# key = sha256 of the spec and the architecture (the spec holds the presets, versions, path, worker image and refresh
-# epoch). The manifest hash is the sha256 over every path, type, mode and content hash below the key directory.
+# key = sha256 of the spec and the architecture (the spec holds the presets, versions, path, worker image, the image
+# digest after a re-pushed tag (#538) and refresh epoch). The manifest hash is the sha256 over every path, type, mode
+# and content hash below the key directory.
 set -uo pipefail
 TC="${TOOLCHAIN_DIR:-/state/toolchain}"
 TERM_LOG="${TOOLCHAIN_TERMINATION_LOG:-/dev/termination-log}"
