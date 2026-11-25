@@ -104,6 +104,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | ContextForge | the MCP gateway in the platform namespace |
 | cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
+| effort | the reasoning effort level of a Claude run (`claude --effort`): `low`, `medium`, `high`, `xhigh` or `max` (#564) |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
 | GitOps engine | a program in the cluster (Argo CD, Flux) that applies the manifests of a git repository or OCI artifact (#384) |
@@ -117,6 +118,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |
 | Markdown | the text format with `#` headings, `-` lists, tables and fenced code blocks that the console shows as formatted text |
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
+| model | the Claude model that a Claude run uses (`claude --model`), an alias such as `opus` or a full model name (#564) |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
 | Prometheus, Loki | the metrics and log services that the observability tools read |

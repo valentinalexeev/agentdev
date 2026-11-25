@@ -99,8 +99,11 @@
       kind: Agent
       metadata: {name: "{{ kind_agents_agent }}", namespace: "{{ kind_agents_ns }}"}
       spec: "{{ kind_agents_spec | combine({'toolchain': kind_agents_toolchain[kind_agents_agent]}
-                if kind_agents_agent in kind_agents_toolchain else {}) }}"
+                if kind_agents_agent in kind_agents_toolchain else {})
+                | combine({'model': kind_agents_model} if kind_agents_model else {})
+                | combine({'effort': kind_agents_effort} if kind_agents_effort else {}) }}"
   vars:
+    # #564: empty kind_agents_model, kind_agents_effort: no field (the CLI's own default); "" would fail the CRD rules
     # #499: {presets: {go: "1.27.4"}, path: [...], refresh: 168h} for this agent; not named: no toolchain (no field)
     kind_agents_spec:
       repo: "{{ kind_agents_repo }}"

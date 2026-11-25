@@ -74,7 +74,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.model`, `spec.effort`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -178,6 +178,20 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
 1. On `kind`: set `MAX_TURNS` (the default is 40, the maximum is 500).
    On GKE: set `max_turns`, or `agents[].max_turns` for one agent.
 2. Deploy again.
+
+The model and the effort tell Claude Code which Claude model to use and how much to think (#564). When you do not
+set them, the agent uses the default of the Claude Code CLI for its credential. Each value is valid for all the runs
+of the agent.
+
+1. On `kind`: set `kind_agents_model` and `kind_agents_effort` in `kind.vars.yml`.
+   On GKE: set `claude_model` and `claude_effort`, or `agents[].model` and `agents[].effort` for one agent.
+   The model is an alias (`opus`, `sonnet`) or a full model name (`claude-opus-5-5`).
+   The effort is `low`, `medium`, `high`, `xhigh` or `max`.
+2. Deploy again.
+3. Make sure that the metric `agentdev_cost_units_total` of the agent shows the new model after its next job.
+
+NOTE: The cluster refuses an Agent object with an incorrect model or effort. If such an object gets into the cluster,
+the operator does not start its pod, and its phase is `invalid`. A larger model or a higher effort uses more cost units (see the Claude proxy section).
 
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
@@ -377,6 +391,7 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Shared Claude credential | `.env` | Secret Manager `claude-shared` |
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Turn limit of one Claude run (#336) | `MAX_TURNS` (default 40) | `max_turns`, `agents[].max_turns` |
+| Model and effort of the Claude runs (#564) | `kind_agents_model`, `kind_agents_effort` (default empty: the CLI default) | `claude_model`, `claude_effort`, `agents[].model`, `agents[].effort` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |

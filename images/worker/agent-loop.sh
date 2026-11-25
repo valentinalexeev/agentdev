@@ -415,6 +415,23 @@ permission_mode() {
   esac
   echo dontAsk
 }
+# Model and effort (#564): the operator sets AGENT_MODEL and AGENT_EFFORT from the Agent's spec.model and spec.effort,
+# never from the repository or issue text. Unset: no flag, the CLI's own default. A value that does not pass the same
+# check as the operator gets no flag and a log line (a model name never starts with a dash, so it is never a flag).
+# model_args: prints one argument per line: --model <m> and --effort <e>, each only when set and valid.
+model_args() {
+  local re='^[A-Za-z0-9][]A-Za-z0-9._:@[-]*$'   # the operator's modelChars; "]" first and "-" last in the class
+  if [[ -n "${AGENT_MODEL:-}" ]]; then
+    if [[ ${#AGENT_MODEL} -le 100 && "${AGENT_MODEL}" =~ ${re} ]]; then
+      printf '%s\n' --model "${AGENT_MODEL}"
+    else log "AGENT_MODEL is not a model name: running with the CLI's default model" >&2; fi
+  fi
+  case "${AGENT_EFFORT:-}" in
+    "") ;;
+    low|medium|high|xhigh|max) printf '%s\n' --effort "${AGENT_EFFORT}";;
+    *) log "AGENT_EFFORT is not low, medium, high, xhigh or max: running with the CLI's default effort" >&2;;
+  esac
+}
 
 # Harness guide (#206): what agentdev gives this agent and what it does not, written by the operator from its own
 # configuration and mounted read-only (/etc/agentdev/guide/guide.md, this agent's key of ConfigMap agentdev-guides).
@@ -542,10 +559,11 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   fi
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   local jenv=(); [[ -n "$(job_header_env)" ]] && jenv=("$(job_header_env)")
+  local margs=(); mapfile -t margs < <(model_args)
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${jenv[@]}" \
           "${runner[@]}" "${CLAUDE_AUTH[@]}" "${pflag[@]}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
-          "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
+          "${margs[@]}" "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
           "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)

@@ -63,6 +63,16 @@ spec:
                   Only claude-* names (claude-shared or claude-<agent>), for the same reason.
                 pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              effort:
+                description: 'Reasoning effort of the agent''s runs (`claude --effort`,
+                  #564). Unset: the CLI''s own default, as before.'
+                enum:
+                - low
+                - medium
+                - high
+                - xhigh
+                - max
+                type: string
               forge:
                 default: gitea
                 description: Forge kind.
@@ -93,6 +103,13 @@ spec:
                 maximum: 500
                 minimum: 1
                 type: integer
+              model:
+                description: |-
+                  Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model
+                  name such as "claude-opus-5-5". Unset: the Claude Code CLI's own default for the credential, as before.
+                maxLength: 100
+                pattern: ^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$
+                type: string
               paused:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'
