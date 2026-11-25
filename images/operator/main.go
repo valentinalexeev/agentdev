@@ -101,6 +101,11 @@ func main() {
 		GraceSeconds:          env("AGENT_GRACE_SECONDS", "300"),
 		DrainMaxMinutes:       env("DRAIN_MAX_MINUTES", "60"),
 	}, Drains: &DrainSignals{}, ns: ns}
+	// #251: a forge limit below its mirror evicts agent pods in a loop; refuse the configuration instead
+	if err := r.D.validateEphemeral(); err != nil {
+		log.Error(err, "configuration")
+		os.Exit(1)
+	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)

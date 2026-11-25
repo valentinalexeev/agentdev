@@ -115,6 +115,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
 | `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |
+| Markdown | the text format with `#` headings, `-` lists, tables and fenced code blocks that the console shows as formatted text |
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |

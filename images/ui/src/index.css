@@ -8,6 +8,16 @@
 .agd-nowrap { white-space: nowrap; }
 /* model text in the Chat page (#346): shown as typed, never parsed as Markdown or HTML */
 .agd-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* assistant text as safe Markdown (#492, Markdown.tsx, react-markdown) */
+.agd-md h3, .agd-md h4, .agd-md h5, .agd-md h6 { margin: var(--space-3) 0 var(--space-2); font-size: 15px; line-height: 23px; }
+.agd-md h3 { font-size: 17px; }
+.agd-md blockquote { margin: 0 0 var(--space-2); padding-left: var(--space-3); border-left: 3px solid var(--line-strong); color: var(--ink-muted); }
+.agd-md hr { border: 0; border-top: 1px solid var(--line); margin: var(--space-3) 0; }
+.agd-md li > ul, .agd-md li > ol { margin-bottom: 0; }
+.agd-md-table { overflow-x: auto; margin: 0 0 var(--space-2); }
+.agd-md-table table { border-collapse: collapse; font-size: 14px; line-height: 20px; }
+.agd-md-table th, .agd-md-table td { border: 1px solid var(--line); padding: 4px var(--space-2); text-align: left; vertical-align: top; }
+.agd-md-table th { background: var(--sunken); }
 /* the session list button: only where the list folds away (below 1000 px, console.css) */
 .agd-chat-back { display: none; }
 @media (max-width: 1000px) { .agd-chat-back { display: inline-flex; } }

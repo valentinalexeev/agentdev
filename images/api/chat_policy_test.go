@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
@@ -58,6 +59,18 @@ func envMap(c *corev1.Container) map[string]corev1.EnvVar {
 		m[e.Name] = e
 	}
 	return m
+}
+
+// proxyToken: the service account token projection of the proxy-token volume (the fixture has it, as the operator renders it)
+func proxyToken(t *testing.T, p *corev1.PodSpec) *corev1.ServiceAccountTokenProjection {
+	t.Helper()
+	for _, v := range p.Volumes {
+		if v.Name == "proxy-token" && v.Projected != nil && len(v.Projected.Sources) == 1 && v.Projected.Sources[0].ServiceAccountToken != nil {
+			return v.Projected.Sources[0].ServiceAccountToken
+		}
+	}
+	t.Fatal("no proxy-token volume")
+	return nil
 }
 
 // The chat pod equals the agent pod except for the interactive entry point: the forge sidecar is the agent's sidecar
@@ -178,7 +191,7 @@ func admit(t *testing.T, pol vapDoc, j *batchv1.Job) []string {
 	b, _ := json.Marshal(j)
 	var obj map[string]any
 	_ = json.Unmarshal(b, &obj)
-	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)))
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("object", cel.DynType), cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,6 +289,10 @@ func TestChatJobAdmission(t *testing.T) {
 			containerNamed(*p, "chat").SecurityContext = &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN"}}}
 		}},
 		{"the agent label (agent Service, approvals)", func(_ *corev1.PodSpec, j *batchv1.Job) { j.Spec.Template.Labels["agent"] = "alice" }},
+		// #550: the projected claude-proxy token keeps its file name; another path (or none, so the default) is refused
+		{"the claude-proxy token under another path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "other" }},
+		{"the claude-proxy token under a nested path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "token/x" }},
+		{"the claude-proxy token without a path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "" }},
 	}
 	for _, tc := range cases {
 		j := chatJobFor(t, "github")
@@ -403,6 +420,38 @@ func TestChatJobAdmissionToolchain(t *testing.T) {
 		tc.mut(&j.Spec.Template.Spec)
 		if f := admit(t, pol, j); len(f) == 0 {
 			t.Errorf("admitted: %s", tc.name)
+		}
+	}
+}
+
+// #538: an agent with a toolchain runs the worker repository pinned to a digest; the policy admits exactly that form and
+// refuses another repository, a malformed digest or the pinned form of a repository prefix.
+func TestChatJobAdmissionPinnedWorker(t *testing.T) {
+	pol := chatPolicy(t)
+	repo := strings.TrimSuffix(testWorkerImage, ":v0.0.0")
+	pin := func(img string) []string {
+		j := chatJobFor(t, "toolchain")
+		p := &j.Spec.Template.Spec
+		for i := range p.InitContainers {
+			if p.InitContainers[i].Name == "toolchain" {
+				p.InitContainers[i].Image = img
+			}
+		}
+		containerNamed(*p, "chat").Image = img
+		return admit(t, pol, j)
+	}
+	if f := pin(repo + "@sha256:" + strings.Repeat("a", 64)); len(f) != 0 {
+		t.Fatalf("pinned worker refused: %v", f)
+	}
+	for _, img := range []string{
+		"ghcr.io/evil/agentdev-worker@sha256:" + strings.Repeat("a", 64),
+		repo + "-evil@sha256:" + strings.Repeat("a", 64),
+		repo + "@sha256:" + strings.Repeat("a", 63),
+		repo + "@sha256:" + strings.Repeat("a", 64) + "x",
+		repo + ":other",
+	} {
+		if f := pin(img); len(f) == 0 {
+			t.Errorf("%s admitted", img)
 		}
 	}
 }

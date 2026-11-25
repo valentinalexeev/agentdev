@@ -155,12 +155,12 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	}}
 	if a.Spec.Toolchain != nil {
 		ps, _ := presetsOf(a.Spec.Toolchain)
-		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps))
+		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps, r.toolchainDigest(s), r.toolchainWorkerImage(a, s)))
 		p.Volumes = append(p.Volumes, toolchainTmpVolume())
 	}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
-		Image:                    image,
+		Image:                    r.toolchainWorkerImage(a, s), // the tag, or with a toolchain its pinned digest (#538)
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
@@ -485,4 +485,15 @@ func stateInitCommand(a *v1.Agent) []string {
 		return []string{"mkdir", "-p", "/state/claude"}
 	}
 	return []string{"mkdir", "-p", "/state/claude", toolchainDir, "/state/cache"}
+}
+
+// validateEphemeral checks the documented rule FORGE_EPHEMERAL_LIMIT >= FORGE_MIRROR_LIMIT (#251): the mirror emptyDir
+// counts against the forge sidecar's ephemeral-storage limit, so a smaller limit evicts the pod before the mirror is
+// full, and the StatefulSet recreates it in a loop. Checked on the effective values (empty or invalid: the defaults).
+func (d Defaults) validateEphemeral() error {
+	mirror, limit := d.qty(d.ForgeMirrorLimit, defForgeMirrorLimit), d.qty(d.ForgeEphemeralLimit, defForgeEphemeralLimit)
+	if limit.Cmp(mirror) < 0 {
+		return fmt.Errorf("FORGE_EPHEMERAL_LIMIT (%s) must be at least FORGE_MIRROR_LIMIT (%s): the git mirror counts against the forge sidecar's limit", limit.String(), mirror.String())
+	}
+	return nil
 }

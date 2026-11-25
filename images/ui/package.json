@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint && node scripts/check-class-prefix.mjs",
+    "test": "node --test test/*.test.ts",
     "preview": "vite preview",
     "mock-api": "node scripts/mock-api.mjs",
     "postbuild": "node scripts/check-class-prefix.mjs --dist",
@@ -21,7 +22,9 @@
     "@fontsource/martian-mono": "^5.3.0",
     "oidc-client-ts": "3.5.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

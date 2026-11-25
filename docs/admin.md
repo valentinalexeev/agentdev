@@ -291,6 +291,14 @@ installs it before the agent starts, and the agent can use it but not change it.
 A new size applies to new agents. To grow the volume of an existing agent, resize its PVC `state-agent-<name>-0`
 (the StorageClass must allow volume expansion).
 
+**A new worker image under the same tag.** The toolchain follows the worker image digest (#538). The operator reads
+the digest when the agent pod starts. The agent then runs the worker image pinned to that digest, for example
+`ghcr.io/valentinalexeev/agentdev-worker@sha256:...`. When the tag (for example `:latest`) gets a new image, the
+operator sees it only when the pod starts again on a node that has pulled the new image. The pod is then replaced
+after drain and the toolchain is installed again. With pull policy `Never` (kind), only a new image load
+(`kind load docker-image`) followed by a pod restart triggers it. An older image on another node does not move the
+digest back. To use a new image at once, set a new `image_tag`.
+
 **When the install fails.** The pod stays in `Init`, so the agent does not run without its toolchain.
 `status.toolchain.reason` is `StepFailed` (a download, a checksum or the check of the toolchain failed) or `Invalid`
 (for example a symbolic link in `/state/toolchain`). `message` has the details. Do the command
@@ -376,7 +384,7 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent container ephemeral-storage request (#251) | `AGENT_EPHEMERAL_REQUEST` (default `1Gi`) | `agent_ephemeral_request` (default `1Gi`) |
 | Agent container ephemeral-storage limit | `AGENT_EPHEMERAL_LIMIT` (default `8Gi`) | `agent_ephemeral_limit` (default `8Gi`) |
 | Forge sidecar git mirror size limit | `FORGE_MIRROR_LIMIT` (default `4Gi`) | `forge_mirror_limit` (default `4Gi`) |
-| Forge sidecar ephemeral-storage limit (at least the mirror limit) | `FORGE_EPHEMERAL_LIMIT` (default `5Gi`) | `forge_ephemeral_limit` (default `5Gi`) |
+| Forge sidecar ephemeral-storage limit (at least the mirror limit; the operator refuses to start otherwise) | `FORGE_EPHEMERAL_LIMIT` (default `5Gi`) | `forge_ephemeral_limit` (default `5Gi`) |
 
 ## Claude proxy and budget
 
