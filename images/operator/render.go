@@ -155,12 +155,12 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	}}
 	if a.Spec.Toolchain != nil {
 		ps, _ := presetsOf(a.Spec.Toolchain)
-		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps))
+		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps, r.toolchainDigest(s), r.toolchainWorkerImage(a, s)))
 		p.Volumes = append(p.Volumes, toolchainTmpVolume())
 	}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
-		Image:                    image,
+		Image:                    r.toolchainWorkerImage(a, s), // the tag, or with a toolchain its pinned digest (#538)
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,

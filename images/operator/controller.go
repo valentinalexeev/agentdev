@@ -171,8 +171,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
 
+	tcDigest := r.toolchainPodDigest(ctx, &a) // #538: the worker image digest the toolchain install ran with
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+		r.noteToolchainDigest(&a, sts, tcDigest)
 		blocked := sts.Annotations["agentdev/blocked"] == "true"
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
