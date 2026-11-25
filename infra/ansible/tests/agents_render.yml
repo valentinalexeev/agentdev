@@ -1,5 +1,6 @@
-# Render checks of templates/agents.j2 (#496, #499): agents[].tools.allow becomes the Agent's spec.tools.allow; an agent
-# without it gets no spec.tools (no new env, no restart on upgrade).
+# Render checks of templates/agents.j2 (#496, #499, #564): agents[].tools.allow becomes the Agent's spec.tools.allow;
+# an agent without it gets no spec.tools (no new env, no restart on upgrade). The same for the toolchain, the model and
+# the effort.
 # Run: ansible-playbook infra/ansible/tests/agents_render.yml
 - name: Agent objects from agents[] (#496)
   hosts: localhost
@@ -15,6 +16,8 @@
       - {name: bob, repos: [o/b], tools: {allow: []}}
       - {name: carol, repos: [o/c], tools: {allow: ["Bash(npm ci:*)", "Bash(npm install:*)"]}}
       - {name: dave, repos: [o/d], toolchain: {presets: {go: "1.27.4"}, refresh: 168h}}
+      - {name: erin, repos: [o/e], model: claude-opus-5-5, effort: high}
+      - {name: frank, repos: [o/f], model: "", effort: ""}
   tasks:
     - name: Render the Agent objects
       ansible.builtin.set_fact:
@@ -36,3 +39,28 @@
           - "'toolchain' not in t_agents.alice"
           - "'toolchain' not in t_agents.carol"
           - "t_agents.dave.toolchain == {'presets': {'go': '1.27.4'}, 'refresh': '168h'}"
+
+    - name: Only an agent or instance with a model or effort gets spec.model, spec.effort (#564)
+      ansible.builtin.assert:
+        that:
+          - "'model' not in t_agents.alice and 'effort' not in t_agents.alice"
+          - "'model' not in t_agents.frank and 'effort' not in t_agents.frank"
+          - t_agents.erin.model == 'claude-opus-5-5'
+          - t_agents.erin.effort == 'high'
+
+    - name: Render with an instance-wide model and effort (#564)
+      ansible.builtin.set_fact:
+        t_agents2: "{{ dict(t_list | map(attribute='metadata.name') | zip(t_list | map(attribute='spec'))) }}"
+      vars:
+        claude_model: sonnet
+        claude_effort: medium
+        t_list: "{{ lookup('ansible.builtin.template', '../templates/agents.j2') | from_yaml }}"
+
+    - name: The instance-wide values apply, agents[].model and agents[].effort win (#564)
+      ansible.builtin.assert:
+        that:
+          - t_agents2.alice.model == 'sonnet'
+          - t_agents2.alice.effort == 'medium'
+          - t_agents2.frank.model == 'sonnet'
+          - t_agents2.erin.model == 'claude-opus-5-5'
+          - t_agents2.erin.effort == 'high'
