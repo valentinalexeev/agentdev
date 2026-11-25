@@ -100,11 +100,23 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **The console shows the page name once (#521).** The page name shows once, in the top bar, to the left of the project picker. The page body does not repeat it as
   a large heading. Each page keeps its subtitle. The left rail marks the current page.
 - **credproxy token cache test checks the cache hit again (#544).** The credproxy positive token cache test no longer has a vacuous assertion (staticcheck SA4000). It now fails if a repeated verify skips the cache.
+- **Toolchain installs follow the worker image digest, so a re-pushed tag installs again (#538).** The toolchain key now follows the worker image digest (ADR 0010 D3). The operator reads the digest from the `imageID`
+  of the `state-init` init container of the agent pod. When the same tag (for example `:latest`) later runs with another
+  digest, the pod is replaced after drain and the toolchain is installed again under a new key. With a toolchain the
+  agent and `toolchain` containers run the worker image pinned to its digest; the chat Job policy admits that form.
+  The digest only moves forward. Agents without `spec.toolchain` keep their pod template. See docs/admin.md. Re-run:
+  the playbook or `./run.sh 12`.
 
 ### Security
 - **Security events for auto mode classifier allows and severity scores (#506).** `claude-proxy` emits one low-severity security event `classifier-allow` for every tool call that Claude Code's auto
   mode classifier allows (`spec.permission.mode: auto`, #500), with the agent, the tool and the input (redacted,
   clipped). In severity mode it emits `classifier-severity` with the score instead. The agent cannot suppress it; it can only create false events about itself. Docs: `docs/security.md` R121.
+- **obs-mcp refuses an unbalanced Cloud Logging filter (#250).** obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses, an unterminated string, a newline in a
+  string, a line end other than LF or CRLF, or a trailing backslash before the API call (#250). Such a filter could
+  close the tool's `(<filter>) AND timestamp>=...` wrapper and drop the time bound.
+- **The chat Job policy pins the path of the projected claude-proxy token to token (#550).** The chat Job ValidatingAdmissionPolicy (`manifests/api.yaml.tmpl`) now requires `path: token` for the projected
+  `claude-proxy` token, the path that the operator and the chat pods already use. A chat Job that projects the token under
+  another file name is refused. Re-run: the playbook or `./run.sh 12`.
 
 ### Upgrade
 From 1.2.0 to 1.3.0-rc.1. Do the steps in this order. Step 2 is **BREAKING** for kind users of `run.sh`. GKE
@@ -154,29 +166,29 @@ off by default.
    than `FORGE_MIRROR_LIMIT`. If you set `forge_mirror_limit` above `5Gi` (the default of `forge_ephemeral_limit`),
    also set `forge_ephemeral_limit` to the same value or more before you deploy. Else the operator pod stays in
    `CrashLoopBackOff` and its log names both values.
-5. **Toolchain agents get pinned images (#538, PR #551).** An agent with `spec.toolchain` runs the worker image
-   pinned to its digest (`<repository>@sha256:...`) after its first start. When the same tag later gets a new image,
-   the agent pod is replaced once and installs its toolchain again. Agents without a toolchain do not change. See
-   docs/admin.md, "A new worker image under the same tag".
-6. **Permission mode `auto` (#500, #505, #506, #539, #503, #523), optional.** `spec.permission` defaults to
+5. **Toolchain agents get their worker image pinned to its digest (#538, PR #551).** For an agent with
+   `spec.toolchain`, the operator reads the worker image digest from the `state-init` container and runs the agent
+   and `toolchain` containers as `<repository>@sha256:...`. The toolchain key follows that digest. When the same tag
+   later gets a new image, the agent pod is replaced once (after drain) and installs its toolchain again. The digest
+   only moves forward. Agents without a toolchain keep their pod template. No setting to change. See docs/admin.md,
+   "A new worker image under the same tag".
+6. **The chat Job policy requires the token path `token` (#550, PR #561).** The ValidatingAdmissionPolicy
+   `agentdev-api-chat-jobs` now refuses a chat Job that projects the `claude-proxy` token under another file name
+   than `token`. The API and the operator already use `token`, so standard deployments do not change. Only a custom
+   chat pod spec is affected: set `path: token` on its projected token before you deploy.
+7. **Permission mode `auto` (#500, #505, #506, #539, #503, #523), optional.** `spec.permission` defaults to
    `dontAsk`, as before: an agent without the field keeps its pod template. To use `auto`, set `agents[].permission`
    (`{mode: auto}`, optional `autoMode` rules) or `kind_agents_permission`, then deploy again. Read the WARNING in
    docs/admin.md, "Set the permission mode of an agent", first: the classifier is not a security boundary. The live
    check of `auto` with approvals (#504) runs on this release candidate; until it passes, use `auto` only on test
    agents. With approvals on, the worker now uses Claude Code's `can_use_tool` host (#539); `APPROVAL_HOST=off` on the
    agent container keeps the old MCP prompt tool. Approval requests now make one comment per job (#523).
-7. **Per-agent tools and toolchains (#496, #499), optional.** `agents[].tools.allow` and `agents[].toolchain` (kind:
+8. **Per-agent tools and toolchains (#496, #499), optional.** `agents[].tools.allow` and `agents[].toolchain` (kind:
    `kind_agents_tools`, `kind_agents_toolchain`). A toolchain needs the setup egress credential
    `egress-setup-proxy`: the playbook makes it, or Terraform with `external_secrets`. Size the agent volume as in
    docs/admin.md, "Give an agent a toolchain" (Rust: 20 GiB or more).
-8. **Deploy and check.** Run `deploy.yml` (or the Flux render) as usual. Then check that every `agent-<name>-0` is
+9. **Deploy and check.** Run `deploy.yml` (or the Flux render) as usual. Then check that every `agent-<name>-0` is
    `2/2 Running` and that `scripts/e2e-gke-security.sh` has no FAIL.
-
-## [1.2.0] - 2026-11-24
-
-1.1.0 was never released as final, so the content of 1.1.0-rc.1, rc.2 and rc.3 is part of 1.2.0. There is no
-`v1.1.0` tag (#392). Upgrade from 1.0.1 directly to 1.2.0. This section also replaces the sections of
-1.2.0-rc.1 to rc.4. An instance on a 1.2.0 rc follows "Upgrade from a 1.2.0 release candidate" below.
 
 ### Upgrade
 From 1.0.x (1.0.0 or 1.0.1) to 1.2.0. Do the steps in this order. Only step 3 changes the behaviour of an existing
@@ -1515,3 +1527,9 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 [1.1.0-rc.3]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.2...v1.1.0-rc.3
 [1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
+
+## [1.2.0] - 2026-11-24
+
+1.1.0 was never released as final, so the content of 1.1.0-rc.1, rc.2 and rc.3 is part of 1.2.0. There is no
+`v1.1.0` tag (#392). Upgrade from 1.0.1 directly to 1.2.0. This section also replaces the sections of
+1.2.0-rc.1 to rc.4. An instance on a 1.2.0 rc follows "Upgrade from a 1.2.0 release candidate" below.
