@@ -121,11 +121,18 @@ func buildJobs(a agent, repo string, prs []forgePR, issues []forgeIssue, pending
 }
 
 // jobCache keeps forge answers for a short time, so a board with 24 projects does not call the forge on every load.
+// #519: an answer older than ttl but younger than maxStale is served at once and refreshed in the background
+// (stale-while-revalidate), so a page load waits for the forge only on a cold cache (a new API pod, or an entry
+// older than maxStale). Forge calls run at most jobForgeParallel repositories at a time, for page loads and
+// background refreshes together.
 type jobCache struct {
-	f   jobForge
-	ttl time.Duration
-	mu  sync.Mutex
-	m   map[string]jobCacheEntry
+	f        jobForge
+	ttl      time.Duration // younger: served without a forge call
+	maxStale time.Duration // younger: served, refreshed in the background; older: the request waits for the forge
+	sem      chan struct{} // forge calls in flight, one slot per repository
+	mu       sync.Mutex
+	m        map[string]jobCacheEntry
+	busy     map[string]bool // keys with a background refresh running
 }
 
 type jobCacheEntry struct {
@@ -134,25 +141,85 @@ type jobCacheEntry struct {
 	issues []forgeIssue
 }
 
-func newJobCache(f jobForge, ttl time.Duration) *jobCache {
-	return &jobCache{f: f, ttl: ttl, m: map[string]jobCacheEntry{}}
+// jobForgeParallel: repositories read from the forge at the same time (2 calls each). GitHub allows at most 100
+// concurrent requests per credential (secondary rate limit), Gitea has no concurrency limit by default.
+const jobForgeParallel = 8
+
+// jobRefreshTimeout bounds one background refresh (each forge call also has its own client timeout).
+const jobRefreshTimeout = 30 * time.Second
+
+func newJobCache(f jobForge, ttl, maxStale time.Duration) *jobCache {
+	return &jobCache{f: f, ttl: ttl, maxStale: maxStale, sem: make(chan struct{}, jobForgeParallel),
+		m: map[string]jobCacheEntry{}, busy: map[string]bool{}}
 }
 
 func (c *jobCache) get(ctx context.Context, forge, repo, agent string) ([]forgePR, []forgeIssue, error) {
 	key := forge + "\x00" + repo + "\x00" + agent
 	c.mu.Lock()
 	e, ok := c.m[key]
-	c.mu.Unlock()
-	if ok && time.Since(e.at) < c.ttl {
+	age := time.Since(e.at)
+	if ok && age < c.ttl {
+		c.mu.Unlock()
 		return e.prs, e.issues, nil
 	}
-	prs, err := c.f.Pulls(ctx, forge, repo)
-	if err != nil {
-		return nil, nil, err
+	if ok && age < c.maxStale {
+		if !c.busy[key] {
+			c.busy[key] = true
+			go c.refresh(key, forge, repo, agent)
+		}
+		c.mu.Unlock()
+		return e.prs, e.issues, nil
 	}
-	issues, err := c.f.AgentIssues(ctx, forge, repo, agent)
-	if err != nil {
-		return nil, nil, err
+	c.mu.Unlock()
+	return c.fetch(ctx, key, forge, repo, agent)
+}
+
+// refresh reads one entry again in the background; on an error the stale entry stays until maxStale.
+func (c *jobCache) refresh(key, forge, repo, agent string) {
+	defer func() {
+		c.mu.Lock()
+		delete(c.busy, key)
+		c.mu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), jobRefreshTimeout)
+	defer cancel()
+	if _, _, err := c.fetch(ctx, key, forge, repo, agent); err != nil {
+		log.Printf("jobs: background refresh of %s on %s: %v", agent, repo, err)
+	}
+}
+
+// fetch reads the PRs and the agent's issues of one repository (both calls at the same time) and stores them.
+func (c *jobCache) fetch(ctx context.Context, key, forge, repo, agent string) ([]forgePR, []forgeIssue, error) {
+	select {
+	case c.sem <- struct{}{}:
+		defer func() { <-c.sem }()
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(ctx) // a failed call stops its sibling
+	defer cancel()
+	var (
+		prs             []forgePR
+		issues          []forgeIssue
+		prErr, issueErr error
+		wg              sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if prs, prErr = c.f.Pulls(ctx, forge, repo); prErr != nil {
+			cancel()
+		}
+	}()
+	if issues, issueErr = c.f.AgentIssues(ctx, forge, repo, agent); issueErr != nil {
+		cancel()
+	}
+	wg.Wait()
+	if prErr != nil {
+		return nil, nil, prErr
+	}
+	if issueErr != nil {
+		return nil, nil, issueErr
 	}
 	c.mu.Lock()
 	c.m[key] = jobCacheEntry{at: time.Now(), prs: prs, issues: issues}
@@ -184,26 +251,56 @@ func (w *writer) pendingJobs(ctx context.Context) map[string]map[string]bool {
 }
 
 // jobsOf lists the jobs of the given agents on the repositories the filter keeps; forge errors skip that repository.
+// The repositories are read at the same time (#519), bounded by the cache's jobForgeParallel.
 func (w *writer) jobsOf(ctx context.Context, agents []agent, keepRepo func(forge, repo string) bool) ([]job, []string) {
 	if w.jobs == nil {
 		return []job{}, nil
 	}
 	pending := w.pendingJobs(ctx)
-	out := []job{}
-	var failed []string
+	type task struct {
+		a    agent
+		repo string
+		js   []job
+		err  error
+	}
+	var tasks []*task
 	for _, a := range agents {
 		for _, repo := range a.Repos {
-			if !keepRepo(a.Forge, repo) {
-				continue
+			if keepRepo(a.Forge, repo) {
+				tasks = append(tasks, &task{a: a, repo: repo})
 			}
-			prs, issues, err := w.jobs.get(ctx, a.Forge, repo, a.Name)
-			if err != nil {
-				log.Printf("jobs: %s on %s: %v", a.Name, repo, err)
-				failed = append(failed, repo)
-				continue
-			}
-			out = append(out, buildJobs(a, repo, prs, issues, pending[a.Name])...)
 		}
+	}
+	var wg sync.WaitGroup
+	limit := make(chan struct{}, jobForgeParallel) // goroutines per request; the cache bounds forge calls overall
+	for _, t := range tasks {
+		select {
+		case limit <- struct{}{}:
+		case <-ctx.Done():
+			t.err = ctx.Err()
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer func() { <-limit; wg.Done() }()
+			prs, issues, err := w.jobs.get(ctx, t.a.Forge, t.repo, t.a.Name)
+			if err != nil {
+				t.err = err
+				return
+			}
+			t.js = buildJobs(t.a, t.repo, prs, issues, pending[t.a.Name])
+		}()
+	}
+	wg.Wait()
+	out := []job{}
+	var failed []string
+	for _, t := range tasks {
+		if t.err != nil {
+			log.Printf("jobs: %s on %s: %v", t.a.Name, t.repo, t.err)
+			failed = append(failed, t.repo)
+			continue
+		}
+		out = append(out, t.js...)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].Updated.Equal(out[j].Updated) {

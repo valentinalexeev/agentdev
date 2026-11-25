@@ -122,9 +122,9 @@ func (f fakePlatform) DeploymentReady(_ context.Context, ns, name string) (int32
 func (f fakePlatform) AgentPodPhases(context.Context) (map[string]int, error) { return f.phases, f.err }
 
 func TestPlatformAdminsOnly(t *testing.T) {
-	h, wr := detailEnv(t)
+	_, wr := detailEnv(t)
 	wr.platform = newPlatformChecker(fakePlatform{}, nil, "coding-agents", "agentdev-platform")
-	h = routes(idVerify, wr.store.(*kubeAgents), newMemStore(), wr)
+	h := routes(idVerify, wr.store.(*kubeAgents), newMemStore(), wr)
 	for tok, code := range map[string]int{"writer": 403, "admin": 403, "reader": 403, "nobody": 403, "": 401, "group": 200} {
 		if w := do(t, h, "/api/platform", tok); w.Code != code {
 			t.Errorf("%q: %d, want %d", tok, w.Code, code)
