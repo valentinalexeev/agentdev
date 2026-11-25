@@ -234,7 +234,10 @@ runner can start any program. So the security boundary is the pod, not the list 
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
-  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
+  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). An agent with
+  `spec.permission.mode: auto` (#500) runs with `--permission-mode auto` instead: Claude Code's classifier decides a
+  call outside the allow-list, with rules from the Agent object only. The classifier is a model's judgment, not a
+  boundary; the deny-list stays. Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
 - **Egress allow-list (#65):** agent pods reach the outside only through the `egress-proxy` (Squid), and it only
   the hosts in `EGRESS_HOSTS` (forge, package registries; the model API only through `claude-proxy`). A NetworkPolicy denies every other connection

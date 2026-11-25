@@ -17,7 +17,7 @@ export function UsagePage({ token, onExpired }: { token: string; onExpired: () =
   const save = (p: Promise<void>) => { setBusy(true); p.then(load).catch(fail).finally(() => setBusy(false)) }
   const pct = (w?: UsageWindow) => (w && w.resetsAt * 1000 > loadedAt ? Math.round(w.utilization * 100) : null)
   const at = (s?: number) => (s ? new Date(s * 1000).toLocaleString() : '')
-  const head = <PageHead title="Usage" sub="When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish." />
+  const head = <PageHead sub="When a window reaches its limit, the agents on that subscription start no new runs until it resets. Runs in progress finish." />
   if (!u) return <>{head}{error ? <p className="agd-error" role="alert">{error}</p> : <p className="agd-muted">Loading usage…</p>}</>
   const subs = Object.entries(u.state ?? {})
   return (

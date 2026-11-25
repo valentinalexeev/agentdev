@@ -220,12 +220,12 @@
           # authentik_sso and api (their templates/externalsecrets.j2 and tasks/main.yml)
           - >-
             es | map(attribute='metadata.name') | sort == (['claude-shared', 'claude-bob', 'webhook-router', 'webhook-router-poll',
-            'egress-forge-proxy', 'claude-proxy-signing', 'agent-alice', 'agent-bob', 'exec-tf-prod-forge', 'exec-tf-prod-plan',
+            'egress-forge-proxy', 'egress-setup-proxy', 'claude-proxy-signing', 'agent-alice', 'agent-bob', 'exec-tf-prod-forge', 'exec-tf-prod-plan',
             'exec-tf-prod-apply', 'platform-db', 'authentik', 'authentik-sso', 'agentdev-api-db', 'agentdev-api-forge',
             'agentdev-api-github', 'agentdev-api-siem', 'agentdev-api-vapid'] | sort)
           - es | selectattr('metadata.namespace', 'equalto', 'coding-agents') | map(attribute='metadata.name') | sort
             == ['agent-alice', 'agent-bob', 'claude-bob', 'claude-proxy-signing', 'claude-shared', 'egress-forge-proxy',
-                'webhook-router', 'webhook-router-poll']
+                'egress-setup-proxy', 'webhook-router', 'webhook-router-poll']
           # every ExternalSecret uses the platform store of its own namespace, never a value in the spec
           - all_es | map(attribute='spec.secretStoreRef.name') | unique == ['agentdev-platform-secrets']
           - all_es | map(attribute='spec.data') | flatten | rejectattr('remoteRef.key', 'defined') | list | length == 0

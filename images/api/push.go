@@ -510,23 +510,7 @@ func (p *pusher) deliver(ctx context.Context, u userSnap, it item) {
 	if ch == nil {
 		return
 	}
-	if !u.fresh(now()) {
-		return // no console visit for snapTTL: no push until the next one (#404 review)
-	}
-	id := u.pushIdentity() // live forge permission only, never the snapshot's admin group
-	visible := false
-	for _, repo := range it.repos {
-		if visible {
-			break
-		}
-		perm, err := p.w.repoPerm(ctx, id, it.forge, repo)
-		visible = err == nil && perm >= permWrite
-	}
-	if !visible {
-		return
-	}
-	s, err := p.store.Settings(ctx, u.Subject)
-	if err != nil || !s.wants(it.payload.Type, it.payload.Repo) {
+	if !p.wants(ctx, u, it.forge, it.repos, it.payload.Type, it.payload.Repo) {
 		return
 	}
 	if !p.limit.allow(u.Subject) {
@@ -554,6 +538,52 @@ func (p *pusher) deliver(ctx context.Context, u userSnap, it item) {
 	for _, s := range subs {
 		p.sendOne(ctx, ch, s, msg, pl.Tag)
 	}
+}
+
+// wants: user u gets a notification of type typ about project: a fresh snapshot, write access to one of repos (live,
+// R35) and the user's settings.
+func (p *pusher) wants(ctx context.Context, u userSnap, forge string, repos []string, typ, project string) bool {
+	if !u.fresh(now()) {
+		return false // no console visit for snapTTL: no push until the next one (#404 review)
+	}
+	id := u.pushIdentity() // live forge permission only, never the snapshot's admin group
+	visible := false
+	for _, repo := range repos {
+		if visible {
+			break
+		}
+		perm, err := p.w.repoPerm(ctx, id, forge, repo)
+		visible = err == nil && perm >= permWrite
+	}
+	if !visible {
+		return false
+	}
+	s, err := p.store.Settings(ctx, u.Subject)
+	return err == nil && s.wants(typ, project)
+}
+
+// reaches tells whether an approval notification for repo reaches at least one person who can decide it: the channel
+// is on, and a subscribed user passes the checks of deliver. The forge sidecar asks this before it comments on the
+// forge (#523). Any error is false: the sidecar then comments (fail open to the forge, never to silence). A source
+// that approvalPayload does not send (cost) never reaches anybody.
+func (p *pusher) reaches(ctx context.Context, forge, repo, source string) bool {
+	if p == nil || p.ar == nil || p.channels() == nil || requestKind[source] == "" || !validRepo(repo) {
+		return false
+	}
+	subjects, err := p.store.Subscribers(ctx)
+	if err != nil {
+		return false
+	}
+	for _, sub := range subjects {
+		u, ok, err := p.store.User(ctx, sub)
+		if err != nil || !ok || !p.wants(ctx, u, forge, []string{repo}, typeApprovals, repo) {
+			continue
+		}
+		if subs, err := p.store.Subscriptions(ctx, sub); err == nil && len(subs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *pusher) sendOne(ctx context.Context, ch *pushChannel, s pushSub, msg []byte, tag string) {
@@ -625,4 +655,40 @@ func (p *pusher) runAction(ctx context.Context, tok string) (int, any) {
 		audit(auditEntry{Who: who, Action: "push-snooze", Result: "ok", Request: map[string]any{"approval": c.Name}})
 		return http.StatusOK, map[string]any{"state": "snoozed", "minutes": int(snoozeFor / time.Minute)}
 	}
+}
+
+// internalReach: GET /internal/approvals/{agent}/reach?repo=&forge=&source=, for the agent's forge sidecar (#523). It
+// answers {"push": true} when a Web Push notification of a new request reaches a person who can decide it; the
+// sidecar then does not comment on the forge. The caller must be a running pod of that agent, and repo one of its
+// repositories. The answer is one bit: it does not name the people.
+func internalReach(p *pusher, agents agentLister, pods agentPodIPs) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("agent")
+		q := r.URL.Query()
+		repo, forge, source := q.Get("repo"), q.Get("forge"), q.Get("source")
+		if !agentNameRe.MatchString(name) || len(name) > 63 || !validRepo(repo) ||
+			(forge != "" && forge != "gitea" && forge != "github") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
+			return
+		}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		ips, err := pods.AgentPodIPs(r.Context(), name)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "cannot check the caller"})
+			return
+		}
+		if !slices.Contains(ips, host) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		if a, ok := findAgent(r.Context(), agents, name); !ok || !slices.Contains(a.Repos, repo) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "not a repository of this agent"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"push": p.reaches(r.Context(), forge, repo, source)})
+	})
 }

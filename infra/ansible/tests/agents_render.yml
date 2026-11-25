@@ -1,0 +1,38 @@
+# Render checks of templates/agents.j2 (#496, #499): agents[].tools.allow becomes the Agent's spec.tools.allow; an agent
+# without it gets no spec.tools (no new env, no restart on upgrade).
+# Run: ansible-playbook infra/ansible/tests/agents_render.yml
+- name: Agent objects from agents[] (#496)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    agents_ns: coding-agents
+    forge_kind: github
+    max_concurrent: 2
+    max_turns: 40
+    scale_to_zero: true
+    agents:
+      - {name: alice, repos: [o/a]}
+      - {name: bob, repos: [o/b], tools: {allow: []}}
+      - {name: carol, repos: [o/c], tools: {allow: ["Bash(npm ci:*)", "Bash(npm install:*)"]}}
+      - {name: dave, repos: [o/d], toolchain: {presets: {go: "1.27.4"}, refresh: 168h}}
+  tasks:
+    - name: Render the Agent objects
+      ansible.builtin.set_fact:
+        t_agents: "{{ dict(t_list | map(attribute='metadata.name') | zip(t_list | map(attribute='spec'))) }}"
+      vars:
+        t_list: "{{ lookup('ansible.builtin.template', '../templates/agents.j2') | from_yaml }}"
+
+    - name: Only an agent with entries gets spec.tools
+      ansible.builtin.assert:
+        that:
+          - "'tools' not in t_agents.alice"
+          - "'tools' not in t_agents.bob"
+          - "t_agents.carol.tools == {'allow': ['Bash(npm ci:*)', 'Bash(npm install:*)']}"
+          - t_agents.carol.repo == ['o/c']
+
+    - name: Only an agent with a toolchain gets spec.toolchain (#499)
+      ansible.builtin.assert:
+        that:
+          - "'toolchain' not in t_agents.alice"
+          - "'toolchain' not in t_agents.carol"
+          - "t_agents.dave.toolchain == {'presets': {'go': '1.27.4'}, 'refresh': '168h'}"

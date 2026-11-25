@@ -32,7 +32,7 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
 
   return (
     <>
-      <PageHead title="Security" sub="Guardrails that refused an action. High severity, or too many events in one job, pause the agent." />
+      <PageHead sub="Guardrails that refused an action. High severity, or too many events in one job, pause the agent." />
       <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
         <label className="agd-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}><span>Agent</span>
           <input className="agd-input" style={{ width: 160 }} value={filter.agent ?? ''} placeholder="all"
