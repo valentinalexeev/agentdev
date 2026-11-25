@@ -14,10 +14,10 @@
                  'maxTurns': (a.max_turns | default(max_turns)) | int,
                  'scaleToZero': (a.scale_to_zero | default(scale_to_zero)) | bool} -%}
 {%-   if a.model | default(claude_model | default('', true), true) -%}
-{%-     set _ = spec.update({'model': a.model | default(claude_model, true) | string}) -%}
+{%-     set _ = spec.update({'model': a.model | default(claude_model | default('', true), true) | string}) -%}
 {%-   endif -%}
 {%-   if a.effort | default(claude_effort | default('', true), true) -%}
-{%-     set _ = spec.update({'effort': a.effort | default(claude_effort, true) | string}) -%}
+{%-     set _ = spec.update({'effort': a.effort | default(claude_effort | default('', true), true) | string}) -%}
 {%-   endif -%}
 {%-   if a.permission | default({}) -%}
 {%-     set _ = spec.update({'permission': a.permission}) -%}

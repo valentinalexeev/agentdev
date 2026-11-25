@@ -575,7 +575,7 @@ func TestModelEffortFromSpec(t *testing.T) {
 		reconcile(t, r, n)
 	}
 	for _, tc := range []struct{ agent, model, effort string }{
-		{"alice", "", ""}, {"bob", "claude-opus-5-5", "high"}, {"carol", "sonnet", ""},
+		{"alice", "<unset>", "<unset>"}, {"bob", "claude-opus-5-5", "high"}, {"carol", "sonnet", "<unset>"},
 	} {
 		s := getSTS(t, c, tc.agent)
 		if got := envOf(s, "AGENT_MODEL"); got != tc.model {
@@ -585,7 +585,7 @@ func TestModelEffortFromSpec(t *testing.T) {
 			t.Errorf("%s: AGENT_EFFORT = %q, want %q", tc.agent, got, tc.effort)
 		}
 		for _, e := range s.Spec.Template.Spec.Containers[0].Env {
-			if (e.Name == "AGENT_MODEL" && tc.model == "") || (e.Name == "AGENT_EFFORT" && tc.effort == "") {
+			if (e.Name == "AGENT_MODEL" && tc.model == "<unset>") || (e.Name == "AGENT_EFFORT" && tc.effort == "<unset>") {
 				t.Errorf("%s: has %s without the field (pod template must stay unchanged)", tc.agent, e.Name)
 			}
 		}
