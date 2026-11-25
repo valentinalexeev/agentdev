@@ -2642,7 +2642,7 @@ permission. The agent examines this before each start. Else it does not do the w
 | Item | Value |
 |---|---|
 | Account on Gitea | one account for each agent (the agent name) |
-| Work | open issues assigned to the agent by a person with write access |
+| Work | open issues and pull requests assigned to the agent by a person with write access (#573) |
 | Branches | `agent/<agent>/...` |
 | Label on its own PR | `agent:<agent>` (#241). The deployment makes this label (the `kind.yml` tag `forge`, `scripts/bootstrap-project.sh`, Ansible role `gitea_forge`) |
 | Router | finds the agent from the logins in the event and from the label `agent:<agent>` |
