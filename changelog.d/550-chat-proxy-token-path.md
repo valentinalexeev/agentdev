@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: The chat Job policy pins the path of the projected claude-proxy token to token
 components: [api]
+pr: 561
 ---
 ## Summary
 
