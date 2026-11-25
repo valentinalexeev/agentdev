@@ -67,7 +67,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -172,6 +172,128 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
 
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
+
+### Set the permission mode of an agent
+
+The permission mode decides a tool call that is not on the allow-list of the agent (#500). Each agent has its own mode:
+
+- `dontAsk` (default): Claude Code refuses the call. With approvals on, a project member must approve the call.
+- `auto`: a classifier of Claude Code decides the call. The classifier uses its default rules and your rules. With
+  approvals on, a project member must approve a call that the classifier blocks.
+
+The deny-list of the worker (`git push`, `curl`, `/state` and others) stays in both modes. `bypassPermissions` is
+not available.
+
+WARNING: The classifier is the judgment of a model. It is not a security boundary. Use `auto` only for agents that
+you trust with packages that the classifier installs (threat model V6).
+
+1. On `kind`: set `kind_agents_permission` for the agent, for example
+   `{alice: {mode: auto, autoMode: {allow: ["Install dependencies declared in the repository"]}}}`.
+   On GKE: set `agents[].permission` for the agent, for example `{mode: auto}`.
+   In Git mode: set `spec.permission` in the `Agent` manifest.
+2. Optional: add rules in `autoMode`. Use `allow`, `softDeny` and `environment`, one rule on each line.
+3. Deploy again.
+4. Do the command `claude auto-mode defaults` in an agent pod to see the default rules.
+
+NOTE: The rules come from the `Agent` object only. The repository and the issue text cannot change them. The
+classifier sends more requests through `claude-proxy`. They count against the token budget of the agent.
+
+To see the mode and the rules of an agent, open the agent in the console and select the **Permission** tab. The
+**Overview** tab shows the mode too. Only `agentdev-admins` members see them, and the console does not change them.
+The API also returns them in `GET /api/agents/{name}` (`permission`).
+
+Each change of `spec.permission` makes one entry in the audit log (#505): action `permission`, with the old and the
+new mode and rules in `before.permission` and `after.permission`. Open the **Audit** page and select the action
+`permission`, or do `curl -H "Authorization: Bearer <token>" "https://<api host>/api/audit?agent=<name>"`. The API
+does not know who changed the `Agent` object, so the entry has no person. Look in the Git history or the Kubernetes
+audit log for the person. The API records a change that happened while it was stopped when it starts again. Two
+API processes write one entry for one change.
+
+If the audit log has no earlier `permission` entry of the agent, and the mode is not the default (`dontAsk` without
+rules), the entry has `before: null` and the reason `first seen (no earlier entry)`. This occurs for a new agent,
+after the retention removed the old entries, or after a restart of an API without a database. The console shows
+`unknown → <new mode>`.
+
+NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
+sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
+
+### Allow extra tools for an agent
+
+The allow-list of the worker has the tools that all agents can use without a question (#496). You can add tools to
+the list for one agent, for example `npm ci` for a repository that needs `node_modules`:
+
+- The entries are added to the default list, or to `CLAUDE_TOOLS` of the instance. You cannot remove or replace
+  entries of the default list.
+- The deny-list of the worker (`git push`, `curl`, `/state` and others) stays.
+- Use the Claude Code rule syntax, one rule in each entry, for example `Bash(npm ci:*)`. An entry has no commas and
+  no control characters, and is not longer than 200 characters. An agent has at most 50 entries.
+
+WARNING: Each entry widens what the agent can do without a question. `npm install` runs the install scripts of
+packages: a compromised dependency then runs in the agent pod (threat model V6). Add an entry only for an agent and
+a repository that need it.
+
+1. On `kind`: set `kind_agents_tools` for the agent, for example `{alice: ["Bash(npm ci:*)", "Bash(npm install:*)"]}`.
+   On GKE: set `agents[].tools` for the agent, for example `{allow: ["Bash(npm ci:*)"]}`.
+   In Git mode: set `spec.tools.allow` in the `Agent` manifest.
+2. Deploy again. The agent pod restarts with the new list.
+3. Do the command `kubectl -n coding-agents get statefulset agent-<name> -o yaml | grep -A1 CLAUDE_TOOLS_EXTRA` to
+   see the added entries.
+
+NOTE: The entries come from the `Agent` object only. The repository and the issue text cannot change them. The
+operator refuses an `Agent` with an invalid entry (phase `invalid`). An agent without entries has no
+`CLAUDE_TOOLS_EXTRA`, so its pod does not restart on upgrade.
+
+### Give an agent a toolchain
+
+An agent can get a language toolchain that the worker image does not have, for example Go or Rust (#499). agentdev
+installs it before the agent starts, and the agent can use it but not change it.
+
+- The presets and their versions are in the operator (`images/operator/toolchain.go`). Each download has a pinned
+  SHA-256. A new version is an agentdev release.
+- The init container `toolchain` installs the toolchain into `/state/toolchain` on the agent volume. The agent
+  container mounts that directory read-only, and gets it on its search path.
+- A wake only checks the installed files. A change of the toolchain, of the worker image or of the refresh period
+  installs again, after the running jobs end.
+- The commands of the preset (for example `go mod`, `cargo build`) are added to the tool allow-list of the agent.
+
+| Preset | Versions | Download hosts | Agent environment |
+|--------|----------|----------------|-------------------|
+| `go` | 1.27.4, 1.26.11 | `dl.google.com` | `GOTOOLCHAIN=local`, `GOPATH` and `GOMODCACHE` under `/state/cache/go` |
+| `rust` | 1.100.0 (rustup, profile minimal) | `static.rust-lang.org` | `RUSTUP_HOME` read-only, `CARGO_HOME=/state/cache/cargo` |
+
+1. On `kind`: set `kind_agents_toolchain` for the agent, for example `{alice: {presets: {go: "1.27.4"}}}`.
+   On GKE: set `agents[].toolchain` for the agent, for example `{presets: {go: "1.27.4", rust: "1.100.0"}}`.
+   In Git mode: set `spec.toolchain` in the `Agent` manifest.
+2. Optional: set `refresh`, for example `168h` (at least `1h`), to install again regularly. Each agent has its own
+   offset, so the agents do not all install at the same time.
+3. Optional: add `path` entries below `$TOOLCHAIN`, for example `$TOOLCHAIN/go/bin`.
+4. Make sure the agent volume is large enough (see below).
+5. Deploy again.
+6. Do the command `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.toolchain}'` to see the result.
+   `reason` is `Installed` or `Verified` when the toolchain is ready.
+
+**Disk.** The toolchain and the caches are on the agent volume (`AGENT_STATE_STORAGE`, default 10 GiB):
+
+| Toolchain | Toolchain size | Caches (modules, build) | Volume |
+|-----------|----------------|-------------------------|--------|
+| Go | about 250 MB | 1 to 3 GB | 10 GiB is enough |
+| Rust | about 550 MB | 2 to 6 GB (`CARGO_HOME`, `target/`) | 20 GiB or more |
+
+A new size applies to new agents. To grow the volume of an existing agent, resize its PVC `state-agent-<name>-0`
+(the StorageClass must allow volume expansion).
+
+**When the install fails.** The pod stays in `Init`, so the agent does not run without its toolchain.
+`status.toolchain.reason` is `StepFailed` (a download, a checksum or the check of the toolchain failed) or `Invalid`
+(for example a symbolic link in `/state/toolchain`). `message` has the details. Do the command
+`kubectl -n coding-agents logs agent-<name>-0 -c toolchain` to see the full output.
+
+WARNING: A `Reinstalled` reason means that the installed files changed since the last start. The operator records
+a high-severity security event `toolchain-manifest`. Find out what changed it (see "Find the security events of an
+agent").
+
+NOTE: The download hosts are open only for the init container, with the credential `egress-setup-proxy` (generated
+by the playbook, or by Terraform with `external_secrets`). The agent container cannot use them. The toolchain comes
+from the `Agent` object only. The repository and the issue text cannot change it.
 
 ### Set the poll interval
 
@@ -314,8 +436,8 @@ NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a f
 A job is the work of an agent on one issue or one pull request. The proxy can stop a job that uses too many cost
 units (#196, #310). There are two limits per job:
 
-- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent writes
-  a comment "waiting for approval" with the source `cost` on its issue or pull request. One approval gives the job
+- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent adds
+  a request with the source `cost` to the approvals comment on its issue or pull request. One approval gives the job
   one more step of units (`CLAUDE_JOB_APPROVAL_STEP_UNITS`). Then the agent continues in the same Claude session.
 - The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
 
@@ -1337,8 +1459,8 @@ subscribe again.
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
-| `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
+| `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events. The action `permission` (#505) records a change of `spec.permission` of an Agent, with `before.permission` and `after.permission` |
+| `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). Only for `agentdev-admins` members: `permission` (#505), the permission mode `mode` (`dontAsk` or `auto`) and the classifier rules `autoMode` (`allow`, `softDeny`, `environment`). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
 | `GET /api/platform` | the health of the platform for the Platform page (#344). Only `agentdev-admins` (403 for other users). It gives `version`, `checked` and `components`: `api`, `router`, `operator`, `claude-proxy`, `authentik`, `forge-token`, `egress-proxy` and `agent-pool`. Each has `status` (`ok`, `degraded`, `down`, `absent`, `unknown`), `detail` and a `command` to look deeper. It gives no Secret values. |
 | `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 30 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. Same visibility as the agent drawer. |
 | `GET /api/stream` | live updates for the console (#345), server-sent events. Each message is `event: <type>`, `id: <n>`, `data: {"type", "time", "data"}`. Types: `hello` (`heartbeatSeconds`), `heartbeat` (every 15 s), `agents` (the visible agent list), `approval` (one approval, on create and change), `approval-removed` (`name`), `security-event` (one event), `usage` (read `GET /api/usage` again), `bye` (`reason`; reconnect). Only items the caller may see, with the rules of their list. The stream ends after 30 minutes, max. 5 streams for each user (429). Read it with `fetch()` and the bearer token. |
@@ -1850,6 +1972,11 @@ default. To turn on approvals on kind, do the steps that follow.
    minutes. After this time, the agent continues without the action, but the request stays open.
 3. Run `./run.sh 10` and then `./run.sh 12`.
    The operator starts the agent pods again with the new setting.
+
+NOTE: The agent asks for permission through Claude Code's `can_use_tool` host protocol (`permission-host` in the
+worker image, #539). The request then shows Claude Code's reason, the blocked path and the suggested rule. The
+decision rules do not change. The environment variable `APPROVAL_HOST=off` on the agent container switches back to
+the MCP prompt tool `mcp__agentdev__approve`, which sends only the tool and its input.
 
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`). The
 API also keeps them in Postgres. To see them, open `GET /api/audit` (admin group). A decision in the web UI has

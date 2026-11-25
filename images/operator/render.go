@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -129,13 +131,19 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Items: []corev1.KeyToPath{{Key: "GITHUB_APP_PRIVATE_KEY", Path: "private-key.pem"}}}}})
 		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "github-app", MountPath: "/var/run/agentdev/github-app", ReadOnly: true})
 	}
+	// toolchain (#499): /state/toolchain read-only in every container but the init container that installs it
+	var tcMounts []corev1.VolumeMount
+	if a.Spec.Toolchain != nil {
+		tcMounts = []corev1.VolumeMount{toolchainMount()}
+		forgeMounts = append(forgeMounts, toolchainMount())
+	}
 	common := []corev1.EnvVar{env("FORGE_URL", forgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
 	// the kubelet creates a missing subPath directory as root; created here first, it belongs to the agent (uid 1000)
 	p.InitContainers = []corev1.Container{{
 		Name: "state-init", Image: image, ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath: corev1.TerminationMessagePathDefault, TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Command:      []string{"mkdir", "-p", "/state/claude"},
+		Command:      stateInitCommand(a),
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}},
 		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
@@ -143,6 +151,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
 	}}
+	if a.Spec.Toolchain != nil {
+		ps, _ := presetsOf(a.Spec.Toolchain)
+		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps))
+		p.Volumes = append(p.Volumes, toolchainTmpVolume())
+	}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
 		Image:                    image,
@@ -157,10 +170,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
-		VolumeMounts: append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
+		), append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...)...),
+		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
-			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, r.proxyTokenMounts()...),
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
 		EnvFrom: r.claudeEnvFrom(a),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
@@ -194,6 +207,97 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		},
 	}}
+}
+
+// ruleChars: one rule of spec.permission.autoMode, as the CRD pattern (#500): no control characters.
+var ruleChars = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
+
+// permissionValid is the operator's check behind the CRD rules (#500): "" when spec.permission is unset or valid.
+func permissionValid(a *v1.Agent) string {
+	p := a.Spec.Permission
+	if p == nil {
+		return ""
+	}
+	if p.Mode != "" && p.Mode != "dontAsk" && p.Mode != "auto" {
+		return fmt.Sprintf("spec.permission.mode: %q is not dontAsk or auto", p.Mode)
+	}
+	m := p.AutoMode
+	if m == nil {
+		return ""
+	}
+	if p.Mode != "auto" {
+		return "spec.permission.autoMode needs mode auto"
+	}
+	for name, l := range map[string][]string{"allow": m.Allow, "softDeny": m.SoftDeny, "environment": m.Environment} {
+		if len(l) > 50 {
+			return fmt.Sprintf("spec.permission.autoMode.%s: more than 50 rules", name)
+		}
+		for _, s := range l {
+			if len(s) > 500 || !ruleChars.MatchString(s) {
+				return fmt.Sprintf("spec.permission.autoMode.%s: a rule is empty, longer than 500 or has a control character", name)
+			}
+		}
+	}
+	return ""
+}
+
+// toolChars: one entry of spec.tools.allow, as the CRD pattern (#496): no control characters and no comma, since
+// CLAUDE_TOOLS is a comma-separated list.
+var toolChars = regexp.MustCompile(`^[^\x00-\x1f\x7f,]+$`)
+
+// toolsValid is the operator's check behind the CRD rules (#496): "" when spec.tools is unset or valid.
+func toolsValid(a *v1.Agent) string {
+	t := a.Spec.Tools
+	if t == nil {
+		return ""
+	}
+	if len(t.Allow) > 50 {
+		return "spec.tools.allow: more than 50 entries"
+	}
+	for _, s := range t.Allow {
+		if len(s) > 200 || !toolChars.MatchString(s) {
+			return "spec.tools.allow: an entry is empty, longer than 200 or has a comma or a control character"
+		}
+	}
+	return ""
+}
+
+// toolsEnv passes spec.tools.allow to the worker (#496, ADR 0010 D1) as CLAUDE_TOOLS_EXTRA, comma-joined; the worker
+// appends it to CLAUDE_TOOLS. Nothing without entries, so the pod template of an agent without the field is unchanged
+// (no restart on upgrade).
+// The allow entries of the toolchain presets (#499) come first.
+func toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	extra := toolchainAllow(a)
+	if a.Spec.Tools != nil {
+		extra = append(extra, a.Spec.Tools.Allow...)
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "CLAUDE_TOOLS_EXTRA", Value: strings.Join(extra, ",")}}
+}
+
+// permissionEnv passes spec.permission to the worker (#500): CLAUDE_PERMISSION_MODE=auto and, with rules,
+// CLAUDE_AUTO_MODE, the autoMode section of the Claude Code settings as JSON. Built here from the Agent only, never
+// from the repository or issue text. Nothing for dontAsk, so the pod template of an agent without the field is
+// unchanged (no restart on upgrade).
+func permissionEnv(a *v1.Agent) []corev1.EnvVar {
+	p := a.Spec.Permission
+	if p == nil || p.Mode != "auto" {
+		return nil
+	}
+	out := []corev1.EnvVar{{Name: "CLAUDE_PERMISSION_MODE", Value: "auto"}}
+	if m := p.AutoMode; m != nil && len(m.Allow)+len(m.SoftDeny)+len(m.Environment) > 0 {
+		section := map[string][]string{}
+		for k, l := range map[string][]string{"allow": m.Allow, "soft_deny": m.SoftDeny, "environment": m.Environment} {
+			if len(l) > 0 {
+				section[k] = l
+			}
+		}
+		b, _ := json.Marshal(section) // map keys are sorted: the same Agent gives the same pod template
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_AUTO_MODE", Value: string(b)})
+	}
+	return out
 }
 
 // graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.
@@ -344,4 +448,14 @@ func (r *AgentReconciler) usageReports() string {
 // webhook deliveries.
 func routerURL(ns string) string {
 	return fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8081", ns)
+}
+
+// stateInitCommand: the directories of the state volume, created by the agent's UID before the kubelet mounts a
+// subPath of them (it would create a missing one as root). With a toolchain (#499) also /state/toolchain and the
+// caches; an agent without one keeps the earlier command, so its pod template is unchanged.
+func stateInitCommand(a *v1.Agent) []string {
+	if a.Spec.Toolchain == nil {
+		return []string{"mkdir", "-p", "/state/claude"}
+	}
+	return []string{"mkdir", "-p", "/state/claude", toolchainDir, "/state/cache"}
 }

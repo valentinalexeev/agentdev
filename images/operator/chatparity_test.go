@@ -20,6 +20,10 @@ func TestAgentPodTemplateFixturesForChat(t *testing.T) {
 	}{
 		{"agent-pod-gitea.json", nil},
 		{"agent-pod-github.json", func(a *v1.Agent) { a.Spec.Forge = "github"; a.Spec.Repo = "octo-org/repo" }},
+		// #499: the init container toolchain and the read-only /state/toolchain mounts (chat Job admission policy)
+		{"agent-pod-toolchain.json", func(a *v1.Agent) {
+			a.Spec.Toolchain = &v1.AgentToolchain{Presets: v1.ToolchainPresets{Go: "1.27.4"}}
+		}},
 	} {
 		r, c := setup(t, agent("alice", tc.mut))
 		r.D.ForgeImage, r.D.WorkerImage, r.D.PullPolicy = "ghcr.io/example/agentdev-forge:v0.0.0", "ghcr.io/example/agentdev-worker:v0.0.0", "IfNotPresent"

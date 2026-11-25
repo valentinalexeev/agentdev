@@ -21,6 +21,7 @@ locals {
     {
       "platform-pg-agentdev-api"    = 24
       "egress-forge-proxy"          = 32
+      "egress-setup-proxy"          = 32 # toolchain init containers (#499)
       "claude-proxy-signing"        = 32
       "agentdev-api-chat-token-key" = 32
     },
@@ -43,7 +44,7 @@ locals {
     agents = {
       namespace = var.agents_namespace
       ids = ["claude-shared", "router-register-token", "github-app-webhook-secret", "github-app-private-key",
-      "router-poll-forge-token", "egress-forge-proxy", "claude-proxy-signing", "agent-*"]
+      "router-poll-forge-token", "egress-forge-proxy", "egress-setup-proxy", "claude-proxy-signing", "agent-*"]
     }
     executors = {
       namespace = var.executors_namespace

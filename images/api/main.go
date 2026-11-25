@@ -76,6 +76,7 @@ func main() {
 		go o.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
+	go watchPermissions(ctx, agents.d, cfg.Namespace) // #505: audit entry on a change of spec.permission
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
@@ -147,6 +148,9 @@ func main() {
 		p := newPusher(ns, wr, ar, cs.get)
 		wr.notify = &notifyAPI{store: ns, w: wr, channels: cs.get, limit: newRateLimiter(30, time.Minute), push: p}
 		go p.run(ctx)
+		if ar != nil { // #523: the sidecar comments on the forge only when push reaches nobody (404 here: it comments)
+			imux.Handle("GET /internal/approvals/{agent}/reach", internalReach(p, agents, agents))
+		}
 	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: routes(verify, agents, store, wr), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second}

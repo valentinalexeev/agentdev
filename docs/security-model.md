@@ -262,9 +262,19 @@ the permission prompt if they were running Claude Code interactively.
 ### Forge as an approval surface
 
 Because the right to approve is write access to the repository, the forge is an approval surface too. When a request
-is created, the agent comments on its issue or PR "waiting for approval `<id>`: <request>", linking the UI. A reply
+is created, the agent lists it in the one approvals comment of its issue or PR (#523): a table of the job's requests
+(id, tool, state), the text of each waiting request, and the commands in a `<details>` block. The sidecar edits this
+comment on each new request and change of state; forges send no notification for an edit. A reply
 `/approve <id>`, `/approve-job <id>` or `/deny <id>` from a person with the required access decides it. The UI and
 the forge show the same request.
+
+Push first (#523): before it comments, the sidecar asks the API `GET /internal/approvals/{agent}/reach` (caller: a
+running pod of that agent, repo: one of its repositories). The answer is one bit: whether a Web Push notification of
+the request reaches a subscribed user with a recent console visit, live write access and approvals not muted (the
+checks of the sender). If yes, the request is not commented on the forge; the person decides in the UI. It goes to
+the forge anyway when the agent stopped waiting without a decision, and once a job has its comment, every later
+request of the job is listed there. Any error, an API without the endpoint, or a cost request (never pushed) means
+the forge comment. The decision rules below do not change.
 
 ### Decision rules (UI and forge)
 
@@ -396,7 +406,8 @@ sequenceDiagram
   S->>S: id = random nonce, contentHash = sha256(id, agent, repo, job, source, tool, input)
   S-->>O: log line AGENTDEV_APPROVAL_REQUEST (trusted only from the forge container)
   O->>O: create Approval (spec immutable, hash re-checked)
-  S->>F: comment "waiting for approval <id>"
+  S->>API: GET /internal/approvals/{agent}/reach (does Web Push reach a person who decides?)
+  S->>F: no: add the request to the job's approvals comment (post once, then edit)
   U->>F: /approve <id> | /approve-job <id> | /deny <id>
   API->>F: read comments of the job's issue or PR, commenter's permission
   API->>API: rules 1-6, status update with resourceVersion (first wins), audit
@@ -442,9 +453,11 @@ sequenceDiagram
 - **Lifecycle and deduplication** (owner on #107). A request has a fingerprint: job + tool + exact input for a Claude
   prompt, job + branch + protected paths for a push. The sidecar keeps one record per fingerprint; asking again
   reuses it, with no new log line, Approval or comment. Timeline:
-  1. Claude asks, or a push hits a protected path: one Approval, one forge comment "waiting for approval".
+  1. Claude asks, or a push hits a protected path: one Approval, and one row in the job's approvals comment (none
+     while Web Push reaches a person who decides, #523).
   2. The agent waits (Claude prompt: `APPROVAL_TIMEOUT_MINUTES`, default 30; push: at most 14 min, the loop's request
-     limit). With no decision the action fails closed; the comment is edited once to "still open". The record stays
+     limit). With no decision the action fails closed; the row is edited once to "the agent continued without it"
+     (a request that went only by Web Push is added to the approvals comment now). The record stays
      `pending` and decidable; there is no expiry.
   3. A later ask with the same fingerprint (in the same pod) uses the decision of that record: allowed (once: used
      up), denied (denied again at once, nothing new is filed), or still pending (waits again).

@@ -82,6 +82,9 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    does not exist yet. For a patch (`X.Y.Z`, Z > 0), use the existing `release/X.Y`; patches never get a branch.
    Check that every lower line is merged in: `scripts/release-lines.sh check --strict release/X.Y origin/release/X.Y`.
    Then branch `chore/release-X.Y.Z` from `release/X.Y`.
+   A sandboxed agent can push only to `agent/<name>/*` branches. It uses `agent/<name>/release-X.Y.Z` for the
+   release PR and `agent/<name>/merge-<lower>-into-<upper>` for a forward merge (#510). The `Release lines` and
+   `Changelog` checks handle these the same as `chore/release-*` and `merge/*` (`scripts/release-lines.sh kind`).
 2. Write the release section from the fragments (#448): `scripts/release-lines.sh release X.Y.Z [YYYY-MM-DD]` does
    step 1 and this step. It runs `scripts/changelog.sh release X.Y.Z YYYY-MM-DD`, which moves `## [Unreleased]` and
    every `status: done` fragment in `changelog.d/` to `## [X.Y.Z] - YYYY-MM-DD`, moves `## Description` parts to
@@ -106,4 +109,5 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
 6. Check that `images.yml` publishes the images at `X.Y.Z`, then make the GitHub release with the CHANGELOG section.
 7. Upgrade the reference private deployment by its normal PR flow.
 8. Merge the line forward, one PR per hop up to the highest line: `scripts/release-lines.sh forward release/X.Y`.
+   A sandboxed agent pushes each hop as `agent/<name>/merge-<lower>-into-<upper>` instead of `merge/...` (step 1).
 9. Report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
