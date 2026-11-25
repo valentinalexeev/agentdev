@@ -2,7 +2,7 @@
 # Agents on kind (#106, was 06-agents.sh): local images, the webhook router, the Claude credential proxy, the egress
 # allow-list, and one Agent object per agent (the operator renders the StatefulSets). The manifests are the same as
 # deploy.yml on GKE (manifests/*.tmpl, templates/render.j2). Secrets are files in kind_agents_secrets_dir (generated
-# once, mode 600), not Secret Manager. 06-agents.sh passes the config.env values with -e.
+# once, mode 600), not Secret Manager. kind.vars.yml (-e @kind.vars.yml, see kind.example.vars.yml) sets the values.
 kind_agents_context: kind-agentdev
 kind_agents_cluster_name: agentdev
 kind_agents_container_engine: docker
@@ -29,7 +29,7 @@ kind_agents_forge_admin_user: owner
 # from the environment (never from -e, so it is not in the process list)
 kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
 kind_agents_max_concurrent: 2
-kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; MAX_TURNS in config.env)
+kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; formerly MAX_TURNS in config.env)
 # permission mode per agent (#500): {alice: {mode: auto, autoMode: {allow: ["..."]}}}; an agent not named: dontAsk
 kind_agents_permission: {}
 # tools added to the default allow-list per agent (#496): {alice: ["Bash(npm ci:*)"]}; an agent not named: default only
@@ -44,7 +44,7 @@ kind_agents_claude_proxy: true
 # (CLAUDE_BUDGET_TOKENS) is deprecated (removed in 2.0.0): alone it counts as units 1:1 (tasks/claude_budget.yml, as GKE)
 kind_agents_claude_budget_units: null
 kind_agents_claude_budget_tokens: null
-# CLAUDE_PRICES as in config.env: "key=value ..." (w_in w_cw5 w_cw1h w_cr w_out usd_per_million_units model.<prefix>)
+# as the former CLAUDE_PRICES: "key=value ..." (w_in w_cw5 w_cw1h w_cr w_out usd_per_million_units model.<prefix>)
 kind_agents_claude_prices: ""
 # per job in cost units, 0 = off (#196 D6, #310): hard limit, soft limit (lower than the hard one) and approval step
 kind_agents_claude_job_budget_units: 0
@@ -52,7 +52,7 @@ kind_agents_claude_job_approval_units: 0
 kind_agents_claude_job_approval_step_units: 0
 kind_agents_approvals: false                  # APPROVALS: the soft limit asks a person only when true
 kind_agents_claude_proxy_auth: both           # key | both | token (#352)
-# telemetry (#196, #278): same keys as deploy.yml's telemetry; kind's scraper is the Prometheus of ./run.sh 14
+# telemetry (#196, #278): same keys as deploy.yml's telemetry; kind's scraper is a Prometheus server in monitoring
 kind_agents_telemetry:
   otlp_url: ""
   instance: agentdev
@@ -65,7 +65,7 @@ kind_agents_forge_egress_hosts: [api.github.com, github.com]
 # toolchain preset downloads (#499): only the init container toolchain, with the egress-setup-proxy credential
 kind_agents_setup_egress_hosts: [dl.google.com, static.rust-lang.org]
 kind_agents_timeout: 300
-# shared Claude credential (claude-shared), from the environment as 06-agents.sh read it (.env)
+# shared Claude credential (claude-shared), from the environment (set -a; source .env; set +a), never from -e
 kind_agents_shared_claude: >-
   {{ {'ANTHROPIC_API_KEY': lookup('ansible.builtin.env', 'ANTHROPIC_API_KEY'),
       'CLAUDE_CODE_OAUTH_TOKEN': lookup('ansible.builtin.env', 'CLAUDE_CODE_OAUTH_TOKEN')}

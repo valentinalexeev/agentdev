@@ -34,11 +34,7 @@
       vars:
         suspend: "{{ test_role | selectattr('name', 'search', '^Suspend, resume') | first }}"
 
-    - name: The wrapper prints the deprecation notice and calls kind.yml
+    - name: The shell step is gone (#417), kind.yml is the only entry point
       ansible.builtin.assert:
-        that:
-          - "'deprecated 03 sandbox-test' in wrapper"
-          - "'kind.yml\" --tags sandbox-test' in wrapper"
+        that: not (playbook_dir ~ '/../../../03-test-sandbox.sh') is exists
         quiet: true
-      vars:
-        wrapper: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../03-test-sandbox.sh') }}"

@@ -1,6 +1,6 @@
 ---
 # kind (#106, was 08-mcp.sh): pull the platform images once and load them into the kind nodes. A local operator tag
-# (agentdev-operator:*) is built from images/operator first, as ./run.sh 12 does.
+# (agentdev-operator:*) is built from images/operator first, as the role operator does.
 - name: Platform images present locally
   ansible.builtin.shell: >-
     {{ platform_container_engine }} image inspect {{ item | quote }} >/dev/null 2>&1

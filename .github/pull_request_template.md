@@ -8,7 +8,7 @@
      "## [Unreleased]" in CHANGELOG.md: CI fails it. -->
 
 ## Checks
-<!-- CI result, ./run.sh steps re-run, e2e observations (issue -> PR -> review -> reply), independent review -->
+<!-- CI result, kind.yml tags re-run, e2e observations (issue -> PR -> review -> reply), independent review -->
 
 ## Still open
 <!-- each item is an issue link; files shared with other open PRs -->

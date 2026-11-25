@@ -1,5 +1,5 @@
 ---
-# authentik on GKE (#114): the same steps as ./run.sh 09 (Secret `authentik`, Job authentik-db-init (#382), ConfigMap
+# authentik on GKE (#114): the same steps as kind.yml --tags authentik (Secret `authentik`, Job authentik-db-init (#382), ConfigMap
 # `authentik-blueprints`, Helm chart with manifests/authentik-values.yaml), with secrets from Secret Manager.
 # Runs after the platform role (Postgres) and before the roles authentik_sso and api. Every task that holds a secret
 # value has no_log. The blueprints create the group agentdev-admins but never set its members (R53): the only member
@@ -21,7 +21,7 @@
       authentik_trusted_proxy_cidrs (a list of CIDRs, not wider than /8 unless authentik_trusted_proxy_allow_wide: true): example.vars.yml
     quiet: true
 
-# authentik_secret_source: secret_manager (GKE) or files (kind.yml, #106: .secrets/platform, as 09-authentik.sh)
+# authentik_secret_source: secret_manager (GKE) or files (kind.yml, #106: .secrets/platform, as the old 09-authentik.sh)
 - name: Authentik secrets from files (kind)
   ansible.builtin.include_tasks: secrets_files.yml
   when: authentik_secret_source == 'files'

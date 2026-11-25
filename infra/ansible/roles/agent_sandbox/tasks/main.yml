@@ -125,9 +125,9 @@
   when: agent_sandbox_api_key | length > 0
   no_log: true
 
-- name: No API key, step 03 skips the live Claude call
+- name: No API key, the tag sandbox-test skips the live Claude call
   ansible.builtin.debug:
-    msg: "ANTHROPIC_API_KEY not set: sandboxes start fine, step 03 skips the live Claude call"
+    msg: "ANTHROPIC_API_KEY not set: sandboxes start fine, the tag sandbox-test skips the live Claude call"
   when: agent_sandbox_api_key | length == 0
 
 - name: SandboxTemplate and SandboxWarmPool

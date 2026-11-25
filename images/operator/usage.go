@@ -52,7 +52,7 @@ const (
 )
 
 // DefaultFiveHour and DefaultWeekly are the global thresholds in percent when no setting exists (#92 decision: 80 and
-// 90). The instance can change them with USAGE_FIVE_HOUR and USAGE_WEEKLY (config.env, Ansible usage.*), set in main.
+// 90). The instance can change them with USAGE_FIVE_HOUR and USAGE_WEEKLY (Ansible usage.*), set in main.
 var (
 	DefaultFiveHour = 80
 	DefaultWeekly   = 90

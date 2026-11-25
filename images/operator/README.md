@@ -1,8 +1,8 @@
 # agentdev operator
 
 Reconciles `Agent` resources (`agentdev.dev/v1alpha1`, short name `ag`) in the agents namespace into the agent's
-Service and StatefulSet (#47, design A on the issue). `06-agents.sh`, `scripts/bootstrap-project.sh` and the
-Ansible playbook create Agents (#57); existing StatefulSets are adopted in place, without a restart.
+Service and StatefulSet (#47, design A on the issue). `infra/ansible/kind.yml` (tag `agents`),
+`scripts/bootstrap-project.sh` and the GKE playbook create Agents (#57); existing StatefulSets are adopted in place, without a restart.
 
 ```yaml
 apiVersion: agentdev.dev/v1alpha1
@@ -50,14 +50,15 @@ go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0 crd rbac:roleName
   output:crd:dir=config/crd output:rbac:dir=config/rbac
 ```
 
-`render.go` is the only definition of an agent's pod: change it, run `./run.sh 12`, and every agent follows.
+`render.go` is the only definition of an agent's pod: change it, run
+`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags operator`, and every agent follows.
 
 **Deterministic executors (#69).** With `EXEC_NS` set, the operator also polls the forge for every `Executor`
 (short name `exe`) in that namespace and runs `ExecutorRun`s (short name `exr`): a plan of each PR head, a plan of each
 merge commit, and an apply after an `Approval` of that plan. The same binary runs `hash-plan <file>` and
 `verify-plan <file> <sha256>` inside the Jobs. Admin guide: `docs/admin.md`, "Deterministic executors".
 
-**Project secrets (#202, ADR 0003).** With `SECRETS_STORE` set (`./run.sh 13`), the operator keeps one
+**Project secrets (#202, ADR 0003).** With `SECRETS_STORE` set (`kind.yml --tags secrets`), the operator keeps one
 `ExternalSecret ps-<name>` per `ProjectSecret` (short name `psec`) and mirrors its sync state into the status
 (`pending`, `ready`, `error`). It never reads the value. An ExternalSecret of the same name that it does not own is
 never taken over. Field rules: `api/v1alpha1/projectsecret_types.go`; name rules: `manifests/secrets-policy.yaml.tmpl`.

@@ -26,7 +26,7 @@ import (
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
 
-// Defaults is the cluster-wide part of an agent (what 06-agents.sh takes from config.env).
+// Defaults is the cluster-wide part of an agent (the operator env from kind.vars.yml or instance.yml).
 type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	GitHubURL                                                                            string // FORGE_URL of forge: github agents (#2)

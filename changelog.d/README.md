@@ -61,7 +61,7 @@ contains ` #`.
 - `## Summary` (required, 1 to 6 lines): the changelog text. The entry in `CHANGELOG.md` is
   `- **<title> (#<issue>).** <summary>`, with `**BREAKING**` in front when `breaking: true`.
 - `## Upgrade` (optional): operator steps. They go into the release's `### Upgrade` part, after `**#<issue>:**`.
-  A breaking entry names every `./run.sh` step, Ansible role and Terraform module to apply again (`CLAUDE.md` §6).
+  A breaking entry names every `kind.yml` tag, Ansible role and Terraform module to apply again (`CLAUDE.md` §6).
 - `## Description` (optional): the full description. Not in `CHANGELOG.md`; at release it moves to
   `docs/changes/<version>/<file name>`, so the history stays readable.
 

@@ -1,5 +1,5 @@
-# Read-only observability MCP tools (#205), namespace ${PLATFORM_NS}. Rendered by 08-mcp.sh (kind) and the platform role
-# (GKE) when OBS_MCP=true / obs_mcp_enabled. The operator image runs `agentdev-operator obs-mcp`. It holds the backend
+# Read-only observability MCP tools (#205), namespace ${PLATFORM_NS}. Rendered by the platform role on kind
+# (kind.yml tag mcp) and GKE when OBS_MCP=true / obs_mcp_enabled. The operator image runs `agentdev-operator obs-mcp`. It holds the backend
 # credential (Secret obs-mcp-token, optional, mounted as a file); agents only reach it through ContextForge with their
 # project-scoped token: add {name: obs, url: http://obs-mcp.${PLATFORM_NS}.svc.cluster.local:8080/mcp} to a project
 # spec's mcp.servers and obs-mcp.${PLATFORM_NS}.svc.cluster.local to the MCP allow-list (docs/admin.md).

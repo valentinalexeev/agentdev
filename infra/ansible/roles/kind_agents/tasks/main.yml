@@ -318,7 +318,7 @@
   changed_when: false
 
 # ---------- agents (#47, #57): Agent objects; the operator renders their StatefulSets ----------
-- name: The operator runs (was installed by 06-agents.sh when missing; run ./run.sh 12 first)
+- name: The operator runs (a plain run installs it; else run kind.yml --tags operator first)
   kubernetes.core.k8s_info:
     context: "{{ kind_agents_context }}"
     kind: Deployment

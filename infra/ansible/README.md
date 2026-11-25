@@ -51,7 +51,7 @@ from Secret Manager and run after `include_role: platform`.
 ## Management API (#104)
 The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
 authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
-`./run.sh 10` it:
+`kind.yml --tags api` it:
 - runs the Job `agentdev-db-init-<hash>` in the cluster (#382, no `kubectl exec`): it creates `agentdev_owner`
   (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies `images/api/schema.sql` as
   the owner, sets the retention (`api.db_retention_days`, default 365), applies `images/api/grants.sql` and writes the
@@ -74,18 +74,18 @@ from the access token. When the token has none of these claims, the API calls th
 with the token and uses the claims from there. The userinfo `sub` must be the token's `sub`. A userinfo error or a
 different `sub` refuses the request (401). authentik puts the claims into the access token, so it makes no userinfo call.
 Other keys: `api.oidc_discovery_url`, `api.oidc_audience`, `api.forge_url`, image override `api_image`
-(`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); a local
-source for kind is a new `secrets_local.yml` that sets the same facts when `run.sh` moves to Ansible (#106).
+(`roles/api/defaults/main.yml`). Secrets come from `tasks/secrets_gcp.yml` (`api_secret_source: gcp`); on kind they come from
+`tasks/secrets_files.yml` (`api_secret_source: files`, see the kind section below).
 With `forge_kind: github` the API checks GitHub permissions and decides approvals with the agents' GitHub App
 (#87): the role reads `sm_github_app_private_key` and writes the Secret `agentdev-api-github` (App id and key); the
 API mints only read-only installation tokens.
 
 ## authentik (#114)
 The `authentik` role runs after `platform` and before `authentik_sso` and `api` when `ingress.auth_host` is set (or
-`authentik.enabled: true`). Like `./run.sh 09` it makes the database `authentik`, the Secret `authentik` (same keys,
+`authentik.enabled: true`). Like `kind.yml --tags authentik` it makes the database `authentik`, the Secret `authentik` (same keys,
 plus the trusted proxy ranges and `AGENTDEV_UI_CALLBACK`), the ConfigMap `authentik-blueprints` from
 `manifests/authentik-blueprint-*.yaml` (never `manifests/kind/`) and installs the chart (`authentik.version`, default
-the `config.env` version). Secrets: Secret Manager `platform-pg-authentik`, `platform-authentik-secret-key`,
+the same version as kind, `roles/authentik/defaults/main.yml`). Secrets: Secret Manager `platform-pg-authentik`, `platform-authentik-secret-key`,
 `platform-authentik-admin` (the first `akadmin` password), generated once. It adds `akadmin` to `agentdev-admins`
 (add only, break-glass) and fails without an active superuser. Then `api.oidc_issuer` defaults to
 `https://<auth_host>/application/o/agentdev/` and `api.oidc_discovery_url` to the in-cluster service. Render test:
@@ -153,40 +153,51 @@ ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --skip-tags preflig
 `-e '{"preflight_checks": ["claude", "images"]}'` selects some checks only. Test: `tests/preflight.yml`.
 
 ## kind (#106)
-The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
-with a kind e2e that proves parity (two runs on a fresh kind cluster, the second must report `changed=0`; run by
-hand and reported in the pull request until a CI job does it); the old step stays as a wrapper that prints a
-deprecation notice and calls the playbook, for one MINOR release. All steps apart from 04 are ported:
+`kind.yml` is the local install. It replaced the numbered shell steps (`run.sh`, `00-prereqs.sh` to `13-secrets.sh`,
+`99-teardown.sh`): deprecated in 1.1.0 and removed in 1.3.0 (#417). Each step was ported with a kind e2e that proves
+parity (two runs on a fresh kind cluster, the second must report `changed=0`). Run it from the repository root:
+```bash
+cp infra/ansible/kind.example.vars.yml kind.vars.yml   # once; gitignored, no secrets in it
+set -a; source .env; set +a                            # FORGE_ADMIN_PASSWORD, ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml                 # plain run: prereqs, cluster, forge, operator, agents
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags <tag>    # one part
+```
+`kind.example.vars.yml` lists every former `config.env` name next to its Ansible variable. `config.env` no longer
+configures `kind.yml`; it stays only for the helper scripts in `scripts/`, so keep its namespaces the same as in
+`kind.vars.yml`. The playbook does not write `results.md`. The tags `sandbox`, `sandbox-test`, `botboard`, `mcp`,
+`authentik`, `api`, `ui`, `secrets` and `teardown` are not in a plain run.
 
-| run.sh step | `kind.yml` tag | Role |
+| Former step | `kind.yml` tag | Role |
 |---|---|---|
 | 00 | `prereqs` | `kind_cluster` (`tasks/prereqs.yml`) |
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
 | 05 | `forge` | `gitea_forge` |
+| 06 | `agents` | `kind_agents` |
 | 07 | `botboard` (optional) | `botboard` |
 | 08 | `mcp` | `platform` |
+| 09 | `authentik` | `authentik`, `authentik_kind` |
 | 10 | `api` | `api` (same role as GKE) |
 | 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
 | 13 | `secrets` | `secrets_store`, then `operator` |
 | 99 (`99-teardown.sh`) | `teardown` (also `never`) | `kind_cluster` (`tasks/teardown.yml`) |
 
-Step 04 (Coder spike) is not ported: it is deprecated and removed together with `run.sh` and all wrappers in 1.3.0.
+Step 04 (Coder spike) was not ported: it was removed together with `run.sh` and all wrappers in 1.3.0.
 `--tags prereqs` only checks the host (tools, engine VM, kind v0.24 or later); `--tags cluster` runs the same checks
 first. `--tags teardown` deletes the kind cluster and `.coder`; as it is tagged `never`, a plain run never deletes.
 
 ```bash
-ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
 ```
 The role takes `kind_cluster_name`, `kind_cluster_engine`, `kind_cluster_gvisor_version` and `kind_cluster_config`
-(the wrapper passes the values of `config.env`). It is idempotent: a second run reuses the cluster and the installed
+(set them in `kind.vars.yml`). It is idempotent: a second run reuses the cluster and the installed
 gVisor. The role always downloads the `.tar.bz2` archive of gVisor and checks its sha512 (the old step used
 `.tar.zstd` when `zstd` was installed).
 
 ```bash
-ansible-playbook infra/ansible/kind.yml --tags sandbox    # agent-sandbox, agent image, template, warm pool
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags sandbox    # agent-sandbox, agent image, template, warm pool
 ```
 The role `agent_sandbox` uses `kubernetes.core` like `deploy.yml` (server-side apply of the pinned release manifest,
 cached in `~/.cache/agentdev`), so GKE can include it with its own `agent_sandbox_context` and
@@ -196,7 +207,7 @@ cached in `~/.cache/agentdev`), so GKE can include it with its own `agent_sandbo
 (`agent_sandbox_hash_label`); the build is skipped when the local image has that hash and `kind load` when every node has it.
 
 ```bash
-ansible-playbook infra/ansible/kind.yml --tags sandbox-test    # warm claim, gVisor, suspend/resume, pool to 0, Claude
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags sandbox-test    # warm claim, gVisor, suspend/resume, pool to 0, Claude
 ```
 The role `sandbox_test` does the checks of the old step 03 with `kubernetes.core` and `kubectl --context`, so GKE can
 include it with its own `sandbox_test_context`. It takes `sandbox_test_ns`, `sandbox_test_pool`,
@@ -206,7 +217,7 @@ nothing. An `always` block sets the sandbox back to `Running` and the warm pool 
 The headless Claude turn runs only when the Secret `claude-agent-keys` exists; the Secret is read under `no_log`.
 
 ```bash
-FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags forge    # Gitea, accounts, seeded repo
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags forge    # Gitea, accounts, seeded repo
 ```
 The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, the owner account, the repo
 `gitea_forge_repo` seeded from `seed/`, one write collaborator per entry of `gitea_forge_agents` with a token in
@@ -214,11 +225,11 @@ The role `gitea_forge` does the old step 05: Gitea from `manifests/gitea.yaml`, 
 password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every task that uses it or a token has
 `no_log`. Each write is guarded by a read (user list, repo, collaborator, token file, protection rule), so a second run
 changes nothing. An existing token file is kept when it still logs in as its agent; a file from an older cluster
-(HTTP 401) is replaced by a new token, then run `--tags agents` (step 06) so the agent gets it. Delete a file to mint
+(HTTP 401) is replaced by a new token, then run `--tags agents` so the agent gets it. Delete a file to mint
 a new token. GKE uses GitHub (#2), not this role.
 
 ```bash
-FORGE_ADMIN_PASSWORD=... ANTHROPIC_API_KEY=... ansible-playbook infra/ansible/kind.yml --tags agents   # needs the operator
+FORGE_ADMIN_PASSWORD=... ANTHROPIC_API_KEY=... ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents   # needs the operator
 ```
 The role `kind_agents` does the old step 06 with the same manifests as `deploy.yml` (`manifests/router.yaml.tmpl`,
 `egress.yaml.tmpl`, `egress-proxy-web.yaml.tmpl`, `claude-proxy.yaml.tmpl`, `templates/render.j2`): it builds the
@@ -233,24 +244,24 @@ telemetry) use the same checks as `deploy.yml`, `tasks/claude_budget.yml` and `t
 GKE keeps its own tasks in `deploy.yml` (Secret Manager); `tests/kind_agents.yml` checks that both render the same.
 
 ```bash
-FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags api    # API, database grants, agentdev-api
+FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags api    # API, database grants, agentdev-api
 ```
 The role `api` does the old step 10 on kind with `api_secret_source: files`. The database password is the file
 `.secrets/platform/pg-agentdev-api` (made once, mode 600). SIEM values come from `.secrets/platform/siem-webhook`
 (optional). With `forge_kind: github` the App comes from `.secrets/github-app`. On Gitea, the role makes the account
 `agentdev-api` (admin of the agent repositories, token `read:repository,read:user`). It keeps a token that works and
 deletes the other `agentdev-api*` tokens. A local `agentdev-api:*` tag is built and loaded into kind. A new image or a
-changed Secret restarts the API. The web UI is step 11 (`api_ui: false` here).
+changed Secret restarts the API. The web UI is the tag `ui` (`api_ui: false` here).
 `kind.yml --tags ui` runs only `roles/api/tasks/ui.yml` (old step 11): it builds or pulls `api_ui_image`, loads it
 into kind, applies `manifests/ui.yaml.tmpl` and restarts the UI only after a new image.
 
 ```bash
-ansible-playbook infra/ansible/kind.yml --tags operator    # CRDs, operator, executor egress
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags operator    # CRDs, operator, executor egress
 ```
 The role `operator` does the old step 12: the namespaces with `operator_cost_labels` (#184), the operator image (a
 local `agentdev-operator:*` tag is built and loaded into kind), the six `agentdev.dev` CRDs, `manifests/operator.yaml.tmpl`
 and the executor egress manifests, through `templates/render.j2`. The scoped secrets store is on only when the External
-Secrets Operator CRD exists (step 13). The operator restarts only after a new image or a manifest change. GKE keeps
+Secrets Operator CRD exists (tag `secrets`). The operator restarts only after a new image or a manifest change. GKE keeps
 the operator tasks in `deploy.yml`.
 
 ## Not here

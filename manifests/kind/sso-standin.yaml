@@ -1,4 +1,4 @@
-# Local OIDC stand-in for the company SSO (#122), kind only (09-authentik.sh). It plays Google Workspace: a test login
+# Local OIDC stand-in for the company SSO (#122), kind only (role authentik_kind). It plays Google Workspace: a test login
 # form that takes any user and any claims (groups, the custom attribute). authentik reaches it in the cluster; the
 # browser through `kubectl port-forward svc/sso-standin 18080:8080` (the authorize URL is http://localhost:18080).
 # Never deploy this outside kind: anyone who reaches it can sign in as anybody.
