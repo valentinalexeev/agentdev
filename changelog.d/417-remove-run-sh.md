@@ -33,3 +33,7 @@ Owner decision D on #106. The play-level variables of kind.yml (`kind_engine`, `
 `config.env` before. A plain run now lists prereqs, cluster, forge, operator, agents; the operator runs before the
 agents because the role kind_agents needs it (06-agents.sh installed it when missing). Every other step is tagged
 `never` and runs only with its tag (tests/kind_plain_run.yml).
+
+The removal ships in the 1.3.0 minor, not in a major (owner decision on PR #495, 2026-11-25). The 1.1.0 and 1.2.0
+entries announced it, `run.sh` is not on the public-interface list (CLAUDE.md §7), and `kind.vars.yml` keeps the
+meaning of every `config.env` value. This overrides milestone rule 6 (CLAUDE.md §7a) on purpose for this change.
