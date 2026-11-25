@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
@@ -178,7 +179,7 @@ func admit(t *testing.T, pol vapDoc, j *batchv1.Job) []string {
 	b, _ := json.Marshal(j)
 	var obj map[string]any
 	_ = json.Unmarshal(b, &obj)
-	env, err := cel.NewEnv(cel.Variable("object", cel.DynType), cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)))
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("object", cel.DynType), cel.Variable("variables", cel.MapType(cel.StringType, cel.DynType)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,6 +404,38 @@ func TestChatJobAdmissionToolchain(t *testing.T) {
 		tc.mut(&j.Spec.Template.Spec)
 		if f := admit(t, pol, j); len(f) == 0 {
 			t.Errorf("admitted: %s", tc.name)
+		}
+	}
+}
+
+// #538: an agent with a toolchain runs the worker repository pinned to a digest; the policy admits exactly that form and
+// refuses another repository, a malformed digest or the pinned form of a repository prefix.
+func TestChatJobAdmissionPinnedWorker(t *testing.T) {
+	pol := chatPolicy(t)
+	repo := strings.TrimSuffix(testWorkerImage, ":v0.0.0")
+	pin := func(img string) []string {
+		j := chatJobFor(t, "toolchain")
+		p := &j.Spec.Template.Spec
+		for i := range p.InitContainers {
+			if p.InitContainers[i].Name == "toolchain" {
+				p.InitContainers[i].Image = img
+			}
+		}
+		containerNamed(*p, "chat").Image = img
+		return admit(t, pol, j)
+	}
+	if f := pin(repo + "@sha256:" + strings.Repeat("a", 64)); len(f) != 0 {
+		t.Fatalf("pinned worker refused: %v", f)
+	}
+	for _, img := range []string{
+		"ghcr.io/evil/agentdev-worker@sha256:" + strings.Repeat("a", 64),
+		repo + "-evil@sha256:" + strings.Repeat("a", 64),
+		repo + "@sha256:" + strings.Repeat("a", 63),
+		repo + "@sha256:" + strings.Repeat("a", 64) + "x",
+		repo + ":other",
+	} {
+		if f := pin(img); len(f) == 0 {
+			t.Errorf("%s admitted", img)
 		}
 	}
 }

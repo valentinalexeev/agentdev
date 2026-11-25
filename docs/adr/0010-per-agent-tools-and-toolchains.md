@@ -85,6 +85,13 @@ Three layers. Each one is optional and falls back to the one below it.
    - The `toolchain` init container installs into `/state/toolchain/<key>` on the agent PVC. `key` is the SHA-256
      of the canonical toolchain spec: presets with versions, steps, `path`, architecture, base image digest and the
      refresh epoch.
+   - **Image digest (#538).** The operator has no registry access, so it reads the digest from the kubelet: the
+     `imageID` of the `state-init` init container, which keeps the worker image tag. The `toolchain` and agent
+     containers then run `<repository>@<digest>`, so the key and the running image always match on every node. The
+     first digest of a tag is the base and does not change the key. A later digest that was not seen before goes into
+     the key and the pin. The digest only moves forward: a node with an older cached image does not move it back.
+     Detection needs a pod start on a node that has the new image. With pull policy `Never`, only a new image load
+     on the node triggers it, and the containers keep the tag.
    - **The agent container mounts `/state/toolchain` read-only**, as a separate `subPath` mount, and its `/state`
      read-write mount does not include it. The pod runs as one UID, so without the read-only mount Claude or the
      repository's code could rewrite `bin/go` and the next pod would trust it.

@@ -213,37 +213,59 @@ func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset, digest str
 }
 
 // Worker image digest of the toolchain key (#538, ADR 0010 D3). A tag such as :latest can be pushed again with other
-// content; the install must then run again. The operator has no registry access (no egress, no pull secret, and kind
-// loads images without a registry), so the digest comes from the kubelet: the imageID of the toolchain init container
-// of the agent's pod, which is the image that really ran the install. Two StatefulSet annotations keep it:
-//   - toolchainBaseAnnotation: "<image ref> <digest>", the first digest seen for the current WORKER_IMAGE. The
-//     install keyed on the tag alone was made with it, so it does not go into the spec (no extra roll on an upgrade).
-//   - toolchainDigestAnnotation: the latest digest seen for that image ref.
+// content; the install must then run again, and the agent must run the image the install was keyed on. The operator
+// has no registry access (no egress, no pull secret, and kind loads images without a registry), so the digest comes
+// from the kubelet: the imageID of the state-init init container. state-init keeps the tag (WORKER_IMAGE) and only runs
+// mkdir, so it is the probe of what the tag resolves to on the pod's node. The toolchain and agent containers are pinned
+// to <repository>@<digest>, so the key and the running image always match, on every node (#551 review).
 //
-// When the latest differs from the base, the spec gets "digest": the pod template changes, the pod is replaced after
-// drain (#174), and the new pod installs under a new key. Fail-safe: without a pod, a status or a valid digest nothing
-// changes (the key stays the tag's, as before). Without spec.toolchain nothing is read or written.
+// StatefulSet annotations:
+//   - toolchainBaseAnnotation: "<image ref> <digest>", the first digest seen for the current WORKER_IMAGE. The
+//     install keyed on the tag alone was made with it, so it does not go into the spec (no reinstall on an upgrade).
+//   - toolchainDigestAnnotation: the pinned digest.
+//   - toolchainSeenAnnotation: every digest pinned for this image ref. The digest only moves forward: a digest seen
+//     before is ignored, so nodes with different cached images cannot flip the key back and forth (a, b, a).
+//
+// Fail-safe: without a pod, a status or a repository digest ("<repo>@sha256:..."; a bare image ID is not one) nothing
+// changes and the containers keep the tag, as before. A WORKER_IMAGE that is already a digest is not changed. With pull
+// policy Never the key follows the digest but the containers are not pinned (a loaded image is found by its tag).
+// Without spec.toolchain nothing is read or written.
 const (
 	toolchainBaseAnnotation   = "agentdev/toolchain-image-base"
 	toolchainDigestAnnotation = "agentdev/toolchain-image-digest"
+	toolchainSeenAnnotation   = "agentdev/toolchain-image-seen"
+	toolchainSeenMax          = 20
 )
 
-var imageDigest = regexp.MustCompile(`(sha256:[0-9a-f]{64})$`)
+var (
+	imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	repoDigest  = regexp.MustCompile(`@(sha256:[0-9a-f]{64})$`)
+)
 
-// observedToolchainDigest: the digest of the image the toolchain init container of p ran, when it ran image. "" when
-// unknown (no status yet, an old pod of another image, or an imageID without a sha256 digest).
-func observedToolchainDigest(p *corev1.Pod, image string) string {
+// workerRepo: WORKER_IMAGE without its tag; "" when it is already pinned to a digest (nothing to resolve).
+func workerRepo(image string) string {
+	if strings.Contains(image, "@") {
+		return ""
+	}
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		return image[:i]
+	}
+	return image
+}
+
+// observedWorkerDigest: the repository digest the tag image resolved to on p's node, read from state-init (the probe).
+// "" when unknown: no status yet, a pod of another image, or an imageID without a repository digest.
+func observedWorkerDigest(p *corev1.Pod, image string) string {
+	for _, c := range p.Spec.InitContainers {
+		if c.Name == "state-init" && c.Image != image {
+			return ""
+		}
+	}
 	for _, cs := range p.Status.InitContainerStatuses {
-		if cs.Name != toolchainContainer || cs.ImageID == "" {
+		if cs.Name != "state-init" {
 			continue
 		}
-		// the status image of the pod's own spec; an older pod of the previous tag is not this image's evidence
-		for _, c := range p.Spec.InitContainers {
-			if c.Name == toolchainContainer && c.Image != image {
-				return ""
-			}
-		}
-		if m := imageDigest.FindStringSubmatch(cs.ImageID); m != nil {
+		if m := repoDigest.FindStringSubmatch(cs.ImageID); m != nil {
 			return m[1]
 		}
 	}
@@ -253,39 +275,73 @@ func observedToolchainDigest(p *corev1.Pod, image string) string {
 // noteToolchainDigest records an observed digest on the StatefulSet annotations (see above). Called in the mutate
 // function before render; d == "" or no toolchain changes nothing.
 func (r *AgentReconciler) noteToolchainDigest(a *v1.Agent, s *appsv1.StatefulSet, d string) {
-	if a.Spec.Toolchain == nil || d == "" {
+	if a.Spec.Toolchain == nil || d == "" || workerRepo(r.D.WorkerImage) == "" {
 		return
 	}
 	if s.Annotations == nil {
 		s.Annotations = map[string]string{}
 	}
 	img, base, _ := strings.Cut(s.Annotations[toolchainBaseAnnotation], " ")
-	if img != r.D.WorkerImage || base == "" {
+	if img != r.D.WorkerImage || base == "" { // first digest of this image ref: the base
 		s.Annotations[toolchainBaseAnnotation] = r.D.WorkerImage + " " + d
+		s.Annotations[toolchainDigestAnnotation] = d
+		s.Annotations[toolchainSeenAnnotation] = d
+		return
+	}
+	seen := strings.Fields(s.Annotations[toolchainSeenAnnotation])
+	for _, x := range seen {
+		if x == d {
+			return // the current one, or an older one (a node with a stale cache): forward only
+		}
+	}
+	seen = append(seen, d)
+	if len(seen) > toolchainSeenMax {
+		seen = seen[len(seen)-toolchainSeenMax:]
 	}
 	s.Annotations[toolchainDigestAnnotation] = d
+	s.Annotations[toolchainSeenAnnotation] = strings.Join(seen, " ")
 }
 
-// toolchainDigest: the digest for the spec, "" while the image ran with its base digest or nothing is known.
-func (r *AgentReconciler) toolchainDigest(s *appsv1.StatefulSet) string {
+// toolchainPin: the pinned digest and the base digest for the current WORKER_IMAGE; "" and "" when nothing is known.
+func (r *AgentReconciler) toolchainPin(s *appsv1.StatefulSet) (digest, base string) {
 	img, base, _ := strings.Cut(s.Annotations[toolchainBaseAnnotation], " ")
 	d := s.Annotations[toolchainDigestAnnotation]
-	if img != r.D.WorkerImage || base == "" || !imageDigest.MatchString(d) || d == base {
-		return ""
+	if img != r.D.WorkerImage || workerRepo(img) == "" || !imageDigest.MatchString(base) || !imageDigest.MatchString(d) {
+		return "", ""
 	}
-	return d
+	return d, base
+}
+
+// toolchainDigest: the digest for the spec, "" while the pin is the base digest or nothing is known.
+func (r *AgentReconciler) toolchainDigest(s *appsv1.StatefulSet) string {
+	if d, base := r.toolchainPin(s); d != base {
+		return d
+	}
+	return ""
+}
+
+// toolchainWorkerImage: the image of the toolchain and agent containers: <repository>@<pinned digest>, or WORKER_IMAGE
+// when nothing is pinned, the agent has no toolchain, or the pull policy is Never.
+func (r *AgentReconciler) toolchainWorkerImage(a *v1.Agent, s *appsv1.StatefulSet) string {
+	if a.Spec.Toolchain == nil || r.D.PullPolicy == string(corev1.PullNever) {
+		return r.D.WorkerImage
+	}
+	if d, _ := r.toolchainPin(s); d != "" {
+		return workerRepo(r.D.WorkerImage) + "@" + d
+	}
+	return r.D.WorkerImage
 }
 
 // toolchainPodDigest reads the agent pod for noteToolchainDigest. Errors are not fatal: "" keeps the current key.
 func (r *AgentReconciler) toolchainPodDigest(ctx context.Context, a *v1.Agent) string {
-	if a.Spec.Toolchain == nil {
+	if a.Spec.Toolchain == nil || workerRepo(r.D.WorkerImage) == "" {
 		return ""
 	}
 	var pod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: "agent-" + a.Name + "-0"}, &pod); err != nil {
 		return ""
 	}
-	return observedToolchainDigest(&pod, r.D.WorkerImage)
+	return observedWorkerDigest(&pod, r.D.WorkerImage)
 }
 
 // toolchainNextRefresh: how long until the agent's refresh epoch changes; 0 without refresh.
@@ -356,7 +412,7 @@ func setupProxySecretName(agent string) string { return "agent-" + agent + "-set
 
 // toolchainInit is the init container toolchain: worker image, UID 1000, no capabilities, read-only root, an emptyDir
 // /tmp, no forge or Claude credential and no service account token; only the setup proxy credential.
-func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset, digest string) corev1.Container {
+func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset, digest, image string) corev1.Container {
 	env := []corev1.EnvVar{{Name: "TOOLCHAIN_SPEC", Value: r.toolchainSpecJSON(a, ps, digest)}, {Name: "TOOLCHAIN_DIR", Value: toolchainDir},
 		{Name: "TMPDIR", Value: "/tmp"}, {Name: "HOME", Value: "/tmp"},
 		// the last good "<key>:<hash>", read at pod start (a new value does not change the pod template)
@@ -373,7 +429,7 @@ func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset, digest string)
 		env = append(env, corev1.EnvVar{Name: "NO_PROXY", Value: noProxy}, corev1.EnvVar{Name: "no_proxy", Value: noProxy})
 	}
 	return corev1.Container{
-		Name: toolchainContainer, Image: r.D.WorkerImage, ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
+		Name: toolchainContainer, Image: image, ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath: corev1.TerminationMessagePathDefault, TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		Command: []string{"toolchain-install"},
 		Env:     env,
