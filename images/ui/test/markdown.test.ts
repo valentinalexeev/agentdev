@@ -58,6 +58,30 @@ test('raw HTML, links and images render no element: only text with the address',
   assert.match(html('```\n<img src=x>\n```'), /<code>&lt;img src=x&gt;\n<\/code>/)
 })
 
+test('dangerous schemes, nested images and HTML tricks stay text (#494)', () => {
+  const out = html([
+    '[a](javascript:alert(1)) [b](JaVaScRiPt:alert(1)) [c](&#106;avascript:alert(1)) [d](java\tscript:x)',
+    '[e](data:text/html;base64,PHNjcmlwdD4=) [f](vbscript:msgbox(1)) [g](//evil.example/x)',
+    '[![img](https://evil.example/p.png)](https://evil.example/q)',
+    '<!-- <img src=x onerror=alert(1)> -->',
+    '<svg onload=alert(1)><style>body{}</style><form action=x><button>b</button></form>',
+    '<details open ontoggle=alert(1)><summary>s</summary></details>',
+    '<object data=x></object><embed src=x><video src=x></video><audio src=x></audio><link rel=stylesheet href=x><meta http-equiv=refresh content=0>',
+    '**<b onmouseover=alert(1)>x</b>** `<script>` _<i>y</i>_',
+  ].join('\n\n'))
+  assert.doesNotMatch(out, /<(a|img|script|iframe|input|svg|style|form|button|details|summary|object|embed|video|audio|link|meta|b|i)[\s/>]/i)
+  assert.doesNotMatch(out, /\s(href|src|srcset|action|data|style|on\w+)="/i)
+  // only the allowlisted elements appear at all
+  const allowed = new Set(['p', 'br', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr'])
+  for (const m of out.matchAll(/<\/?([a-zA-Z0-9]+)/g)) assert.ok(allowed.has(m[1]), `element not in allowlist: ${m[1]}`)
+})
+
+test('urlTransform drops every address', () => {
+  for (const u of ['https://example.com', 'javascript:alert(1)', 'data:image/png;base64,AA', '/relative']) {
+    assert.equal(options.urlTransform?.(u, 'href', { type: 'element', tagName: 'a', properties: {}, children: [] }), '')
+  }
+})
+
 test('the renderer has no way to make a link, an image, raw HTML or a handler', () => {
   for (const f of ['../src/Markdown.tsx', '../src/markdown.ts']) {
     const src = readFileSync(new URL(f, import.meta.url), 'utf8')
