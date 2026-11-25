@@ -172,21 +172,32 @@ func checkQuery(q string) error {
 }
 
 // checkLoggingFilter refuses a Cloud Logging filter the API would reject, before the call (#250): unbalanced
-// parentheses, an unterminated string and a trailing backslash. Parentheses inside "..." do not count. A backslash
-// escapes the next character inside and outside a string, as in the Logging query language, so \" or \) outside a
-// string is a literal and does not change the state. The filter is wrapped as (<filter>) AND timestamp>=..., so
-// balanced parentheses also mean the filter cannot close the wrapper and drop the time bound.
+// parentheses, an unterminated string, a newline inside a string and a trailing backslash. Parentheses inside "..."
+// do not count. A backslash escapes the next character inside and outside a string, as in the Logging query
+// language, so \" or \) outside a string is a literal. "--" outside a string starts a comment that runs to the end
+// of the line: nothing in it counts. The filter is wrapped as "(\n<filter>\n) AND timestamp>=..." (wrapLoggingFilter),
+// so balanced parentheses mean the filter cannot close the wrapper, and the newline ends a trailing comment before
+// the time bound.
 func checkLoggingFilter(f string) error {
-	depth, inStr, esc := 0, false, false
-	for _, r := range f {
+	depth, inStr, inCmt, esc := 0, false, false, false
+	rs := []rune(f)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
 		switch {
+		case inCmt:
+			inCmt = r != '\n'
 		case esc:
 			esc = false
 		case r == '\\':
 			esc = true
+		case inStr && r == '\n':
+			return errors.New("filter: newline in a string")
 		case r == '"':
 			inStr = !inStr
 		case inStr:
+		case r == '-' && i+1 < len(rs) && rs[i+1] == '-':
+			inCmt = true
+			i++
 		case r == '(':
 			depth++
 		case r == ')':
@@ -205,6 +216,12 @@ func checkLoggingFilter(f string) error {
 		return errors.New("filter: unbalanced parentheses")
 	}
 	return nil
+}
+
+// wrapLoggingFilter adds the time bound to a filter checkLoggingFilter accepted. The newlines end a comment on the
+// filter's first or last line, so it cannot swallow the wrapper's parentheses or the bound.
+func wrapLoggingFilter(f string, since time.Time) string {
+	return fmt.Sprintf("(\n%s\n) AND timestamp>=%q", f, since.UTC().Format(time.RFC3339))
 }
 
 func checkSince(m, def int) (int, error) {
@@ -489,7 +506,7 @@ func (s *obsServer) cloudLogging(ctx context.Context, _ *mcp.CallToolRequest, in
 	if json.Unmarshal(tb, &tok) != nil || tok.AccessToken == "" {
 		return obsError("cloud logging: no Workload Identity token"), nil, nil
 	}
-	filter := fmt.Sprintf("(%s) AND timestamp>=%q", in.Filter, s.now().Add(-time.Duration(since)*time.Minute).UTC().Format(time.RFC3339))
+	filter := wrapLoggingFilter(in.Filter, s.now().Add(-time.Duration(since)*time.Minute))
 	body, _ := json.Marshal(map[string]any{"resourceNames": []string{"projects/" + s.c.CloudLoggingProj},
 		"filter": filter, "orderBy": "timestamp desc", "pageSize": limit})
 	hreq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.c.CloudLoggingURL+"/v2/entries:list", strings.NewReader(string(body)))

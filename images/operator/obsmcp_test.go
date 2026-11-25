@@ -273,6 +273,11 @@ func TestCheckLoggingFilter(t *testing.T) {
 		`a="x" AND (b="y)" OR c="(")`,
 		`labels."k(1)"="v"`,
 		`a="é ( ü"`,
+		`severity>=ERROR -- errors only`,   // trailing comment: the wrapper's newline ends it
+		"-- note (\nseverity>=ERROR",       // parentheses in a comment do not count
+		"a=\"x\" -- say \")\" here\nAND b", // quotes in a comment do not count
+		`a="-- not a comment )("`,          // -- inside a string is text
+		"(a -- )\n)",
 	}
 	for _, f := range ok {
 		if err := checkLoggingFilter(f); err != nil {
@@ -294,10 +299,98 @@ func TestCheckLoggingFilter(t *testing.T) {
 		`a="b" \`,
 		`a="\`,
 		`)(`,
+		"-- \"\nx) OR (y)\n-- \"", // #268 review: quotes in comments must not hide x) OR (y
+		"-- (\nx)\n--",
+		"(a -- )",    // the ")" is in the comment
+		"a=\"x\ny\"", // newline in a string
 	}
 	for _, f := range bad {
 		if checkLoggingFilter(f) == nil {
 			t.Errorf("%s: accepted", f)
 		}
 	}
+}
+
+// #268 review: a trailing comment must not swallow the wrapper's ")" or the time bound.
+func TestWrapLoggingFilter(t *testing.T) {
+	since := time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)
+	got := wrapLoggingFilter("severity>=ERROR -- errors only", since)
+	want := "(\nseverity>=ERROR -- errors only\n) AND timestamp>=\"2026-11-07T11:00:00Z\""
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+	if !boundKept(got) {
+		t.Fatalf("bound lost in %q", got)
+	}
+}
+
+// boundKept is a reference LQL scanner, written apart from checkLoggingFilter: it reports whether the wrapped query
+// ends with " AND timestamp>=..." as code at depth 0 (not in a string or a comment) and is balanced.
+func boundKept(q string) bool {
+	i := strings.LastIndex(q, "\n) AND timestamp>=")
+	if i < 0 {
+		return false
+	}
+	depth := 0
+	inStr, inCmt := false, false
+	rs := []rune(q)
+	pos := len([]rune(q[:i])) // rune index of the wrapper's "\n"
+	for k := 0; k < len(rs); k++ {
+		if k == pos && (inStr || depth != 1) {
+			return false // the wrapper's newline is inside a string, or the filter changed the depth
+		}
+		if k == pos {
+			inCmt = false
+		}
+		c := rs[k]
+		if inCmt {
+			if c == '\n' {
+				inCmt = false
+			}
+			continue
+		}
+		if c == '\\' {
+			k++
+			continue
+		}
+		if inStr {
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			inStr = true
+		case c == '-' && k+1 < len(rs) && rs[k+1] == '-':
+			if k > pos {
+				return false
+			}
+			inCmt = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0 && !inStr && !inCmt
+}
+
+// #268 review: every filter checkLoggingFilter accepts keeps the time bound once wrapped.
+func FuzzCheckLoggingFilter(f *testing.F) {
+	for _, s := range []string{"severity>=ERROR", "-- \"\nx) OR (y)\n-- \"", "a=\"x\\\")\" -- c", "(a -- )\n)", `a=\"(`, "--"} {
+		f.Add(s)
+	}
+	since := time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)
+	f.Fuzz(func(t *testing.T, s string) {
+		if checkQuery(s) != nil || checkLoggingFilter(s) != nil {
+			return
+		}
+		if q := wrapLoggingFilter(s, since); !boundKept(q) {
+			t.Fatalf("accepted %q, but the wrapped query loses the bound: %q", s, q)
+		}
+	})
 }

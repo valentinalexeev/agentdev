@@ -10,11 +10,12 @@ pr: 268
 ---
 ## Summary
 
-obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses, an unterminated string or a trailing
-backslash before the API call (#250). Such a filter could close the tool's `(<filter>) AND timestamp>=...` wrapper
+obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses, an unterminated string, a newline in a
+string or a trailing backslash before the API call (#250). Such a filter could close the tool's `(<filter>) AND timestamp>=...` wrapper
 and drop the time bound.
 
 ## Description
 
 The check skips parentheses inside `"..."` strings and honours backslash escapes inside and outside strings, as in
-the Logging query language. Nested parentheses are counted to any depth; a `)` before its `(` is refused at once.
+the Logging query language. A `--` comment outside a string runs to the end of the line and does not count. The
+filter is wrapped as `(\n<filter>\n) AND timestamp>=...`, so a trailing comment cannot hide the time bound. Nested parentheses are counted to any depth; a `)` before its `(` is refused at once.
