@@ -17,6 +17,9 @@
 //   POST /messages                 {"author","text"}: a person's message, written to Claude's stdin
 //   POST /permissions/{id}         {"author","behavior":"allow"|"deny"}: answer a pending permission request (once)
 //   POST /presence                 {"viewers":["name",...]}: who has the session open in the console (from the API)
+//   POST /settings                 {"author","model"?,"effort"?}: change the model (set_model) and the effort
+//                                  (apply_flag_settings effortLevel) of the running Claude (#570); the API checks the
+//                                  instance allow-list, this server only the form. A "settings" event follows each answer.
 //   POST /end                      {"author"}: end the session now
 //
 // Issue drafts: the model writes a fenced ```agentdev-draft block with JSON {title, what, acceptance, decisions}.
@@ -84,6 +87,22 @@ function normAddr(a) { return (a || '').replace(/^::ffff:/, ''); }
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,99}$/;
 
+// #570: the model and effort forms, as the operator's rules (images/operator/render.go modelValid): an alias or a full
+// name of a claude-proxy price family, and the effort levels of Claude Code.
+const MODEL_RE = /^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$/;
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+function modelOK(m) { return typeof m === 'string' && m.length <= 80 && MODEL_RE.test(m); }
+function effortOK(e) { return typeof e === 'string' && EFFORTS.includes(e); }
+
+// startSettings reads CLAUDE_MODEL and CLAUDE_EFFORT (the agent's spec.model and spec.effort, or the choice at the
+// start of the session, set in the pod by the API) and returns the Claude flags and the settings; a bad value is dropped.
+function startSettings(env) {
+  const out = { args: [], settings: { model: '', effort: '' } };
+  if (modelOK(env.CLAUDE_MODEL)) { out.args.push('--model', env.CLAUDE_MODEL); out.settings.model = env.CLAUDE_MODEL; }
+  if (effortOK(env.CLAUDE_EFFORT)) { out.args.push('--effort', env.CLAUDE_EFFORT); out.settings.effort = env.CLAUDE_EFFORT; }
+  return out;
+}
+
 // ---------- the session ----------
 
 class Session {
@@ -102,6 +121,11 @@ class Session {
     this.tokens = { input: 0, output: 0 };
     this.drafts = 0;
     this.perms = 0;
+    // #570: the model and effort Claude runs with ("" = Claude Code's default). model is the effective model once Claude
+    // reports it (init, set_model answer). requests: our control requests to Claude that wait for an answer.
+    this.settings = { model: '', effort: '', ...(opts.settings || {}) };
+    this.requests = new Map(); // request_id -> {kind, value, author}
+    this.reqs = 0;
     this.claude = null;
     this.write = opts.write || ((line) => this.claude && this.claude.stdin.write(line + '\n'));
     fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -120,7 +144,7 @@ class Session {
     const idle = this.opts.idleSeconds * 1000;
     return {
       session: this.opts.name, repo: this.opts.repo, agent: this.opts.agent,
-      viewers: this.viewers, tokens: this.tokens, lastSeq: this.seq,
+      viewers: this.viewers, tokens: this.tokens, lastSeq: this.seq, settings: { ...this.settings },
       pendingPermissions: [...this.pending.keys()],
       ended: this.ended,
       idleEndsAt: this.ended || this.viewerCount() > 0 ? null : new Date(this.lastViewer + idle).toISOString(),
@@ -144,7 +168,10 @@ class Session {
     if (!m || typeof m !== 'object') return;
     switch (m.type) {
       case 'system':
-        if (m.subtype === 'init') this.append('ready', { model: m.model || '', tools: (m.tools || []).length });
+        if (m.subtype === 'init') {
+          if (typeof m.model === 'string' && m.model) this.settings.model = m.model;
+          this.append('ready', { model: m.model || '', tools: (m.tools || []).length });
+        }
         break;
       case 'assistant':
         for (const c of (m.message && m.message.content) || []) {
@@ -170,6 +197,20 @@ class Session {
         this.tokens.input += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
         this.tokens.output += u.output_tokens || 0;
         this.append('turn', { error: !!m.is_error, tokens: { ...this.tokens } });
+        break;
+      }
+      case 'control_response': { // the answer to a settings request of ours (#570)
+        const r = m.response || {};
+        const q = this.requests.get(r.request_id);
+        if (!q) return;
+        this.requests.delete(r.request_id);
+        if (r.subtype === 'success') {
+          const v = q.kind === 'model' && r.response && typeof r.response.model === 'string' && r.response.model ? r.response.model : q.value;
+          this.settings[q.kind] = v;
+          this.append('settings', { kind: q.kind, value: v, status: 'applied', settings: { ...this.settings } }, q.author);
+        } else {
+          this.append('settings', { kind: q.kind, value: q.value, status: 'refused', error: clip(String(r.error || 'refused'), 500), settings: { ...this.settings } }, q.author);
+        }
         break;
       }
       case 'control_request': {
@@ -209,6 +250,26 @@ class Session {
       : { behavior: 'deny', message: `${author} denied this in the console` };
     this.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: p.request_id, response } }));
     return this.append('permission-answer', { id, behavior }, author);
+  }
+
+  // changeSettings sends set_model and apply_flag_settings (effortLevel) to Claude (#570). The change counts once
+  // Claude answers (a "settings" event with status applied or refused); until then the old value stays in the state.
+  changeSettings(author, model, effort) {
+    if (this.ended) throw httpError(409, 'the session has ended');
+    if (!NAME_RE.test(author || '')) throw httpError(400, 'author is required');
+    if (model === undefined && effort === undefined) throw httpError(400, 'model or effort is required');
+    if (model !== undefined && !modelOK(model)) throw httpError(400, 'model must be opus, sonnet, haiku, fable or a claude-<family>-... name');
+    if (effort !== undefined && !effortOK(effort)) throw httpError(400, `effort must be one of ${EFFORTS.join(', ')}`);
+    const out = [];
+    const send = (kind, value, request) => {
+      const id = `agentdev-settings-${++this.reqs}`;
+      this.requests.set(id, { kind, value, author });
+      this.write(JSON.stringify({ type: 'control_request', request_id: id, request }));
+      out.push(this.append('settings', { kind, value, status: 'requested' }, author));
+    };
+    if (model !== undefined) send('model', model, { subtype: 'set_model', model });
+    if (effort !== undefined) send('effort', effort, { subtype: 'apply_flag_settings', settings: { effortLevel: effort } });
+    return out;
   }
 
   presence(viewers) {
@@ -270,6 +331,7 @@ function handler(s, opts) {
       const pm = /^\/permissions\/(p[0-9]{1,9})$/.exec(u.pathname);
       if (pm) return send(200, s.answer(pm[1], body.author, body.behavior));
       if (u.pathname === '/presence') { s.presence(body.viewers); return send(200, s.state()); }
+      if (u.pathname === '/settings') { s.changeSettings(body.author, body.model, body.effort); return send(200, s.state()); }
       if (u.pathname === '/end') {
         if (!NAME_RE.test(body.author || '')) throw httpError(400, 'author is required');
         s.end('ended by a person', body.author); send(200, s.state()); if (opts.onEnd) opts.onEnd(); return;
@@ -299,6 +361,7 @@ function render(file) {
       case 'permission-answer': return `${t} ${d.behavior} ${d.id} by ${e.author || 'system'}`;
       case 'draft': return `${t} issue draft ${d.id}: ${d.title}`;
       case 'presence': return `${t} here: ${(d.viewers || []).join(', ') || 'nobody'}`;
+      case 'settings': return `${t} ${d.kind} ${d.value} ${d.status}${e.author ? ` (${e.author})` : ''}`;
       case 'end': return `${t} session ended: ${d.reason}`;
       default: return null;
     }
@@ -328,9 +391,10 @@ function main() {
     try { return require('child_process').execFileSync('tmux', ['list-clients', '-t', 'chat'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim().split('\n').filter(Boolean).length; } catch { return 0; }
   };
   const terminalMax = /^[0-9]{1,6}$/.test(process.env.CHAT_TERMINAL_MAX_SECONDS || '') ? Number(process.env.CHAT_TERMINAL_MAX_SECONDS) : 7200;
-  const s = new Session({ name: process.env.SESSION_NAME || os.hostname(), repo: process.env.REPO || '', agent: process.env.CHAT_AGENT || '', idleSeconds: idle, terminalMaxSeconds: terminalMax, tmuxClients });
+  const start = startSettings(process.env);
+  const s = new Session({ name: process.env.SESSION_NAME || os.hostname(), repo: process.env.REPO || '', agent: process.env.CHAT_AGENT || '', idleSeconds: idle, terminalMaxSeconds: terminalMax, tmuxClients, settings: start.settings });
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
-    '--permission-prompt-tool', 'stdio', '--append-system-prompt', fs.readFileSync(promptFile, 'utf8')];
+    '--permission-prompt-tool', 'stdio', ...start.args, '--append-system-prompt', fs.readFileSync(promptFile, 'utf8')];
   // #400: the apiKeyHelper settings for the projected claude-proxy token (agent-chat-session.sh); absent: the HMAC key
   if (/^\/[A-Za-z0-9._/-]+\.json$/.test(process.env.CHAT_CLAUDE_SETTINGS || '')) args.push('--settings', process.env.CHAT_CLAUDE_SETTINGS);
   // #424: the agent's project MCP tools (Secret agent-<name>-mcp, written by agent-chat-session.sh as agent-loop does)
@@ -338,7 +402,7 @@ function main() {
   const env = { ...process.env };
   const claude = spawn('claude', args, { cwd: process.env.CHAT_WORKDIR || '/state/repo', env, stdio: ['pipe', 'pipe', 'inherit'] });
   s.claude = claude;
-  s.append('start', { repo: s.opts.repo, agent: s.opts.agent, idleSeconds: idle });
+  s.append('start', { repo: s.opts.repo, agent: s.opts.agent, idleSeconds: idle, settings: { ...s.settings } });
   let buf = '';
   claude.stdout.on('data', (c) => { buf += c.toString('utf8'); let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); if (l.trim()) s.onClaude(l); } });
   let server;
@@ -352,4 +416,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { Session, parseDrafts, tokenOK, handler, clip };
+module.exports = { Session, parseDrafts, tokenOK, handler, clip, startSettings };

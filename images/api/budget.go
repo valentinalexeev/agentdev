@@ -71,3 +71,40 @@ func addBudgets(ctx context.Context, list []agent) {
 		}
 	}
 }
+
+// modelPrices gives the claude-proxy model multipliers by name prefix (#570, GET /status "models"), for the cost hint
+// of the chat model choice. nil, or nil from the call: no hint.
+var modelPrices = proxyModelPrices(os.Getenv("CLAUDE_PROXY_STATUS_URL"), &http.Client{Timeout: 2 * time.Second})
+
+func proxyModelPrices(url string, c *http.Client) func(ctx context.Context) map[string]float64 {
+	return func(ctx context.Context) map[string]float64 {
+		if url == "" {
+			return nil
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			return nil
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil
+		}
+		var st struct {
+			Models map[string]float64 `json:"models"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&st) != nil || len(st.Models) == 0 || len(st.Models) > 200 {
+			return nil
+		}
+		out := map[string]float64{}
+		for k, v := range st.Models {
+			if len(k) <= 64 && v >= 0 && v < 1000 {
+				out[k] = v
+			}
+		}
+		return out
+	}
+}

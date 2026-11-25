@@ -76,7 +76,7 @@ func main() {
 		go o.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
-	go watchPermissions(ctx, agents.d, cfg.Namespace) // #505: audit entry on a change of spec.permission
+	go watchPermissions(ctx, agents.d, cfg.Namespace) // #505, #570: audit entry on a change of spec.permission, spec.model or spec.effort
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
@@ -252,8 +252,12 @@ type agent struct {
 	Ready         int32    `json:"ready"`
 	Managed       bool     `json:"managed"` // an Agent object exists (#57); false: a StatefulSet from before the operator
 	MaxConcurrent int32    `json:"maxConcurrent,omitempty"`
-	ScaleToZero   bool     `json:"scaleToZero"`
-	Paused        bool     `json:"paused"`
+	// spec.model and spec.effort (#570): the Claude model and effort of the agent's runs and the default of its chat
+	// sessions; empty: Claude Code's default
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	ScaleToZero bool   `json:"scaleToZero"`
+	Paused      bool   `json:"paused"`
 	// api | git (#58): a Git-owned Agent is read-only in the API except pause and resume; empty for managed: false
 	Source string `json:"source,omitempty"`
 	// SecurityEvents in the last 7 days (#70)
