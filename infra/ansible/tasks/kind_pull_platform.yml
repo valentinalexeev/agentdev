@@ -1,0 +1,24 @@
+---
+# The platform for pulling published images into kind (#378, #558): linux/<arch> of the container engine. With the
+# containerd image store a plain pull keeps the multi-arch index, and `kind load` (ctr import --all-platforms) fails
+# with "content digest ... not found" on the platforms that were not pulled. Used with kind_pull_image.yml by the roles
+# kind_agents and platform.
+# Input: kind_pull_engine (docker or podman). Output: the fact kind_pull_platform (linux/amd64 or linux/arm64).
+- name: Container engine architecture
+  ansible.builtin.shell: >-
+    {{ kind_pull_engine }} info -f '{{ '{{' }}.Architecture{{ '}}' }}' 2>/dev/null ||
+    {{ kind_pull_engine }} info -f '{{ '{{' }}.Host.Arch{{ '}}' }}'
+  register: kind_pull_engine_arch
+  changed_when: false
+
+- name: Platform of pulled images
+  ansible.builtin.set_fact:
+    kind_pull_platform: >-
+      linux/{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(kind_pull_engine_arch.stdout | trim,
+                                                          kind_pull_engine_arch.stdout | trim) }}
+
+- name: Known container engine architecture
+  ansible.builtin.assert:
+    that: kind_pull_platform in ['linux/amd64', 'linux/arm64']
+    fail_msg: "unknown container engine architecture: {{ kind_pull_engine_arch.stdout | trim }}"
+    quiet: true
