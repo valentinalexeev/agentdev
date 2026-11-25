@@ -52,7 +52,7 @@
           1    owner    owner@agents.local   true      true     false
           2    alice    alice@agents.local   true      false    false
 
-    - name: The kind settings file keeps the password out of -e (it stays in the environment, #417)
+    - name: "The kind settings file keeps the password out of -e (it stays in the environment, #417)"
       ansible.builtin.assert:
         that:
           - "'gitea_forge_admin_password' not in settings"

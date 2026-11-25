@@ -29,7 +29,7 @@
           - "\"lookup('env', 'ANTHROPIC_API_KEY')\" in sandbox_defaults"
         quiet: true
 
-    - name: The kind settings file never holds the key (it stays in the environment, #417)
+    - name: "The kind settings file never holds the key (it stays in the environment, #417)"
       ansible.builtin.assert:
         that: "'ANTHROPIC_API_KEY' not in lookup('ansible.builtin.file', playbook_dir ~ '/../kind.example.vars.yml')"
         quiet: true
