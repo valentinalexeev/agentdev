@@ -183,6 +183,9 @@ func checkLoggingFilter(f string) error {
 	rs := []rune(f)
 	for i := 0; i < len(rs); i++ {
 		r := rs[i]
+		if isOtherLineEnd(r) && (r != '\r' || i+1 >= len(rs) || rs[i+1] != '\n') {
+			return fmt.Errorf("filter: line end character %U (use \\n)", r)
+		}
 		switch {
 		case inCmt:
 			inCmt = r != '\n'
@@ -216,6 +219,17 @@ func checkLoggingFilter(f string) error {
 		return errors.New("filter: unbalanced parentheses")
 	}
 	return nil
+}
+
+// isOtherLineEnd reports a character a parser may take as a line end, apart from \n: CR, VT, FF, NEL, LS, PS. The
+// Logging docs do not define the line end that closes a "--" comment, so checkLoggingFilter refuses these anywhere
+// (inside strings too) and only \n (or CRLF) ends a comment (#268 review).
+func isOtherLineEnd(r rune) bool {
+	switch r {
+	case '\r', '\v', '\f', '\u0085', '\u2028', '\u2029':
+		return true
+	}
+	return false
 }
 
 // wrapLoggingFilter adds the time bound to a filter checkLoggingFilter accepted. The newlines end a comment on the

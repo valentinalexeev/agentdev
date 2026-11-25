@@ -278,6 +278,7 @@ func TestCheckLoggingFilter(t *testing.T) {
 		"a=\"x\" -- say \")\" here\nAND b", // quotes in a comment do not count
 		`a="-- not a comment )("`,          // -- inside a string is text
 		"(a -- )\n)",
+		"severity>=ERROR\r\n-- c (\r\nAND a", // CRLF: \n ends the comment either way
 	}
 	for _, f := range ok {
 		if err := checkLoggingFilter(f); err != nil {
@@ -301,8 +302,16 @@ func TestCheckLoggingFilter(t *testing.T) {
 		`)(`,
 		"-- \"\nx) OR (y)\n-- \"", // #268 review: quotes in comments must not hide x) OR (y
 		"-- (\nx)\n--",
-		"(a -- )",    // the ")" is in the comment
-		"a=\"x\ny\"", // newline in a string
+		"(a -- )",              // the ")" is in the comment
+		"a=\"x\ny\"",           // newline in a string
+		"a -- c\u2028x) OR (y", // #268 review 2: every line end other than \n (or CRLF) is refused
+		"-- \r x) OR (y",
+		"a -- c\u2029x) OR (y",
+		"a -- c\u0085x) OR (y",
+		"a -- c\vx) OR (y",
+		"a -- c\fx) OR (y",
+		"a=\"x\u2028y\"", // inside a string too
+		"a\r",
 	}
 	for _, f := range bad {
 		if checkLoggingFilter(f) == nil {
@@ -344,7 +353,7 @@ func boundKept(q string) bool {
 		}
 		c := rs[k]
 		if inCmt {
-			if c == '\n' {
+			if c == '\n' || isRefLineEnd(c) {
 				inCmt = false
 			}
 			continue
@@ -381,16 +390,23 @@ func boundKept(q string) bool {
 
 // #268 review: every filter checkLoggingFilter accepts keeps the time bound once wrapped.
 func FuzzCheckLoggingFilter(f *testing.F) {
-	for _, s := range []string{"severity>=ERROR", "-- \"\nx) OR (y)\n-- \"", "a=\"x\\\")\" -- c", "(a -- )\n)", `a=\"(`, "--"} {
+	for _, s := range []string{"severity>=ERROR", "-- \"\nx) OR (y)\n-- \"", "a=\"x\\\")\" -- c", "(a -- )\n)", `a=\"(`, "--",
+		"a -- c\u2028x) OR (y", "-- \r x) OR (y", "a -- c\u0085x) OR (y", "a -- c\u2029x) OR (y", "a -- c\vx) OR (y", "a\r\n-- (\r\nb"} {
 		f.Add(s)
 	}
 	since := time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)
 	f.Fuzz(func(t *testing.T, s string) {
-		if checkQuery(s) != nil || checkLoggingFilter(s) != nil {
+		// the filter check alone, without checkQuery (which also refuses CR, VT and FF): the property must not depend on it
+		if checkLoggingFilter(s) != nil {
 			return
 		}
 		if q := wrapLoggingFilter(s, since); !boundKept(q) {
 			t.Fatalf("accepted %q, but the wrapped query loses the bound: %q", s, q)
 		}
 	})
+}
+
+// isRefLineEnd: in boundKept, every character a parser might take as a line end closes a comment (the worst case).
+func isRefLineEnd(c rune) bool {
+	return strings.ContainsRune("\r\v\f\u0085\u2028\u2029", c)
 }
