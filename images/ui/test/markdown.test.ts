@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ReactMarkdown from 'react-markdown'
-import { options } from '../src/markdown.ts'
+import { MAX_DEPTH, PlainOnError, markdownElement, options, tooDeep } from '../src/markdown.ts'
 
 const html = (md: string) => renderToStaticMarkup(createElement(ReactMarkdown, options, md))
 // text as React escapes it in the markup
@@ -89,4 +89,41 @@ test('the renderer has no way to make a link, an image, raw HTML or a handler', 
       assert.ok(!src.includes(bad), `${f} contains ${bad}`)
     }
   }
+})
+
+test('deeply nested text is detected cheaply and shown plain (#494)', () => {
+  const deep = ['- '.repeat(1000) + 'x', '>'.repeat(5000) + ' x', '- '.repeat(5000) + 'x', '1. '.repeat(1000) + 'x',
+    '> - '.repeat(600) + 'x', ' '.repeat(200) + '- x', 'a\n' + '>'.repeat(40) + ' x']
+  const t0 = performance.now()
+  for (const s of deep) assert.equal(tooDeep(s), true, s.slice(0, 20))
+  assert.ok(tooDeep('- x\n'.repeat(20_000) + '> '.repeat(40_000)))
+  assert.ok(performance.now() - t0 < 500, 'tooDeep is slow')
+  // ordinary Markdown is not too deep: rules, bold, numbers, a nested list, quotes and code
+  for (const s of ['-'.repeat(200), '*'.repeat(200), '**bold** text', '2024. was a year', '- a\n  - b\n    - c',
+    '> > > quote', '```\n' + '    '.repeat(10) + 'code\n```', 'x\n'.repeat(1000)]) assert.equal(tooDeep(s), false, s.slice(0, 20))
+  // the component renders plain text, fast, without throwing
+  for (const s of ['- '.repeat(1000) + 'x', '>'.repeat(5000) + ' x', '- '.repeat(5000) + 'x']) {
+    const t = performance.now()
+    const out = renderToStaticMarkup(markdownElement(s))
+    assert.ok(performance.now() - t < 1000, 'render is slow')
+    assert.match(out, /^<div class="agd-msg-text agd-plain">/)
+    assert.doesNotMatch(out, /<(ul|li|blockquote)/)
+  }
+  // nesting under the cap still renders as Markdown
+  assert.match(renderToStaticMarkup(markdownElement('> '.repeat(MAX_DEPTH) + 'x')), /agd-md/)
+})
+
+test('the error boundary shows plain text when rendering throws (#494)', () => {
+  const Boom = () => { throw new Error('boom') }
+  const orig = console.error
+  console.error = () => {}
+  try {
+    // renderToStaticMarkup does not run error boundaries, so check the boundary's own contract
+    assert.deepEqual(PlainOnError.getDerivedStateFromError(), { failed: true })
+    const b = new PlainOnError({ text: '<b>x</b>', children: createElement(Boom) })
+    b.state = { failed: true }
+    assert.equal(renderToStaticMarkup(b.render() as never), '<div class="agd-msg-text agd-plain">&lt;b&gt;x&lt;/b&gt;</div>')
+    b.state = { failed: false }
+    assert.equal(b.render(), b.props.children)
+  } finally { console.error = orig }
 })

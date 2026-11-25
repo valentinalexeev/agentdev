@@ -6,6 +6,8 @@
 // in model text becomes a link, a button, an image or a request of the browser. test/markdown.test.ts checks this.
 import type { Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Component, createElement, type ReactElement, type ReactNode } from 'react'
+import ReactMarkdown from 'react-markdown'
 
 // longer text is shown plain (Markdown.tsx)
 export const MAX_CHARS = 100_000
@@ -64,4 +66,58 @@ export const options: Readonly<Options> = {
   urlTransform: () => '',
   // a heading in a message ranks below the page and thread headings
   components: { h1: 'h3', h2: 'h4', h3: 'h5', h4: 'h6', h5: 'h6', h6: 'h6' },
+}
+
+// Deeply nested text (about 1,000 levels of `>` or list markers, a few thousand characters) overflows the stack of the
+// react-markdown pipeline and a 5,000 level list takes seconds first (#494). tooDeep() is a cheap linear check before
+// parsing: per line it counts the leading quote and list markers and the indentation before them (one level per 2
+// spaces, a tab is 4 spaces). A line above MAX_DEPTH levels shows the message as plain text (Markdown.tsx).
+export const MAX_DEPTH = 32
+
+// a space, a tab, a line end or the end of the text (NaN)
+const blank = (c: number) => c === 32 || c === 9 || c === 10 || c === 13 || Number.isNaN(c)
+
+export function tooDeep(text: string): boolean {
+  let depth = 0, indent = 0, start = true
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c === 10) { depth = 0; indent = 0; start = true; continue }
+    if (!start) continue
+    // indentation counts before the first marker; spaces after a marker only separate it from the next one
+    if (c === 32) indent += depth ? 0 : 1
+    else if (c === 9) indent += depth ? 0 : 4
+    else if (c === 62) depth++ // >
+    else if ((c === 45 || c === 42 || c === 43) && blank(text.charCodeAt(i + 1))) depth++ // - * + then a blank
+    else if (c >= 48 && c <= 57) {
+      // an ordered list marker: digits then . or )
+      let j = i
+      while (j < text.length && text.charCodeAt(j) >= 48 && text.charCodeAt(j) <= 57) j++
+      const d = text.charCodeAt(j)
+      if ((d === 46 || d === 41) && blank(text.charCodeAt(j + 1))) { depth++; i = j } else start = false
+    } else start = false
+    if (depth + (indent >> 1) > MAX_DEPTH) return true
+  }
+  return false
+}
+
+type BoundaryProps = { text: string; children?: ReactNode }
+
+// Error boundary around the Markdown renderer (#494): if rendering throws anyway, the message shows as plain text
+// instead of React unmounting the whole console.
+export class PlainOnError extends Component<BoundaryProps, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } { return { failed: true } }
+  render(): ReactNode {
+    return this.state.failed ? plain(this.props.text) : this.props.children
+  }
+}
+
+const plain = (text: string) => createElement('div', { className: 'agd-msg-text agd-plain' }, text)
+
+// The element of one assistant message (Markdown.tsx): plain text when the text is too long or too deeply nested,
+// otherwise react-markdown with the options above inside PlainOnError.
+export function markdownElement(text: string): ReactElement {
+  if (text.length > MAX_CHARS || tooDeep(text)) return plain(text)
+  return createElement(PlainOnError, { text },
+    createElement('div', { className: 'agd-msg-text agd-md' }, createElement(ReactMarkdown, options, text)))
 }

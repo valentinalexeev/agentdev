@@ -12,7 +12,7 @@ components: [ui]
 The console Chat page shows the answers of Claude as formatted Markdown: headings, lists, GFM tables, bold, italic,
 code, quotes and rules. Raw HTML shows as text. Images and links show their text and address as text, so the
 browser loads and opens nothing from model text. A **Plain text** toggle on each answer shows the exact text. Tool
-input and output, permission requests and drafts stay plain text. Docs: `docs/user-guide.md`, risk R121 in
+input and output, permission requests and drafts stay plain text. Docs: `docs/user-guide.md`, risk R125 in
 `docs/security.md`.
 
 ## Description
