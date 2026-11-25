@@ -89,22 +89,29 @@
   when: not ansible_check_mode
 
 # the worker re-applies a blueprint only when its file changes, not when its env does: apply the SSO one now. A
-# changed ConfigMap reaches the mounted file after up to a minute: wait for the repo version first.
+# changed ConfigMap reaches the mounted file after up to a minute: wait for the repo version first. #557: after the
+# restart above, `rollout status` returns while the old worker pod still terminates (phase Running). Applied there, the
+# blueprint sees no AGENTDEV_SSO_* env, its conditions are false, apply() still says True and no source exists (the
+# sign-in check then gets HTTP 404). So pick a pod that is not being deleted and has the SSO env.
 - name: The SSO blueprint of the repo reached the worker
   ansible.builtin.shell: |
     set -euo pipefail
     # compare without trailing newlines: the ConfigMap value may lose the final newline of the file
     want=$(printf '%s' "$(cat {{ (repo_root ~ '/manifests/authentik-blueprint-sso.yaml') | quote }})" | openssl dgst -sha256 -r | cut -d' ' -f1)
     k="kubectl --context {{ kube_context }} -n {{ platform_ns }}"
-    wp=$($k get pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=worker \
-         --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
     for _ in $(seq 1 60); do
-      have=$(printf '%s' "$($k exec "$wp" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null)" \
-             | openssl dgst -sha256 -r | cut -d' ' -f1)
-      [ "$have" = "$want" ] && { echo "$wp"; exit 0; }
+      wp=$($k get pod -l app.kubernetes.io/name=authentik,app.kubernetes.io/component=worker \
+           --field-selector=status.phase=Running \
+           -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.deletionTimestamp}{"\n"}{end}' \
+           | awk 'NF == 1 && w == "" {w = $1} END {print w}')
+      if [ -n "$wp" ] && [ "$($k exec "$wp" -- printenv AGENTDEV_SSO_OIDC 2>/dev/null)" = true ]; then
+        have=$(printf '%s' "$($k exec "$wp" -- cat /blueprints/mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml 2>/dev/null)" \
+               | openssl dgst -sha256 -r | cut -d' ' -f1)
+        [ "$have" = "$want" ] && { echo "$wp"; exit 0; }
+      fi
       sleep 3
     done
-    echo "the SSO blueprint did not reach the authentik worker" >&2; exit 1
+    echo "the SSO blueprint or the SSO env did not reach a running authentik worker" >&2; exit 1
   args: {executable: /bin/bash}
   register: authentik_kind_wp
   changed_when: false
@@ -119,9 +126,12 @@
       from authentik.blueprints.v1.importer import Importer
       bi = BlueprintInstance.objects.get(path="mounted/cm-authentik-blueprints/authentik-blueprint-sso.yaml")
       print("SSO_APPLIED=" + str(Importer.from_string(bi.retrieve(), bi.context).apply()))
+      from authentik.sources.oauth.models import OAuthSource
+      print("SSO_SOURCE=" + str(OAuthSource.objects.filter(slug="agentdev-sso", enabled=True).exists()))
   register: authentik_kind_sso_apply
   changed_when: false
-  failed_when: "'SSO_APPLIED=True' not in authentik_kind_sso_apply.stdout"
+  # apply() is True even when the blueprint's env conditions skip every entry: also require the source (#557)
+  failed_when: "'SSO_APPLIED=True' not in authentik_kind_sso_apply.stdout or 'SSO_SOURCE=True' not in authentik_kind_sso_apply.stdout"
   when: not ansible_check_mode
 
 # sign-in checks: add, keep a hand-added member, remove only on leaving the directory group, audit (#122)
