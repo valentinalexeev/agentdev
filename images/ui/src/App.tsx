@@ -165,11 +165,12 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
         )}
       </aside>
       <header className="agd-topbar">
+        {/* the page name is shown once, here (#521); Chat has its own h1 with the session name */}
+        {page === 'chat' ? <div className="agd-crumbs"><strong>{title}</strong></div> : <h1 className="agd-crumbs"><strong>{title}</strong></h1>}
         <button className="agd-scope" type="button" aria-haspopup="dialog" onClick={() => setPicking(true)}
           aria-label={`Projects shown: ${scopeLabel(d)}, ${d.projects.length}. Change`}>
           <span>{scopeLabel(d)}</span><span className="agd-data">{d.projects.length}</span><Icon name="down" />
         </button>
-        <div className="agd-crumbs agd-hide-phone"><strong>{title}</strong></div>
         <span style={{ marginLeft: 'auto' }} />
         <ConnState />
         <button className="agd-iconbtn agd-hide-phone" type="button" onClick={toggleTheme} aria-label={dark ? 'Use the light theme' : 'Use the dark theme'}>

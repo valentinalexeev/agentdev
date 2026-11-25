@@ -82,7 +82,7 @@ export function SettingsPage({ token, onExpired }: { token: string; onExpired: (
     }
   }
 
-  const head = <PageHead title="Settings" sub="Notifications for you. They contain the agent, the repository, the request type and the expiry, never text from an agent." />
+  const head = <PageHead sub="Notifications for you. They contain the agent, the repository, the request type and the expiry, never text from an agent." />
   if (!s) return <>{head}{error ? <p className="agd-error" role="alert">{error}</p> : <p className="agd-muted">Loading…</p>}</>
   const on = s.channels.includes('webpush')
   const muted = (p: string, t: NotifyType | '*') => s.mutes.some((m) => m.project === p && m.type === t)

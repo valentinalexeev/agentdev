@@ -82,10 +82,11 @@ export function Banner({ kind, icon, children, action }: {
   )
 }
 
-export function PageHead({ title, sub, actions }: { title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
+// The page name itself is the h1 in the top bar (#521); PageHead carries the subtitle and the actions.
+export function PageHead({ sub, actions }: { sub?: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="agd-page-head">
-      <div><h1 className="agd-page-title">{title}</h1>{sub && <p className="agd-page-sub">{sub}</p>}</div>
+      <div>{sub && <p className="agd-page-sub">{sub}</p>}</div>
       {actions && <div className="agd-row-actions">{actions}</div>}
     </div>
   )
