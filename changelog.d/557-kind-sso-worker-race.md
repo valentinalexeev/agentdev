@@ -6,6 +6,7 @@ status: done
 breaking: false
 title: The kind SSO check applies the SSO blueprint on the restarted authentik worker
 components: [ansible]
+pr: 562
 ---
 ## Summary
 
