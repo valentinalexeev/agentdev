@@ -154,6 +154,12 @@ labeler_ok() {
 }
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
 MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
+# jq filter (#573): open PRs handed to this agent that it did not open itself, whoever the author and whatever the
+# branch. GitHub: the label agent:<name>; Gitea: the agent is an assignee. As for issues, this alone gives no work:
+# labeler_ok checks who set it before each start. Needs --arg kind.
+ASSIGNED_PRS='.[] | select((.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/"))) | not)
+  | select(if $kind == "github" then any(.labels[]?; .name == "agent:" + $agent)
+           else any(.assignees[]?; .login == $agent) end)'
 # label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
 # is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
 # branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
@@ -297,6 +303,7 @@ start_job() {
   backing_off "${key}" && return 1
   (( $(running_jobs) >= MAX_CONCURRENT )) && return 1
   echo "$$" > "${JOBS}/${key}.lock"
+  echo "${key}" >> "${JOBS}/pass-started"   # #573: the main loop says when a wake started nothing
   (
     JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
     # #175: <key>.active outlives a killed pod (the lock does not): present at start means an earlier run of this job
@@ -1108,11 +1115,13 @@ feedback_background() {
   clip "${out}" "${cap}"
 }
 
-# feedback_prompt <pr> <title> <background> <new feedback> <thread ask> -> the prompt of a feedback run. Background
-# and new feedback are both fenced as untrusted; only the new feedback is to be answered.
+# feedback_prompt <pr> <title> <background> <new feedback> <thread ask> [intro] -> the prompt of a feedback run.
+# Background and new feedback are both fenced as untrusted; only the new feedback is to be answered. intro replaces
+# the first sentence for a PR assigned to the agent (#573).
 feedback_prompt() {
-  local pr=$1 title=$2 bg=$3 fb=$4 ask=$5
-  printf '%s' "You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}")."
+  local pr=$1 title=$2 bg=$3 fb=$4 ask=$5 intro=${6:-}
+  [[ -n "${intro}" ]] || intro="You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}")."
+  printf '%s' "${intro}"
   [[ -n "${bg}" ]] && printf '%s' "
 
 Background: the issue this PR resolves, the PR description and earlier review rounds. It is already handled and
@@ -1208,7 +1217,60 @@ handle_feedback() {
       log "PR #${pr}: new feedback, waiting for a free slot"
     fi
   done
+  handle_assigned "${prs}"
   board_finish "${prs}"
+}
+
+# ignored <pr> <key> <reason> [comment]: an assigned PR the agent does not work on leaves a trace (#573): always a log
+# line, and with "comment" also one comment on the PR, once per PR and reason key (a marker in state).
+ignored() {
+  log "ignored: PR #$1: $3"
+  [[ "${4:-}" == comment && "$2" =~ ^[a-z-]{1,40}$ ]] || return 0
+  local f="${STATE}/seen/pr-$1.ignored-$2"
+  [[ -e "${f}" ]] && return 0
+  comment "$1" "🤖 I cannot act on this: $3" && touch "${f}"
+}
+# safe_ref <name>: a branch name the loop may put into git refs and paths (from the forge JSON, never from the model)
+safe_ref() { [[ "$1" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && "$1" != *..* && "$1" != *//* && "$1" != */ && "$1" != *.lock ]]; }
+
+# PRs assigned to this agent by a person (#573): the label agent:<name> (GitHub) or an assignment (Gitea) on a PR the
+# agent did not open. Same job key, cursor, backoff and MAX_CONCURRENT as the agent's own PRs. The first pass after
+# the assignment starts a job even without comments (the assignment is the request); later passes start one on new
+# feedback, as for the agent's own PRs.
+handle_assigned() {
+  local pr branch upd created hrepo base title since last fb
+  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" --arg kind "${FORGE_KIND}" "${ASSIGNED_PRS}"' |
+    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, .title] | @tsv' <<<"$1" 2>/dev/null |
+  while IFS=$'\t' read -r pr branch upd created hrepo base title; do
+    [[ "${pr}" =~ ^[1-9][0-9]{0,15}$ ]] || continue
+    last=""; [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
+    [[ "${last}" == "${upd}" ]] && continue
+    is_running "pr-${pr}" && continue
+    backing_off "pr-${pr}" && continue
+    # nothing below is retried before the PR changes again (a new comment, label or push moves updated_at)
+    if ! labeler_ok "${pr}"; then
+      ignored "${pr}" not-writer "the assignment to \`${FORGE_USER}\` was not made by a person with write access to this repository." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    if [[ "${hrepo,,}" != "${REPO,,}" ]]; then
+      ignored "${pr}" fork "the head branch of this pull request is not in ${REPO} (a fork). I work only on branches of this repository." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    if ! safe_ref "${branch}" || ! safe_ref "${base}"; then
+      ignored "${pr}" bad-ref "the head or base branch name is not a plain branch name." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    since="${created}"; [[ -r "${STATE}/seen/pr-${pr}" ]] && read -r since < "${STATE}/seen/pr-${pr}"
+    if [[ -r "${STATE}/seen/pr-${pr}" ]]; then
+      fb=$(new_feedback "${pr}" "${since}")
+      if [[ -z "${fb}" ]]; then ignored "${pr}" none "no new feedback since the last run"; echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue; fi
+    fi
+    if start_job "pr-${pr}" feedback_job "${pr}" "${branch}" "${title}" "${since}" "${base}"; then
+      log "PR #${pr}: assigned to ${FORGE_USER} (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
+    else
+      log "PR #${pr}: assigned to ${FORGE_USER}, waiting for a free slot"
+    fi
+  done
 }
 
 # botboard: a PR of ours that left the open list was merged or closed -> its card goes to done (once).
@@ -1232,8 +1294,20 @@ board_finish() {
 }
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
+# An assigned PR (#573, base given): the agent never pushes to another author's branch. A head under agent/<name>/ is
+# pushed as it is; any other head is copied to agent/<name>/pr-<n>, pushed there and offered as a stacked PR into the
+# head. A head that is the default branch is never pushed: the change is posted as a patch.
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg exitf
+  local pr=$1 branch=$2 title=$3 since=$4 base=${5:-} fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg exitf
+  local work=$2 readonly=0 intro=""
+  if [[ -n "${base}" ]]; then
+    [[ "${branch}" == "agent/${FORGE_USER}/"* ]] || work="agent/${FORGE_USER}/pr-${pr}"
+    [[ "${branch}" == "$(default_branch)" ]] && readonly=1
+    intro="You are ${FORGE_USER}. PR #${pr} was assigned to you; you work on a copy of its head branch ${branch}, and it
+merges into ${base}. Its changes: git diff origin/${base}...HEAD. Its title: $(untrusted "${title}")."
+    (( readonly )) && intro+="
+Your changes are not pushed, because the head is the default branch: they are posted as a patch for the author."
+  fi
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # #175: an interrupted job keeps its first cursor time, and does not reply twice
   if [[ "${RESUMING:-0}" == 1 && -r "$(jobf now)" ]]; then read -r now < "$(jobf now)"; [[ "${now}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || now=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
@@ -1242,6 +1316,9 @@ feedback_job() {
     log "PR #${pr}: replied before the restart; cursor moved"; echo "${now}" > "${STATE}/seen/pr-${pr}"; return 0
   fi
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
+  # an assigned PR without a cursor was never worked: the assignment itself is the request (#573)
+  [[ -z "${fb}" && -n "${base}" && ! -r "${STATE}/seen/pr-${pr}" ]] \
+    && fb="- The pull request was assigned to you. Review it and fix what is wrong, failing checks first."
   [[ -z "${fb}" ]] && return
   threads=$(security_threads "${pr}" "${since}")
   pull=$(api GET "/repos/${REPO}/pulls/${pr}") || pull='{}'
@@ -1255,14 +1332,16 @@ THREAD <id> <fixed|accepted-risk|false-positive>: <one-sentence reason>
 before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   fi
   sync_repo || return 1
-  dir=$(worktree "${branch}" "origin/${branch}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
+  local from="origin/${branch}"
+  [[ "${work}" != "${branch}" ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${work}" >/dev/null 2>&1 && from="origin/${work}"
+  dir=$(worktree "${work}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
   exitf="${STATE}/jobs/claude-exit-pr-${pr}"; rm -f "${exitf}"
-  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
+  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}" "${intro}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
   local status="done"
   if [[ ${claude_rc:-0} != 0 ]]; then   # failed or stopped early (#336): a fixed note, never a log line
@@ -1283,19 +1362,36 @@ ${result}"
     log "PR #${pr}: ${status}, replied without a push"
     return 0
   fi
-  before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
+  if (( readonly )); then
+    local patch; patch=$(proposed_patch "${dir}" "${branch}")
+    reply_threads "${pr}" "${threads}" "${result}" "" ""
+    comment "${pr}" "🤖 I cannot push to \`${branch}\`: it is the default branch.${patch:+ My proposed change:
+
+~~~~diff
+${patch}
+~~~~}
+
+${result}"
+    [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"
+    echo "${now}" > "${STATE}/seen/pr-${pr}"
+    log "PR #${pr}: replied with a patch (head is the default branch)"
+    return 0
+  fi
+  before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${work}" 2>/dev/null || lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
   # an interrupted job that pushed already: the diff for the thread replies starts before that push
   [[ "${RESUMING:-0}" == 1 && -r "$(jobf before)" ]] && read -r before < "$(jobf before)"
   [[ -n "${JOB:-}" && "${before}" =~ ^[0-9a-f]{40}$ ]] && echo "${before}" > "$(jobf before)"
-  if push_step "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
+  if push_step "${dir}" "${work}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
     after=$(lgit -C "${dir}" rev-parse HEAD 2>/dev/null)
     [[ "${before}" =~ ^[0-9a-f]{40}$ && "${after}" =~ ^[0-9a-f]{40}$ ]] && changed=$(lgit -C "${dir}" diff --name-only "${before}" "${after}")
     reply_threads "${pr}" "${threads}" "${result}" "${after}" "${changed}"
-    comment "${pr}" "🤖 Pushed an update.
+    local note="Pushed an update."
+    [[ "${work}" != "${branch}" ]] && note=$(stacked_pr "${pr}" "${work}" "${branch}")
+    comment "${pr}" "🤖 ${note}
 
 ${result}"
     [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"   # #175: posted; a restart from here only moves the cursor
-    request_review "${pr}"   # ask the approver to look again
+    [[ -z "${base}" ]] && request_review "${pr}"   # ask the approver to look again (an assigned PR is not the agent's)
   else
     reply_threads "${pr}" "${threads}" "${result}" "" ""
     comment "${pr}" "🤖 ${result}"
@@ -1308,15 +1404,45 @@ ${result}"
   return 0
 }
 
+# stacked_pr <pr> <work branch> <head branch> -> the note for the assigned PR: the agent's PR from its own branch into
+# the head of the assigned PR (#573), opened once (a restart finds it by its head) and owned like an issue PR
+stacked_pr() {
+  local pr=$1 work=$2 head=$3 n
+  n=$(open_pr_for "${work}")
+  [[ "${n}" =~ ^[0-9]+$ ]] || n=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "fix: address review feedback on #${pr}" \
+      --arg h "${work}" --arg b "${head}" --arg d "Refs #${pr}
+
+The changes for PR #${pr}, which was assigned to agent \`${FORGE_USER}\`. Merge this PR into \`${head}\` to take them.
+
+---
+_Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+  if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
+    log "PR #${pr}: could not open a PR from ${work} into ${head}"
+    echo "I pushed my changes to \`${work}\`, but could not open a pull request into \`${head}\`."; return 0
+  fi
+  [[ -e "${STATE}/seen/pr-${n}.reviewer" ]] || { request_review "${n}"; touch "${STATE}/seen/pr-${n}.reviewer"; }
+  label_own_pr "${n}"
+  [[ -r "${STATE}/seen/pr-${n}" ]] || date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${n}"
+  log "PR #${pr}: changes in PR #${n} (${work} into ${head})"
+  echo "I pushed my changes to \`${work}\` and opened PR #${n} into \`${head}\`."
+}
+# proposed_patch <dir> <ref> -> the worktree's change against origin/<ref> (commits and uncommitted files), clipped
+proposed_patch() {
+  ( flock 9; scrub_git_config ) 9>"${STATE}/git.lock"
+  pin_worktree "$1" || return 0
+  lgit -C "$1" add -A >/dev/null 2>&1
+  clip "$(lgit -C "$1" diff --cached "origin/$2" 2>/dev/null)" 30000
+}
+
 # Sleep up to POLL_SECONDS, but return as soon as a webhook was delivered.
 # The listener appends one line per delivery; comparing the line count (not mtime, which has 1 s resolution)
 # means deliveries that arrive while the loop is working, or in the same second, are never lost.
-seen_wakes=0
+seen_wakes=0 woke=0
 wait_for_work() {
   local deadline=$(( $(date +%s) + POLL_SECONDS )) n
   while (( $(date +%s) < deadline )); do
     n=$(wc -l < "${WAKE_FILE}" 2>/dev/null || echo 0)
-    if (( n > seen_wakes )); then seen_wakes=$n; log "woken by webhook"; return; fi
+    if (( n > seen_wakes )); then seen_wakes=$n; woke=1; log "woken by webhook"; return; fi
     sleep 0.5
   done
 }
@@ -1455,9 +1581,13 @@ while true; do
     (( usage_note )) || log "subscription usage limit: new runs paused"; usage_note=1
   else
     (( usage_note )) && log "subscription usage pause ended: resuming"; usage_note=0
+    : > "${JOBS}/pass-started"
     handle_issues
     handle_feedback
+    # #573: a wake never ends silently; the reasons per item are the "ignored:" and "skipped" lines above
+    (( woke )) && [[ ! -s "${JOBS}/pass-started" ]] && log "wake: no job started ($(running_jobs)/${MAX_CONCURRENT} running; nothing new assigned to ${FORGE_USER})"
   fi
+  woke=0
   maybe_stop
   wait_for_work
 done

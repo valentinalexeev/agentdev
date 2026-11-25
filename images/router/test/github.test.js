@@ -49,6 +49,19 @@ test('a labelled issue wakes that agent only', async () => {
   assert.strictEqual(r.body.routed, 1); assert.deepStrictEqual(wakes, { alice: 1, bob: 0 });
 });
 
+test('a label on a PR by a person, from any branch, wakes that agent (#573)', async () => {
+  reset();
+  const r = await hook({ action: 'labeled', repository: repo, label: { name: 'agent:alice' },
+    pull_request: { number: 13, user: { login: 'octo-dev' }, head: { ref: 'main' }, labels: [{ name: 'agent:alice' }], requested_reviewers: [] } }, 'pull_request');
+  await settle();
+  assert.strictEqual(r.body.routed, 1); assert.deepStrictEqual(wakes, { alice: 1, bob: 0 });
+  reset();
+  await hook({ action: 'opened', repository: repo,
+    pull_request: { number: 17, user: { login: 'octo-dev' }, head: { ref: 'feature/x' }, labels: [], requested_reviewers: [] } }, 'pull_request');
+  await settle();
+  assert.deepStrictEqual(wakes, { alice: 0, bob: 0 });
+});
+
 test('a review on an agent PR routes by the head branch, not the shared bot login', async () => {
   reset();
   const r = await hook({ action: 'submitted', repository: repo, review: { user: { login: 'octo-dev' } },

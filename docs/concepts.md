@@ -56,6 +56,15 @@ start the loop finds the person who added `agent:<name>` last (GitHub issue even
 repository (on Gitea: that the person is in the repository's assignee list, which has only users with write access). Anything else (no such event, a reader, an unknown answer) skips the issue and records a
 `label-not-writer` or `label-unverified` security event.
 
+**Pull requests given to an agent** (#573). The same rule applies to a pull request that the agent did not open: the
+label `agent:<name>` (GitHub) or an assignment (Gitea), set by a person with write access, whoever opened the PR and
+from whichever branch. The first run after the assignment needs no comment; later runs start on new feedback, as for
+the agent's own PRs. The agent never pushes to the branch of another author: it copies the head to
+`agent/<name>/pr-<n>`, pushes there and opens a stacked PR into the head branch. When the head is the default branch,
+it posts its change as a patch in a comment. A PR from a fork, a label by a person without write access, or a branch
+name that is not plain gets one comment that says why, and no run. A wake that starts no job writes
+`wake: no job started` in the log, after the `ignored:` lines for each item.
+
 The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread
 items (default 20) and `FEEDBACK_CONTEXT_CHARS` characters in total (default 12000; `0` turns the background off).
 The issue and the PR description get at most a quarter of that each; when the thread is cut, the oldest items go
