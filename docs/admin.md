@@ -2047,6 +2047,13 @@ The operator pauses an agent when a high severity event occurs. The operator als
 more than 5 events (`SECURITY_PAUSE_AFTER`). The count starts again for a new pod. The operator also pauses an
 agent when its containers write more than 10 events in one minute (rule `rate-limited`).
 
+The operator counts the same `run-events-invalid` refusal only one time for each job. The event text gives the repo
+of the refused batch, the number of events and a hash of the first event.
+
+When the operator pauses an agent for too many events, the running jobs continue until they end. The agent does
+not start new jobs. Then the operator stops the pod. The maximum time is `DRAIN_MAX_MINUTES`. When a high severity
+event occurs, the operator stops the pod immediately.
+
 WARNING: Do not resume the agent before you read the events and the issue or the pull request of the job. The text
 of the issue can contain a prompt injection.
 
@@ -2056,7 +2063,8 @@ of the issue can contain a prompt injection.
 3. Read the issue or the pull request of the job.
 4. Resume the agent:
    `kubectl -n coding-agents patch agent <name> --type merge -p '{"spec":{"paused":false}}'`
-   The agent starts again. The condition `SecurityPaused` changes to `False`.
+   The agent starts again. The condition `SecurityPaused` changes to `False`. The message of the condition gives
+   the field manager that resumed the agent, for example `kubectl-patch` or `agentdev-api`.
 
 ### Send the security events to a SIEM
 
