@@ -153,7 +153,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	}}
 	if a.Spec.Toolchain != nil {
 		ps, _ := presetsOf(a.Spec.Toolchain)
-		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps))
+		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps, r.toolchainDigest(s)))
 		p.Volumes = append(p.Volumes, toolchainTmpVolume())
 	}
 	p.Containers = []corev1.Container{{

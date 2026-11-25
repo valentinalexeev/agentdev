@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -187,14 +188,17 @@ func refreshEpoch(agent string, refresh time.Duration, now time.Time) (int64, ti
 // toolchainSpec is the canonical spec the init container installs and hashes into the key: presets, path, worker image
 // and refresh epoch. It goes into the pod template, so a change of any of them installs again (after drain).
 type toolchainSpec struct {
-	V       int      `json:"v"`
-	Image   string   `json:"image"`
+	V     int    `json:"v"`
+	Image string `json:"image"`
+	// Digest (#538, ADR 0010 D3): the worker image digest when it differs from the first one seen for this tag (a
+	// re-pushed tag). Empty otherwise, so the spec of an agent whose tag did not move is unchanged.
+	Digest  string   `json:"digest,omitempty"`
 	Epoch   int64    `json:"epoch"`
 	Path    []string `json:"path"`
 	Presets []preset `json:"presets"`
 }
 
-func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset) string {
+func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset, digest string) string {
 	var refresh time.Duration
 	if a.Spec.Toolchain.Refresh != nil {
 		refresh = a.Spec.Toolchain.Refresh.Duration
@@ -204,8 +208,84 @@ func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset) string {
 	if path == nil {
 		path = []string{}
 	}
-	b, _ := json.Marshal(toolchainSpec{V: 1, Image: r.D.WorkerImage, Epoch: epoch, Path: path, Presets: ps})
+	b, _ := json.Marshal(toolchainSpec{V: 1, Image: r.D.WorkerImage, Digest: digest, Epoch: epoch, Path: path, Presets: ps})
 	return string(b)
+}
+
+// Worker image digest of the toolchain key (#538, ADR 0010 D3). A tag such as :latest can be pushed again with other
+// content; the install must then run again. The operator has no registry access (no egress, no pull secret, and kind
+// loads images without a registry), so the digest comes from the kubelet: the imageID of the toolchain init container
+// of the agent's pod, which is the image that really ran the install. Two StatefulSet annotations keep it:
+//   - toolchainBaseAnnotation: "<image ref> <digest>", the first digest seen for the current WORKER_IMAGE. The
+//     install keyed on the tag alone was made with it, so it does not go into the spec (no extra roll on an upgrade).
+//   - toolchainDigestAnnotation: the latest digest seen for that image ref.
+//
+// When the latest differs from the base, the spec gets "digest": the pod template changes, the pod is replaced after
+// drain (#174), and the new pod installs under a new key. Fail-safe: without a pod, a status or a valid digest nothing
+// changes (the key stays the tag's, as before). Without spec.toolchain nothing is read or written.
+const (
+	toolchainBaseAnnotation   = "agentdev/toolchain-image-base"
+	toolchainDigestAnnotation = "agentdev/toolchain-image-digest"
+)
+
+var imageDigest = regexp.MustCompile(`(sha256:[0-9a-f]{64})$`)
+
+// observedToolchainDigest: the digest of the image the toolchain init container of p ran, when it ran image. "" when
+// unknown (no status yet, an old pod of another image, or an imageID without a sha256 digest).
+func observedToolchainDigest(p *corev1.Pod, image string) string {
+	for _, cs := range p.Status.InitContainerStatuses {
+		if cs.Name != toolchainContainer || cs.ImageID == "" {
+			continue
+		}
+		// the status image of the pod's own spec; an older pod of the previous tag is not this image's evidence
+		for _, c := range p.Spec.InitContainers {
+			if c.Name == toolchainContainer && c.Image != image {
+				return ""
+			}
+		}
+		if m := imageDigest.FindStringSubmatch(cs.ImageID); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// noteToolchainDigest records an observed digest on the StatefulSet annotations (see above). Called in the mutate
+// function before render; d == "" or no toolchain changes nothing.
+func (r *AgentReconciler) noteToolchainDigest(a *v1.Agent, s *appsv1.StatefulSet, d string) {
+	if a.Spec.Toolchain == nil || d == "" {
+		return
+	}
+	if s.Annotations == nil {
+		s.Annotations = map[string]string{}
+	}
+	img, base, _ := strings.Cut(s.Annotations[toolchainBaseAnnotation], " ")
+	if img != r.D.WorkerImage || base == "" {
+		s.Annotations[toolchainBaseAnnotation] = r.D.WorkerImage + " " + d
+	}
+	s.Annotations[toolchainDigestAnnotation] = d
+}
+
+// toolchainDigest: the digest for the spec, "" while the image ran with its base digest or nothing is known.
+func (r *AgentReconciler) toolchainDigest(s *appsv1.StatefulSet) string {
+	img, base, _ := strings.Cut(s.Annotations[toolchainBaseAnnotation], " ")
+	d := s.Annotations[toolchainDigestAnnotation]
+	if img != r.D.WorkerImage || base == "" || !imageDigest.MatchString(d) || d == base {
+		return ""
+	}
+	return d
+}
+
+// toolchainPodDigest reads the agent pod for noteToolchainDigest. Errors are not fatal: "" keeps the current key.
+func (r *AgentReconciler) toolchainPodDigest(ctx context.Context, a *v1.Agent) string {
+	if a.Spec.Toolchain == nil {
+		return ""
+	}
+	var pod corev1.Pod
+	if err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: "agent-" + a.Name + "-0"}, &pod); err != nil {
+		return ""
+	}
+	return observedToolchainDigest(&pod, r.D.WorkerImage)
 }
 
 // toolchainNextRefresh: how long until the agent's refresh epoch changes; 0 without refresh.
@@ -276,8 +356,8 @@ func setupProxySecretName(agent string) string { return "agent-" + agent + "-set
 
 // toolchainInit is the init container toolchain: worker image, UID 1000, no capabilities, read-only root, an emptyDir
 // /tmp, no forge or Claude credential and no service account token; only the setup proxy credential.
-func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset) corev1.Container {
-	env := []corev1.EnvVar{{Name: "TOOLCHAIN_SPEC", Value: r.toolchainSpecJSON(a, ps)}, {Name: "TOOLCHAIN_DIR", Value: toolchainDir},
+func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset, digest string) corev1.Container {
+	env := []corev1.EnvVar{{Name: "TOOLCHAIN_SPEC", Value: r.toolchainSpecJSON(a, ps, digest)}, {Name: "TOOLCHAIN_DIR", Value: toolchainDir},
 		{Name: "TMPDIR", Value: "/tmp"}, {Name: "HOME", Value: "/tmp"},
 		// the last good "<key>:<hash>", read at pod start (a new value does not change the pod template)
 		{Name: "TOOLCHAIN_EXPECT", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
