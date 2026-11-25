@@ -190,6 +190,12 @@ off by default.
 9. **Deploy and check.** Run `deploy.yml` (or the Flux render) as usual. Then check that every `agent-<name>-0` is
    `2/2 Running` and that `scripts/e2e-gke-security.sh` has no FAIL.
 
+## [1.2.0] - 2026-11-24
+
+1.1.0 was never released as final, so the content of 1.1.0-rc.1, rc.2 and rc.3 is part of 1.2.0. There is no
+`v1.1.0` tag (#392). Upgrade from 1.0.1 directly to 1.2.0. This section also replaces the sections of
+1.2.0-rc.1 to rc.4. An instance on a 1.2.0 rc follows "Upgrade from a 1.2.0 release candidate" below.
+
 ### Upgrade
 From 1.0.x (1.0.0 or 1.0.1) to 1.2.0. Do the steps in this order. Only step 3 changes the behaviour of an existing
 instance without an opt-in (the lean cluster, **BREAKING** for Terraform defaults); every other new feature is off or
@@ -1527,9 +1533,3 @@ Steps for an instance on `1.0.0-rc.6` or later (#315). Change `image_tag` and Te
 [1.1.0-rc.3]: https://github.com/valentinalexeev/agentdev/compare/v1.1.0-rc.2...v1.1.0-rc.3
 [1.0.0]: https://github.com/valentinalexeev/agentdev/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/valentinalexeev/agentdev/releases/tag/v0.1.0
-
-## [1.2.0] - 2026-11-24
-
-1.1.0 was never released as final, so the content of 1.1.0-rc.1, rc.2 and rc.3 is part of 1.2.0. There is no
-`v1.1.0` tag (#392). Upgrade from 1.0.1 directly to 1.2.0. This section also replaces the sections of
-1.2.0-rc.1 to rc.4. An instance on a 1.2.0 rc follows "Upgrade from a 1.2.0 release candidate" below.
