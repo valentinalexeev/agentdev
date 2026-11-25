@@ -13,9 +13,8 @@ pr: 265
 Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi with
 its git mirror `emptyDir` capped at 4Gi, `state-init` 64Mi, the `toolchain` init container 3Gi with its `/tmp` at 2Gi.
 A chat session's `/state` `emptyDir` is capped at the agent container's limit. The Go preset sets
-`GOCACHE=/state/cache/go/build`, so builds use the agent volume. Settings: `AGENT_EPHEMERAL_REQUEST`,
-`AGENT_EPHEMERAL_LIMIT`, `FORGE_MIRROR_LIMIT`, `FORGE_EPHEMERAL_LIMIT` (`config.env`; Ansible `agent_ephemeral_*`,
-`forge_*_limit`). Re-run: the playbook or `./run.sh 12`; agent pods roll on the next reconcile.
+`GOCACHE=/state/cache/go/build`, so builds use the agent volume. Settings: deploy.yml `agent_ephemeral_*`,
+`forge_*_limit`; kind `operator_agent_ephemeral_*`, `operator_forge_*_limit`. Re-run the playbook (kind: `--tags operator`).
 
 ## Description
 

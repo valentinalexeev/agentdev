@@ -1,7 +1,7 @@
 ---
 # Company SSO for authentik (#122): the Secret authentik-sso in {{ platform_ns }}, read by the authentik pods
-# (manifests/authentik-values.yaml) and used by manifests/authentik-blueprint-sso.yaml. Same keys as 09-authentik.sh
-# writes for the kind stand-in. The playbook does not deploy authentik yet (#114): until then the Secret waits for it.
+# (manifests/authentik-values.yaml) and used by manifests/authentik-blueprint-sso.yaml. Same keys as the role
+# authentik_kind writes for the kind stand-in. The playbook does not deploy authentik yet (#114): until then the Secret waits for it.
 # The blueprint never sets group members (#103): see docs/admin.md, "Sign in with Google Workspace".
 # secrets_mode external (#381): no value here. The SSO settings get an ESO reference in place of the secret value, and
 # the ExternalSecret authentik-sso fills it in the cluster; Reloader restarts authentik (deploymentAnnotations).

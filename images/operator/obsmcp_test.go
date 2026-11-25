@@ -205,7 +205,7 @@ func TestObsCloudLoggingAddOn(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/token"):
 			if r.Header.Get("Metadata-Flavor") != "Google" {
-				http.Error(w, "no", 403)
+				http.Error(w, "no", http.StatusForbidden)
 				return
 			}
 			_, _ = w.Write([]byte(`{"access_token":"wi-token","expires_in":3600}`))

@@ -42,7 +42,7 @@ func (c credStore) checkCredentials(report func(secret string)) error {
 	for _, s := range c.credentialProblems() {
 		report(s)
 		if s == "claude-shared" {
-			return fmt.Errorf("Claude secret claude-shared has no recognised credential: put one line CLAUDE_CODE_OAUTH_TOKEN=<token> or ANTHROPIC_API_KEY=<key> in the Secret Manager entry claude-shared")
+			return fmt.Errorf("claude secret claude-shared has no recognised credential: put one line CLAUDE_CODE_OAUTH_TOKEN=<token> or ANTHROPIC_API_KEY=<key> in the Secret Manager entry claude-shared")
 		}
 	}
 	return nil

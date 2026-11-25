@@ -10,9 +10,9 @@ NOTE: This guide is for GKE. The local evaluation on kind
 
 | Item | kind | GKE (this guide) |
 |---|---|---|
-| Instance values | `config.env` | `ansible/instance.yml` and `terraform/instance.tfvars` in the deployment repository |
-| Secret values | files in `.secrets/` | Secret Manager |
-| Install and upgrade | `./run.sh` | the playbook `deploy.yml`, from the deployment CI |
+| Instance values | `kind.vars.yml` | `ansible/instance.yml` and `terraform/instance.tfvars` in the deployment repository |
+| Secret values | `.env` and files in `.secrets/` | Secret Manager |
+| Install and upgrade | the playbook `infra/ansible/kind.yml` | the playbook `deploy.yml`, from the deployment CI |
 | Sandbox pool | one node with gVisor | a GKE Sandbox (gVisor) node pool with an autoscaler |
 | GitHub events | polling (no public URL) | webhook on `<public_url>/hook`, and polling |
 | Google Workspace sign-in | not available | the authentik Workspace source |

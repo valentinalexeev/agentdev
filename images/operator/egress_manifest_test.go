@@ -15,7 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// renderTmpl does what envsubst does for manifests/*.tmpl (06-agents.sh) with the given values.
+// renderTmpl does what templates/render.j2 does for manifests/*.tmpl (infra/ansible) with the given values.
 func renderTmpl(t *testing.T, path string, vals map[string]string) []string {
 	t.Helper()
 	b, err := os.ReadFile(path)

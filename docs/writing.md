@@ -100,7 +100,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | branch | a git branch |
 | cluster | a Kubernetes cluster |
 | concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
-| config.env | the file with the local default settings |
+| config.env | the file with the default settings of the helper scripts in `scripts/`. Since 1.3.0 the `kind` playbook does not read it |
 | ContextForge | the MCP gateway in the platform namespace |
 | cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
@@ -114,6 +114,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
+| `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |
 | Markdown | the text format with `#` headings, `-` lists, tables and fenced code blocks that the console shows as formatted text |
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
@@ -130,7 +131,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | public port | the port of a service that a Gateway or a reverse proxy publishes (router: 8080, webhooks only) |
 | internal port | the port of a service that only callers in the cluster use (router: 8081, `/status`, `/healthz`, `/register`, `/idle`) |
 | health port | the port of a service that gives only its health status (router: 8082, `GET /healthz`), for the probes and the health check of the load balancer |
-| run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
+| playbook | an Ansible playbook, for example `infra/ansible/kind.yml` (local) or `infra/ansible/deploy.yml` (GKE) |
+| tag | an Ansible tag that selects one part of a playbook, for example `--tags api`. Write "the tag `api`", not "step", because STEP alone is the STE noun for a step of a procedure |
+| plain run | a run of the `kind` playbook without `--tags` (prereqs, cluster, forge, operator, agents) |
+| run.sh step | one numbered script of the old installation, for example `./run.sh 11`. Removed in 1.3.0; use only in history and upgrade notes |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
 | thread | a comment on a line of a pull request, with its replies |
@@ -144,7 +148,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | SIEM | a security information and event management system that collects security events |
 | webhook | an HTTP request that a service sends to a URL when an event occurs |
 | Postgres | the PostgreSQL database of the instance |
-| setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
+| setting | a value in `kind.vars.yml` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
 | Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |

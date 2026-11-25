@@ -1,5 +1,5 @@
-# Claude credential proxy (#66, security model phase 3, fixes R11). Rendered by 06-agents.sh (envsubst) and
-# infra/ansible/deploy.yml (same template).
+# Claude credential proxy (#66, security model phase 3, fixes R11). Rendered by infra/ansible/kind.yml
+# (tag agents) and infra/ansible/deploy.yml (same template).
 #
 # - The only pod that mounts the Claude credentials (claude-shared and every claude-<agent>). Agent pods call it as
 #   ANTHROPIC_BASE_URL with a per-agent key (Secret agent-<name>-proxy, an HMAC of the agent name with the signing

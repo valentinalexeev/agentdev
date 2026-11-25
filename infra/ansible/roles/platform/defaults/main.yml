@@ -1,5 +1,5 @@
 ---
-# Platform namespace on GKE (#51): Postgres + ContextForge, the same manifests/platform.yaml.tmpl as ./run.sh 08.
+# Platform namespace on GKE (#51): Postgres + ContextForge, the same manifests/platform.yaml.tmpl as kind.yml --tags mcp.
 platform_postgres_image: postgres:17.11
 platform_contextforge_image: ghcr.io/ibm/mcp-context-forge:v1.1.0
 # ContextForge runs only when a project uses MCP (#172): it requests 100m CPU / 512Mi. false removes it (Postgres stays).

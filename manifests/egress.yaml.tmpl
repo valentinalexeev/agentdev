@@ -1,5 +1,5 @@
-# Egress allow-list for agent pods (#65, security model phase 2, fixes R10). Rendered by 06-agents.sh (envsubst) and
-# infra/ansible/deploy.yml (same template).
+# Egress allow-list for agent pods (#65, security model phase 2, fixes R10). Rendered by infra/ansible/kind.yml
+# (tag agents) and infra/ansible/deploy.yml (same template).
 #
 # - agent-egress: agent pods and chat sessions (#118) may open connections only to DNS, the egress proxy, the webhook router, the in-cluster
 #   forge, botboard and ContextForge. Everything else (the internet, the metadata server, other platform services) is

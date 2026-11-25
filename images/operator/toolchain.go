@@ -32,7 +32,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -350,18 +349,7 @@ func (r *AgentReconciler) ensureSetupProxyKey(ctx context.Context, a *v1.Agent) 
 	if len(pw) < 16 {
 		return fmt.Errorf("secret %s: password missing or shorter than 16 characters", setupProxySecret)
 	}
-	ctrl := true
-	s := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-		ObjectMeta: metav1.ObjectMeta{Name: setupProxySecretName(a.Name), Namespace: a.Namespace,
-			Labels: map[string]string{"app": "coding-agent", "agent": a.Name},
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Agent", Name: a.Name,
-				UID: a.UID, Controller: &ctrl, BlockOwnerDeletion: &ctrl}}},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"password": []byte(pw)},
-	}
-	//nolint:staticcheck // same server-side apply as ensureProxyKey
-	if err := r.Client.Patch(ctx, s, client.Apply, client.FieldOwner("agentdev-operator"), client.ForceOwnership); err != nil {
+	if err := applyAgentSecret(ctx, r.Client, a, setupProxySecretName(a.Name), map[string][]byte{"password": []byte(pw)}); err != nil {
 		return fmt.Errorf("setup proxy key secret: %w", err)
 	}
 	return nil

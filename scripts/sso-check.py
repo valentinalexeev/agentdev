@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign-in check of the company SSO source on kind (#122), run by 09-authentik.sh.
+"""Sign-in check of the company SSO source on kind (#122), run by kind.yml --tags authentik.
 
 Drives real browser sign-ins through authentik and the local OIDC stand-in (manifests/kind/sso-standin.yaml), then
 reads the result inside the authentik worker. Checks the owner rule of #103 and the default of #122:

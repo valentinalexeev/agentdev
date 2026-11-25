@@ -1,5 +1,5 @@
 ---
-# kind cluster with gVisor (#106, was 01-cluster.sh). The values match config.env; run.sh passes them with -e.
+# kind cluster with gVisor (#106, was 01-cluster.sh). kind.vars.yml (-e @kind.vars.yml) sets the values.
 kind_cluster_name: agentdev
 kind_cluster_engine: docker
 kind_cluster_gvisor_version: "20261012.0"

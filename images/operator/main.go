@@ -202,7 +202,7 @@ func main() {
 		log.Info("mcp projects on")
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
+	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (kind.yml,
 	// deploy.yml) fails on kind and GKE alike instead of passing before the crash loop
 	_ = mgr.AddReadyzCheck("readyz", cacheSynced(mgr.GetCache()))
 	log.Info("agentdev-operator starting", "namespace", ns)
