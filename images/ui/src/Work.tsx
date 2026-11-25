@@ -9,6 +9,7 @@ import { listJobs, Unauthorized, type Job, type JobPhase } from './api'
 import { ago, outcomeText, runLogHash, short } from './format'
 import { AgentTag, Empty, PageHead } from './ui'
 import { useData } from './useData'
+import { useStoredChoice } from './stored'
 
 const COLS: [JobPhase, string, string][] = [['queued', 'Plan', 'agent'], ['build', 'Build', 'agent'], ['review', 'Review', 'your turn'], ['done', 'Done', 'finished']]
 const STEP: Record<JobPhase, string> = { queued: 'plan', build: 'build', review: 'review', done: 'done' }
@@ -158,7 +159,7 @@ export function WorkPage({ token, onExpired, agent, repo }: { token: string; onE
   const d = useData()
   const [res, setRes] = useState<{ key: string; jobs: Job[]; unavailable: string[]; at: number } | null>(null)
   const [error, setError] = useState('')
-  const [view, setView] = useState<'auto' | 'list'>('auto')
+  const [view, setView] = useStoredChoice('agd-work-view', ['auto', 'list'] as const, 'auto')
   const [tick, setTick] = useState(0)
   // the scope of the top bar goes to the API: one project = repo=, My projects = scope=mine
   const q = useMemo(() => {

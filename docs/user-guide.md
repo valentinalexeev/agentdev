@@ -248,6 +248,9 @@ requests that wait for a decision. The top bar shows the project scope, the conn
 and the theme button. Click the theme button to change between the light and the dark theme. The web UI keeps your choice in this
 browser. If you do not select a theme, the web UI uses the theme of your system.
 
+The web UI also keeps the last view that you select in this browser: **Work** (board or list), **Agents** (filter),
+**Approvals** (tab) and **Today** (groups). A link to an approval request always opens the **Pending** tab.
+
 ### See what waits for you
 
 The page **Today** is the start page. The inbox shows the items that wait for you:

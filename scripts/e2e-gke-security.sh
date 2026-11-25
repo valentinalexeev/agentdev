@@ -461,6 +461,19 @@ if section chat; then
       check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
       out=$(try '.volumes += [{name:"x",projected:{sources:[{secret:{name:"agentdev-api-forge"}}]}}]'); denied "$out"
       check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
+      # #416: the projected claude-proxy token keeps its shape and its container. pt adds the token volume as the
+      # operator renders it (images/operator/render.go proxyTokenVolumes) when the agent runs without it.
+      pt='(if any(.volumes[]; .name=="proxy-token") then . else .volumes += [{name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:"claude-proxy",expirationSeconds:600,path:"token"}}]}}] end)'
+      out=$(try "$pt"); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: a chat Job with the projected claude-proxy token (600 s) is allowed (control)" "$(echo "$out" | head -1)"
+      for exp in 3600 599; do
+        out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.expirationSeconds) = $exp"); denied "$out"
+        check $? "admission: the API cannot create a chat Job whose claude-proxy token lives ${exp} s (not 600)" "$(echo "$out" | head -1)"
+      done
+      out=$(try "$pt | (.containers[]|select(.name==\"forge\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"
+      check $? "admission: the forge container of a chat Job cannot mount the claude-proxy token" "$(echo "$out" | head -1)"
+      out=$(try "$pt | (.initContainers[]|select(.name==\"state-init\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"
+      check $? "admission: the init container (state-init, the clone step) of a chat Job cannot mount the claude-proxy token" "$(echo "$out" | head -1)"
       out=$(try . '.spec.template.metadata.labels.agent = "'"$AGENT"'"'); denied "$out"
       check $? "admission: a chat pod cannot carry the agent label of agent pods" "$(echo "$out" | head -1)"
     fi

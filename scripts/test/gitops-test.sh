@@ -78,6 +78,36 @@ grep -q replicas "$work/out/platform/01-platform.yaml" && fail "StatefulSet repl
   || fail "reloader layer watches the rendered namespaces"
 grep -q 'agentdev-executors' "$work/out/reloader/kustomization.yaml" && fail "no executors namespace without executors"
 pass "layout"
+# #466: with SecretStores in the render, Reloader watches only their namespaces (the Ansible subset), not every Namespace
+r2="$work/render2"; mkdir -p "$r2"
+cat > "$r2/00-namespaces.yaml" <<'Y'
+apiVersion: v1
+kind: Namespace
+metadata: {name: agentdev-platform}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: coding-agents}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: no-store}
+Y
+cat > "$r2/05-stores.yaml" <<'Y'
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata: {name: agentdev-platform-secrets, namespace: agentdev-platform}
+spec: {provider: {gcpsm: {projectID: p}}}
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata: {name: agentdev-platform-secrets, namespace: coding-agents}
+spec: {provider: {gcpsm: {projectID: p}}}
+Y
+lay "$r2" "$work/out3" >/dev/null
+[ "$(yq '.patches[0].patch | from_json | .[0].value | join(",")' "$work/out3/reloader/kustomization.yaml")" = agentdev-platform,coding-agents ] \
+  || fail "reloader watches only the namespaces with a SecretStore"
+pass "reloader scope matches the Ansible subset (#466)"
 if command -v kustomize >/dev/null; then
   [ "$(kustomize build "$work/out/platform" | grep -c '^kind:')" = 2 ] || fail "kustomize build platform"
   kustomize build "$work/out/agents" | grep -q '^kind: Agent' || fail "kustomize build agents"

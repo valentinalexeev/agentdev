@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { decideApproval, listApprovals, Unauthorized, type Approval, type Decision } from './api'
 import { jobLink } from './format'
 import { REFRESH_MS } from './pending'
+import { useStoredChoice } from './stored'
 import { useData } from './useData'
 import { AgentTag, Drawer, Empty, Icon, PageHead, PersonTag, Untrusted } from './ui'
 
@@ -20,7 +21,8 @@ function outcome(a: Approval): string {
 
 // openName (#347): the approval to open at start, from a notification link (#approvals?open=<name>).
 export function Approvals({ token, onExpired, openName = '' }: { token: string; onExpired: () => void; openName?: string }) {
-  const [tab, setTab] = useState<'pending' | 'decided'>('pending')
+  // a notification link is for a pending request: it opens Pending even when History is the stored choice
+  const [tab, setTab] = useStoredChoice('agd-approvals-tab', ['pending', 'decided'] as const, 'pending', openName ? 'pending' : undefined)
   const [list, setList] = useState<{ tab: string; items: Approval[] } | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<Approval | null>(null) // detail
