@@ -1,13 +1,7 @@
----
-issue: 417
-type: removal
-section: Removed
-status: done
-breaking: true
-title: run.sh and the numbered step scripts are removed; kind uses infra/ansible/kind.yml only
-components: [platform, ansible]
-pr: 495
----
+# run.sh and the numbered step scripts are removed; kind uses infra/ansible/kind.yml only (#417)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: removal. Section: Removed. Components: platform, ansible. PR: #495.
+
 ## Summary
 
 `run.sh`, the step scripts `00-prereqs.sh` to `13-secrets.sh` (with `04-coder.sh`) and `99-teardown.sh` are removed

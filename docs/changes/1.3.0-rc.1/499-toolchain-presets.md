@@ -1,12 +1,7 @@
----
-issue: 499
-type: feature
-section: Added
-status: done
-breaking: false
-title: Per-agent toolchain presets (go, rust) installed read-only before the agent starts
-components: [operator, worker]
----
+# Per-agent toolchain presets (go, rust) installed read-only before the agent starts (#499)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: operator, worker.
+
 ## Summary
 
 `Agent` has `spec.toolchain`: preset versions (`go`, `rust`) from a catalogue in the operator with pinned SHA-256

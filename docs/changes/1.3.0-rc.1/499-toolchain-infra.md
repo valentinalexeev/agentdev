@@ -1,12 +1,7 @@
----
-issue: 499
-type: feature
-section: Added
-status: done
-breaking: false
-title: Toolchain setup egress, chat Job policy and settings for per-agent toolchains
-components: [ansible, terraform, manifests, docs]
----
+# Toolchain setup egress, chat Job policy and settings for per-agent toolchains (#499)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: ansible, terraform, manifests, docs.
+
 ## Summary
 
 Set a toolchain per agent with `agents[].toolchain` (GKE) or `kind_agents_toolchain` (kind), for example

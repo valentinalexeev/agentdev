@@ -1,13 +1,7 @@
----
-issue: 503
-type: feature
-section: Added
-status: done
-breaking: false
-title: Approval requests explain why the agent asks
-components: [forge]
-pr: 536
----
+# Approval requests explain why the agent asks (#503)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: forge. PR: #536.
+
 ## Summary
 
 An approval request comment now says why it exists. **Why it asks** comes from the forge sidecar (no allow rule in

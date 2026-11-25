@@ -1,13 +1,7 @@
----
-issue: 523
-type: feature
-section: Changed
-status: done
-breaking: false
-title: One approvals comment per job, and Web Push before the forge
-components: [forge, api]
-pr: 541
----
+# One approvals comment per job, and Web Push before the forge (#523)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Changed. Components: forge, api. PR: #541.
+
 ## Summary
 
 The forge sidecar no longer posts one "waiting for approval" comment per request. Each job has one approvals comment

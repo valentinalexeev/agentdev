@@ -1,12 +1,7 @@
----
-issue: 519
-type: fix
-section: Changed
-status: done
-breaking: false
-title: Faster Work board and agent drawer, the forge is read in parallel and in the background
-components: [api]
----
+# Faster Work board and agent drawer, the forge is read in parallel and in the background (#519)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: fix. Section: Changed. Components: api.
+
 ## Summary
 
 `GET /api/jobs` and the agent drawer's recent jobs no longer wait for the forge one repository after the other.
