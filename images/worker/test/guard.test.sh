@@ -8,7 +8,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 # a known environment (#507): every variable the sourced loop code reads is unset here; a check that needs one sets it
-unset APPROVALS APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_TOOLS CLAUDE_EXIT_FILE \
+unset APPROVALS APPROVAL_HOST PERMISSION_HOST APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_TOOLS CLAUDE_EXIT_FILE \
   ANTHROPIC_BASE_URL FORGE_API FORGE_PUBLIC_URL RESUMING GUIDE_FILE STATE_DIR PROXY_TOKEN_FILE
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"
 export MAX_TURNS=5 MCP_CONFIG="${STATE}/mcp.json"
@@ -70,10 +70,10 @@ cat > "${tmp}/bin/curl" <<'EOF2'
 exit 7
 EOF2
 chmod +x "${tmp}/bin/curl"
-perm APPROVALS=true FORGE_API=http://127.0.0.1:1 CLAUDE_PERMISSION_MODE=auto
+perm APPROVALS=true APPROVAL_HOST=off FORGE_API=http://127.0.0.1:1 CLAUDE_PERMISSION_MODE=auto
 check "mode auto with approvals: auto and the prompt tool" \
   "[[ \$(nextarg --permission-mode) == auto && \$(nextarg --permission-prompt-tool) == mcp__agentdev__approve ]]"
-perm APPROVALS=true FORGE_API=http://127.0.0.1:1
+perm APPROVALS=true APPROVAL_HOST=off FORGE_API=http://127.0.0.1:1
 check "approvals without auto: mode default and the prompt tool, as before" \
   "[[ \$(nextarg --permission-mode) == default && \$(nextarg --permission-prompt-tool) == mcp__agentdev__approve ]]"
 rm -f "${tmp}/bin/curl"
