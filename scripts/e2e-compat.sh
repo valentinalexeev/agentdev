@@ -71,7 +71,7 @@ jq -n --arg cn "${CLUSTER_NAME}" --arg en "${CONTAINER_ENGINE}" --arg gv "${GVIS
     agents_ns: $an, platform_ns: $pn, kind_forge_ns: $fn, kind_forge_url: $fu, kind_forge_admin_user: $fa,
     kind_repo: $repo, kind_agent_names: ["alice"], kind_worker_image: $wi, kind_forge_image: $fimg,
     kind_service_cidr: $sc, operator_image: $oi, kind_agents_router_image: $ri, kind_agents_credproxy_image: $ci,
-    kind_agents_forge_kind: "gitea", kind_agents_scale_to_zero: true, kind_agents_wake_poll_seconds: $wake,
+    kind_agents_forge_kind: "gitea", forge_kind: "gitea", kind_agents_scale_to_zero: true, kind_agents_wake_poll_seconds: $wake,
     kind_agents_max_concurrent: $mc, operator_idle_seconds: $idle, operator_poll_seconds: $poll, api_image: $ai}' \
   > "${vars_file}" || die "IDLE_SECONDS, POLL_SECONDS, WAKE_POLL_SECONDS and MAX_CONCURRENT must be numbers"
 kind_play() { ansible-playbook infra/ansible/kind.yml -e "@${vars_file}" "$@"; }
@@ -91,15 +91,17 @@ if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
 fi
 
 kind_play --tags operator
+# #556: the API roles take minutes; deploy them before the agents so the idle timer does not stop alice before the
+# router check (mcp needs the operator's McpProject CRD, the chat admission checks need agent-alice's StatefulSet later)
+if [[ "${COMPAT_API:-0}" == 1 ]]; then
+  kind_play --tags mcp; kind_play --tags authentik; kind_play --tags api
+fi
 kind_play --tags agents
 if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
   # the tag agents renders the production proxy; point it at the stub (plain http allowed only by this flag)
   k -n "${AGENTS_NS}" set env deploy/claude-proxy UPSTREAM="http://claude-stub.${AGENTS_NS}.svc.cluster.local:8080" \
     ALLOW_HTTP_UPSTREAM=true >/dev/null
   k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null
-fi
-if [[ "${COMPAT_API:-0}" == 1 ]]; then
-  kind_play --tags mcp; kind_play --tags authentik; kind_play --tags api
 fi
 
 ga() { curl -fsS -u "${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}" -X "$1" -H 'Content-Type: application/json' \

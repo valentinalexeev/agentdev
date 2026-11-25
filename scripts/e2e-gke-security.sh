@@ -466,7 +466,8 @@ if section chat; then
       pt='(if any(.volumes[]; .name=="proxy-token") then . else .volumes += [{name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:"claude-proxy",expirationSeconds:600,path:"token"}}]}}] end)'
       out=$(try "$pt"); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
       check $? "admission: a chat Job with the projected claude-proxy token (600 s) is allowed (control)" "$(echo "$out" | head -1)"
-      for exp in 3600 599; do
+      # 601, not 599: Kubernetes itself refuses a token below 600 s before the policy runs (#556)
+      for exp in 3600 601; do
         out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.expirationSeconds) = $exp"); denied "$out"
         check $? "admission: the API cannot create a chat Job whose claude-proxy token lives ${exp} s (not 600)" "$(echo "$out" | head -1)"
       done
