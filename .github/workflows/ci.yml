@@ -225,10 +225,10 @@ jobs:
       - uses: actions/setup-node@v4
         if: needs.scope.outputs.ui == 'true'
         with: {node-version-file: images/ui/package.json, cache: npm, cache-dependency-path: images/ui/package-lock.json}
-      - name: UI lint, type check and build (#48)
+      - name: UI lint, type check, tests and build (#48, #492)
         if: needs.scope.outputs.ui == 'true'
         working-directory: images/ui
-        run: npm ci && npm run lint && npm run build
+        run: npm ci && npm run lint && npm test && npm run build
       - name: UI unused exports, files and dependencies (knip, #132)
         if: needs.scope.outputs.ui == 'true'
         working-directory: images/ui
