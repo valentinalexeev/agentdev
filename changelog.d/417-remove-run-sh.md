@@ -6,6 +6,7 @@ status: done
 breaking: true
 title: run.sh and the numbered step scripts are removed; kind uses infra/ansible/kind.yml only
 components: [platform, ansible]
+pr: 495
 ---
 ## Summary
 

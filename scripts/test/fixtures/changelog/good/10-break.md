@@ -12,4 +12,4 @@ The knob is gone.
 
 ## Upgrade
 
-1. Re-run `./run.sh 05`.
+1. Re-run `ansible-playbook infra/ansible/kind.yml --tags forge`.

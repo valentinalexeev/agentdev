@@ -126,10 +126,10 @@ vars_file=$(mktemp "${TMPDIR:-/tmp}/bootstrap-vars.XXXXXX")
 jq -n --arg cn "${CLUSTER_NAME}" --arg en "${CONTAINER_ENGINE}" --arg an "${AGENTS_NS}" --arg pn "${PLATFORM_NS}" \
   --arg fn "${FORGE_NS}" --arg fu "${FORGE_HOST_URL}" --arg fa "${FORGE_ADMIN_USER}" --arg repo "${REPO}" \
   --argjson ag "$(printf '%s\n' ${AGENTS} | jq -R . | jq -sc .)" --argjson mc "${MAX_CONCURRENT}" \
-  --arg wi "${WORKER_IMAGE}" --arg fi "${FORGE_IMAGE}" --arg bn "${BOTBOARD_NS}" \
+  --arg wi "${WORKER_IMAGE}" --arg fimg "${FORGE_IMAGE}" --arg bn "${BOTBOARD_NS}" \
   '{kind_cluster_name: $cn, kind_engine: $en, agents_ns: $an, platform_ns: $pn, kind_forge_ns: $fn, kind_forge_url: $fu,
     kind_forge_admin_user: $fa, kind_repo: $repo, kind_agent_names: $ag, kind_agents_max_concurrent: $mc,
-    kind_worker_image: $wi, kind_forge_image: $fi, kind_botboard_ns: $bn}' > "${vars_file}"
+    kind_worker_image: $wi, kind_forge_image: $fimg, kind_botboard_ns: $bn}' > "${vars_file}"
 # secrets stay in the environment: the role reads them with lookup('env'), never from a vars file
 export FORGE_ADMIN_PASSWORD ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 # KIND_VARS: your kind.vars.yml, when you use one, so the rest of your settings stay as they are (the spec wins)

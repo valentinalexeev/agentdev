@@ -59,7 +59,7 @@ expected_section="### Added
 
 ### Upgrade
 **#10:**
-1. Re-run \`./run.sh 05\`."
+1. Re-run \`ansible-playbook infra/ansible/kind.yml --tags forge\`."
 
 setup good
 check "preview: existing lines kept, fragments merged in KaC order, done only" "## [Unreleased]

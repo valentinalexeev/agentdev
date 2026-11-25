@@ -63,13 +63,13 @@ vars_file=$(mktemp "${TMPDIR:-/tmp}/e2e-compat-vars.XXXXXX")
 jq -n --arg cn "${CLUSTER_NAME}" --arg en "${CONTAINER_ENGINE}" --arg gv "${GVISOR_VERSION}" \
   --arg cc "${root}/tools/claude-stub/kind-config.yaml" --arg an "${AGENTS_NS}" --arg pn "${PLATFORM_NS}" \
   --arg fn "${FORGE_NS}" --arg fu "${FORGE_HOST_URL}" --arg fa "${FORGE_ADMIN_USER}" --arg repo "${REPO}" \
-  --arg wi "${WORKER_IMAGE}" --arg fi "${FORGE_IMAGE}" --arg sc "${SERVICE_CIDR}" --arg oi "${OPERATOR_IMAGE}" \
+  --arg wi "${WORKER_IMAGE}" --arg fimg "${FORGE_IMAGE}" --arg sc "${SERVICE_CIDR}" --arg oi "${OPERATOR_IMAGE}" \
   --arg ri "${ROUTER_IMAGE}" --arg ci "${CLAUDE_PROXY_IMAGE}" --arg ai "${API_IMAGE}" \
   --argjson idle "${IDLE_SECONDS}" --argjson poll "${POLL_SECONDS}" --argjson wake "${WAKE_POLL_SECONDS}" \
   --argjson mc "${MAX_CONCURRENT}" \
   '{kind_cluster_name: $cn, kind_engine: $en, kind_cluster_gvisor_version: $gv, kind_cluster_config: $cc,
     agents_ns: $an, platform_ns: $pn, kind_forge_ns: $fn, kind_forge_url: $fu, kind_forge_admin_user: $fa,
-    kind_repo: $repo, kind_agent_names: ["alice"], kind_worker_image: $wi, kind_forge_image: $fi,
+    kind_repo: $repo, kind_agent_names: ["alice"], kind_worker_image: $wi, kind_forge_image: $fimg,
     kind_service_cidr: $sc, operator_image: $oi, kind_agents_router_image: $ri, kind_agents_credproxy_image: $ci,
     kind_agents_forge_kind: "gitea", kind_agents_scale_to_zero: true, kind_agents_wake_poll_seconds: $wake,
     kind_agents_max_concurrent: $mc, operator_idle_seconds: $idle, operator_poll_seconds: $poll, api_image: $ai}' \
