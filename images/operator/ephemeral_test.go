@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -91,6 +92,29 @@ func TestAgentPodEphemeralStorageConfigurable(t *testing.T) {
 	for _, v := range spec.Volumes {
 		if v.Name == "forge" && v.EmptyDir.SizeLimit.String() != defForgeMirrorLimit {
 			t.Errorf("mirror limit %v, want the default for an invalid value", v.EmptyDir.SizeLimit)
+		}
+	}
+}
+
+// #251 follow-up: FORGE_EPHEMERAL_LIMIT below FORGE_MIRROR_LIMIT is refused (on the effective values)
+func TestValidateEphemeral(t *testing.T) {
+	for _, tc := range []struct {
+		mirror, limit string
+		ok            bool
+	}{
+		{"", "", true},        // defaults 4Gi / 5Gi
+		{"4Gi", "4Gi", true},  // equal is allowed
+		{"1Gi", "bad", true},  // invalid limit: default 5Gi
+		{"4Gi", "3Gi", false}, // below the mirror
+		{"8Gi", "", false},    // default 5Gi below a raised mirror
+		{"bad", "1Gi", false}, // invalid mirror: default 4Gi
+	} {
+		err := Defaults{ForgeMirrorLimit: tc.mirror, ForgeEphemeralLimit: tc.limit}.validateEphemeral()
+		if (err == nil) != tc.ok {
+			t.Errorf("mirror %q limit %q: err %v, want ok=%v", tc.mirror, tc.limit, err, tc.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "FORGE_EPHEMERAL_LIMIT") {
+			t.Errorf("error %q does not name the setting", err)
 		}
 	}
 }

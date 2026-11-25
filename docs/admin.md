@@ -376,7 +376,7 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent container ephemeral-storage request (#251) | `AGENT_EPHEMERAL_REQUEST` (default `1Gi`) | `agent_ephemeral_request` (default `1Gi`) |
 | Agent container ephemeral-storage limit | `AGENT_EPHEMERAL_LIMIT` (default `8Gi`) | `agent_ephemeral_limit` (default `8Gi`) |
 | Forge sidecar git mirror size limit | `FORGE_MIRROR_LIMIT` (default `4Gi`) | `forge_mirror_limit` (default `4Gi`) |
-| Forge sidecar ephemeral-storage limit (at least the mirror limit) | `FORGE_EPHEMERAL_LIMIT` (default `5Gi`) | `forge_ephemeral_limit` (default `5Gi`) |
+| Forge sidecar ephemeral-storage limit (at least the mirror limit; the operator refuses to start otherwise) | `FORGE_EPHEMERAL_LIMIT` (default `5Gi`) | `forge_ephemeral_limit` (default `5Gi`) |
 
 ## Claude proxy and budget
 
