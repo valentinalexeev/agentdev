@@ -4,15 +4,15 @@
 // job titles and approval tools, which people or agents wrote on the forge: all of it is rendered as plain text.
 import { useCallback, useEffect, useState } from 'react'
 import {
-  getAgentDetail, patchAgent, statusOf, Unauthorized, formatBudget, maxConcurrentError, type AgentDetail, type Job, type WaitingItem,
+  getAgentDetail, patchAgent, statusOf, Unauthorized, formatBudget, maxConcurrentError, type AgentDetail, type AgentPermission, type Job, type WaitingItem,
 } from './api'
 import { ATTN_LABEL } from './model'
 import { useData } from './useData'
 import { ago, left, outcomeText, runLogHash } from './format'
-import { AgentTag, Attention, Drawer, Empty, Icon, Lamp } from './ui'
+import { AgentTag, Attention, Drawer, Empty, Icon, Lamp, RuleLists } from './ui'
 
-type Tab = 'overview' | 'jobs' | 'usage' | 'settings' | 'guide'
-const TABS: [Tab, string][] = [['overview', 'Overview'], ['jobs', 'Jobs'], ['usage', 'Usage'], ['settings', 'Settings'], ['guide', 'Guide']]
+type Tab = 'overview' | 'jobs' | 'usage' | 'settings' | 'permission' | 'guide'
+const ALL_TABS: [Tab, string][] = [['overview', 'Overview'], ['jobs', 'Jobs'], ['usage', 'Usage'], ['settings', 'Settings'], ['permission', 'Permission'], ['guide', 'Guide']]
 
 export function AgentDrawer({ name, token, onExpired, onClose }: { name: string; token: string; onExpired: () => void; onClose: () => void }) {
   const d = useData()
@@ -21,6 +21,8 @@ export function AgentDrawer({ name, token, onExpired, onClose }: { name: string;
   const [tab, setTab] = useState<Tab>('overview')
   const [tick, setTick] = useState(0)
   const view = d.allAgents.find((a) => a.name === name)
+  // the Permission tab only when the API sends the field (agentdev-admins, #505)
+  const TABS = ALL_TABS.filter(([t]) => t !== 'permission' || !!detail?.permission)
 
   useEffect(() => {
     let alive = true
@@ -74,6 +76,7 @@ export function AgentDrawer({ name, token, onExpired, onClose }: { name: string;
                 {tab === 'jobs' && <Jobs jobs={detail.recentJobs} now={d.now} name={name} />}
                 {tab === 'usage' && <UsageTab a={detail} pause={d.usage?.pauses?.[name]} now={d.now} />}
                 {tab === 'settings' && <Settings a={detail} token={token} onExpired={onExpired} onDone={reload} />}
+                {tab === 'permission' && detail.permission && <PermissionTab p={detail.permission} />}
                 {tab === 'guide' && (detail.guide
                   ? <><p className="agd-muted" style={{ margin: 0, fontSize: 13 }}>The operator writes this guide from the Agent object and the harness. Copy it into an issue or a review to tell the agent how to work.</p>
                     <pre className="agd-code agd-guide">{detail.guide}</pre></>
@@ -112,6 +115,7 @@ function Overview({ a, now }: { a: AgentDetail; now: number }) {
         <dt>Forge</dt><dd>{a.forge ?? '–'}</dd>
         <dt>Max. concurrent</dt><dd>{a.maxConcurrent ?? 2}</dd>
         <dt>Scale to zero</dt><dd>{a.scaleToZero ? 'yes' : 'no'}</dd>
+        {a.permission && <><dt>Permission mode</dt><dd className="agd-code">{a.permission.mode}</dd></>}
         <dt>Events 7 d</dt><dd>{a.securityEvents
           ? <a className="agd-link" href={`#security?agent=${encodeURIComponent(a.name)}`}>{a.securityEvents} security events</a> : '0'}</dd>
       </dl>
@@ -133,6 +137,27 @@ function WaitRow({ w, now }: { w: WaitingItem; now: number }) {
         {until > 0 && <span className="agd-data">{left(until, now)}</span>}
       </div>
     </li>
+  )
+}
+
+// PermissionTab (#505): the permission mode and the classifier rules, read-only. An administrator changes them in the
+// Agent object (Ansible or Git); every change is in the audit log.
+function PermissionTab({ p }: { p: AgentPermission }) {
+  return (
+    <>
+      <dl className="agd-dl">
+        <dt>Mode</dt><dd className="agd-code">{p.mode}</dd>
+      </dl>
+      <p className="agd-muted" style={{ margin: 0, fontSize: 13 }}>
+        {p.mode === 'auto'
+          ? 'A classifier of Claude Code decides a tool call outside the allow-list. With approvals on, a call that it blocks goes to a person.'
+          : 'A tool call outside the allow-list is refused, or asked through approvals.'}
+        {' '}Change the mode in the Agent object (Ansible or Git). The audit log has every change.
+      </p>
+      {p.mode === 'auto' && (p.autoMode
+        ? <section className="agd-section" aria-labelledby="ag-rules"><h3 className="agd-section-title" id="ag-rules">Classifier rules</h3><RuleLists r={p.autoMode} /></section>
+        : <p className="agd-muted" style={{ margin: 0 }}>No own rules: the classifier uses the default rules of Claude Code.</p>)}
+    </>
   )
 }
 

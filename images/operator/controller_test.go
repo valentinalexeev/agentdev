@@ -678,3 +678,57 @@ func TestAgentServiceAccountAndProxyToken(t *testing.T) {
 		}
 	}
 }
+
+// #496: spec.tools.allow reaches the agent container only, as CLAUDE_TOOLS_EXTRA; unset or empty: no env (no restart).
+func TestToolsFromSpec(t *testing.T) {
+	r, c := setup(t, agent("alice", nil),
+		agent("bob", func(a *v1.Agent) { a.Spec.Tools = &v1.AgentTools{} }),
+		agent("carol", func(a *v1.Agent) {
+			a.Spec.Tools = &v1.AgentTools{Allow: []string{"Bash(npm ci:*)", "Bash(npm install:*)"}}
+		}))
+	for _, n := range []string{"alice", "bob", "carol"} {
+		reconcile(t, r, n)
+	}
+	for _, tc := range []struct{ agent, extra string }{
+		{"alice", "<unset>"}, {"bob", "<unset>"}, {"carol", "Bash(npm ci:*),Bash(npm install:*)"},
+	} {
+		s := getSTS(t, c, tc.agent)
+		if got := envOf(s, "CLAUDE_TOOLS_EXTRA"); got != tc.extra {
+			t.Errorf("%s: CLAUDE_TOOLS_EXTRA = %q, want %q", tc.agent, got, tc.extra)
+		}
+		for _, ct := range s.Spec.Template.Spec.Containers[1:] {
+			for _, e := range ct.Env {
+				if strings.HasPrefix(e.Name, "CLAUDE_TOOLS") {
+					t.Errorf("%s: container %s has %s", tc.agent, ct.Name, e.Name)
+				}
+			}
+		}
+	}
+}
+
+// #496: the operator refuses what the CRD rules would refuse: commas, control characters, empty, too long, too many.
+func TestToolsInvalidRefused(t *testing.T) {
+	many := make([]string, 51)
+	for i := range many {
+		many[i] = "Read"
+	}
+	for name, l := range map[string][]string{
+		"comma":   {"Bash(npm ci:*),Bash(curl:*)"},
+		"newline": {"Read\nBash(curl:*)"},
+		"empty":   {""},
+		"long":    {strings.Repeat("a", 201)},
+		"many":    many,
+	} {
+		r, c := setup(t, agent("mallory", func(a *v1.Agent) { a.Spec.Tools = &v1.AgentTools{Allow: l} }))
+		reconcile(t, r, "mallory")
+		var s appsv1.StatefulSet
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
+			t.Errorf("%s: rendered a pod", name)
+		}
+		var a v1.Agent
+		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
+		if a.Status.Phase != "invalid" {
+			t.Errorf("%s: phase = %q, want invalid", name, a.Status.Phase)
+		}
+	}
+}
