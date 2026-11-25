@@ -1,0 +1,18 @@
+# one setting for tests/ingress_forwarder_deploy.yml: the checks of tasks/forwarder.yml refuse it (t_expect_refused,
+# default) or accept it (then the next task, the gcloud call, is the first to fail: no gcloud project in the test)
+- name: Setting {{ t_bad }}
+  block:
+    - name: Run the checks
+      ansible.builtin.include_tasks: ../../roles/ingress/tasks/forwarder.yml
+      vars:
+        ingress_fwd_deploy: "{{ t_good | combine(t_bad) }}"
+        gcp_project: agentdev-test-no-such-project
+    - name: Not reached
+      ansible.builtin.fail: {msg: "the gcloud step passed for {{ t_bad }}"}
+  rescue:
+    - name: Refused by the checks, or accepted and stopped at gcloud
+      ansible.builtin.assert:
+        that: >-
+          ansible_failed_task.name == ('Check the deployed forwarder settings' if t_expect_refused | default(true)
+                                       else 'Forwarder pre-auth key from Secret Manager')
+        quiet: true

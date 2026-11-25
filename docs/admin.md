@@ -52,6 +52,59 @@ CAUTION: Step 3 deletes the work data of the agent.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 3. Delete the StatefulSet, the volumes and the forge account of the agent.
 
+### Keep the agents in Git (Flux)
+
+With the setting `agents_source: git`, Flux applies the `Agent` objects from the deployment repository (#58). The
+default is `api`: the playbook and the API write the `Agent` objects.
+
+In `git` mode:
+
+- An agent from Git is read-only in the API and the web UI. Only **Pause** and **Resume** are possible.
+- An agent that a person adds in the web UI or the API stays owned by the API. Flux does not prune it.
+- The playbook makes the Secrets of the agents. It does not apply the `Agent` objects.
+
+Each field has one owner:
+
+| Field | Owner |
+|---|---|
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
+| `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
+| replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
+| `status` | the operator |
+
+CAUTION: Do not put `spec.paused` in the Git manifest. If you do, Flux owns the field and resumes an agent that the
+security pause stopped.
+
+1. Set `agents_source: git` in `instance.yml`. On `kind`, set `AGENTS_SOURCE=git` in `config.env`.
+2. Put one `Agent` manifest for each agent in the `agents/` directory of the deployment repository:
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: Agent
+   metadata: {name: alice, namespace: coding-agents}
+   spec:
+     repo: my-org/my-repo
+     forge: github
+     claudeSecret: claude-shared
+     maxConcurrent: 2
+     scaleToZero: true
+     # no spec.paused: the API and the operator own it
+   ```
+3. Keep the agent in the `agents:` list of `instance.yml`. The playbook makes its Secrets.
+4. Add a Flux `Kustomization` for `agents/` (see "Health checks for Flux and Argo CD").
+5. Deploy again.
+
+NOTE: On `kind`, step 06 applies the `Agent` objects in both modes. It does the work of Flux.
+
+For Argo CD, add `ignoreDifferences` for `spec.paused`, or `selfHeal` resumes a paused agent:
+
+```yaml
+spec:
+  ignoreDifferences:
+    - group: agentdev.dev
+      kind: Agent
+      jsonPointers: [/spec/paused]
+```
+
 ### Give an agent its own Claude credential
 
 WARNING: Do not put the credential in git or in an issue.
@@ -73,6 +126,35 @@ Use this task to replace a Claude credential or a forge token.
 1. Replace the file or the secret.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
+NOTE: With `external_secrets.mode: external` on GKE (#381), step 2 is not needed. Add a new version of the
+Secret Manager secret. The External Secrets Operator copies it within `external_secrets_refresh` (default 15
+minutes), and Reloader restarts the pods that use it. An agent pod restarts at its next scale to zero or drain, not
+in the middle of a job. The Claude proxy refuses to start when `claude-shared` has no `CLAUDE_CODE_OAUTH_TOKEN=` or
+`ANTHROPIC_API_KEY=` line. It reports an invalid `agent-<agent>-claude` as a security event.
+
+### Read the secrets from Secret Manager without the playbook (GKE, #381)
+
+In `external` mode, no secret value passes through the operator machine or Ansible. Terraform generates the random
+secrets once in Secret Manager. The External Secrets Operator copies each one into a Kubernetes Secret with the same
+name and keys as before. Stakater Reloader v2 (a pinned beta, owner decision on #381) restarts the workloads that
+carry `secret.reloader.stakater.com/reload`.
+
+1. In `terraform/instance.tfvars`, set `external_secrets = true` and set `agent_names` to the names of `agents` in
+   `ansible/instance.yml`. With the default `false`, Terraform makes none of these secrets or accounts.
+2. For an upgrade from 1.1.x, the playbook already made the generated secrets. List them in
+   `keep_existing_secret_values` and import them (`terraform/imports.tf.example` of the deployment template). If you
+   skip this step, Terraform writes new values, the databases keep the old passwords, and the platform breaks.
+3. Apply Terraform. `terraform output secrets_readers` shows the Google service accounts of the namespaces.
+4. Make sure that the secrets you supply exist in Secret Manager: `claude-shared`, `router-register-token`,
+   `github-app-*`, `agent-<agent>-forge-token`, and `agentdev-api-vapid-*` if Web Push is on. External mode does not
+   create them.
+5. In `ansible/instance.yml`, set `external_secrets: {mode: external}`. Set `own_claude: true` on each agent that has
+   `agent-<agent>-claude`. Deploy.
+
+WARNING: The Terraform state now holds the generated values. Only the deployment identities may read the state bucket.
+
+NOTE: A new version of a database password does not change the password in Postgres yet (#382).
+
 ### Set the concurrency
 
 The concurrency is the number of items that one agent works on at the same time.
@@ -90,6 +172,128 @@ writes "class `max-turns`" on the PR and on the issue. A large task can need mor
 
 NOTE: The memory limit of an agent is (1 + concurrency) GiB. At the default of 2, the limit is 3 GiB. The operator
 sets the limit.
+
+### Set the permission mode of an agent
+
+The permission mode decides a tool call that is not on the allow-list of the agent (#500). Each agent has its own mode:
+
+- `dontAsk` (default): Claude Code refuses the call. With approvals on, a project member must approve the call.
+- `auto`: a classifier of Claude Code decides the call. The classifier uses its default rules and your rules. With
+  approvals on, a project member must approve a call that the classifier blocks.
+
+The deny-list of the worker (`git push`, `curl`, `/state` and others) stays in both modes. `bypassPermissions` is
+not available.
+
+WARNING: The classifier is the judgment of a model. It is not a security boundary. Use `auto` only for agents that
+you trust with packages that the classifier installs (threat model V6).
+
+1. On `kind`: set `kind_agents_permission` for the agent, for example
+   `{alice: {mode: auto, autoMode: {allow: ["Install dependencies declared in the repository"]}}}`.
+   On GKE: set `agents[].permission` for the agent, for example `{mode: auto}`.
+   In Git mode: set `spec.permission` in the `Agent` manifest.
+2. Optional: add rules in `autoMode`. Use `allow`, `softDeny` and `environment`, one rule on each line.
+3. Deploy again.
+4. Do the command `claude auto-mode defaults` in an agent pod to see the default rules.
+
+NOTE: The rules come from the `Agent` object only. The repository and the issue text cannot change them. The
+classifier sends more requests through `claude-proxy`. They count against the token budget of the agent.
+
+To see the mode and the rules of an agent, open the agent in the console and select the **Permission** tab. The
+**Overview** tab shows the mode too. Only `agentdev-admins` members see them, and the console does not change them.
+The API also returns them in `GET /api/agents/{name}` (`permission`).
+
+Each change of `spec.permission` makes one entry in the audit log (#505): action `permission`, with the old and the
+new mode and rules in `before.permission` and `after.permission`. Open the **Audit** page and select the action
+`permission`, or do `curl -H "Authorization: Bearer <token>" "https://<api host>/api/audit?agent=<name>"`. The API
+does not know who changed the `Agent` object, so the entry has no person. Look in the Git history or the Kubernetes
+audit log for the person. The API records a change that happened while it was stopped when it starts again. Two
+API processes write one entry for one change.
+
+If the audit log has no earlier `permission` entry of the agent, and the mode is not the default (`dontAsk` without
+rules), the entry has `before: null` and the reason `first seen (no earlier entry)`. This occurs for a new agent,
+after the retention removed the old entries, or after a restart of an API without a database. The console shows
+`unknown → <new mode>`.
+
+NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
+sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
+
+### Allow extra tools for an agent
+
+The allow-list of the worker has the tools that all agents can use without a question (#496). You can add tools to
+the list for one agent, for example `npm ci` for a repository that needs `node_modules`:
+
+- The entries are added to the default list, or to `CLAUDE_TOOLS` of the instance. You cannot remove or replace
+  entries of the default list.
+- The deny-list of the worker (`git push`, `curl`, `/state` and others) stays.
+- Use the Claude Code rule syntax, one rule in each entry, for example `Bash(npm ci:*)`. An entry has no commas and
+  no control characters, and is not longer than 200 characters. An agent has at most 50 entries.
+
+WARNING: Each entry widens what the agent can do without a question. `npm install` runs the install scripts of
+packages: a compromised dependency then runs in the agent pod (threat model V6). Add an entry only for an agent and
+a repository that need it.
+
+1. On `kind`: set `kind_agents_tools` for the agent, for example `{alice: ["Bash(npm ci:*)", "Bash(npm install:*)"]}`.
+   On GKE: set `agents[].tools` for the agent, for example `{allow: ["Bash(npm ci:*)"]}`.
+   In Git mode: set `spec.tools.allow` in the `Agent` manifest.
+2. Deploy again. The agent pod restarts with the new list.
+3. Do the command `kubectl -n coding-agents get statefulset agent-<name> -o yaml | grep -A1 CLAUDE_TOOLS_EXTRA` to
+   see the added entries.
+
+NOTE: The entries come from the `Agent` object only. The repository and the issue text cannot change them. The
+operator refuses an `Agent` with an invalid entry (phase `invalid`). An agent without entries has no
+`CLAUDE_TOOLS_EXTRA`, so its pod does not restart on upgrade.
+
+### Give an agent a toolchain
+
+An agent can get a language toolchain that the worker image does not have, for example Go or Rust (#499). agentdev
+installs it before the agent starts, and the agent can use it but not change it.
+
+- The presets and their versions are in the operator (`images/operator/toolchain.go`). Each download has a pinned
+  SHA-256. A new version is an agentdev release.
+- The init container `toolchain` installs the toolchain into `/state/toolchain` on the agent volume. The agent
+  container mounts that directory read-only, and gets it on its search path.
+- A wake only checks the installed files. A change of the toolchain, of the worker image or of the refresh period
+  installs again, after the running jobs end.
+- The commands of the preset (for example `go mod`, `cargo build`) are added to the tool allow-list of the agent.
+
+| Preset | Versions | Download hosts | Agent environment |
+|--------|----------|----------------|-------------------|
+| `go` | 1.27.4, 1.26.11 | `dl.google.com` | `GOTOOLCHAIN=local`, `GOPATH` and `GOMODCACHE` under `/state/cache/go` |
+| `rust` | 1.100.0 (rustup, profile minimal) | `static.rust-lang.org` | `RUSTUP_HOME` read-only, `CARGO_HOME=/state/cache/cargo` |
+
+1. On `kind`: set `kind_agents_toolchain` for the agent, for example `{alice: {presets: {go: "1.27.4"}}}`.
+   On GKE: set `agents[].toolchain` for the agent, for example `{presets: {go: "1.27.4", rust: "1.100.0"}}`.
+   In Git mode: set `spec.toolchain` in the `Agent` manifest.
+2. Optional: set `refresh`, for example `168h` (at least `1h`), to install again regularly. Each agent has its own
+   offset, so the agents do not all install at the same time.
+3. Optional: add `path` entries below `$TOOLCHAIN`, for example `$TOOLCHAIN/go/bin`.
+4. Make sure the agent volume is large enough (see below).
+5. Deploy again.
+6. Do the command `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.toolchain}'` to see the result.
+   `reason` is `Installed` or `Verified` when the toolchain is ready.
+
+**Disk.** The toolchain and the caches are on the agent volume (`AGENT_STATE_STORAGE`, default 10 GiB):
+
+| Toolchain | Toolchain size | Caches (modules, build) | Volume |
+|-----------|----------------|-------------------------|--------|
+| Go | about 250 MB | 1 to 3 GB | 10 GiB is enough |
+| Rust | about 550 MB | 2 to 6 GB (`CARGO_HOME`, `target/`) | 20 GiB or more |
+
+A new size applies to new agents. To grow the volume of an existing agent, resize its PVC `state-agent-<name>-0`
+(the StorageClass must allow volume expansion).
+
+**When the install fails.** The pod stays in `Init`, so the agent does not run without its toolchain.
+`status.toolchain.reason` is `StepFailed` (a download, a checksum or the check of the toolchain failed) or `Invalid`
+(for example a symbolic link in `/state/toolchain`). `message` has the details. Do the command
+`kubectl -n coding-agents logs agent-<name>-0 -c toolchain` to see the full output.
+
+WARNING: A `Reinstalled` reason means that the installed files changed since the last start. The operator records
+a high-severity security event `toolchain-manifest`. Find out what changed it (see "Find the security events of an
+agent").
+
+NOTE: The download hosts are open only for the init container, with the credential `egress-setup-proxy` (generated
+by the playbook, or by Terraform with `external_secrets`). The agent container cannot use them. The toolchain comes
+from the `Agent` object only. The repository and the issue text cannot change it.
 
 ### Set the poll interval
 
@@ -161,22 +365,50 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
 | Agent volume size | `AGENT_STATE_STORAGE` (default `10Gi`) | `agent_state_storage` (default `10Gi`) |
 
-## Claude proxy and token budget
+## Claude proxy and budget
 
 The Claude proxy (`claude-proxy`) is the only pod that has the Claude credentials (#66). An agent sends its model
 requests to the proxy with its proxy key. The proxy adds the real credential and sends the request to the Anthropic
-API. The proxy also counts the tokens of each agent and stops an agent that used its budget.
+API. The proxy also counts the spend of each agent and stops an agent that used its budget.
 
-### Set the token budget of all agents
+### Cost units
 
-The budget is the number of tokens (input, cache and output) that one agent can use in 24 hours.
+The budget counts **cost units**, not raw tokens (#196, [ADR 0002](adr/0002-llm-telemetry-and-cost-control.md)).
+One unit is the price of one input token at 3 USD per million (Sonnet 4.x). The proxy weights each token type and
+the model of the response:
 
-1. On `kind`: set `CLAUDE_BUDGET_TOKENS` in `config.env`. On GKE: set `claude_budget_tokens` in `instance.yml`.
+| Token type | Weight |
+|---|---|
+| input | 1 |
+| cache write, 5 minutes | 1.25 |
+| cache write, 1 hour | 2 |
+| cache read | 0.1 |
+| output | 5 |
+
+Model multipliers (input price / 3 USD, list prices of November 2026): Opus 5.5 1.33, Opus 4.5 to 5 1.67, Opus 4
+and 4.1 5, Sonnet 4.x 1, Sonnet 5 and 5.5 0.67, Haiku 4.5 0.33, Haiku 5.5 0.03, Fable 5.x 3.33. A family name (for
+example `claude-opus`) covers new versions at the current family price. A model outside every family counts with
+the highest multiplier. The token weights are the same for every model; some models price cache reads lower (Opus
+5.5: 0.05), so the units of those models are a little high. Change the multipliers in `claude-proxy-prices` when
+Anthropic changes its prices. Claude Code reads most of its context from the cache, so a run uses far fewer units
+than raw tokens (often less than 20 %).
+
+### Set the budget of all agents
+
+The budget is the number of cost units that one agent can use in 24 hours.
+
+1. On `kind`: set `CLAUDE_BUDGET_UNITS` in `config.env`. On GKE: set `claude_budget_units` in `instance.yml`.
 2. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
 
 NOTE: The value 0 means no limit. This is the default.
 
-### Set the token budget of one agent
+NOTE: `CLAUDE_BUDGET_TOKENS` and `claude_budget_tokens` are deprecated since 1.2.0 and will be removed in 2.0.0.
+Until then they still work: when only the old variable is set, its value is used as cost units (1 token = 1 unit).
+When both are set, `CLAUDE_BUDGET_UNITS` / `claude_budget_units` wins. The proxy, `./run.sh 06` and the playbook
+show a warning. To migrate, rename the variable. A budget in units allows more traffic than the same number of
+tokens, so you can lower the value (see the CHANGELOG, 1.2.0 Deprecated).
+
+### Set the budget of one agent
 
 1. Run this command (use 0 for no limit):
    `kubectl -n coding-agents patch configmap claude-proxy-budgets --type merge -p '{"data":{"<agent>":"500000"}}'`
@@ -184,11 +416,95 @@ NOTE: The value 0 means no limit. This is the default.
 
 NOTE: A deploy does not change this value. The template of the ConfigMap has no data.
 
-### Look at the token use
+### Change the weights or show USD
 
-1. Open the web UI. The column **Claude tokens (24 h)** shows the tokens of each agent and the budget.
+The ConfigMap `claude-proxy-prices` holds the weights. Keys: `w_in`, `w_cw5`, `w_cw1h`, `w_cr`, `w_out`,
+`model.<name prefix>` (the longest prefix wins) and `usd_per_million_units`. Each value is a number with at most
+6 decimals. The proxy ignores a bad key or value, keeps the built-in value and writes a `proxy-price-invalid`
+security event.
+
+1. On `kind`: set `CLAUDE_PRICES` in `config.env`, for example `CLAUDE_PRICES="usd_per_million_units=3"`. On GKE:
+   set `claude_prices` in `instance.yml`, for example `claude_prices: {usd_per_million_units: 3}`. With 3, the USD
+   estimate follows the list prices, because one unit is priced at 3 USD per million.
+2. Deploy again. The proxy reads the ConfigMap again within one minute.
+
+NOTE: USD is an estimate. On a subscription the bill is fixed, and units are a fair share between agents. Set
+`usd_per_million_units` only when the instance bills by API key. Without it, the web UI shows units only.
+
+### Limit the cost of one job
+
+A job is the work of an agent on one issue or one pull request. The proxy can stop a job that uses too many cost
+units (#196, #310). There are two limits per job:
+
+- The **soft limit** (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and asks a person. The agent adds
+  a request with the source `cost` to the approvals comment on its issue or pull request. One approval gives the job
+  one more step of units (`CLAUDE_JOB_APPROVAL_STEP_UNITS`). Then the agent continues in the same Claude session.
+- The **hard limit** (`CLAUDE_JOB_BUDGET_UNITS`). At this limit the job stops. An approval cannot change it.
+
+1. On `kind`: set `CLAUDE_JOB_APPROVAL_UNITS`, `CLAUDE_JOB_APPROVAL_STEP_UNITS` and `CLAUDE_JOB_BUDGET_UNITS` in
+   `config.env`. On GKE: set `claude_job_approval_units`, `claude_job_approval_step_units` and
+   `claude_job_budget_units` in `instance.yml`.
+2. On `kind`, set `APPROVALS=true`. On GKE, approvals are on by default.
+3. Deploy again: `./run.sh 06` and `./run.sh 12`, or a pull request in the deployment repository.
+
+NOTE: The value 0 means off. This is the default for all three settings. A step of 0 is the same as the soft limit.
+
+NOTE: The soft limit must be lower than the hard limit when you set both. `./run.sh 06`, the playbook and the proxy
+stop with an error if it is not.
+
+NOTE: A denial, a void request or no answer within the approval timeout (`APPROVAL_TIMEOUT_MINUTES`, default 30)
+ends the job as failed, as at the hard limit.
+
+NOTE: Only the proxy raises the limit. It reads the allowed approvals of the job from the Kubernetes API (Role
+`agentdev-claude-proxy-approvals`: `get` and `list` on `approvals`). The worker and the model cannot raise it.
+
+NOTE: The job id comes from the agent (`X-Agentdev-Job`). Thus the limits per job stop a run that loops. They are
+not a security limit. The budget of the agent (24 hours) is the security limit.
+
+### Look at the spend
+
+1. Open the web UI. The column **Claude units (24 h)** shows the units of each agent and the budget.
 2. Or run this command:
    `kubectl -n coding-agents exec deploy/webhook-router -- node -e "require('http').get('http://claude-proxy:8080/status',r=>r.pipe(process.stdout))"`
+
+   `budgets` lists units per agent. `jobs` lists each job (issue or pull request) of the last 7 days with its
+   units, tokens by type and number of requests, most expensive first. The worker names the job in the header
+   `X-Agentdev-Job`. The agent can change this header, so the job list is a report, not a limit.
+   `weights` lists the weight of each token type. Each `AGENTDEV_USAGE` line of the proxy has `tokens` (by type),
+   `multiplier` and `units`. Thus you can calculate the units again: units = sum(tokens x weight) x multiplier,
+   rounded up.
+
+### Metrics and OpenTelemetry
+
+`claude-proxy` and the operator serve OpenTelemetry metrics in the Prometheus format on port 9464, path `/metrics`
+(#196, ADR 0002 D4). A NetworkPolicy lets only the scraper pods reach this port: the Prometheus server in
+`monitoring` on kind (`TELEMETRY_SCRAPER_NS`, `TELEMETRY_SCRAPER_SELECTOR`), the GMP collector in `gmp-system` on GKE
+(`telemetry.scraper_ns`, `telemetry.scraper_selector`). Other pods of that namespace and agent pods cannot reach it.
+If you use another scraper, set both: the namespace and the labels of its pods.
+
+| Metric (Prometheus name) | What it shows |
+|---|---|
+| `gen_ai_client_token_usage` | tokens per request, by `gen_ai_token_type` (`input`, `output`) and `agentdev_cache` (`read`, `write`) |
+| `gen_ai_client_operation_duration_seconds` | time of a model request |
+| `agentdev_cost_units_total` | cost units by agent and model |
+| `agentdev_cost_usd_total` | estimated USD, only when `usd_per_million_units` is set |
+| `agentdev_budget_used`, `agentdev_budget_limit` | units of the agent in 24 hours, and its budget |
+| `agentdev_ratelimit_utilization` | last 5 h and 7 d utilization of each subscription (0 to 1) |
+| `agentdev_requests_refused_total` | refused requests by `agentdev_reason` (`budget`, `job_budget`, `rate_limited`, `bad_key`) |
+| `agentdev_usage_paused` | operator: 1 while an agent is paused by a usage limit, by reason |
+
+Every series has the label `agentdev_instance`. It is the name of the agentdev instance (default `agentdev`). With
+it, one external Prometheus and Grafana can show many instances.
+
+1. On `kind`: set `TELEMETRY_INSTANCE` in `config.env`, then run `./run.sh 06` and `./run.sh 12`.
+2. On GKE: set `telemetry: {instance: <name>}` in `instance.yml`, then run the playbook.
+
+The name is a DNS label: `a-z`, `0-9` and `-`, at most 63 characters.
+
+The metrics have no job label and no prompt content. To send metrics and spans (one `chat` span per model request,
+with the job id) to an OTLP backend such as Langfuse, Phoenix or an OpenTelemetry Collector, set
+`TELEMETRY_OTLP_URL` in `config.env` (kind) or `telemetry.otlp_url` in `instance.yml` (GKE). The URL must be
+`https://`. Then run `./run.sh 06` and `./run.sh 12`, or the playbook.
 
 ### Reference: the Claude proxy
 
@@ -197,6 +513,9 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Image | `agentdev-credproxy`. On `kind`, `./run.sh 06` builds it (`CLAUDE_PROXY_IMAGE`). Ansible uses `credproxy_image` |
 | Credentials | the Secrets `claude-shared` and `claude-<agent>`, mounted only in the proxy pod |
 | Proxy key of an agent | the Secret `agent-<agent>-proxy`, key `ANTHROPIC_AUTH_TOKEN`. It is the agent name and an HMAC of the name |
+| Token of an agent (#352) | a projected service account token of `agent-<agent>`, audience `claude-proxy`, 10 minutes. Only in the `agent` container, at `/var/run/secrets/agentdev/proxy/token` |
+| Accepted identity | `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE): `key`, `both` (default) or `token` |
+| Access to the API server | the proxy has the service account `claude-proxy`, bound to the ClusterRole `agentdev-claude-proxy-tokenreview` (`tokenreviews` `create` only). Its NetworkPolicy allows only the addresses of the Service `default/kubernetes` |
 | Signing key | the Secret `claude-proxy-signing`. On `kind`: `.secrets/claude-proxy-signing.key`. On GKE: Secret Manager `claude-proxy-signing` |
 | Forwarded requests | `POST /v1/messages` and `POST /v1/messages/count_tokens` only |
 | When the budget is used | the proxy gives HTTP 429 and writes one `budget-exhausted` security event. The agent continues when the 24-hour window has free tokens |
@@ -204,6 +523,35 @@ NOTE: A deploy does not change this value. The template of the ConfigMap has no 
 | Old Claude login on the volume | when the proxy is on, the agent removes `~/.claude/.credentials.json` and the keys in `~/.claude.json` at each start |
 | Usage of the subscription (#93) | only from the proxy. The forge sidecar refuses `POST /usage` |
 | Turn off the proxy | `CLAUDE_PROXY=false` (`kind`) or `claude_proxy: false` (GKE). This is deprecated: the credential is then in the agent pod again (R11) |
+
+### Agent identity at the Claude proxy (#352)
+
+Each agent has its own Kubernetes service account `agent-<agent>`. The operator makes it. The agent container gets a
+token of this service account with the audience `claude-proxy`. The token expires after 10 minutes, and Kubernetes
+renews it. The proxy checks the token with the Kubernetes TokenReview API.
+
+The setting `CLAUDE_PROXY_AUTH` (`kind`) or `claude_proxy_auth` (GKE) selects what the proxy accepts:
+
+| Value | The proxy accepts |
+|---|---|
+| `key` | only the proxy key (the behaviour before 1.1) |
+| `both` | the proxy key or the token. This is the default |
+| `token` | only the token. The proxy refuses the proxy key |
+
+A worker of 1.1 or later sends the token. An older worker sends the proxy key.
+
+To accept only the token:
+
+1. Make sure that each agent runs a worker of 1.1 or later:
+   `kubectl -n coding-agents get pods -l app=coding-agent -o jsonpath='{range .items[*]}{.metadata.name} {.spec.containers[0].image}{"\n"}{end}'`
+2. Make sure that no `proxy-key-invalid` security event shows `wrong agent token` after the upgrade.
+3. On `kind`: set `CLAUDE_PROXY_AUTH=token` in `config.env`. On GKE: set `claude_proxy_auth: token` in `instance.yml`.
+4. Deploy again: `./run.sh 06`, or a pull request in the deployment repository.
+5. Run `scripts/e2e-gke-security.sh`. Make sure that the proxy key check shows PASS.
+
+CAUTION: Do not set `token` while an agent runs an older worker. The proxy then refuses all calls of that agent.
+
+To go back, set `both` and deploy again.
 
 WARNING: Do not give the proxy key of an agent to a person. The key lets the holder use the Claude budget of that
 agent from inside the cluster.
@@ -222,6 +570,16 @@ The router starts a stopped agent when:
 NOTE: The first response of a stopped agent is slower. The pod must start (and on GKE, a node must start). Expect
 1 to 2 minutes after the webhook, or up to `wake_poll_seconds` more on the wake poll.
 
+NOTE: The worker asks the proxy once at start whether it takes the token. When the proxy answers 401 (mode `key`, or
+a proxy from before 1.1) or does not answer, the agent uses its key. So agents keep working during an upgrade in
+any order and after a switch back to `key`.
+
+NOTE: The NetworkPolicy of the proxy allows only the addresses of the Service `default/kubernetes` at deploy time.
+On GKE these addresses can change (control plane IP rotation, a change of the private endpoint). Then the token
+check fails with 401 until the next playbook run. In mode `both` the agents use their key meanwhile. In mode
+`token` all agents stop. After such a change, run the playbook again. `scripts/e2e-gke-security.sh` checks that the
+proxy reaches the API server.
+
 ### Settings
 
 | Setting | `kind` (`config.env`) | GKE (`instance.yml`) | Default |
@@ -234,7 +592,7 @@ NOTE: The first response of a stopped agent is slower. The pod must start (and o
 The wake poll uses a read-only forge credential in the Secret `webhook-router-poll`. Only the router pod reads it.
 
 - GitHub: the router uses the GitHub App. It asks for installation tokens with read access only.
-- Gitea on `kind`: `06-agents.sh` makes the account `agentdev-router` (read access to the repository) and its token.
+- Gitea on `kind`: step 06 (role `kind_agents`) makes the account `agentdev-router` (read access to the repository) and its token.
 - Gitea on GKE: put a read-only token (scopes `read:repository`, `read:issue`) in the Secret Manager entry
   `router-poll-forge-token`.
 
@@ -260,6 +618,68 @@ NOTE: The router must have a namespaced Role to scale the agent StatefulSets. Th
 
 NOTE: When you apply the manifests again (a new deployment), stopped agents start one time. They stop again after the
 idle time.
+
+### Health checks for Flux and Argo CD
+
+The kinds `Agent`, `Executor` and `ProjectSecret` have a `Ready` condition and `status.observedGeneration` (#386).
+Flux and Argo CD read them. A stopped agent is ready: the router can start it again.
+
+| Kind | `Ready` is `True` | `Ready` is `False` (reason) |
+|---|---|---|
+| `Agent` | phase `running`, `starting`, `stopped` or `paused` | phase `blocked` (`Blocked`), phase `invalid` (`SecretNotBound`) |
+| `Executor` | phase `ready` or `paused` | phase `invalid` or `error` |
+| `ProjectSecret` | phase `ready` (`Synced`) | phase `pending` (`Pending`) or `error` (`Error`) |
+
+`status.image` of an `Agent` shows the worker image of its StatefulSet. A stopped agent starts with this image at its
+next wake.
+
+To make Flux wait for the agents, use a `Kustomization` with `wait: true` or with `healthChecks`:
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agents
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./agents
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: deployment
+  dependsOn:
+    - name: agentdev        # the layer with the CRDs and the operator
+  timeout: 5m
+  healthChecks:
+    - apiVersion: agentdev.dev/v1alpha1
+      kind: Agent
+      name: alice
+      namespace: coding-agents
+```
+
+For Argo CD, add a health check for each kind to `argocd-cm`. Do not use `Suspended` for a stopped agent: one
+suspended resource makes all of the Application suspended.
+
+```yaml
+resource.customizations.health.agentdev.dev_Agent: |
+  hs = {status = "Progressing", message = "waiting for the operator"}
+  if obj.status ~= nil and obj.status.conditions ~= nil then
+    if (obj.status.observedGeneration or 0) < obj.metadata.generation then return hs end
+    for _, c in ipairs(obj.status.conditions) do
+      if c.type == "Ready" then
+        hs.message = c.message
+        if c.status == "True" then hs.status = "Healthy" else hs.status = "Degraded" end
+      end
+    end
+  end
+  return hs
+```
+
+Use the same script for `agentdev.dev_Executor` and `agentdev.dev_ProjectSecret`.
+
+To show the state of all agents, do this command:
+`kubectl -n coding-agents get agents`. The column `READY` shows the `Ready` condition.
 
 ## Labels
 
@@ -384,7 +804,8 @@ ContextForge. On GKE, the Ansible playbook deploys it.
 3. Run run.sh step 08: `./run.sh 08`
    The step runs the playbook `infra/ansible/kind.yml` with the tag `mcp` (#106), with the values from `config.env`.
    The playbook deploys the namespace `agentdev-platform` with Postgres.
-   If `MCP_PROJECTS` is set, the script also deploys ContextForge and runs `scripts/mcp-sync.sh` for each specification.
+   If `MCP_PROJECTS` is set, the step also deploys ContextForge and makes one `McpProject` for each specification.
+   The operator (step 12) syncs each `McpProject` to ContextForge.
 
 NOTE: If `MCP_PROJECTS` is empty, the script does not deploy ContextForge. If ContextForge is already deployed,
 the script removes it and the MCP token secrets of the agents. The ContextForge database stays in Postgres.
@@ -412,13 +833,15 @@ database stays in Postgres. To keep ContextForge without `mcp_projects`, set `pl
    Use full paths on the machine that runs the playbook. `PWD` is the deployment repository.
    List the hosts of the MCP servers that you trust in `mcp_allowed_hosts` (refer to the next section).
 3. Run the playbook (refer to `infra/ansible/README.md`).
-   The playbook runs `scripts/mcp-sync.sh` for each specification after ContextForge is ready.
+   The playbook makes one `McpProject` for each specification. The operator syncs it to ContextForge.
+   The machine that runs the playbook does not read the ContextForge admin password.
 4. Make sure that the pods are ready: `kubectl -n agentdev-platform get pods`
 
 CAUTION: Do not delete a `platform-pg-*` secret. Postgres keeps the first password on its volume. A new value stops
 the connection from ContextForge.
 
-NOTE: The dry run (`--check`) does not run the sync.
+NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not exist yet. The playbook skips the
+`McpProject` objects in that case.
 
 ### Add MCP servers to a project
 
@@ -437,9 +860,11 @@ NOTE: The dry run (`--check`) does not run the sync.
    CAUTION: Add only servers that you trust. The names, descriptions and outputs of their tools go to the model.
    A bad server can put instructions in them (prompt injection). Refer to R51 in `docs/security.md`.
 
-   The sync stops if a server is on a host that is not in the list. The sync makes no changes in that case.
-3. Run the sync: `scripts/mcp-sync.sh <spec>`
-   The bootstrap also runs this script.
+   The operator makes no changes in ContextForge if a server is on a host that is not in the list. The
+   `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
+3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
+   You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
+   `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
@@ -482,7 +907,7 @@ Before you start, make sure that Prometheus or Loki operates in the cluster. age
    ```
 
 5. Add `obs-mcp.agentdev-platform.svc.cluster.local` to the allow-list (`MCP_ALLOWED_HOSTS` or `mcp_allowed_hosts`).
-6. Run the sync: `scripts/mcp-sync.sh <spec>`
+6. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the project.
 7. Start each agent of the project again: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 CAUTION: The tools send log lines and metric labels to the model. The pod removes common credential shapes from the
@@ -523,19 +948,53 @@ cannot close its code block. The output goes only to the model. agentdev does no
 
 ### Reference: the MCP sync
 
-You can run `scripts/mcp-sync.sh` again with no risk. It does these actions:
+The operator syncs each `McpProject` (short name `mcpp`) in the agents namespace (#383). The name is the project:
 
-- It stops if a server host is not in the allow-list.
+```yaml
+apiVersion: agentdev.dev/v1alpha1
+kind: McpProject
+metadata: {name: web, namespace: coding-agents}
+spec:
+  servers:
+    - {name: docs, url: http://docs-mcp.tools.svc.cluster.local:8080/mcp}
+  agents: [alice, bob]
+```
+
+The sync runs at each change and every 6 hours (`MCP_RESYNC_MINUTES` on the operator). It does these actions:
+
+- It stops if a server host is not in the allow-list (`MCP_ALLOWED_HOSTS` on the operator, from `mcp_allowed_hosts`).
+  The allow-list is an instance setting. An `McpProject` cannot change it.
 - It registers each server as the gateway `<project>-<name>`.
 - It builds the virtual server `project-<project>` from the tools of the gateways.
 - It makes one token for each agent, for that server only.
 - It keeps the token in the Secret `agent-<name>-mcp` (`CF_URL`, `CF_TOKEN`).
 
 Tokens are valid for one year. A sync in the last 30 days of a token makes a new token and revokes the old token.
-When you remove an agent from `agents:` (or remove `mcp:`), the next sync deletes its Secret and revokes its token.
+When you remove an agent from `agents:` (or remove the servers), the next sync deletes its Secret and revokes its
+token. When you delete the `McpProject`, the operator revokes all its tokens and deletes their Secrets.
+
+The operator cannot read the Secrets in the agents namespace (#452). It keeps the token id, the server and the renew
+time in the `McpProject` status. At each sync it tells if `agent-<name>-mcp` exists with a dry-run create (no read).
+- If the Secret is missing (deleted by hand), the sync makes a new token, writes the Secret and revokes the old token.
+- The operator does not see a changed Secret (edit drift). To repair a changed or doubtful Secret, delete it:
+  `kubectl -n coding-agents delete secret agent-<name>-mcp`. The next sync (at most `MCP_RESYNC_MINUTES`, or at once
+  after any change to the `McpProject`) makes it again with a new token.
+
+The operator reads the ContextForge admin password from the Secret `contextforge` in `agentdev-platform` (key
+`PLATFORM_ADMIN_PASSWORD`). Its Role there can read only that Secret. The status shows the result, never a token:
+
+| `Ready` reason | Meaning |
+|---|---|
+| `Synced` | The gateways, the virtual server and every agent token are in place |
+| `NoServers` | The spec has no servers; no tokens |
+| `HostNotAllowed`, `InvalidServer` | A server is refused; nothing changed in ContextForge |
+| `ContextForgeUnavailable` | ContextForge is not deployed or the admin login failed |
+| `NoTools` | ContextForge found no tools on the servers; make sure that they operate |
+| `SyncFailed` | A ContextForge call or a Secret failed; the message names the step |
 
 The worker gives Claude `--strict-mcp-config`, so only the tools of the gateway are available. NetworkPolicies close
-Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace. GKE
+Postgres to all pods except ContextForge. They close ContextForge to all namespaces except the agents namespace and
+the operator pod. GKE
 applies the NetworkPolicies, because the Terraform cluster uses Dataplane V2 (`ADVANCED_DATAPATH`). Local `kind`
 (kindnet) does not.
 
@@ -593,8 +1052,9 @@ authentik, set `authentik.enabled: false`.
 
 `akadmin` is the break-glass admin. authentik makes it at the first start with the password from Secret Manager
 `platform-authentik-admin`. A password that you change in the UI stays: authentik uses the first password only once.
-The playbook adds `akadmin` to `agentdev-admins` with an add-only call. It never removes a member, and it fails when
-authentik has no active superuser.
+The Job `authentik-breakglass-<hash>` (role `authentik`, #382, `manifests/db-init/breakglass.py`) adds `akadmin` to
+`agentdev-admins` with an add-only call. It never removes a member, and it fails when authentik has no active
+superuser.
 
 WARNING: Do not delete `akadmin`, do not deactivate it, and do not remove its password login. Keep its password and
 the MFA recovery codes in the password manager of the owner. If the Workspace source fails, this is the only login.
@@ -841,6 +1301,29 @@ Do this task after run.sh step 09.
 
 NOTE: authentik writes the login URL into the token. Thus, `API_OIDC_ISSUER` must be the same URL.
 
+### Run log of jobs (#425)
+
+The agents send the run log of each job (what Claude writes, its tool calls and their results) to the API. The console
+shows it in the **Run** tab of a job. The path is: the worker reads Claude's output while it runs, the forge sidecar
+(`POST /run-events`, localhost only) checks and forwards it, and the API's internal listener
+(`agentdev-api-internal:8081`, `POST /internal/run-events/<agent>`) stores it. The API accepts a batch only from a
+running pod of that agent (`app=coding-agent,agent=<name>`), so an agent cannot write the run log of another agent.
+
+| Limit | Value | Where |
+|---|---|---|
+| One text (assistant text, tool input, tool output) | 2 KB, then `[clipped]` | worker (`RUN_EVENT_CLIP`); the sidecar clips at 4 KB |
+| One job | 2 MB, then one "truncated" step | worker (`RUN_LOG_MAX`); the API refuses more than 3 MB |
+| One batch | 100 steps, 256 KB | sidecar and API |
+| Retention | 30 days | Postgres table `job_events`, removed daily by `job_events_prune()` |
+
+The worker and the sidecar replace credential shapes (GitHub, GitLab, Slack, AWS and OpenAI style keys, private keys,
+`password=`/`token:` values, bare `Bearer` tokens, a private key whose END line was clipped) and the values of token variables in their environment with `[redacted]`. Without a
+database (`DATABASE_URL` empty) the API keeps the run log in memory: it is lost on restart.
+
+If the API or the sidecar does not answer, the run log of that moment is lost; the job continues. The run log is never
+in a container log: to read it, use the console or `GET /api/jobs/<agent>/<job>/events?repo=<owner/name>` with a
+bearer token.
+
 ### Deploy the API on GKE
 
 The playbook deploys the API after the platform namespace. It uses the same manifest, schema and grants as run.sh
@@ -894,6 +1377,9 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 | `api.approval_deny_accounts` | `[]` | `APPROVAL_DENY_ACCOUNTS` (comma-separated) |
 | `approvals.enabled` | `true` | `APPROVALS` (`false`) |
 | `usage.five_hour`, `usage.weekly` | `80`, `90` | `USAGE_FIVE_HOUR`, `USAGE_WEEKLY` |
+| `notifications.channels` | `[]` (off) | `NOTIFY_CHANNELS` (empty; `webpush` turns it on) |
+| `notifications.subject` | none (required with `webpush`) | `NOTIFY_SUBJECT` (`mailto:admin@agentdev.local`) |
+| `notifications.push_hosts` | FCM, Mozilla, Apple, Windows push services | the same list |
 
 - The API and the operator get the same `approvals.enabled` and `usage` values.
 
@@ -903,6 +1389,58 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
   changes, the playbook restarts the API.
 - The optional secrets `agentdev-api-forge-token` and `security-siem` can be empty. When a secret has no enabled
   version, the playbook acts as if the secret is not there.
+
+### Turn on push notifications
+
+The API can send Web Push notifications to the people who subscribe in the web UI (#347). Each person chooses the
+types and mutes projects in **Settings**. The instance value turns the channel on or off.
+
+1. In `instance.yml`, add:
+   ```yaml
+   notifications:
+     channels: [webpush]
+     subject: mailto:ops@example.com
+   ```
+   On `kind`, set `NOTIFY_CHANNELS=webpush` and `NOTIFY_SUBJECT` in `config.env`.
+2. Run the playbook (`deploy.yml`), or `ansible-playbook infra/ansible/kind.yml --tags api` on `kind`.
+3. Check the result: `kubectl -n agentdev-platform get notificationchannels`.
+   The list shows `webpush` with the type `webpush`.
+4. Check the API log: `kubectl -n agentdev-platform logs deploy/agentdev-api | grep "web push"`.
+   The log shows "web push: on (NotificationChannel webpush)" in less than one minute.
+
+To turn it off, remove `webpush` from `notifications.channels` and run the playbook again. The playbook removes the
+`NotificationChannel`. The key pair stays, so the subscriptions work again when you turn it on.
+
+CAUTION: Do not delete or replace the VAPID key pair. All browser subscriptions then stop, and each person must
+subscribe again.
+
+### Reference: push notifications
+
+- `NotificationChannel` (`agentdev.dev/v1alpha1`, short name `nch`) is a resource in the platform namespace. Only
+  cluster admins write it. Fields: `type` (`webpush`), `subject` (`mailto:` or `https://`), `vapid.secretRef.name`
+  and `allowedHosts` (host names or `*.suffix`, max. 20).
+- The playbook makes the VAPID key pair one time: Secret Manager `platform-notify-vapid` on GKE, the file
+  `.secrets/platform/notify-vapid` on `kind`. It copies the pair to the Secret `agentdev-api-vapid`. The API can read
+  only this Secret, by name.
+- The API reads the `NotificationChannel` each minute. Without one, the push endpoints give 404.
+- A subscription is accepted only for an `https` URL on port 443 on a host of `allowedHosts`. The API refuses a
+  private, loopback or link-local address after DNS.
+- The API checks for new items each 15 seconds: pending approvals, agents paused by a guardrail or blocked, and
+  usage pauses. It sends to each person who can see the agent (`agentdev-admins`, or write access on the forge,
+  checked again for each notification) and who did not mute the project or the type.
+- Max. 30 notifications for each person in 10 minutes. Max. 10 devices for each person.
+- When a push service says 404 or 410, the API removes that subscription.
+- The data is in the API database: `push_subscriptions`, `notify_settings`, `notify_users` and `push_action_nonces`.
+- Bark: #402. Network-level egress policy for the API: #403.
+
+| Endpoint | Gives |
+|---|---|
+| `GET /api/push/vapid-public-key` | `publicKey` of the VAPID key pair. 404 when push is off |
+| `POST /api/push/subscriptions` | adds the `PushSubscription` of this browser (`endpoint`, `keys.p256dh`, `keys.auth`). 201, 400 for a bad endpoint or key, 409 over 10 devices |
+| `DELETE /api/push/subscriptions?endpoint=` | removes one subscription of the caller |
+| `GET /api/notify/settings` | `channels`, `types`, `mutes`, `projects` (the caller may mute), `subscriptions`, `snoozeMinutes`, `vapidPublicKey` |
+| `PUT /api/notify/settings` | `{types: {approvals, stopped, usage}, mutes: [{project, type}]}`; `type` `*` mutes the whole project. Replaces the caller's settings. Max. 30 changes a minute (429) |
+| `POST /api/push/action` | `{token}` from a notification button: `deny` or `snooze`. No bearer token: the action token is the credential. 401 for a bad or expired token, 409 when it was used |
 
 ### Connect to the API
 
@@ -921,12 +1459,18 @@ A discovery URL in the cluster (`*.svc` or `*.svc.cluster.local`, authentik on G
 |---|---|
 | `GET /api/me` | the caller (`sub`, `preferred_username`, `email`) |
 | `GET /api/agents` | each agent: `name`, `repos`, `forge`, `phase` (`running`, `starting`, `stopped`, `paused`, `blocked`, `invalid`), replicas, `managed` (an Agent object exists; `false` for a StatefulSet from before the operator), `paused`, `maxConcurrent`, `scaleToZero` (#57), `securityEvents` (count, last 7 days, #70) |
-| `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events |
-| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308) |
+| `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events. The action `permission` (#505) records a change of `spec.permission` of an Agent, with `before.permission` and `after.permission` |
+| `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). Only for `agentdev-admins` members: `permission` (#505), the permission mode `mode` (`dontAsk` or `auto`) and the classifier rules `autoMode` (`allow`, `softDeny`, `environment`). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
+| `GET /api/platform` | the health of the platform for the Platform page (#344). Only `agentdev-admins` (403 for other users). It gives `version`, `checked` and `components`: `api`, `router`, `operator`, `claude-proxy`, `authentik`, `forge-token`, `egress-proxy` and `agent-pool`. Each has `status` (`ok`, `degraded`, `down`, `absent`, `unknown`), `detail` and a `command` to look deeper. It gives no Secret values. |
+| `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 30 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. Same visibility as the agent drawer. |
+| `GET /api/stream` | live updates for the console (#345), server-sent events. Each message is `event: <type>`, `id: <n>`, `data: {"type", "time", "data"}`. Types: `hello` (`heartbeatSeconds`), `heartbeat` (every 15 s), `agents` (the visible agent list), `approval` (one approval, on create and change), `approval-removed` (`name`), `security-event` (one event), `usage` (read `GET /api/usage` again), `bye` (`reason`; reconnect). Only items the caller may see, with the rules of their list. The stream ends after 30 minutes, max. 5 streams for each user (429). Read it with `fetch()` and the bearer token. |
+| `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308). `repo` and `scope` as below |
 
-| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. |
+**Filters on the lists** (#345). `GET /api/agents`, `GET /api/approvals`, `GET /api/security-events` and `GET /api/jobs` take `repo=owner/name` (only items of that repository) and `scope=mine` (only repositories where the caller has write access, also for admins; `scope=all` is the default). `GET /api/agents`, `GET /api/approvals` and `GET /api/jobs` also take `limit` and `cursor`; `next_cursor` in the answer gives the next page. A filter only narrows: it never shows an item the visibility rule hides.
+
+| `PATCH /api/agents/{name}` | changes `paused`, `maxConcurrent` (1 to 8) or `scaleToZero` (JSON merge patch). Gives the agent. With `agents_source: git`, an agent from Git accepts only `paused`; other fields give 409 (#58). |
 | `POST /api/agents` | adds an agent: `name`, `repo`, and optional `forge`, `claudeSecret`, `maxConcurrent`, `scaleToZero`. Gives 201. |
-| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. |
+| `DELETE /api/agents/{name}` | removes the Agent object. The volumes stay. `?keepState=true` is the default; `false` gives 400. Gives 204. An agent from Git gives 409 (#58). |
 
 ### Give the API access to the forge
 
@@ -1312,6 +1856,45 @@ source `ingress` and rule `forwarder-not-ready`. The SIEM outputs get the event.
 change the time, set `ingress.forwarder_not_ready_minutes`. The playbook gives the operator a Role in the forwarder
 namespace that can only read pods. Without `pod_selector`, the monitor is off.
 
+#### Deployed forwarder
+
+With `ingress.forwarder.deploy`, the playbook also runs the funnel forwarder of headlamp (#316). Before, the
+deployment repository applied its own manifest, and a forwarder that lost its route registration stayed not Ready
+until somebody restarted it (headlamp#95).
+
+1. Put the pre-auth key in the Secret Manager secret `funnel-sidecar-authkey` (other name:
+   `ingress.forwarder.deploy.authkey_secret`).
+2. In `ansible/instance.yml`, set the forwarder namespace, the pod selector and `deploy`:
+
+   ```yaml
+   ingress:
+     mode: external
+     forwarder:
+       namespace: agentdev-funnel
+       pod_selector: {app: funnel-forwarder}
+       deploy:
+         image: ghcr.io/valentinalexeev/headlamp/funnel-sidecar:0.19.0   # a release, a sha tag or a digest
+         control_url: https://headscale.example.com
+   ```
+
+3. Run the playbook. It makes the namespace, the Secret `funnel-sidecar`, a Deployment with one replica, and a
+   NetworkPolicy. The forwarder can reach DNS, the UI, the router's public port, authentik and public addresses.
+   Nothing can connect to it.
+4. Delete the old manifest from the deployment repository (for example `k8s/funnel-forwarder.yaml`). The Deployment
+   name `funnel-forwarder` stays the same, so the playbook takes over the existing Deployment. Kubernetes does not
+   let a run change the selector of a Deployment: when the old selector is not `ingress.forwarder.pod_selector`, the
+   run fails. Then delete the old Deployment
+   (`kubectl -n agentdev-funnel delete deployment funnel-forwarder`) and run the playbook again.
+
+The readiness probe and the liveness probe ask `/readyz`. It answers 200 only while every route is registered. The
+liveness probe restarts the pod after 10 minutes without registration (`liveness_period_seconds` 30 x
+`liveness_failure_threshold` 20). The published Services are, by default, the UI, `/hook` of the router, and authentik
+when the role deploys it (`deploy.services`, format `name=port@host:port`). The router's internal port 8081 is never
+published. The playbook refuses an image tag `main` or `latest`, and a `control_url` that does not use `https`. A new
+key version in Secret Manager restarts the forwarder on the next run. The NetworkPolicy blocks private, CGNAT and
+link-local addresses. When headscale or `funnel-ingress` has such an address, add it in `deploy.egress_cidrs`
+(for example `[100.64.0.0/10]`; no range wider than `/8`).
+
 NOTE: `ingress.forwarder` also operates with `mode: gateway`. Then the router policy also keeps the Google load
 balancer ranges.
 
@@ -1389,6 +1972,11 @@ default. To turn on approvals on kind, do the steps that follow.
    minutes. After this time, the agent continues without the action, but the request stays open.
 3. Run `./run.sh 10` and then `./run.sh 12`.
    The operator starts the agent pods again with the new setting.
+
+NOTE: The agent asks for permission through Claude Code's `can_use_tool` host protocol (`permission-host` in the
+worker image, #539). The request then shows Claude Code's reason, the blocked path and the suggested rule. The
+decision rules do not change. The environment variable `APPROVAL_HOST=off` on the agent container switches back to
+the MCP prompt tool `mcp__agentdev__approve`, which sends only the tool and its input.
 
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`). The
 API also keeps them in Postgres. To see them, open `GET /api/audit` (admin group). A decision in the web UI has
@@ -1575,7 +2163,7 @@ for the rows in Postgres. The API cannot change the database retention.
 The agents can connect to the internet only through the egress proxy (`egress-proxy`, #65). The proxy lets an agent
 connect only to the hosts on the allow-list. The default list contains the Claude API, GitHub, npm, PyPI, the Go
 module proxy and crates.io. A NetworkPolicy stops all other connections from the agent pods. On `kind`, this
-NetworkPolicy operates only with kind v0.24 or later. `./run.sh 00` makes sure of this.
+NetworkPolicy operates only with kind v0.24 or later. `kind.yml --tags prereqs` (and `--tags cluster`) makes sure of this.
 
 ### Add a host to the allow-list
 
@@ -2041,6 +2629,36 @@ Differences from GitHub (#241):
   repository-wide list of issue events. Thus, the monitor does not show `action` events (who closed, who added a
   label) on Gitea. Gitea has no `blocked` merge state: the monitor shows `clean` or `conflict`.
 
+### Connect an external Gitea on GKE
+
+agentdev does not run Gitea on GKE. It connects to a Gitea that you already operate (#442). The in-cluster Gitea of
+the Ansible role `gitea_forge` is for kind only.
+
+1. In `ansible/instance.yml`, set `forge_kind: gitea` and `forge_url: https://<your gitea host>`.
+   The playbook refuses a URL that is not `https://`. It adds the host to the egress hosts of the forge sidecar (Squid
+   and the FQDN network policy). The agent container cannot reach the host.
+2. On Gitea, make one account for each agent and give each a token with the scopes
+   `write:repository,write:issue,read:user`.
+3. Put each token in Secret Manager as `agent-<name>-forge-token`.
+4. Optional: make the account `agentdev-api` with a token `read:repository,read:user` and put it in
+   `agentdev-api-forge-token`. Make the account `agentdev-router` with a token `read:repository,read:issue` and put
+   it in `router-poll-forge-token` (wake poll).
+5. Put the webhook secret in `github-app-webhook-secret` (the name stays for Gitea too).
+6. Do one of these steps for collaborators, labels, the webhook and branch protection:
+   - Set them by hand on Gitea (the same rules as the reference below), or
+   - Set `forge_init: {enabled: true}` and put an admin token of Gitea in the Secret Manager entry
+     `gitea-admin-token`. This needs `external_secrets.mode: external`. In `terraform/instance.tfvars`, also set
+     `external_secrets = true` and `forge_init = true` and apply (#459). Then the store `agentdev-platform-secrets`
+     can read `gitea-admin-token` and `github-app-webhook-secret`. The Job `forge-init-<hash>` in `agentdev-platform` uses the Gitea API only. It makes the
+     agents write collaborators, `agentdev-api` admin collaborator and `agentdev-router` read collaborator. It also
+     makes the label `agent:<name>`, one webhook to the router, and the branch protection (one approval by
+     `reviewer`). It does not make tokens or repositories. With `create_accounts: true` it also makes missing agent
+     accounts. When Gitea is outside the cluster, set `forge_init.hook_url` to the public webhook URL of the router.
+     For a private CA, put `ca.crt` in a ConfigMap in `agentdev-platform` and set `forge_init.ca_configmap`.
+
+NOTE: The Job has no Kubernetes API token. Only the Job reads the Secret `forge-init` (ESO, #381). The same inputs
+give the same Job name. To run it again with the same inputs, set `forge_init.rerun` to a new string.
+
 ## Limits and blocked agents
 
 ### Set a quota for the agents
@@ -2116,6 +2734,68 @@ NOTE: Kubernetes removes a finished session 5 minutes after it ends.
 If botboard runs (`./run.sh 07`, #26), each open session shows as a card (agent `chat`). The card changes to `done`
 when the session stops. `CHAT_URL` sets the link of the card. When #12 is done, it will go to the chat page of the UI.
 
+### Console chat sessions
+
+The API can start sessions for the console Chat page (#346). These sessions are Jobs that run
+`chat-session-server`. Only the API connects to the session pod (NetworkPolicy and a token for each session).
+
+A session pod is the pod of its agent (#424). The API copies the pod template of the StatefulSet `agent-<name>` that
+the operator makes, and changes only the parts that make it interactive:
+
+- The `agent` container becomes the `chat` container. It runs `agent-chat-session` (`chat-session-server`) on port
+  7681 with the session's control token, not the autonomous loop.
+- The `forge` sidecar is the agent's sidecar: the same image, forge credential, egress proxy key and security context.
+  It does not register with the router and does not listen for wakes (no `WAKE_TOKEN`, `REGISTER_TOKEN` or
+  `SELF_URL`), and it does not file approval requests (`APPROVALS=false`).
+- `/state` is an empty volume, not the agent's disk. The pod labels are `app=agent-chat`, so the pod is not in the
+  agent's Service and the operator does not take it for the agent.
+
+So the session uses the agent's paths: the repository comes through the sidecar (`agentdev-forge sync`, the same git
+bundle as the loop), forge calls and pushes go through the sidecar and its rules (`agentdev-forge api`,
+`agentdev-forge push agent/<name>/...`), and Claude uses the agent's identity at `claude-proxy`, its MCP Secret
+`agent-<name>-mcp` and its egress allow-list. This works on GitHub too: the forge hosts are reached only by the
+sidecar with its egress key. The `chat` container holds no forge token and no egress key.
+
+Tool permissions: the session asks in the console (**Allow once** or **Deny**), not through the agent's approval
+comments. The agent's approval path needs an issue or a pull request of the agent to comment on, and a session has
+none. A push to a protected path is refused by the sidecar at once (as for an agent with approvals off).
+
+The admission policy `agentdev-api-chat-jobs` allows only this shape: the containers `chat` (worker image) and
+`forge` (forge image), the init container `state-init`, the service account `agent-<name>`, and only the Secrets of
+the agent in the Job label, each in the container that has it in the agent pod. The API reads no Secret; its Role is
+not changed. A session can start only after the operator has made the agent's StatefulSet.
+
+1. Set `api.chat.enabled: true` in `ansible/instance.yml`.
+2. Run the Ansible `deploy.yml`.
+   On GKE, Ansible makes the Secret Manager entry `agentdev-api-chat-token-key` once.
+
+| Setting (`api.chat`) | API variable | Default | Meaning |
+|---|---|---|---|
+| `enabled` | `CHAT_SESSIONS` | false | Turns on the session API. |
+| `idle_minutes` | `CHAT_IDLE_SECONDS` | 30 | The session stops this time after the last viewer leaves. |
+| `retention_days` | `CHAT_RETENTION_DAYS` | 30 | The API deletes transcripts that are older. |
+| `max_sessions` | `CHAT_MAX_SESSIONS` | 0 (no limit) | Maximum sessions that run at the same time. |
+| `max_sessions_per_user` | `CHAT_MAX_SESSIONS_PER_USER` | 0 (no limit) | Maximum sessions of one person. |
+| | `CHAT_MAX_SECONDS` | 28800 | Maximum time of one session. |
+
+Optional secret, on Gitea: `agentdev-chat-issue-token` (site admin, `write:issue`, used with `Sudo`, so the issue
+author is the person). Since #424 there is no clone token: the Secret Manager entry `agentdev-chat-clone-token` is
+not read any more (you can delete it), and the playbook removes the Secret `agentdev-chat-clone`.
+
+Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
+
+Notes:
+
+- The API and the worker must run the same `image_tag` (ADR 0006): the API starts the worker image's
+  `chat-session-server`. Chat is off by default, so an instance that does not turn it on is not affected.
+- A terminal view (`tmux attach -t chat` in the session pod) keeps a session open for at most 2 hours
+  (`CHAT_TERMINAL_MAX_SECONDS` in the pod) after the last console viewer. Claude runs as the same user as tmux, so it
+  could fake a terminal client; only console presence, reported by the API, renews the session without limit.
+- The terminal view renders `/state/chat/events.jsonl`, which Claude can also write. It is display only; the console
+  reads the events from the session server's memory.
+- On GitHub, the issue author is the GitHub App, not the person. The issue body names the person who selected
+  **Create issue**, and the audit log records them.
+
 ## Webhooks
 
 Each repository has one webhook to the router. The run.sh step 06 (`06-agents.sh`) or the bootstrap registers it.
@@ -2184,6 +2864,229 @@ Do this task before maintenance of a node, for example.
 3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
    `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
 
+### Show the plan on deployment pull requests
+
+Do this task once per deployment repository on GKE. Then each pull request gets a `terraform plan` comment (#291).
+The plan uses the read-only service account `agentdev-plan`. This account cannot change resources.
+
+The identity is opt-in (`create_plan_identity`, default `false` since #421), because the apply account of the
+bootstrap may not create it.
+
+1. Use an agentdev release that contains #291 and #421 (`ref=` and `image_tag`).
+2. You (the owner) give the apply account these one-time grants. The apply account cannot give them to itself.
+   Without them `terraform apply` stops half way with 403 (#421).
+   ```bash
+   SA=agentdev-automation@<project_id>.iam.gserviceaccount.com
+   gcloud projects add-iam-policy-binding <project_id> --member=serviceAccount:$SA \
+     --role=roles/iam.workloadIdentityPoolAdmin --condition=None
+   gcloud storage buckets add-iam-policy-binding gs://<project_id>-tfstate --member=serviceAccount:$SA \
+     --role=roles/storage.admin
+   # only with create_budget = true (the default)
+   gcloud billing accounts add-iam-policy-binding <billing_account_id> --member=serviceAccount:$SA \
+     --role=roles/billing.admin
+   ```
+   - `roles/iam.workloadIdentityPoolAdmin`: create the pool `github-pr` (`iam.workloadIdentityPools.create`).
+   - `roles/storage.admin` on the state bucket: the read grant for the plan account
+     (`storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`).
+   - `roles/billing.admin` on the billing account: the `roles/billing.viewer` grant for the plan account
+     (`billing.accounts.setIamPolicy`; only with `create_budget`).
+3. In `terraform/main.tf` set `create_plan_identity = true` in the module block. In `ansible/instance.yml` set
+   `plan_identity: true` and `plan_identity_billing_account: <billing_account_id>` (`""` with
+   `create_budget = false`; `plan_identity_state_bucket` if the state is not in `<project_id>-tfstate`).
+   The preflight (`scripts/upgrade-check.sh`) then checks the grants and prints the missing commands.
+4. Run `terraform plan`, then apply it. The apply makes `agentdev-plan`, the Workload Identity pool `github-pr`
+   and the read grants.
+5. Run `terraform output github_actions_auth`.
+6. In the deployment repository, set the repository variable `GCP_PLAN_WIF_PROVIDER` to
+   `plan_workload_identity_provider`.
+7. Set the repository variable `GCP_PLAN_SERVICE_ACCOUNT` to `plan_service_account`.
+8. Copy the new `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke/`.
+9. In the branch protection of `main`, require the `plan` check.
+10. Make sure that only trusted persons can push branches to the repository. A pull request from a branch of the
+    repository can read the Terraform state (docs/security.md R115).
+11. Open a test pull request. Make sure that the `plan` job posts a comment that starts with `terraform plan`.
+
+What the plan identity can do:
+
+- It can read all resources of the project (`roles/viewer`) and their IAM policies (`roles/iam.securityReviewer`).
+- It can read the Terraform state bucket (`roles/storage.objectViewer`). It cannot lock or write the state, so the
+  plan runs with `-lock=false`.
+- It can read the budget (`roles/billing.viewer`, only with `create_budget`).
+- It cannot read Secret Manager values. It cannot change resources or IAM.
+- Only `pull_request` runs of `github_repository` get it. A pull request from a fork gets no token.
+
+To check that the identity cannot apply, run `terraform apply` with it once. The apply must fail with `403`.
+To remove the identity, set `create_plan_identity = false` and `plan_identity: false`, then apply. You can then
+remove the three owner grants again.
+
+### Render the manifests for a GitOps engine
+
+`infra/ansible/render.yml` renders the manifests of one instance to a directory (#384). A GitOps engine (Argo CD,
+Flux) can then apply them. The render does not connect to the cluster or to Secret Manager. The output contains no
+secret values. `deploy.yml` uses the same renderer (`tasks/render_objects.yml`), so both give the same objects.
+
+The render reads the cluster facts from the instance values in `platform`:
+
+| Value | Meaning | Source |
+|---|---|---|
+| `platform.egress.fqdn` | `gke`: FQDNNetworkPolicy for the egress proxies and the Claude proxy. `none`: Squid only | `terraform output platform` |
+| `platform.ingress.gateway_api` | the cluster serves the Gateway API (necessary for `ingress.mode: gateway`) | `terraform output platform` |
+| `platform.ingress.certificate_domains` | the domains of the managed certificate; `ingress.auth_host` must be one of them | `terraform output platform` |
+| `platform.kube_version` | the Kubernetes minor version of the cluster, for `helm template` | `terraform output platform` |
+| `platform.kube_api_ips` | the addresses of Service `default/kubernetes`, for the Claude proxy NetworkPolicy | `terraform output platform` |
+
+1. Apply `infra/terraform` with an agentdev release that contains #384.
+2. Copy `terraform output platform` into `platform` of `ansible/instance.yml`.
+3. Render the manifests:
+   ```bash
+   ansible-playbook infra/ansible/render.yml -e @ansible/instance.yml -e render_dir=$PWD/rendered
+   ```
+4. Check the output:
+   ```bash
+   kubeconform -strict -ignore-missing-schemas rendered/
+   gitleaks dir rendered/
+   ```
+5. With `external_secrets.mode: playbook`, make the Secrets in the list `rendered/SECRETS.md`. Use `deploy.yml`.
+   With `external_secrets.mode: external`, go to the next step. The output contains the ExternalSecrets (#457).
+6. Give the directory to the GitOps engine. Apply the files in the order of their numbers. For Flux, use the
+   procedure "Install an instance with Flux".
+
+The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authentik and API objects (#447):
+
+- The authentik chart is `helm template` output. The render needs `helm`. The output has no Helm hooks.
+- The database steps are the same Jobs that `deploy.yml` applies (#382): `agentdev-db-init-<hash>` (roles, schema,
+  grants and the schema version that the API waits for), `authentik-db-init-<hash>` and `authentik-breakglass-<hash>`.
+  They read the passwords from the Secrets `platform-db`, `agentdev-api-db` and `authentik` by name. A changed schema
+  gives a new Job name. Remove the Jobs of an old hash with the pruning of the GitOps engine.
+- The authentik Deployments have the annotation `secret.reloader.stakater.com/reload: authentik,authentik-sso`.
+  Reloader (#445) restarts them when one of these Secrets changes. Without Reloader, restart them by hand after a
+  change: `kubectl -n agentdev-platform rollout restart deploy/authentik-server deploy/authentik-worker`. The pod
+  annotation `agentdev/config-hash` changes with the values file, the blueprints and the chart version.
+- `helm template` uses `platform.kube_version` (`terraform output platform`), or `1.36` when it is not set.
+- The render writes one `McpProject` for each spec in `mcp_projects` (#383). The operator registers the servers.
+- The render does not write the Secrets. With `external_secrets.mode: playbook`, their names are in `SECRETS.md`.
+- With `external_secrets.mode: external` (#457), the render writes the objects of the External Secrets Operator in
+  place of `SECRETS.md`. These are the same objects that `deploy.yml` applies:
+  - `secrets-policy.yaml`: the CEL policies (ValidatingAdmissionPolicy) for Secrets and ExternalSecrets.
+  - `secrets-stores.yaml`: one ServiceAccount and one SecretStore `agentdev-platform-secrets` in each namespace,
+    with the Google service account of `terraform output secrets_readers`.
+  - `externalsecrets.yaml`: the ExternalSecrets. They contain Secret Manager ids only, never a value.
+  - With `forge_init.enabled`, the ExternalSecret `forge-init` and the Job `forge-init-<hash>` (#442).
+
+  CAUTION: The GitOps engine must install the External Secrets Operator and Stakater Reloader before these files.
+  Use the chart versions of `infra/ansible/roles/external_secrets/defaults/main.yml`, with the same values as the role.
+  The render does not write the two charts.
+
+NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and
+`deploy.yml` reads the API server addresses from the cluster. `deploy.yml` does not read the cluster to select a
+template. The preflight (`crds`) compares `platform` with the cluster.
+
+The render refuses bad values before it writes a file. It uses the same checks as `deploy.yml` (`tasks/checks.yml`):
+labels, executors, approvals, Claude budget and wake source. Thus the CI of a deployment repository finds them
+before a merge.
+
+### Install an instance with Flux
+
+Flux applies the manifests of an instance from its deployment repository (#385). The deploy workflow renders the
+manifests and pushes them to the branch `gitops`. Flux applies that branch. The workflow does not call the Flux API.
+
+The template `examples/deployment/gcp-gke/gitops/flux/` has four layers. Flux applies them in this order
+(`dependsOn`):
+
+| Layer | Flux Kustomization | Contents |
+|---|---|---|
+| infrastructure | `agentdev-infrastructure` | External Secrets Operator chart 2.14.0 and the Helm repositories |
+| platform | `agentdev-platform` | the `render.yml` output without the agents: namespaces, CRDs, router, operator, platform, authentik, API, ingress, ExternalSecrets |
+| agents | `agentdev-agents` | the Agent and Executor objects (#58) |
+| reloader | `agentdev-reloader` | Stakater Reloader v2.0.0-beta.2 (chart 3.0.0-beta.5), after the platform layer |
+
+Reloader runs in scoped mode. It makes a Role in each namespace that it watches, thus it starts after the platform
+layer made these namespaces. The workflow sets the watched namespaces to the namespaces of the render
+(`rendered/reloader`). Thus `agentdev-executors` is watched only with executors, and the forwarder namespace only when
+the forwarder is deployed.
+
+All layers use `prune: true`: Flux removes an object that is removed from Git. Flux also corrects drift: it applies
+the state of Git again at each interval, and the HelmReleases use drift detection. The Flux controllers, the External
+Secrets Operator and Reloader run on the `system` node pool. They never stop the agent pool from scaling to zero
+(#181). No StatefulSet has `replicas` in Git, because the router sets the replicas of the agents.
+
+Before you start:
+
+- You did steps 1 to 6 of `AGENTS.md` (Terraform applied, Secret Manager values filled in).
+- `ansible/instance.yml` has `platform` from `terraform output platform` and `external_secrets: {mode: external}`.
+- You have the `flux` CLI v2.10.1 (the version of the agentdev release check, `scripts/check-flux-tree.sh`) and
+  `kubectl` access to the cluster.
+
+agentdev's Flux objects are named `agentdev`: the `GitRepository`, the root `Kustomization`, the deploy key Secret
+and the prefix `agentdev-` of the layers and the Helm repositories. `flux bootstrap` uses the name `flux-system`. Thus
+agentdev never changes the root sync of another tenant on the same cluster (#472).
+
+First, find out if Flux is already installed on the cluster:
+
+```bash
+kubectl get crd kustomizations.kustomize.toolkit.fluxcd.io
+```
+
+- The command shows `NotFound`: agentdev installs Flux. Do all the steps below.
+- The command shows the CRD: Flux is already installed. agentdev adds only its own objects and uses the Flux
+  controllers that are there. Do the extra part of step 1, skip steps 2 and 9, and skip the first command of step 10.
+
+1. Copy `examples/deployment/gcp-gke/gitops/` and `.github/workflows/deploy.yml` of the pinned release into the
+   deployment repository.
+   Flux already installed only: remove the line `- flux-system` from
+   `gitops/flux/clusters/agentdev/kustomization.yaml`, and remove the directory
+   `gitops/flux/clusters/agentdev/flux-system`. The existing Flux must be v2.x with the APIs
+   `source.toolkit.fluxcd.io/v1`, `kustomize.toolkit.fluxcd.io/v1` and `helm.toolkit.fluxcd.io/v2`, and it must
+   watch the namespace `flux-system`.
+2. Make sure that `flux version --client` shows `v2.10.1`. Then write the Flux controllers into the repository:
+   ```bash
+   flux install --export > gitops/flux/clusters/agentdev/flux-system/gotk-components.yaml
+   ```
+   The Flux controllers run on the node pool `system` (#181). If your cluster has no pool with this name, set
+   `value` in `gitops/flux/clusters/agentdev/flux-system/controller-nodepool.yaml` to the name of your system pool.
+3. Copy `gitops/flux/clusters/agentdev/sync/gotk-sync.yaml.example` to `gotk-sync.yaml`.
+4. In `gotk-sync.yaml`, set `url` to the SSH address of the deployment repository.
+5. Set the repository variable `DEPLOY_ENGINE` to `flux`. The workflow then runs the jobs `render` and `verify` in
+   place of the job `deploy`.
+6. Merge these changes into `main`. The job `render` pushes the branch `gitops`. If Flux is not installed yet, the
+   job `verify` skips its checks and shows the notice "Flux not installed". This is expected.
+7. Make a read-only deploy key and the Secret `agentdev`:
+   ```bash
+   kubectl create namespace flux-system    # only when Flux is not installed
+   flux create secret git agentdev --namespace flux-system --url=ssh://git@github.com/<owner>/<deployment-repository>
+   ```
+   The command shows a public key.
+8. Add the public key as a read-only deploy key of the deployment repository.
+9. Install the Flux controllers and their CRDs, and wait until the CRDs are established:
+   ```bash
+   kubectl apply -f gitops/flux/clusters/agentdev/flux-system/gotk-components.yaml
+   kubectl wait --for condition=established --timeout=120s crd --all
+   ```
+10. Install the node pool patch of the Flux controllers (skip this command when Flux was already installed), then
+    agentdev's sync, the `GitRepository` and the root `Kustomization` named `agentdev`:
+    ```bash
+    kubectl apply -k gitops/flux/clusters/agentdev/flux-system
+    kubectl apply -k gitops/flux/clusters/agentdev/sync
+    ```
+11. Wait until all layers are ready:
+    ```bash
+    flux get kustomizations --watch
+    ```
+    `agentdev`, `agentdev-infrastructure`, `agentdev-platform`, `agentdev-agents` and `agentdev-reloader` show
+    `Ready True`. When Flux was already installed, the `Kustomization` objects of the other tenants do not change.
+12. Run the workflow `deploy` on `main`: in GitHub, open Actions, select `deploy`, then select "Run workflow". The job
+    `verify` waits until Flux applied the new revision, then it does the smoke test of the public hosts
+    (`infra/ansible/smoke.yml`).
+
+The job `verify` reads the status of the engine with `scripts/gitops-status.sh`. A layer is ready when its `Ready`
+condition is `True` for the current generation and for the commit of the job `render`. A stalled layer stops the job
+at once. A stopped agent is ready (#386), thus the instance is healthy with all agents stopped.
+
+CAUTION: Do not run `deploy.yml` of Ansible on a cluster that Flux operates. Both change the same objects.
+
+NOTE: Flux does not make the Secrets. The External Secrets Operator makes them from Secret Manager. A change of an
+agent (for example a new image) does not start a stopped agent. The change applies when the agent starts next.
+
 ### Upgrade the local installation
 
 Do this task after you pull a new `main` into an existing `kind` cluster.
@@ -2206,7 +3109,9 @@ shows a `DEPRECATED` message and runs the playbook. You must install `ansible-pl
 The shell wrapper of a step is removed one MINOR release after the step moved. Then use the playbook command in the
 message.
 
-NOTE: Step 06 runs step 12 only when the operator is not installed. On an existing cluster, step 12 must come after
+NOTE: Step 06 runs the playbook `infra/ansible/kind.yml` with the tag `agents` (#106). The playbook restarts the
+router, the Claude proxy and the agents only when an image or a Secret changed. Step 06 runs step 12 only when the
+operator is not installed. On an existing cluster, step 12 must come after
 step 06 to update the CRDs.
 
 ## Remove agentdev
@@ -2218,20 +3123,27 @@ a run.sh step or a manual `kubectl` command on GKE.
 
 | Component | `kind` (run.sh step) | GKE (playbook) |
 |---|---|---|
+| Host prerequisites (tools, engine, kind version) | 00 (`kind.yml --tags prereqs`) | not used |
 | Cluster with gVisor | 01 (`kind.yml --tags cluster`) | `infra/terraform` |
+| Coder front end (spike, deprecated) | 04 (not ported, removed with `run.sh` in 1.3.0) | not used |
 | agent-sandbox and warm pool (evaluation) | 02 (`kind.yml --tags sandbox`) | not used |
 | Checks of the warm pool, suspend and resume (evaluation) | 03 (`kind.yml --tags sandbox-test`) | not used |
 | Gitea forge, accounts, seeded repo | 05 (`kind.yml --tags forge`) | not used (GitHub, #2) |
 | botboard (optional) | 07 (`kind.yml --tags botboard`) | not used (`botboard_url`, an external botboard) |
-| Webhook router | 06 | `deploy.yml` |
-| Egress proxy | 06 | `deploy.yml` |
-| Claude credential proxy | 06 | `deploy.yml` (`claude_proxy: true`) |
+| Webhook router | 06 (`kind.yml --tags agents`, role `kind_agents`) | `deploy.yml` |
+| Egress proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` |
+| Claude credential proxy | 06 (`kind.yml --tags agents`) | `deploy.yml` (`claude_proxy: true`) |
 | Operator and CRDs | 12 (`kind.yml --tags operator`) | `deploy.yml` |
+| Scoped secrets store (External Secrets Operator, policies, store) | 13 (`kind.yml --tags secrets`, role `secrets_store`) | not yet (GKE parity in #202 part 4, PR #274) |
 | Platform namespace | 08 (`kind.yml --tags mcp`, role `platform`) | role `platform` |
 | authentik | 09 (`kind.yml --tags authentik`, roles `authentik` and `authentik_kind`) | role `authentik` |
 | API | 10 (`kind.yml --tags api`, role `api`) | role `api` (`api.oidc_issuer`) |
 | Web UI | 11 (`kind.yml --tags ui`, role `api`) | role `api` (`api.ui`) |
 | Public entry point | port-forward | role `ingress` (`ingress.host`) |
+| Delete the cluster | `99-teardown.sh` (`kind.yml --tags teardown`, tagged `never`) | `terraform destroy` |
+
+NOTE: Every run.sh step is now in `kind.yml` (#106), apart from step 04. `run.sh`, the numbered wrappers and
+`99-teardown.sh` are removed in 1.3.0 (#470). Then use `ansible-playbook infra/ansible/kind.yml --tags <tag>`.
 
 - The playbook waits until the operator, router, egress proxy, Claude proxy, API and web UI are ready. If one of
   them is not ready, the playbook stops with an error.
@@ -2243,7 +3155,8 @@ a run.sh step or a manual `kubectl` command on GKE.
 
 CAUTION: This procedure deletes the cluster and all data in it.
 
-1. Run `./99-teardown.sh`.
+1. Run `ansible-playbook infra/ansible/kind.yml --tags teardown` (or the deprecated `./99-teardown.sh`).
+   The tag `teardown` is also tagged `never`: no other run of `kind.yml` deletes the cluster.
 
 ### Remove a GKE instance
 

@@ -11,6 +11,9 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [agentdev.dev], resources: [agents, agents/status], verbs: [get, list, watch, update, patch]}
 - {apiGroups: [apps], resources: [statefulsets], verbs: [get, list, watch, create, update, patch, delete]}
 - {apiGroups: [""], resources: [services], verbs: [get, list, watch, create, update, patch, delete]}
+# workload identity (#352): one service account agent-<name> per agent (no token automount; the pod gets only a
+# projected claude-proxy token). No rights to bind roles or to create tokens.
+- {apiGroups: [""], resources: [serviceaccounts], verbs: [get, list, watch, create, update, delete]}
 # volume layout change (#173): the operator deletes an agent's old claims when it recreates its StatefulSet
 - {apiGroups: [""], resources: [persistentvolumeclaims], verbs: [get, delete]}
 - {apiGroups: [""], resources: [events], verbs: [create, patch]}
@@ -30,16 +33,77 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 # harness guide (#206): one key per agent, written by the operator only; agent pods mount their own key read-only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
+# toolchains (#499): the last good "<key>:<manifest hash>" per agent, read by the init container toolchain at pod start
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-toolchains], verbs: [get, update]}
 # scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
 # its fields); the operator never reads the synced Secrets
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [projectsecrets/status], verbs: [get, update, patch]}
 - {apiGroups: [external-secrets.io], resources: [externalsecrets], verbs: [get, list, watch, create, update, patch, delete]}
+# Secrets in the agents namespace (#381, #383, #452): the operator never lists, watches or reads a Secret here, except
+# get on the proxy signing key by name (never claude-shared or a forge token). It writes agent-<name>-proxy (#381) and
+# agent-<name>-mcp (#383) by server-side apply (create, patch) and deletes agent-<name>-mcp by name; the McpProject
+# controller keeps token id, server and renew time in the McpProject status. create, patch and delete cannot be
+# narrowed by a name pattern in RBAC: the ValidatingAdmissionPolicy agentdev-operator-secrets (below in this file,
+# applied in both secrets modes) limits writes to agent-*-proxy and agent-*-mcp and deletes to agent-*-mcp
+# (docs/security.md R52, R119)
+- {apiGroups: [""], resources: [secrets], resourceNames: [claude-proxy-signing], verbs: [get]}
+# toolchains (#499): the instance's setup proxy credential, copied into agent-<name>-setup-proxy
+- {apiGroups: [""], resources: [secrets], resourceNames: [egress-setup-proxy], verbs: [get]}
+- {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
+# MCP per project (#383, was scripts/mcp-sync.sh): McpProjects
+- {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/status], verbs: [get, update, patch]}
+- {apiGroups: [agentdev.dev], resources: [mcpprojects/finalizers], verbs: [update]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
+# Proxy keys (#381): the operator writes Secrets in the agents namespace only to keep agent-<name>-proxy (the HMAC of
+# the agent name, images/operator/proxykey.go). Its Role allows create and patch on all Secrets there (RBAC cannot
+# narrow them by a name pattern); this policy narrows the writes to agent-*-proxy names, and to agent-*-mcp
+# for the McpProject controller (#383, also deletes). It sits here, next to the Role,
+# so every path that applies the Role (deploy.yml in both secrets modes, the kind operator role) applies the guard too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-operator-secrets}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE, DELETE], resources: [secrets]}
+  matchConditions:
+  - name: operator
+    expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-operator'"
+  validations:
+  - expression: >-
+      request.name.startsWith('agent-') && (request.name.endsWith('-mcp')
+      || (request.operation != 'DELETE' && request.name.endsWith('-proxy')))
+    message: "the operator writes only agent-<name>-proxy (including agent-<name>-setup-proxy, #499) and agent-<name>-mcp Secrets, and deletes only agent-<name>-mcp, in the agents namespace"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-operator-secrets}
+spec:
+  policyName: agentdev-operator-secrets
+  validationActions: [Deny]
+---
+# MCP per project (#383): the ContextForge admin login, read by name from the Secret ContextForge starts with. Nothing else
+# in the platform namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [contextforge], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator-mcp, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator-mcp}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
 ---
 # deterministic executors (#69): own namespace, so their write credentials never sit next to agents. Only cluster
@@ -133,25 +197,38 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        - {name: TELEMETRY_INSTANCE, value: "${TELEMETRY_INSTANCE}"}   # #278: label agentdev_instance on every metric
+        - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
         - {name: FORWARDER_NS, value: "${FORWARDER_NS}"}
         - {name: FORWARDER_SELECTOR, value: "${FORWARDER_SELECTOR}"}   # k=v,k2=v2 (ingress.forwarder.pod_selector)
         - {name: FORWARDER_NOT_READY_MINUTES, value: "${FORWARDER_NOT_READY_MINUTES}"}
         - {name: SECRETS_STORE, value: "${SECRETS_STORE}"}   # #202: SecretStore of ProjectSecrets; empty = off
         - {name: SECRETS_REMOTE_PROPERTY, value: "${SECRETS_REMOTE_PROPERTY}"}   # kind store: value; GCP: empty
+        # MCP per project (#383): ContextForge in this namespace, its admin login from Secret contextforge
+        - {name: PLATFORM_NS, value: "${PLATFORM_NS}"}
+        - {name: MCP_ADMIN_EMAIL, value: "${MCP_ADMIN_EMAIL}"}
+        - {name: MCP_ALLOWED_HOSTS, value: "${MCP_ALLOWED_HOSTS}"}   # trusted MCP hosts (host or host:port); others: Ready=False
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: health, containerPort: 8081}]
+        ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 64Mi}
           limits: {memory: 256Mi}
 ---
-# no inbound traffic (it only calls the Kubernetes API)
+# no inbound traffic except the metrics scraper (it only calls the Kubernetes API)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
 spec:
   podSelector: {matchLabels: {app: agentdev-operator}}
   policyTypes: [Ingress]
-  ingress: []
+  ingress:
+  # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper pods (TELEMETRY_SCRAPER_SELECTOR) in its
+  # namespace (kind: Prometheus in monitoring, GKE Managed Prometheus: the collector in gmp-system); not from other
+  # pods of that namespace (Grafana, the OTLP collector), and never from agent pods
+  - from:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${TELEMETRY_SCRAPER_NS}}}
+      podSelector: {matchLabels: ${TELEMETRY_SCRAPER_SELECTOR}}
+    ports: [{port: 9464}]

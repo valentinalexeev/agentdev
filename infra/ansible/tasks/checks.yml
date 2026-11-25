@@ -1,0 +1,115 @@
+# Value checks of the instance (#384): run by deploy.yml and render.yml before anything is rendered, so the CI of a
+# deployment repository finds bad values before a merge. No cluster or Secret Manager access.
+- name: Instance values come from the deployment repo (see example.vars.yml)
+  ansible.builtin.assert:
+    that:
+      - gcp_project is defined and gcp_project | length > 0
+      - gcp_zone is defined and gcp_zone | length > 0
+      - image_tag is defined and image_tag | length > 0
+      - reviewer is defined and reviewer | length > 0
+      - agents is defined and agents | length > 0
+      # GitHub App (#2): App id (not secret) in instance.yml, validated; the private key in Secret Manager
+      - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
+      - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
+      - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
+      # external Gitea (#442): HTTPS only (tokens and the webhook secret travel to it)
+      - forge_kind != 'gitea' or forge_url is match('^https://[a-z0-9.-]+(:[0-9]{1,5})?(/.*)?$')
+      - not (forge_init.enabled | default(false) | bool) or forge_kind == 'gitea'
+      # #58: api (the playbook and the API write Agent objects) or git (Flux applies them from the deployment repo)
+      - (agents_source | default('api')) in ['api', 'git']
+    fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
+    quiet: true
+
+# #459: the forge-init Job reads gitea-admin-token through the store agentdev-platform-secrets, which exists only with
+# secrets_mode external (Terraform: external_secrets = true and forge_init = true)
+- name: Forge-init needs external secrets (#459)
+  ansible.builtin.assert:
+    that: not (forge_init.enabled | default(false) | bool) or secrets_mode | default('playbook') == 'external'
+    fail_msg: >-
+      forge_init.enabled needs external_secrets.mode: external, and in Terraform external_secrets = true and
+      forge_init = true (docs/admin.md, external Gitea)
+    quiet: true
+
+# Labels (#184): GCP and Kubernetes rules, the same as Terraform's labels validation. They reach a manifest
+# value (COST_LABELS), so check them before any task uses them.
+- name: Labels are valid (lower-case keys and values, environment dev/stage/prod)
+  ansible.builtin.assert:
+    that:
+      - agentdev_effective_labels is mapping
+      - agentdev_effective_labels.keys() | select('match', '^[a-z][a-z0-9_-]{0,62}$') | list | length == agentdev_effective_labels | length
+      - agentdev_effective_labels.values() | map('string') | select('match', '^[a-z0-9_-]{0,63}$') | list | length == agentdev_effective_labels | length
+      - agentdev_effective_labels.environment | default('prod') in ['dev', 'stage', 'prod']
+    fail_msg: "agentdev_labels: keys ^[a-z][a-z0-9_-]{0,62}$, values ^[a-z0-9_-]{0,63}$, environment dev, stage or prod."
+    quiet: true
+
+# Executor names and environments become parts of shell commands and object names below: check them before any
+# task uses them, with the same rules as the operator's validExecutor and the CRD (#69, review of #116).
+- name: Executors are valid (names, environments, image by digest, one executor per environment)
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name is string and item.name is match('^[a-z0-9-]{1,40}$')
+      - item.environment is defined and item.environment is string and item.environment is match('^[a-z0-9]([-a-z0-9]{0,28}[a-z0-9])?$')
+      - item.repo is defined and item.repo is match('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') and '..' not in item.repo
+      - item.image is defined and item.image is match('^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$')
+      - item.plan is defined and item.plan is sequence and item.plan is not string and item.plan | length > 0
+      - item.apply is defined and item.apply is sequence and item.apply is not string and item.apply | length > 0
+      - "'..' not in (item.path | default(''))"
+      - (item.egress_hosts | default([])) is sequence and (item.egress_hosts | default([])) is not string
+      - (item.egress_hosts | default([])) | reject('match', '^\\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
+      - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
+      - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
+      - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+    fail_msg: >-
+      executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
+      plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
+    quiet: true
+  loop: "{{ executors }}"
+  loop_control: {label: "{{ item.name | default('?') }}"}
+
+- name: "Approvals need agentdev-api (#67, #115): deployed only when api.oidc_issuer is set"
+  ansible.builtin.assert:
+    that: >-
+      not (approvals.enabled | default(true) | bool)
+      or (api_effective_issuer | length > 0)
+    fail_msg: >-
+      approvals are on by default on GKE and need the management API. The operator sends every request to
+      agentdev-api-internal, which this playbook deploys only with an OIDC issuer (api.oidc_issuer, or authentik
+      with ingress.auth_host); without it every prompt and protected push would be refused. Set one, or opt out with approvals.enabled: false
+      (docs/admin.md, Turn on approvals).
+    quiet: true
+
+# #196 (ADR 0002 D2): the budget is in cost units. claude_budget_tokens is deprecated (1.2.0, removed in 2.0.0):
+# alone it counts as units 1:1; claude_budget_units wins when both are set. Prices reach the ConfigMap as strings.
+- name: "Claude budget in cost units (claude_budget_tokens deprecated, #196)"
+  ansible.builtin.include_tasks: tasks/claude_budget.yml
+
+- name: Claude budget in cost units and valid prices (#196)
+  ansible.builtin.assert:
+    that:
+      - (claude_budget_units_effective | string) is match('^[0-9]+$')
+      - claude_prices is mapping
+      - (claude_job_budget_units | string) is match('^[0-9]{1,15}$')
+      - (claude_job_approval_units | string) is match('^[0-9]{1,15}$')
+      - (claude_job_approval_step_units | string) is match('^[0-9]{1,15}$')
+      - >-
+        (claude_job_approval_units | int) == 0 or (claude_job_budget_units | int) == 0
+        or (claude_job_approval_units | int) < (claude_job_budget_units | int)
+      - (telemetry.instance | default('agentdev')) is match('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+      - (telemetry.otlp_url | default('')) is match('^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?)?$')
+      - (telemetry.scraper_ns | default('gmp-system')) is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+      - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) is mapping"
+      - "(telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'})) | length > 0"
+      - >-
+        claude_prices.keys()
+        | reject('match', '^(w_in|w_cw5|w_cw1h|w_cr|w_out|usd_per_million_units|model\\.[a-z0-9][a-z0-9.-]{0,62})$')
+        | list | length == 0
+      - claude_prices.values() | map('string') | reject('match', '^[0-9]+(\\.[0-9]{1,6})?$') | list | length == 0
+    fail_msg: >-
+      claude_budget_units (or the deprecated claude_budget_tokens) is a non-negative integer;
+      claude_prices keys w_in, w_cw5, w_cw1h, w_cr, w_out, usd_per_million_units or model.<prefix>, values ^[0-9]+(\.[0-9]{1,6})?$;
+      claude_job_budget_units, claude_job_approval_units and claude_job_approval_step_units are non-negative integers,
+      and claude_job_approval_units is lower than claude_job_budget_units when both are set (#310).
+    quiet: true
+
+- name: Scale to zero has a wake source (#181)
+  ansible.builtin.include_tasks: tasks/wake_source.yml

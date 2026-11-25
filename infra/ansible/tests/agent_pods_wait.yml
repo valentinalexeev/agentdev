@@ -1,0 +1,50 @@
+# Check (#491): deploy.yml waits only for the agents expected to run. With every agent stopped (scale to zero, 0
+# replicas) the wait is skipped and ends in seconds, not after the full 600 s timeout. Runs the same task file as
+# deploy.yml. No cluster: the running case stops at the wait itself, after the selector is set.
+# Run: ansible-playbook infra/ansible/tests/agent_pods_wait.yml
+- name: The deploy waits only for running agents (#491)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kube_context: agentdev-test-no-such-context
+    agents_ns: coding-agents
+    sts_stopped:
+      - {metadata: {name: agent-alice, labels: {app: coding-agent, agent: alice}}, spec: {replicas: 0}}
+      - {metadata: {name: agent-bob, labels: {app: coding-agent, agent: bob}}, spec: {replicas: 0}}
+    sts_mixed:
+      - {metadata: {name: agent-carol, labels: {app: coding-agent, agent: carol}}, spec: {replicas: 1}}
+      - {metadata: {name: agent-alice, labels: {app: coding-agent, agent: alice}}, spec: {replicas: 0}}
+      - {metadata: {name: agent-bob, labels: {app: coding-agent, agent: bob}}, spec: {replicas: 1}}
+  tasks:
+    - name: Note the start time
+      ansible.builtin.set_fact:
+        t0: "{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    - name: Every agent stopped
+      ansible.builtin.include_tasks: ../tasks/agent_pods_wait.yml
+      vars: {agent_pods_wait_statefulsets: "{{ sts_stopped }}"}
+
+    - name: No agent StatefulSet at all
+      ansible.builtin.include_tasks: ../tasks/agent_pods_wait.yml
+      vars: {agent_pods_wait_statefulsets: []}
+
+    - name: Nothing to wait for, and done in seconds
+      ansible.builtin.assert:
+        that:
+          - agent_pods_wait_names == []
+          - (lookup('ansible.builtin.pipe', 'date +%s') | int) - (t0 | int) < 30
+
+    - name: Running agents are waited for, by name
+      block:
+        - name: Some agents running
+          ansible.builtin.include_tasks: ../tasks/agent_pods_wait.yml
+          vars: {agent_pods_wait_statefulsets: "{{ sts_mixed }}", agent_pods_wait_timeout: 5}
+        - name: Not reached
+          ansible.builtin.fail:
+            msg: the wait ran without a cluster
+      rescue:
+        - name: The wait ran for the running agents only
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Wait for the running agents'
+              - agent_pods_wait_names == ['bob', 'carol']

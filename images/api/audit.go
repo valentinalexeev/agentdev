@@ -9,12 +9,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // auditRecord is one stored audit entry; Entry is the JSON of the AGENTDEV_AUDIT line.
@@ -34,6 +37,9 @@ type auditFilter struct {
 type auditStore interface {
 	InsertAudit(ctx context.Context, e auditEntry, raw []byte) error
 	ListAudit(ctx context.Context, f auditFilter) ([]auditRecord, error)
+	// RecordPermission stores a "permission" entry for agent when cur differs from the newest one, atomically, also
+	// across API processes; it returns the stored entry, or nil when nothing changed. permission.go (#505)
+	RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error)
 }
 
 // auditDB receives every audit entry; nil keeps the stdout line only. Set once by main before serving.
@@ -85,6 +91,46 @@ func (s *pgStore) ListAudit(ctx context.Context, f auditFilter) ([]auditRecord, 
 	return out, rows.Err()
 }
 
+// afterPermissionRead is a test hook (nil in production): TestPgAudit pauses here to widen the race window between
+// the read of the newest row and the insert.
+var afterPermissionRead func()
+
+// RecordPermission: a transaction-scoped advisory lock per agent (the pattern of Insert in events.go) serialises the
+// read of the newest "permission" row and the insert, so two API processes that see the same change write one entry.
+func (s *pgStore) RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('api_audit_permission:' || $1))`, agent); err != nil {
+		return nil, nil, err
+	}
+	var last []byte
+	err = tx.QueryRow(ctx, `SELECT entry FROM api_audit WHERE agent = $1 AND action = $2 ORDER BY id DESC LIMIT 1`,
+		agent, permissionAction).Scan(&last)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, err
+	}
+	if afterPermissionRead != nil {
+		afterPermissionRead()
+	}
+	e := permissionEntry(agent, last, cur)
+	if e == nil {
+		return nil, nil, nil
+	}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return nil, nil, err
+	}
+	t, _ := time.Parse(time.RFC3339, e.Time)
+	if _, err := tx.Exec(ctx, `INSERT INTO api_audit (time, action, agent, result, username, entry) VALUES ($1,$2,$3,$4,$5,$6)`,
+		t, e.Action, e.Agent, e.Result, e.Who.Username, raw); err != nil {
+		return nil, nil, err
+	}
+	return e, raw, tx.Commit(ctx)
+}
+
 // PruneAudit calls api_audit_prune() (SECURITY DEFINER, owner role); the API passes no retention value.
 func (s *pgStore) PruneAudit(ctx context.Context) (int64, error) {
 	var n int64
@@ -125,6 +171,32 @@ func (m *memAudit) ListAudit(_ context.Context, f auditFilter) ([]auditRecord, e
 		}
 	}
 	return out, nil
+}
+
+// RecordPermission: the same rule as the Postgres store, under the store's mutex.
+func (m *memAudit) RecordPermission(_ context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var last []byte
+	for i := len(m.rows) - 1; i >= 0; i-- {
+		if r := m.rows[i]; r.e.Agent == agent && r.e.Action == permissionAction {
+			last = r.rec.Entry
+			break
+		}
+	}
+	e := permissionEntry(agent, last, cur)
+	if e == nil {
+		return nil, nil, nil
+	}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return nil, nil, err
+	}
+	m.rows = append(m.rows, struct {
+		rec auditRecord
+		e   auditEntry
+	}{auditRecord{ID: int64(len(m.rows) + 1), Entry: raw}, *e})
+	return e, raw, nil
 }
 
 // listAudit serves GET /api/audit?agent=&result=&since=&limit=&cursor= (same paging as /api/security-events). Only

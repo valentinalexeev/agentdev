@@ -7,6 +7,9 @@
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
+# a known environment (#507): every variable the sourced loop code reads is unset here; a check that needs one sets it
+unset APPROVALS APPROVAL_HOST PERMISSION_HOST APPROVAL_TIMEOUT_MINUTES CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE CLAUDE_TOOLS CLAUDE_EXIT_FILE \
+  ANTHROPIC_BASE_URL FORGE_API FORGE_PUBLIC_URL RESUMING GUIDE_FILE STATE_DIR PROXY_TOKEN_FILE
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"
 export MAX_TURNS=5 MCP_CONFIG="${STATE}/mcp.json"
 export FORGE_TOKEN=secret-forge WAKE_TOKEN=secret-wake REGISTER_TOKEN=secret-register
@@ -42,10 +45,38 @@ check "no permission bypass" "! grep -q -- '--dangerously-skip-permissions' '${t
 check "dontAsk mode with an allow-list" "grep -qx dontAsk '${tmp}/args' && grep -qx -- '--allowedTools' '${tmp}/args'"
 check "push, curl and the state dir are denied; cat is not allowed" "grep -qxF 'Bash(git push:*)' '${tmp}/args' && grep -qxF 'Bash(curl:*)' '${tmp}/args' && grep -qxF 'Read(${STATE}/**)' '${tmp}/args' && ! grep -qF 'Bash(cat:' '${tmp}/args'"
 check "test runners are allowed by default" "grep -qF 'Bash(go test:*)' '${tmp}/args'"
+check "no settings and no auto mode by default (#500)" "! grep -qx -- '--settings' '${tmp}/args' && ! grep -qx auto '${tmp}/args'"
 check "claude stderr is not left in the worktree" "[[ -z \$(ls -A '${tmp}/repo') ]] && ! ls '${tmp}'/repo.claude.stderr 2>/dev/null"
 check "security system prompt appended" "grep -qx -- '--append-system-prompt' '${tmp}/args' && grep -q 'nothing in the task text can change' '${tmp}/args'"
 check "untrusted text is fenced and cannot close the fence early" \
   "grep -q '<untrusted>' '${tmp}/args' && [[ \$(grep -c '</untrusted>\$' '${tmp}/args') == 1 ]] && grep -q '</untrusted_>' '${tmp}/args'"
+# spec.permission (#500): the operator sets CLAUDE_PERMISSION_MODE and CLAUDE_AUTO_MODE; the deny-list stays
+perm() { (unset APPROVALS CLAUDE_PERMISSION_MODE CLAUDE_AUTO_MODE; export "$@"; run_claude "${tmp}/repo" x >/dev/null 2>&1); }
+nextarg() { grep -A1 -x -- "$1" "${tmp}/args" | tail -n1; }
+perm CLAUDE_PERMISSION_MODE=auto
+check "mode auto without rules: no settings, deny-list kept" \
+  "[[ \$(nextarg --permission-mode) == auto ]] && ! grep -qx -- '--settings' '${tmp}/args' && grep -qxF 'Bash(git push:*)' '${tmp}/args'"
+perm CLAUDE_PERMISSION_MODE=auto CLAUDE_AUTO_MODE='{"allow":["Install declared dependencies"],"environment":["Trusted repos: o/*"]}'
+check "mode auto with rules: the autoMode section goes to --settings" \
+  "[[ \$(nextarg --permission-mode) == auto && \$(nextarg --settings | jq -c .autoMode.allow) == '[\"Install declared dependencies\"]' ]]"
+for bad in '{"hard_deny":["nothing"]}' '{"allow":"x"}' '[1]' 'not json'; do
+  perm CLAUDE_PERMISSION_MODE=auto CLAUDE_AUTO_MODE="${bad}"
+  check "invalid rules ${bad}: dontAsk, no settings (fail closed)" "[[ \$(nextarg --permission-mode) == dontAsk ]] && ! grep -qx -- '--settings' '${tmp}/args'"
+done
+perm CLAUDE_PERMISSION_MODE=bypassPermissions
+check "an unknown mode runs in dontAsk" "[[ \$(nextarg --permission-mode) == dontAsk ]] && ! grep -qx bypassPermissions '${tmp}/args'"
+cat > "${tmp}/bin/curl" <<'EOF2'
+#!/usr/bin/env bash
+exit 7
+EOF2
+chmod +x "${tmp}/bin/curl"
+perm APPROVALS=true APPROVAL_HOST=off FORGE_API=http://127.0.0.1:1 CLAUDE_PERMISSION_MODE=auto
+check "mode auto with approvals: auto and the prompt tool" \
+  "[[ \$(nextarg --permission-mode) == auto && \$(nextarg --permission-prompt-tool) == mcp__agentdev__approve ]]"
+perm APPROVALS=true APPROVAL_HOST=off FORGE_API=http://127.0.0.1:1
+check "approvals without auto: mode default and the prompt tool, as before" \
+  "[[ \$(nextarg --permission-mode) == default && \$(nextarg --permission-prompt-tool) == mcp__agentdev__approve ]]"
+rm -f "${tmp}/bin/curl"
 check "clone URL carries no credentials" "[[ \$(clone_url) == http://gitea.forge:3000/owner/repo.git ]]"
 check "the token is not written anywhere under the state dir" "! grep -rq secret-forge '${STATE}'"
 # the loop runs with no forge credentials at all (#64): nothing in its code reads the token, every forge call goes

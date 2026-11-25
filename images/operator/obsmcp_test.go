@@ -205,7 +205,7 @@ func TestObsCloudLoggingAddOn(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/token"):
 			if r.Header.Get("Metadata-Flavor") != "Google" {
-				http.Error(w, "no", 403)
+				http.Error(w, "no", http.StatusForbidden)
 				return
 			}
 			_, _ = w.Write([]byte(`{"access_token":"wi-token","expires_in":3600}`))
@@ -260,12 +260,42 @@ func TestObsConfigFromEnv(t *testing.T) {
 
 // #250: filters the API would reject are refused before the call, and none can close the wrapper's parenthesis
 func TestCheckLoggingFilter(t *testing.T) {
-	for _, f := range []string{`severity>=ERROR`, `(a="x" OR b="y") AND c`, `textPayload:"a ) b ("`, `jsonPayload.m="say \"(\" now"`} {
+	ok := []string{
+		``,
+		`severity>=ERROR`,
+		`(a="x" OR b="y") AND c`,
+		`((a OR (b AND c)) AND (d))`,
+		`textPayload:"a ) b ("`,
+		`jsonPayload.m="say \"(\" now"`,
+		`jsonPayload.m="ends with backslash \\"`,
+		`textPayload:\(literal AND x`,
+		`textPayload:\"(x)`,
+		`a="x" AND (b="y)" OR c="(")`,
+		`labels."k(1)"="v"`,
+		`a="é ( ü"`,
+	}
+	for _, f := range ok {
 		if err := checkLoggingFilter(f); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
 	}
-	for _, f := range []string{`(severity>=ERROR`, `severity>=ERROR)`, `a) OR (b`, `textPayload:"open`, `x) OR timestamp>="2000-01-01" OR (y`} {
+	bad := []string{
+		`(severity>=ERROR`,
+		`severity>=ERROR)`,
+		`a) OR (b`,
+		`textPayload:"open`,
+		`x) OR timestamp>="2000-01-01" OR (y`,
+		`((a) OR (b)`,
+		`(a)) OR ((b)`,
+		`a="x\") OR (b`,   // escaped quote keeps the string open: unterminated
+		`a="x\\") OR ("b`, // escaped backslash closes the string: ")" is real
+		`a=\" ) OR ( \"`,  // \" outside a string is a literal, the parentheses count
+		`a=\") OR (\"`,
+		`a="b" \`,
+		`a="\`,
+		`)(`,
+	}
+	for _, f := range bad {
 		if checkLoggingFilter(f) == nil {
 			t.Errorf("%s: accepted", f)
 		}

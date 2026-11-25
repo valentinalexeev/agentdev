@@ -6,8 +6,14 @@
 #                                                   check every adjacent pair; with BASE and REF, also that every
 #                                                   line below BASE is an ancestor of REF (release PR check)
 #   scripts/release-lines.sh forward LOWER          merge LOWER into the next line up on a merge/ branch and push it
-# Lines are read from the remote (default origin, override with REMOTE=...); forward fetches first and needs a clean
-# tree, DRY_RUN=1 merges locally without pushing. check exits 1 on a pending
+#   scripts/release-lines.sh release X.Y.Z [DATE]   release PR step (docs/release.md §6 steps 1-2): branch
+#                                                   chore/release-X.Y.Z from release/X.Y, assemble changelog.d/ into
+#                                                   CHANGELOG.md (scripts/changelog.sh release) and commit; not pushed
+#   scripts/release-lines.sh kind BRANCH            print the PR kind of a head branch: release (chore/release-* or
+#                                                   agent/<name>/release-*), merge (merge/* or agent/<name>/merge-*),
+#                                                   or other (#510: a sandboxed agent pushes only to agent/<name>/*)
+# Lines are read from the remote (default origin, override with REMOTE=...); forward and release fetch first and need a
+# clean tree, forward DRY_RUN=1 merges locally without pushing. check exits 1 on a pending
 # forward merge only with --strict; without it, it prints warnings and exits 0.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -19,6 +25,13 @@ lines() {
   printf '%s\n' "$refs" | grep -E '^release/[0-9]+\.[0-9]+$' | sort -t/ -k2 -V || true
   printf '%s\n' "$refs" | grep -qx main && echo main
   printf '%s\n' "$refs" | grep -E '^next/[0-9]+\.0$' | sort -t/ -k2 -V || true
+}
+
+# Keep in step with the exemption in scripts/changelog.sh pr-gate.
+branch_kind() {
+  if [[ "$1" =~ ^(chore/release-|agent/[^/]+/release-). ]]; then echo release
+  elif [[ "$1" =~ ^(merge/|agent/[^/]+/merge-). ]]; then echo merge
+  else echo other; fi
 }
 
 warn() {
@@ -95,8 +108,29 @@ case "$cmd" in
     git push -u "$remote" "$branch"
     echo "open a PR $branch -> $hi; a conflict-free hop with green CI may be merged by the bot (ADR 0004)"
     ;;
+  release)
+    ver="${1:?usage: release X.Y.Z [DATE]}" date="${2:-$(date -u +%F)}"
+    [[ "$ver" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "release: '$ver' is not X.Y.Z[-pre]" >&2; exit 64; }
+    line="release/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+      echo "release: working tree is not clean" >&2
+      exit 1
+    fi
+    git fetch --prune "$remote"
+    git rev-parse -q --verify "refs/remotes/$remote/$line" >/dev/null || {
+      echo "release: $line does not exist; cutting a line is an owner decision (CLAUDE.md §7a)" >&2; exit 1; }
+    "$0" check --strict "$line" "$remote/$line"
+    git checkout -B "chore/release-$ver" "$remote/$line"
+    scripts/changelog.sh release "$ver" "$date"
+    git add -A CHANGELOG.md changelog.d docs/changes
+    git commit -m "chore(release): v$ver" -m "Assembled from changelog.d/ by scripts/changelog.sh release (#448)."
+    echo "next: bump the pinned examples (docs/release.md §6 step 3), amend, push, open the PR into $line"
+    ;;
+  kind)
+    branch_kind "${1:?usage: kind BRANCH}"
+    ;;
   *)
-    sed -n '2,10p' "$0" >&2
+    sed -n '2,16p' "$0" >&2
     exit 64
     ;;
 esac

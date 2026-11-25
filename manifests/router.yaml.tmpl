@@ -28,7 +28,8 @@ subjects: [{kind: ServiceAccount, name: webhook-router, namespace: ${AGENTS_NS}}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}, annotations: {secret.reloader.stakater.com/reload: "webhook-router,webhook-router-poll"}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: webhook-router}}

@@ -1,0 +1,30 @@
+---
+# One case for tests/plan_identity_preflight.yml: run preflight.yml with fake permissions, check result and message.
+- name: "Empty the curl log for {{ case.name }}"
+  ansible.builtin.copy: {dest: "{{ work }}/curl.log", content: "", mode: "0600"}
+
+- name: "Run preflight for {{ case.name }}"
+  ansible.builtin.command:
+    argv: [ansible-playbook, preflight.yml, -e, "{{ base | combine(case.extra) | to_json }}"]
+    chdir: "{{ playbook_dir }}/.."
+  environment:
+    PATH: "{{ work }}/bin:{{ ansible_env_path }}"
+    FAKE_PERMS: "{{ all_perms if case.perms == 'all' else case.perms }}"
+    FAKE_CURL_LOG: "{{ work }}/curl.log"
+    ANSIBLE_DISPLAY_FAILED_STDERR: "false"
+  register: pi_out
+  changed_when: false
+  failed_when: false
+
+- name: "Check the result for {{ case.name }}"
+  vars:
+    pi_text: "{{ pi_out.stdout | regex_replace('\\s+', ' ') }}"
+    pi_calls: "{{ lookup('ansible.builtin.file', work ~ '/curl.log') | split('\n') | select | list | length }}"
+  ansible.builtin.assert:
+    that: >-
+      {{ ([pi_out.rc == 0, 'Preflight passed' in pi_out.stdout, pi_calls | int == case.calls] if case.ok else
+          [pi_out.rc != 0, 'Preflight passed' not in pi_out.stdout, 'fake-token' not in pi_out.stdout])
+         + [ (case.expect | default([]) | reject('in', pi_text) | list | length) == 0,
+             (case.absent | default([]) | select('in', pi_text) | list | length) == 0 ] }}
+    fail_msg: "{{ case.name }}: rc {{ pi_out.rc }}\n{{ pi_out.stdout }}"
+    quiet: true

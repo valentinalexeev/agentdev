@@ -30,23 +30,22 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
    cd agentdev/infra/terraform/bootstrap && terraform init
    terraform apply -var-file=<deployment repo>/terraform/bootstrap.tfvars    # see bootstrap/example.tfvars
    ```
-5. **Plan the infrastructure** in the deployment repo (you may run plan; the owner applies the first time):
-   ```bash
-   cd terraform
-   terraform init -backend-config="bucket=<project_id>-tfstate"
-   terraform plan -var-file=instance.tfvars -out plan.bin
-   ```
-   Summarize the plan for the owner (resources, rough monthly cost per `infra/terraform/README.md`), then the
-   owner runs `terraform apply plan.bin`. This also creates the Workload Identity setup the deployment CI uses.
+5. **Create the CI identity only** (the owner, one time; #471). The cluster and everything else are created by
+   the deployment CI on the first merge, so do not apply all of `terraform/` locally. In `terraform/`, run
+   `terraform init -backend-config="bucket=<project_id>-tfstate"` and
+   `terraform plan -var-file=instance.tfvars` to summarize the full plan for the owner (resources, rough
+   monthly cost per `infra/terraform/README.md`), then the owner runs the targeted `terraform apply` from
+   `docs/install.md` ("make only the CI identity"). Terraform warns that `-target` is for exceptional use:
+   that is expected here. The targeted apply's plan must show no cluster.
 6. **Wire the deployment CI:** set repository variables `GCP_WIF_PROVIDER` and `GCP_SERVICE_ACCOUNT`
-   (from `terraform output github_actions_auth`) and `GCP_PROJECT`; ask the owner to protect `main`.
+   (from `terraform output github_actions_auth`) and `GCP_PROJECT`; for PR plans also `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT`; ask the owner to protect `main`.
 7. **Images:** nothing to build. Deployments pull `ghcr.io/valentinalexeev/agentdev-worker` and
    `agentdev-router` at `image_tag` (#28).
 8. **Secret values** (the owner, or you with the owner's values; never echo them): fill the Secret Manager
    entries listed in `infra/ansible/README.md` (`claude-shared`, `router-register-token`,
    `github-app-webhook-secret`, `agent-<name>-forge-token`).
 9. **Install agentdev:** open a PR in the deployment repo; its CI runs `terraform fmt`/`validate` and
-   `ansible-playbook --syntax-check` (no cloud credentials, no plan). After the owner approves and merges, plan,
+   `ansible-playbook --syntax-check` (no cloud credentials), and with the read-only plan identity (#291) a `terraform plan` comment. After the owner approves and merges, plan,
    apply and the playbook run for real. Before the merge, do the dry run manually from the deployment repo:
    ```bash
    ansible-playbook <agentdev checkout>/infra/ansible/deploy.yml -e @ansible/instance.yml --check --diff

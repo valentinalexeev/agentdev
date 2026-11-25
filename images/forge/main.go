@@ -36,6 +36,7 @@ type Config struct {
 	WakeFile                 string
 	RouterURL, SelfURL       string
 	WakeToken, RegisterToken string
+	APIURL                   string // agentdev-api internal listener (#425 run log); empty: run events are dropped
 	AgentName, ForgeKind     string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
@@ -76,6 +77,8 @@ func loadConfig() (*Config, error) {
 		Git: getenv("GIT", "git"), NoUsage: os.Getenv("USAGE_REPORTS") == "off",
 		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
 		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
+		// #425: the API's internal listener (the operator sets APPROVALS_URL on every agent pod)
+		APIURL: getenv("API_INTERNAL_URL", os.Getenv("APPROVALS_URL")),
 	}
 	// preferred: the key as a file (a Secret volume mounted only into this container), so it is never in any
 	// process environment; /proc/<pid>/environ keeps the original environment even after os.Unsetenv
@@ -132,6 +135,8 @@ func main() {
 	s.drv, s.rules, s.git.drv = drv, drv.rules(), drv
 	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
 		s.enableApprovals(apiURL, timeout)
+		// #310: cost approvals read the job state from claude-proxy (CLAUDE_PROXY_URL, set by the operator)
+		s.appr.proxyURL = strings.TrimRight(os.Getenv("CLAUDE_PROXY_URL"), "/")
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
 	}
 	if err := s.git.init(); err != nil {

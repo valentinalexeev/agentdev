@@ -1,0 +1,53 @@
+---
+# Host prerequisites (#106, was 00-prereqs.sh): the tools, the container engine, the kind version and the engine VM
+# size. Read-only. kind.yml runs it alone with --tags prereqs; the role runs it first with --tags cluster.
+- name: Find the host tools
+  ansible.builtin.command:
+    argv: [sh, -c, 'command -v "$1"', sh, "{{ item.name }}"]
+  loop: "{{ kind_cluster_tools + [{'name': kind_cluster_engine, 'hint': 'Docker Desktop, OrbStack, Colima or Podman'}] }}"
+  loop_control: {label: "{{ item.name }}"}
+  register: kind_cluster_tool_check
+  changed_when: false
+  failed_when: false
+
+- name: All host tools are installed
+  vars:
+    kind_cluster_missing: "{{ kind_cluster_tool_check.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+  ansible.builtin.assert:
+    that: kind_cluster_missing | length == 0
+    fail_msg: >-
+      missing host tools: {{ kind_cluster_missing | map(attribute='name') | join(', ') }}. Install:
+      {{ kind_cluster_missing | map(attribute='hint') | join('; ') }}
+    quiet: true
+
+- name: The container engine runs (CPU and memory of its VM)
+  ansible.builtin.command: "{{ kind_cluster_engine }} info --format '{{ '{{' }}.NCPU{{ '}}' }} {{ '{{' }}.MemTotal{{ '}}' }}'"
+  register: kind_cluster_engine_info
+  changed_when: false
+  failed_when: false
+
+- name: The container engine daemon answers
+  ansible.builtin.assert:
+    that: kind_cluster_engine_info.rc == 0
+    fail_msg: "{{ kind_cluster_engine }} daemon is not running: start Docker Desktop, OrbStack, Colima or Podman"
+    quiet: true
+
+- name: Read the kind version
+  ansible.builtin.command: kind version
+  register: kind_cluster_version
+  changed_when: false
+
+- name: Kind version gate
+  ansible.builtin.include_tasks: version.yml
+
+- name: The engine VM has enough memory
+  vars:
+    kind_cluster_vm: "{{ (kind_cluster_engine_info.stdout ~ ' 0 0').split() }}"
+    kind_cluster_mem_gib: "{{ (kind_cluster_vm[1] | int / 1073741824) | round(1) }}"
+    kind_cluster_mem_warn: >-
+      . WARNING: under {{ kind_cluster_min_mem_gib }} GiB, the platform and the sandboxes may get OOM-killed; raise it
+      in the engine settings
+  ansible.builtin.debug:
+    msg: >-
+      engine VM: {{ kind_cluster_vm[0] }} CPU, {{ kind_cluster_mem_gib }} GiB RAM{{ kind_cluster_mem_warn
+      if kind_cluster_mem_gib | float < kind_cluster_min_mem_gib | float else '' }}

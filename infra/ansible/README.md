@@ -18,6 +18,7 @@ Installs the webhook router, the agents, the platform namespace and (optionally)
 | `agent-<name>-claude` | optional; the agent's own Claude credential (`KEY=VALUE`, same format and check as `claude-shared`) |
 | `agentdev-api-forge-token` | optional; token of the forge account `agentdev-api` for the API (#100, #104): scopes `read:repository,read:user` only, the account is admin of the agent repositories. Synced to the Secret `agentdev-api-forge` (`FORGE_API_TOKEN`) |
 | `authentik-sso-idp-cert` | optional; the Google Workspace SAML certificate (PEM) when `instance.yml` sets `authentik.sso` with `kind: saml` (#122). For `kind: oidc`: `authentik-sso-oidc-client-secret`. Synced to the Secret `authentik-sso` |
+| `funnel-sidecar-authkey` | optional; only with `ingress.forwarder.deploy` (#316): the pre-auth key of the funnel forwarder (headscale). Synced to the Secret `funnel-sidecar` (key `authkey`) in `ingress.forwarder.namespace`. The name is `ingress.forwarder.deploy.authkey_secret` |
 | `security-siem` | optional; SIEM output secrets as `KEY=VALUE` lines (#71): `SECURITY_WEBHOOK_SECRET`, `SECURITY_OTLP_HEADERS`, `SECURITY_SYSLOG_CA`, `SECURITY_SYSLOG_CLIENT_CERT`, `SECURITY_SYSLOG_CLIENT_KEY`, `SECURITY_OTLP_CA`, `SECURITY_OTLP_CLIENT_CERT`, `SECURITY_OTLP_CLIENT_KEY` (PEM on one line, `\n` for line breaks) |
 
 SIEM addresses (not secret) go into `instance.yml` under `security.siem`: `webhook_url`, `syslog_addr`,
@@ -30,9 +31,11 @@ the playbook on first run.
 
 ## Platform (#51)
 The `platform` role deploys Postgres and ContextForge from `manifests/platform.yaml.tmpl` into `platform_ns`,
-then runs `scripts/mcp-sync.sh` for each spec in `mcp_projects` (paths on the operator machine; needs `yq`, `jq`,
-`curl`). Only servers on hosts in `mcp_allowed_hosts` are registered (`docs/security.md` R51); the sync output is
-not logged (`no_log`). The ContextForge admin password reaches the script as a 0600 temp file that is removed afterwards.
+then applies one `McpProject` for each spec in `mcp_projects` (paths on the operator machine). The operator's
+McpProject controller (#383, was `scripts/mcp-sync.sh`) registers the servers in ContextForge and writes the agents'
+token Secrets; it reads the ContextForge admin password from the Secret `contextforge`, so the playbook never handles it
+for the sync. Only servers on hosts in `mcp_allowed_hosts` (operator `MCP_ALLOWED_HOSTS`) are registered
+(`docs/security.md` R51); a refused host shows in `kubectl get mcpp`.
 The platform NetworkPolicies are enforced because the Terraform cluster uses Dataplane V2; `docs/admin.md` has the check.
 ContextForge is deployed only when `mcp_projects` is not empty (#172); with an empty list the role removes it and the
 agents' `agent-<name>-mcp` Secrets (Postgres and the `contextforge` database stay). `platform_contextforge_enabled: true`
@@ -49,9 +52,12 @@ from Secret Manager and run after `include_role: platform`.
 The `api` role runs after `platform` when `instance.yml` sets `api.oidc_issuer` (an `https://` URL; by default the
 authentik issuer of the role `authentik`, #114; or any OIDC provider with a public client `agentdev` and a `groups` claim with `agentdev-admins`). Like
 `./run.sh 10` it:
-- creates `agentdev_owner` (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies
-  `images/api/schema.sql` as the owner, sets the retention (`api.db_retention_days`, default 365) and applies
-  `images/api/grants.sql`. SQL goes to `psql` in `platform-db-0` on stdin (`no_log`), never in argv;
+- runs the Job `agentdev-db-init-<hash>` in the cluster (#382, no `kubectl exec`): it creates `agentdev_owner`
+  (NOLOGIN, owns database `agentdev` and its objects) and the login `agentdev_api`, applies `images/api/schema.sql` as
+  the owner, sets the retention (`api.db_retention_days`, default 365), applies `images/api/grants.sql` and writes the
+  schema version. The SQL is a ConfigMap of the same name (`manifests/db-init/`); the passwords come from the Secrets
+  `platform-db` and `agentdev-api-db` by name. The hash covers the SQL, so a new `schema.sql` gives a new Job and the
+  same files change nothing. The API serves only once the schema version matches its own (`startupProbe`);
 - writes the Secrets `agentdev-api-db`, `agentdev-api-forge` (only if Secret Manager `agentdev-api-forge-token` has
   a value, else absent: forge writes give 503, fail closed) and `agentdev-api-siem` (addresses from
   `security.siem.*`, secret values from `security-siem`; the same keys as `.secrets/platform/siem-webhook` on kind,
@@ -102,7 +108,9 @@ issuer, the UI callback and webhooks; `ingress.host` is required. `ingress.forwa
 in that namespace, or `cidrs`) adds opt-in NetworkPolicies `agentdev-ui-from-forwarder`,
 `webhook-router-from-forwarder` and `authentik-from-forwarder`; without it they are removed and default-deny stays.
 Add the reverse proxy's range to `authentik_trusted_proxy_cidrs` (an instance value, role `authentik` defaults).
-Test: `tests/ingress_external.yml`.
+Test: `tests/ingress_external.yml`. With `ingress.forwarder.deploy` the role also runs the funnel forwarder itself
+(#316, `tasks/forwarder.yml`): one replica, readiness and liveness on `/readyz`, the pre-auth key from Secret Manager,
+a NetworkPolicy. Test: `tests/ingress_forwarder_deploy.yml`.
 
 ## Run
 Usually the deployment repository's CI runs this (template `examples/deployment/gcp-gke`). By hand:
@@ -115,14 +123,44 @@ ansible-playbook infra/ansible/deploy.yml -e @<deployment repo>/ansible/instance
 `reviewer`, `agents`) come from the deployment (`example.vars.yml` shows the shape); the playbook stops with a
 clear message if one is missing. Secret values are read at run time and every task that handles one uses `no_log`.
 
+### Render mode (#384)
+`render.yml` writes the manifests of one instance to `render_dir`, for a GitOps engine. It needs no cluster and no
+gcloud, and writes no secret values (`SECRETS.md` lists the Secrets by name). `deploy.yml` uses the same renderer
+(`tasks/render_objects.yml`) and the same value checks (`tasks/checks.yml`). Cluster facts come from `platform`
+(`terraform output platform`). The roles `platform`, `authentik`, `authentik_sso` and `api` render with their
+`tasks/render.yml` (#447): authentik as `helm template` output, the database and break-glass steps as the Jobs of `tasks/db_init_render.yml` (#382).
+```bash
+ansible-playbook infra/ansible/render.yml -e @<deployment repo>/ansible/instance.yml -e render_dir=$PWD/rendered
+```
+Test: `tests/render_mode.yml` (also runs `kubeconform` and `gitleaks` on the render of `examples/deployment/gcp-gke`).
+
+### Preflight (#314)
+`preflight.yml` only reads. `deploy.yml` imports it first, so a deploy stops before its first change. It checks:
+1. Claude secrets (#212): `claude-shared` and each `agent-<name>-claude` that exists has a `KEY=VALUE` line.
+2. Release (#218): the playbook checkout is on tag `v<image_tag>`, so the router image and its manifests match.
+   A checkout that is not on a release tag gives a warning.
+3. CRDs: the Gateway API (with `ingress.mode: gateway`, the default when `ingress` is set) and FQDNNetworkPolicy
+   (with `platform.egress.fqdn: gke`, or `egress_fqdn_policy` when `platform` is not set).
+4. Images: each agentdev image exists on ghcr.io at `image_tag`.
+5. Plan identity (#421): with `plan_identity: true` (Terraform `create_plan_identity = true`), the gcloud account
+   (the apply account in CI) has the permissions to create it; otherwise it prints the owner grant commands
+   (docs/admin.md "Show the plan on deployment pull requests"). Test: `tests/plan_identity_preflight.yml`.
+```bash
+bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml                  # preflight only
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --tags preflight         # the same
+ansible-playbook infra/ansible/deploy.yml -e @<instance.yml> --skip-tags preflight    # deploy without it
+```
+`-e '{"preflight_checks": ["claude", "images"]}'` selects some checks only. Test: `tests/preflight.yml`.
+
 ## kind (#106)
 The numbered shell steps (`run.sh`, `0*.sh`, `1*.sh`) are deprecated. They move to `kind.yml` one step per PR, each
 with a kind e2e that proves parity (two runs on a fresh kind cluster, the second must report `changed=0`; run by
 hand and reported in the pull request until a CI job does it); the old step stays as a wrapper that prints a
-deprecation notice and calls the playbook, for one MINOR release. Ported so far:
+deprecation notice and calls the playbook, for one MINOR release. All steps apart from 04 are ported:
 
 | run.sh step | `kind.yml` tag | Role |
 |---|---|---|
+| 00 | `prereqs` | `kind_cluster` (`tasks/prereqs.yml`) |
 | 01 | `cluster` | `kind_cluster` |
 | 02 | `sandbox` | `agent_sandbox` |
 | 03 | `sandbox-test` | `sandbox_test` |
@@ -132,6 +170,12 @@ deprecation notice and calls the playbook, for one MINOR release. Ported so far:
 | 10 | `api` | `api` (same role as GKE) |
 | 11 | `ui` | `api` (`tasks/ui.yml`, same tasks as GKE) |
 | 12 | `operator` | `operator` |
+| 13 | `secrets` | `secrets_store`, then `operator` |
+| 99 (`99-teardown.sh`) | `teardown` (also `never`) | `kind_cluster` (`tasks/teardown.yml`) |
+
+Step 04 (Coder spike) is not ported: it is deprecated and removed together with `run.sh` and all wrappers in 1.3.0.
+`--tags prereqs` only checks the host (tools, engine VM, kind v0.24 or later); `--tags cluster` runs the same checks
+first. `--tags teardown` deletes the kind cluster and `.coder`; as it is tagged `never`, a plain run never deletes.
 
 ```bash
 ansible-playbook infra/ansible/kind.yml --tags cluster    # kind cluster, gVisor, RuntimeClass, smoke test
@@ -172,6 +216,21 @@ password comes from the environment (`FORGE_ADMIN_PASSWORD`, never `-e`); every 
 changes nothing. An existing token file is kept when it still logs in as its agent; a file from an older cluster
 (HTTP 401) is replaced by a new token, then run `--tags agents` (step 06) so the agent gets it. Delete a file to mint
 a new token. GKE uses GitHub (#2), not this role.
+
+```bash
+FORGE_ADMIN_PASSWORD=... ANTHROPIC_API_KEY=... ansible-playbook infra/ansible/kind.yml --tags agents   # needs the operator
+```
+The role `kind_agents` does the old step 06 with the same manifests as `deploy.yml` (`manifests/router.yaml.tmpl`,
+`egress.yaml.tmpl`, `egress-proxy-web.yaml.tmpl`, `claude-proxy.yaml.tmpl`, `templates/render.j2`): it builds the
+worker, forge, router and credproxy images and loads them into kind, then applies the router, the Claude proxy, the
+egress proxy, the Secrets of each agent and one Agent object per entry of `kind_agents_agents`, and the Gitea webhook.
+Generated values (router secrets, wake tokens, proxy signing key, forge proxy key) are files in
+`kind_agents_secrets_dir` (mode 600), created once. Credentials come from the environment (`FORGE_ADMIN_PASSWORD`,
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`) or from `.secrets/<agent>.claude`, never from `-e`; every task that
+uses one has `no_log`. Restarts happen only after a new image id or a changed Secret, so a second run changes nothing.
+The Claude proxy settings (`roles/kind_agents/tasks/settings.yml`: budget units, prices, per-job limits, auth mode,
+telemetry) use the same checks as `deploy.yml`, `tasks/claude_budget.yml` and `templates/kube-api-egress.j2`.
+GKE keeps its own tasks in `deploy.yml` (Secret Manager); `tests/kind_agents.yml` checks that both render the same.
 
 ```bash
 FORGE_ADMIN_PASSWORD=... ansible-playbook infra/ansible/kind.yml --tags api    # API, database grants, agentdev-api

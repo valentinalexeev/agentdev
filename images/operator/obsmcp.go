@@ -172,16 +172,17 @@ func checkQuery(q string) error {
 }
 
 // checkLoggingFilter refuses a Cloud Logging filter the API would reject, before the call (#250): unbalanced
-// parentheses and an unterminated string. Parentheses inside "..." do not count; a backslash escapes the next
-// character in a string. The filter is wrapped as (<filter>) AND timestamp>=..., so balanced parentheses also mean
-// the filter cannot close the wrapper and drop the time bound.
+// parentheses, an unterminated string and a trailing backslash. Parentheses inside "..." do not count. A backslash
+// escapes the next character inside and outside a string, as in the Logging query language, so \" or \) outside a
+// string is a literal and does not change the state. The filter is wrapped as (<filter>) AND timestamp>=..., so
+// balanced parentheses also mean the filter cannot close the wrapper and drop the time bound.
 func checkLoggingFilter(f string) error {
 	depth, inStr, esc := 0, false, false
 	for _, r := range f {
 		switch {
 		case esc:
 			esc = false
-		case inStr && r == '\\':
+		case r == '\\':
 			esc = true
 		case r == '"':
 			inStr = !inStr
@@ -196,6 +197,8 @@ func checkLoggingFilter(f string) error {
 		}
 	}
 	switch {
+	case esc:
+		return errors.New("filter: trailing backslash")
 	case inStr:
 		return errors.New("filter: unterminated string")
 	case depth != 0:

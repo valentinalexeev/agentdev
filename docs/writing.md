@@ -102,9 +102,11 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
 | config.env | the file with the local default settings |
 | ContextForge | the MCP gateway in the platform namespace |
+| cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
+| GitOps engine | a program in the cluster (Argo CD, Flux) that applies the manifests of a git repository or OCI artifact (#384) |
 | guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
@@ -147,9 +149,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
 | billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
 | quota project | the Google Cloud project that a Google API charges for a request |
-| token budget | the number of Claude tokens that one agent can use in 24 hours |
+| token budget | old name of the budget, before 1.2.0 it counted raw tokens; now the budget counts cost units |
 | specification (spec) | the project file, for example `my-project.yaml` |
-| sync | one run of `scripts/mcp-sync.sh` |
+| sync | one reconcile of an `McpProject` by the operator (was one run of `scripts/mcp-sync.sh`) |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
 | web UI | the agentdev management user interface |
 | Gateway | the GKE Gateway (a Google Cloud load balancer) that the Ansible role `ingress` makes in `ingress.mode: gateway` |
@@ -179,7 +181,11 @@ Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terrafo
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
-kindnet, Argo CD, Flux, terminal, Claude Code.
+kindnet, Argo CD, Flux, terminal, Claude Code, push notification (a message that the browser shows when the web UI is
+not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device,
+field manager (the name that Kubernetes records for the writer of a field, #58), deployment repository,
+condition (a status entry of a Kubernetes object, for example `Ready`, #386), health check (of Flux or Argo CD),
+Kustomization (the Flux object that applies a directory of a Git repository).
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
@@ -194,10 +200,13 @@ authentik page. A label is not a word of the text, so a label does not break the
 | click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
 | deny | refuse an approval request |
+| render | write the manifests of an instance to files, with no change to the cluster (`infra/ansible/render.yml`, #384) |
 | drain | tell an agent to start no new job and let its running jobs finish (#174) |
 | edit | change the text of a forge comment after you wrote it |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
+| mute | stop the notifications of a project or a type (#347) |
 | merge | add the changes of a pull request to the main branch |
+| prune | delete the objects that Flux applied before and that are no longer in Git (#58) |
 | publish | make a Service of the cluster available on a public or tailnet URL |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
@@ -206,6 +215,8 @@ authentik page. A label is not a word of the text, so a label does not break the
 | resolve | mark a thread of a pull request as done |
 | revoke | make a token not valid |
 | sign in, sign out | start or end a session in the web UI |
+| snooze | delay a notification, so that it comes again later (#347) |
+| subscribe | ask for push notifications on a device (#347) |
 
 ## Before you merge a manual change
 

@@ -1,0 +1,73 @@
+---
+# Deployed forwarder (#316, templates/forwarder_deploy.yaml.j2). Only with ingress.forwarder.deploy (GKE, deploy.yml).
+- name: Check the deployed forwarder settings
+  ansible.builtin.assert:
+    that:
+      - (ingress_forwarder.namespace | default('')) | length > 0
+      - (ingress_forwarder.pod_selector | default({})) | length > 0
+      - ingress_fwd_image is match('^[^:@ ]+(:[0-9A-Za-z._-]+|@sha256:[0-9a-f]{64})$')
+      - ingress_fwd_image is not match('.*:(main|latest)$')
+      - ingress_fwd_control_url is match('^https://')
+      - ingress_fwd_services | length > 0
+      - ingress_fwd_services | select('search', 'webhook-router\\.[^:]+:8081') | list | length == 0
+      - ingress_fwd_extra_egress_cidrs | reject('match', ingress_cidr_re) | list | length == 0
+      - ingress_fwd_extra_egress_cidrs | map('regex_replace', '^.*/', '') | map('int') | select('lt', 8) | list | length == 0
+      - ingress_fwd_liveness_period | int > 0 and ingress_fwd_liveness_threshold | int > 0
+    fail_msg: >-
+      ingress.forwarder.deploy needs ingress.forwarder.namespace and pod_selector (the watch and the smoke test use
+      them), a pinned image (a tag other than main/latest, or a digest), an https control_url and services; the
+      router's internal port 8081 is never published (#214). docs/admin.md, Deployed forwarder.
+    quiet: true
+
+# the pre-auth key: Secret Manager -> Secret funnel-sidecar (key authkey); the version goes into a pod annotation so a
+# new key restarts the forwarder
+- name: Forwarder pre-auth key from Secret Manager
+  ansible.builtin.shell: |
+    set -o pipefail
+    v=$(gcloud secrets versions describe latest --secret {{ ingress_fwd_authkey_secret }} --project {{ gcp_project }} --format='value(name)')
+    echo "${v##*/}"
+    gcloud secrets versions access latest --secret {{ ingress_fwd_authkey_secret }} --project {{ gcp_project }}
+  args: {executable: /bin/bash}
+  register: ingress_fwd_key
+  changed_when: false
+  failed_when: ingress_fwd_key.rc != 0 or ingress_fwd_key.stdout_lines | length < 2
+  when: secrets_mode | default('playbook') == 'playbook'
+  no_log: true
+
+- name: Forwarder namespace
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ ingress_fwd_objects | selectattr('kind', 'equalto', 'Namespace') | list }}"
+  vars:
+    ingress_fwd_objects: "{{ lookup('ansible.builtin.template', 'forwarder_deploy.yaml.j2') | from_yaml_all | list }}"
+
+- name: Secret funnel-sidecar
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: funnel-sidecar, namespace: "{{ ingress_forwarder.namespace }}", labels: {app.kubernetes.io/part-of: agentdev}}
+      stringData: {authkey: "{{ ingress_fwd_key.stdout_lines[1:] | join('\n') }}"}
+  when: secrets_mode | default('playbook') == 'playbook'
+  no_log: true
+
+# secrets_mode external (#381): ExternalSecret funnel-sidecar; Reloader restarts the forwarder on a new key
+- name: ExternalSecret funnel-sidecar
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
+  vars:
+    es_specs:
+      - {name: funnel-sidecar, ns: "{{ ingress_forwarder.namespace }}", data: {authkey: "{{ ingress_fwd_authkey_secret }}"}}
+  when: secrets_mode | default('playbook') == 'external'
+
+- name: Forwarder ServiceAccount, Deployment and NetworkPolicy
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ ingress_fwd_objects | rejectattr('kind', 'equalto', 'Namespace') | list }}"
+    wait: true
+    wait_condition: {type: Available, status: 'True'}
+    wait_timeout: "{{ ingress_smoke_timeout | int }}"
+  vars:
+    # secrets_mode external: no version here, Reloader restarts the pod instead
+    ingress_fwd_authkey_version: "{{ ingress_fwd_key.stdout_lines[0] if ingress_fwd_key.stdout_lines is defined else '' }}"
+    ingress_fwd_objects: "{{ lookup('ansible.builtin.template', 'forwarder_deploy.yaml.j2') | from_yaml_all | list }}"

@@ -6,6 +6,7 @@
 {%- for s in names -%}
 {%-   set _ = src.append({'secret': {'name': s, 'optional': true, 'items': [
         {'key': 'CLAUDE_CODE_OAUTH_TOKEN', 'path': s ~ '/CLAUDE_CODE_OAUTH_TOKEN'},
-        {'key': 'ANTHROPIC_API_KEY', 'path': s ~ '/ANTHROPIC_API_KEY'}]}}) -%}
+        {'key': 'ANTHROPIC_API_KEY', 'path': s ~ '/ANTHROPIC_API_KEY'},
+        {'key': 'CREDENTIAL_FORMAT', 'path': s ~ '/CREDENTIAL_FORMAT'}]}}) -%}
 {%- endfor -%}
 {{ src | to_json }}
