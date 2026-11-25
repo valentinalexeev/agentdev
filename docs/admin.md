@@ -864,7 +864,8 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
    `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
 3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
    You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
-   `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
+   NOTE: Since 1.2.0, the operator does the sync (#383). `scripts/mcp-sync.sh <spec>` is deprecated. It stays only
+   because `scripts/bootstrap-project.sh` still runs it. It is removed when the bootstrap writes an `McpProject` (#547).
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
