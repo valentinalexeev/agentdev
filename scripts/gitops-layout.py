@@ -95,7 +95,7 @@ def main(argv):
     # A render without a SecretStore (secrets_mode playbook) keeps the old scope: every rendered Namespace.
     rendered_ns = {d["metadata"]["name"] for _, d in docs if d.get("kind") == "Namespace"}
     store_ns = {(d.get("metadata") or {}).get("namespace") for _, d in docs
-                if d.get("kind") == "SecretStore" and d.get("apiVersion", "").startswith("external-secrets.io/")}
+                if d.get("kind") == "SecretStore" and d.get("apiVersion", "").split("/")[0] == "external-secrets.io"}
     store_ns.discard(None)
     namespaces = sorted(store_ns or rendered_ns)
     d_out = os.path.join(out, "reloader")
