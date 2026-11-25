@@ -19,6 +19,18 @@ rules:
 - {apiGroups: [""], resources: [configmaps], verbs: [create]}   # create cannot be narrowed by name; only agentdev-usage-settings is created
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get, update]}
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage], verbs: [get]}
+# console chat sessions (#346): the API starts and ends chat-* Jobs and reads their pods' addresses. A session pod is
+# the agent's pod (#424): the API copies the template of the StatefulSet agent-<agent> (the get above) and names the
+# agent's Secrets in the Job; it never reads a Secret. The Job shape is held by the ValidatingAdmissionPolicy
+# agentdev-api-chat-jobs below (the agent pod's containers and images, only that agent's Secrets, each in the container
+# the agent pod has it in, gVisor, the service account agent-<agent>). Created even with chat off, so turning it on
+# needs no RBAC change.
+# delete cannot be narrowed by label in RBAC: the ValidatingAdmissionPolicy agentdev-api-chat-jobs-delete allows only chat-* console Jobs
+- {apiGroups: [batch], resources: [jobs], verbs: [get, list, create, delete]}
+- {apiGroups: [""], resources: [pods], verbs: [get]}
+# console (#344): the harness guide of an agent (operator-written) and the health of the agents-namespace parts
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get]}
+- {apiGroups: [apps], resources: [deployments], resourceNames: [webhook-router, claude-proxy, egress-proxy], verbs: [get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -26,9 +38,26 @@ metadata: {name: agentdev-api-read, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-api-read}
 subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}]
 ---
+# GET /api/platform (#344): readiness of the operator and authentik, by name; no Secrets, no other objects
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-api-platform, namespace: ${PLATFORM_NS}}
+rules:
+- {apiGroups: [apps], resources: [deployments], resourceNames: [agentdev-operator, authentik-server], verbs: [get]}
+# notifications (#347): the instance's NotificationChannel objects and the VAPID key pair they name, nothing else
+- {apiGroups: [agentdev.dev], resources: [notificationchannels], verbs: [get, list, watch]}
+- {apiGroups: [""], resources: [secrets], resourceNames: [agentdev-api-vapid], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-api-platform, namespace: ${PLATFORM_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-api-platform}
+subjects: [{kind: ServiceAccount, name: agentdev-api, namespace: ${PLATFORM_NS}}]
+---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, labels: {app: agentdev-api}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, labels: {app: agentdev-api}, annotations: {secret.reloader.stakater.com/reload: "agentdev-api-db,agentdev-api-forge,agentdev-api-github,agentdev-api-siem,agentdev-api-chat,agentdev-api-vapid"}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: agentdev-api}}
@@ -46,6 +75,8 @@ spec:
         - {name: OIDC_DISCOVERY_URL, value: "${OIDC_DISCOVERY_URL}"}
         - {name: OIDC_AUDIENCE, value: "${OIDC_AUDIENCE}"}
         - {name: AGENTS_NS, value: "${AGENTS_NS}"}
+        - {name: PLATFORM_NS, value: "${PLATFORM_NS}"}   # GET /api/platform (#344)
+        - {name: API_IMAGE, value: "${API_IMAGE}"}       # its tag is the instance version on the Platform page
         - {name: FORGE_URL, value: "${FORGE_URL}"}
         - {name: ADMIN_GROUP, value: agentdev-admins}
         - {name: APPROVALS, value: "${APPROVALS}"}   # #67: decide approval requests from forge comments
@@ -57,6 +88,27 @@ spec:
         # agent caps (#27) for POST /api/agents: all agents, and agents per person (admin group exempt); 0 = no cap
         - {name: MAX_AGENTS, value: "${MAX_AGENTS}"}
         - {name: MAX_AGENTS_PER_USER, value: "${MAX_AGENTS_PER_USER}"}
+        # agents from Git (#58): api (default) or git; with git, Agents without agentdev/created-by are read-only
+        # here except spec.paused (pause and resume)
+        - {name: AGENTS_SOURCE, value: "${AGENTS_SOURCE}"}
+        # console chat sessions (#346, images/api/chat.go): Jobs in ${AGENTS_NS} that run the worker image's session
+        # server. CHAT_TOKEN_KEY (Secret agentdev-api-chat) derives the per-session token for the session servers;
+        # CHAT_ISSUE_TOKEN (same Secret, Gitea only) creates issues from drafts as the person (Sudo).
+        - {name: CHAT_SESSIONS, value: "${CHAT_SESSIONS}"}
+        # #424: a session pod is the agent's own pod spec (the operator-rendered StatefulSet template) with an
+        # interactive entry point; images, forge, Claude and egress settings come from there
+        - {name: CHAT_WORKER_IMAGE, value: "${CHAT_WORKER_IMAGE}"}
+        - {name: CHAT_IDLE_SECONDS, value: "${CHAT_IDLE_SECONDS}"}
+        - {name: CHAT_RETENTION_DAYS, value: "${CHAT_RETENTION_DAYS}"}
+        - {name: CHAT_MAX_SESSIONS, value: "${CHAT_MAX_SESSIONS}"}
+        - {name: CHAT_MAX_SESSIONS_PER_USER, value: "${CHAT_MAX_SESSIONS_PER_USER}"}
+        - name: CHAT_TOKEN_KEY
+          valueFrom: {secretKeyRef: {name: agentdev-api-chat, key: CHAT_TOKEN_KEY, optional: true}}
+        - name: CHAT_ISSUE_TOKEN
+          valueFrom: {secretKeyRef: {name: agentdev-api-chat, key: CHAT_ISSUE_TOKEN, optional: true}}
+        # notification channels on for this instance (#347): webpush; empty = off. The NotificationChannel object in
+        # this namespace gives the VAPID key and the allowed push hosts
+        - {name: NOTIFY_CHANNELS, value: "${NOTIFY_CHANNELS}"}
         # per-agent Claude budget for the UI (#66); the proxy's /status has no credentials. Absent proxy: no budget column
         - {name: CLAUDE_PROXY_STATUS_URL, value: "http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080/status"}
         # forge token for the live permission check of writes (read on the repositories only). Optional: without it
@@ -72,8 +124,9 @@ spec:
         - {name: GITHUB_APP_PRIVATE_KEY_FILE, value: /var/run/agentdev/github-app/private-key.pem}
         - name: GITHUB_API_TOKEN
           valueFrom: {secretKeyRef: {name: agentdev-api-github, key: GITHUB_API_TOKEN, optional: true}}
-        # security_events table (#70): DATABASE_URL from the Secret 10-api.sh creates (login agentdev_api; schema
-        # and retention are set by 10-api.sh as agentdev_owner, the API only inserts, reads and calls the prune function)
+        # security_events table (#70): DATABASE_URL from the Secret agentdev-api-db (login agentdev_api). The Job
+        # agentdev-db-init sets the schema and retention as agentdev_owner (#382); the API only inserts, reads and calls
+        # the prune functions, and serves only after the Job wrote the schema version of this image (waitSchema)
         - name: DATABASE_URL
           valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}
         # optional SIEM outputs, instance config only: webhook (#70), syslog over TLS and OTLP (#71); keys in outputs.go
@@ -82,6 +135,8 @@ spec:
         # the App's private key is a file, never an environment variable (same as the forge sidecar, #128)
         volumeMounts: [{name: github-app, mountPath: /var/run/agentdev/github-app, readOnly: true}]
         ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
+        # the API listens only after the db-init Job applied its schema (#382): allow 15 minutes before liveness counts
+        startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5, failureThreshold: 180}
         readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
         livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 20}
         resources:
@@ -139,3 +194,128 @@ spec:
   ingress:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: coding-agent}}}]
     ports: [{port: 8081}]
+---
+# console chat sessions (#346): the session server in a chat pod accepts only the API. The pod also checks a
+# per-session token and refuses requests from its own addresses (images/worker/chat-session-server.js).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: chat-session-server, namespace: ${AGENTS_NS}}
+spec:
+  podSelector: {matchLabels: {app: agent-chat, agentdev/console: "true"}}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}]
+    ports: [{port: 7681}]
+---
+# The API may create Jobs (#346). This policy holds every Job the API's service account writes to the chat session
+# shape, so the Role cannot be used to run another image or to mount another Secret. #424: the shape is the agent pod
+# of the Job's agent (operator render.go) with the interactive entry point: containers chat (worker image) and forge
+# (forge image), the initContainer state-init (worker image, no Secrets) and, for an agent with a toolchain (#499), the
+# initContainer toolchain (worker image, only the agent's setup proxy key agent-<agent>-setup-proxy, read-only root, UID
+# 1000); then chat and forge mount /state/toolchain read-only. Each Secret of the agent stays in the
+# container that has it in the agent pod: the forge credential (agent-<agent>) and the egress proxy key
+# (egress-forge-proxy) only in forge, the Claude proxy key, the Claude Secret (proxy off) and the MCP Secret only in chat.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-api-chat-jobs}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [batch], apiVersions: ["*"], operations: [CREATE, UPDATE], resources: [jobs]}
+  matchConditions:
+  - {name: api-only, expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-api'"}
+  variables:
+  - {name: pod, expression: "object.spec.template.spec"}
+  - {name: agent, expression: "has(object.metadata.labels) && 'agentdev/chat-agent' in object.metadata.labels ? object.metadata.labels['agentdev/chat-agent'] : ''"}
+  - {name: inits, expression: "has(variables.pod.initContainers) ? variables.pod.initContainers : []"}
+  - {name: all, expression: "variables.pod.containers + variables.inits"}
+  # Secret names each container may read (env secretKeyRef, envFrom secretRef); anything else is denied
+  - {name: chatSecrets, expression: "['agent-' + variables.agent + '-proxy', 'agent-' + variables.agent + '-mcp', 'claude-shared', 'claude-' + variables.agent]"}
+  - {name: forgeSecrets, expression: "['agent-' + variables.agent, 'egress-forge-proxy']"}
+  - {name: setupSecret, expression: "'agent-' + variables.agent + '-setup-proxy'"}
+  - {name: toolchain, expression: "variables.inits.exists(c, c.name == 'toolchain')"}
+  # #499: the toolchain init container's environment, exactly as the operator renders it (toolchain.go toolchainInit)
+  - {name: setupProxy, expression: "'http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.${AGENTS_NS}.svc.cluster.local:3128'"}
+  - {name: noProxy, expression: "'localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local'"}
+  validations:
+  - expression: "object.metadata.name.startsWith('chat-') && object.metadata.labels['app'] == 'agent-chat' && object.metadata.labels['agentdev/console'] == 'true' && variables.agent.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
+    message: "the API creates only console chat Jobs (chat-*, app=agent-chat, agentdev/console=true)"
+  - expression: "object.spec.template.metadata.labels['app'] == 'agent-chat' && object.spec.template.metadata.labels['agentdev/console'] == 'true' && !('agent' in object.spec.template.metadata.labels)"
+    message: "chat pods keep the labels the egress and ingress policies select, and never the agent label of agent pods"
+  - expression: "size(variables.pod.containers) == 2 && variables.pod.containers.exists_one(c, c.name == 'chat' && c.image == '${CHAT_WORKER_IMAGE}') && variables.pod.containers.exists_one(c, c.name == 'forge' && c.image == '${CHAT_FORGE_IMAGE}')"
+    message: "chat pods have exactly the containers chat (worker image) and forge (forge image) of the agent pod"
+  - expression: "variables.inits.all(c, c.name in ['state-init', 'toolchain'] && c.image == '${CHAT_WORKER_IMAGE}') && variables.inits.exists_one(c, c.name == 'state-init') && size(variables.inits.filter(c, c.name == 'toolchain')) <= 1 && (!has(variables.pod.ephemeralContainers) || size(variables.pod.ephemeralContainers) == 0)"
+    message: "the init containers are state-init and, with a toolchain (#499), toolchain, both with the worker image"
+  # #499: the toolchain installer runs as the agent's UID with a read-only root, and every other container that mounts
+  # the state volume gets /state/toolchain read-only (ADR 0010 D3)
+  - expression: "variables.inits.all(c, c.name != 'toolchain' || (has(c.securityContext) && has(c.securityContext.readOnlyRootFilesystem) && c.securityContext.readOnlyRootFilesystem && has(c.securityContext.runAsUser) && c.securityContext.runAsUser == 1000))"
+    message: "the toolchain init container runs as UID 1000 with a read-only root filesystem"
+  # review of #537: the init containers run exactly the operator's commands with exactly its mounts and environment, so
+  # no other command can copy the setup key or write into another volume, and neither is a restartable sidecar (a
+  # restartPolicy would keep it running next to chat, with the setup egress)
+  - expression: "variables.inits.all(c, !has(c.restartPolicy) && !has(c.args) && !has(c.envFrom) && !has(c.volumeDevices) && !has(c.lifecycle) && !has(c.workingDir))"
+    message: "the init containers set no restartPolicy (no sidecars), args, envFrom, volumeDevices, lifecycle or workingDir"
+  - expression: "variables.inits.all(c, c.name != 'state-init' || ((c.command == ['mkdir', '-p', '/state/claude'] || c.command == ['mkdir', '-p', '/state/claude', '/state/toolchain', '/state/cache']) && !has(c.env) && size(c.volumeMounts) == 1 && c.volumeMounts[0].name == 'state' && c.volumeMounts[0].mountPath == '/state' && !has(c.volumeMounts[0].subPath) && !has(c.volumeMounts[0].subPathExpr)))"
+    message: "state-init only creates the state directories and mounts only the state volume at /state"
+  - expression: "variables.inits.all(c, c.name != 'toolchain' || (c.command == ['toolchain-install'] && size(c.volumeMounts) == 2 && c.volumeMounts.all(m, !has(m.subPath) && !has(m.subPathExpr) && ((m.name == 'state' && m.mountPath == '/state') || (m.name == 'toolchain-tmp' && m.mountPath == '/tmp'))) && c.volumeMounts.exists(m, m.name == 'state') && c.volumeMounts.exists(m, m.name == 'toolchain-tmp')))"
+    message: "the toolchain init container runs toolchain-install and mounts only the state volume at /state and toolchain-tmp at /tmp"
+  - expression: "variables.inits.all(c, c.name != 'toolchain' || (has(c.env) && c.env.all(e, size(c.env.filter(x, x.name == e.name)) == 1 && ((e.name == 'TOOLCHAIN_SPEC' && has(e.value) && !has(e.valueFrom)) || (e.name == 'TOOLCHAIN_DIR' && has(e.value) && e.value == '/state/toolchain') || (e.name in ['TMPDIR', 'HOME'] && has(e.value) && e.value == '/tmp') || (e.name in ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'] && has(e.value) && e.value == variables.setupProxy) || (e.name in ['NO_PROXY', 'no_proxy'] && has(e.value) && e.value == variables.noProxy) || (e.name == 'TOOLCHAIN_EXPECT' && has(e.valueFrom) && has(e.valueFrom.configMapKeyRef)) || (e.name == 'EGRESS_SETUP_KEY' && has(e.valueFrom) && has(e.valueFrom.secretKeyRef) && e.valueFrom.secretKeyRef.key == 'password'))) && c.env.exists(e, e.name == 'TOOLCHAIN_SPEC')))"
+    message: "the toolchain init container has exactly the operator's environment (spec, directories, setup proxy)"
+  - expression: "!variables.toolchain || variables.pod.volumes.exists(v, v.name == 'toolchain-tmp' && has(v.emptyDir))"
+    message: "toolchain-tmp is an emptyDir"
+  - expression: "!variables.toolchain || variables.pod.containers.all(c, !has(c.volumeMounts) || !c.volumeMounts.exists(m, m.name == 'state') || c.volumeMounts.exists(m, m.name == 'state' && m.mountPath == '/state/toolchain' && has(m.readOnly) && m.readOnly))"
+    message: "with a toolchain, chat and forge mount /state/toolchain read-only"
+  - expression: "variables.pod.runtimeClassName == 'gvisor' && variables.pod.automountServiceAccountToken == false && (!has(variables.pod.hostNetwork) || !variables.pod.hostNetwork) && (!has(variables.pod.hostPID) || !variables.pod.hostPID) && (!has(variables.pod.hostIPC) || !variables.pod.hostIPC) && (!has(variables.pod.shareProcessNamespace) || !variables.pod.shareProcessNamespace)"
+    message: "chat pods run under gVisor without an automounted service account token, host namespaces or a shared process namespace"
+  # #400: the agent's own service account (its identity at claude-proxy, #352), nothing else; serviceAccount is the
+  # deprecated alias of serviceAccountName and must not name another account
+  - expression: "has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == 'agent-' + variables.agent && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount == variables.pod.serviceAccountName)"
+    message: "chat pods run as the service account agent-<agent> of their agentdev/chat-agent label"
+  - expression: "variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.configMap) && v.configMap.name in ['agentdev-guides', 'agentdev-usage']) || (has(v.downwardAPI) && v.downwardAPI.items.all(i, has(i.fieldRef) && i.fieldRef.fieldPath == 'metadata.annotations')) || (v.name == 'proxy-token' && has(v.projected) && size(v.projected.sources) == 1 && has(v.projected.sources[0].serviceAccountToken) && v.projected.sources[0].serviceAccountToken.audience == 'claude-proxy' && has(v.projected.sources[0].serviceAccountToken.expirationSeconds) && v.projected.sources[0].serviceAccountToken.expirationSeconds == 600) || (v.name == 'github-app' && has(v.secret) && v.secret.secretName == 'agent-' + variables.agent))"
+    message: "chat pods mount only emptyDir, the guide and usage ConfigMaps, the pod's annotations, the projected token proxy-token (audience claude-proxy, 600 s) and the agent's own GitHub App key (github-app)"
+  # (one projection item holds exactly one source type: API validation, so no Secret can hide next to the token)
+  - expression: "variables.all.all(c, c.name == 'chat' || !has(c.volumeMounts) || c.volumeMounts.all(m, m.name != 'proxy-token'))"
+    message: "only the chat container mounts the projected claude-proxy token"
+  - expression: "variables.all.all(c, c.name == 'forge' || !has(c.volumeMounts) || c.volumeMounts.all(m, m.name != 'github-app'))"
+    message: "only the forge container mounts the agent's GitHub App key"
+  - expression: "variables.all.all(c, !has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && ((c.name == 'chat' && e.valueFrom.secretKeyRef.name in variables.chatSecrets) || (c.name == 'forge' && e.valueFrom.secretKeyRef.name in variables.forgeSecrets) || (c.name == 'toolchain' && e.valueFrom.secretKeyRef.name == variables.setupSecret))) || (c.name == 'chat' && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == 'agent-' + variables.agent + '-project') || (c.name == 'toolchain' && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == 'agentdev-toolchains' && e.valueFrom.configMapKeyRef.key == variables.agent)))"
+    message: "chat pods read only the agent's Secrets, each in its container: forge token and egress key only in forge, the Claude and MCP Secrets only in chat, the setup proxy key only in toolchain"
+  - expression: "variables.all.all(c, !has(c.envFrom) || (c.name == 'chat' && c.envFrom.all(f, has(f.secretRef) && !has(f.configMapRef) && f.secretRef.name in variables.chatSecrets)))"
+    message: "only the chat container takes envFrom, and only from the agent's MCP or Claude Secret"
+  - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"
+    message: "no privileged chat containers"
+  - expression: "variables.all.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
+    message: "chat containers add no capabilities"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-api-chat-jobs}
+spec:
+  policyName: agentdev-api-chat-jobs
+  validationActions: [Deny]
+---
+# RBAC cannot narrow delete by label: this policy lets the API's service account delete only console chat Jobs
+# (not the CLI chat Jobs of scripts/agent-chat.sh or any other Job in ${AGENTS_NS}).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}
+    resourceRules:
+    - {apiGroups: [batch], apiVersions: ["*"], operations: [DELETE], resources: [jobs]}
+  matchConditions:
+  - {name: api-only, expression: "request.userInfo.username == 'system:serviceaccount:${PLATFORM_NS}:agentdev-api'"}
+  validations:
+  - expression: "oldObject != null && oldObject.metadata.name.startsWith('chat-') && has(oldObject.metadata.labels) && 'agentdev/console' in oldObject.metadata.labels && oldObject.metadata.labels['agentdev/console'] == 'true' && oldObject.metadata.labels['app'] == 'agent-chat'"
+    message: "the API deletes only console chat Jobs"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: agentdev-api-chat-jobs-delete}
+spec:
+  policyName: agentdev-api-chat-jobs-delete
+  validationActions: [Deny]

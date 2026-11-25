@@ -33,7 +33,7 @@ echo 'ANTHROPIC_API_KEY=...' > .env         # shared Claude credential (gitignor
 open http://localhost:3000                   # login owner / SpikePassw0rd!
 # file an issue in owner/playground, assign it to alice or bob, then review the PR they open
 kubectl --context kind-agentdev -n coding-agents logs -f -l app=coding-agent --prefix
-./99-teardown.sh
+./99-teardown.sh                             # deprecated: ansible-playbook infra/ansible/kind.yml --tags teardown
 ```
 
 **Agents and accounts.** `AGENTS="alice bob"` in `config.env`. Adding a name creates a Gitea user, gives it
@@ -45,7 +45,7 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | File | Role |
 |---|---|
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
-| `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent token budget, usage from the response headers |
+| `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent budget in cost units (#196), per-job cost, usage from the response headers |
 | `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
 | `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`); runs `infra/ansible/kind.yml --tags forge` (#106) |
 | `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
@@ -96,11 +96,11 @@ Results land in `results.md`.
 
 | Step | Builds | Checks |
 |---|---|---|
-| 00 | — | tools present, engine VM big enough |
+| 00 | — | tools present, engine VM big enough (`kind.yml --tags prereqs`) |
 | 01 | kind: control plane + `agentdev/pool=sandboxes` worker; gVisor `runsc` copied into nodes; `RuntimeClass gvisor` | busybox under gVisor shows gVisor's kernel in `dmesg` |
 | 02 | agent-sandbox v1.0.8 (core + extensions); `claude-agent` image; SandboxTemplate (gVisor, 2 PVCs) + WarmPool(1) | warm pool reaches 1 ready |
 | 03 | SandboxClaim | claim latency from warm pool · gVisor in sandbox · **suspend** (`operatingMode: Suspended`) drops the pod and keeps PVCs · **resume** restores files + git repo · **warm pool → 0** · optional headless `claude -p` |
-| 04 | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
+| 04 (deprecated, removed in 1.3.0, #106) | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
 
 ## Two layers, two jobs
 

@@ -1,0 +1,13 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: agentdev-external-secrets, namespace: flux-system}
+spec:
+  interval: 24h
+  url: https://charts.external-secrets.io
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: agentdev-stakater, namespace: flux-system}
+spec:
+  interval: 24h
+  url: https://stakater.github.io/stakater-charts

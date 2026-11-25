@@ -19,7 +19,7 @@ unset GITHUB_ACTIONS GITHUB_STEP_SUMMARY
 # a deployment repository made from the template, with instance values like an owner fills them in
 mkrepo() {
   local d="$work/$1"; mkdir -p "$d"; cp -R "$root/$ex/." "$d/"
-  sed -i.bak -E 's/\?ref=v[0-9.]+/?ref=v9.9.9/' "$d/terraform/main.tf"
+  sed -i.bak -E 's/\?ref=v[0-9A-Za-z.-]+/?ref=v9.9.9/' "$d/terraform/main.tf"
   sed -i.bak -E 's/default = 150/default = 75/; s/^  # system_pool_spot = var/  system_pool_spot = var/' "$d/terraform/main.tf"
   sed -e 's/^gcp_project: .*/gcp_project: prod-123/' -e 's/^# scale_to_zero: false/scale_to_zero: false/' \
     "$d/ansible/instance.yml.example" > "$d/ansible/instance.yml"

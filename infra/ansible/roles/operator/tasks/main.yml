@@ -28,7 +28,7 @@
   changed_when: "'already present on all nodes' not in (operator_load.stdout ~ operator_load.stderr)"
   when: operator_kind_cluster | length > 0
 
-- name: "CRDs agents, securityevents, approvals, executors, executorruns, projectsecrets (agentdev.dev)"
+- name: "CRDs agents, securityevents, approvals, executors, executorruns, projectsecrets, mcpprojects (agentdev.dev)"
   kubernetes.core.k8s:
     context: "{{ operator_context }}"
     src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -108,6 +108,11 @@
         EXECUTOR_EGRESS_HOSTS: "{{ operator_executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ operator_usage.five_hour }}"
         USAGE_WEEKLY: "{{ operator_usage.weekly }}"
+        # telemetry (#196 D4): /metrics on 9464, NetworkPolicy from the scraper pods only
+        TELEMETRY_OTLP_URL: "{{ operator_telemetry.otlp_url }}"
+        TELEMETRY_INSTANCE: "{{ operator_telemetry.instance }}"
+        TELEMETRY_SCRAPER_NS: "{{ operator_telemetry.scraper_ns }}"
+        TELEMETRY_SCRAPER_SELECTOR: "{{ operator_telemetry.scraper_selector | to_json }}"
         # external forwarder watch (#213, PR #286): off on kind. Extra values are harmless before #286 merges.
         FORWARDER_NS: ""
         FORWARDER_SELECTOR: ""
@@ -115,6 +120,9 @@
         SECRETS_STORE: "{{ operator_store }}"
         # the kind store's value Secrets have one key, value
         SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
+        # MCP per project (#383): allow-list as config.env MCP_ALLOWED_HOSTS (kind.yml mcp_allowed_hosts)
+        MCP_ADMIN_EMAIL: "{{ operator_mcp_admin_email }}"
+        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | default([]) | join(' ') }}"
         CLAUDE_PROXY_URL: >-
           {{ ('http://claude-proxy.' ~ operator_agents_ns ~ '.svc.cluster.local:8080') if operator_claude_proxy | bool else '' }}
       replace: []

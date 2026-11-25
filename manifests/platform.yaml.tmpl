@@ -75,7 +75,8 @@ stringData:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}, annotations: {secret.reloader.stakater.com/reload: "contextforge"}}
 spec:
   replicas: 1                      # DB cache, no Redis: one replica (ADR 0001)
   selector: {matchLabels: {app: contextforge}}
@@ -142,4 +143,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}}]
+    ports: [{port: 4444}]
+  # the operator's McpProject controller (#383) calls the admin API; it replaced the port-forward of mcp-sync.sh
+  - from: [{podSelector: {matchLabels: {app: agentdev-operator}}}]
     ports: [{port: 4444}]

@@ -110,6 +110,13 @@ flowchart LR
   a2 -- poll, push, PR, reply --> forge
 ```
 
+## Job
+
+A **job** is one issue handed to an agent (assigned on Gitea, label `agent:<name>` on GitHub) and the PR the agent
+opens for it on its branch `agent/<name>/issue-<n>`. The console shows its phase: `queued` (no PR yet), `build` (the
+agent waits on an approval), `review` (PR open) and `done` (PR merged or closed). The phase comes from the forge and
+from the Approval objects, the records people and the operator write. It never comes from what the agent says (#345).
+
 ## Project
 
 A **project** is one repository plus the agents that work on it, described by one spec file
@@ -221,13 +228,16 @@ runner can start any program. So the security boundary is the pod, not the list 
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
   the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
-  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a budget per agent in cost units (tokens weighted by type and model, #196)
   for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
   come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
-  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
+  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). An agent with
+  `spec.permission.mode: auto` (#500) runs with `--permission-mode auto` instead: Claude Code's classifier decides a
+  call outside the allow-list, with rules from the Agent object only. The classifier is a model's judgment, not a
+  boundary; the deny-list stays. Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
 - **Egress allow-list (#65):** agent pods reach the outside only through the `egress-proxy` (Squid), and it only
   the hosts in `EGRESS_HOSTS` (forge, package registries; the model API only through `claude-proxy`). A NetworkPolicy denies every other connection

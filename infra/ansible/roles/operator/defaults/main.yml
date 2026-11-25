@@ -38,9 +38,17 @@ operator_egress_extra_hosts: []
 operator_claude_proxy: true
 operator_usage: {five_hour: 80, weekly: 90}
 operator_rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174, AGENT_GRACE_SECONDS and DRAIN_MAX_MINUTES in config.env
+# telemetry (#196 D4), as config.env: the Prometheus server of ./run.sh 14 in monitoring
+operator_telemetry:
+  otlp_url: ""
+  instance: agentdev
+  scraper_ns: monitoring
+  scraper_selector: {app.kubernetes.io/name: prometheus, app.kubernetes.io/component: server}
 # scoped secrets store (#202): on only when External Secrets Operator is installed (step 13), else the operator's
 # cache never syncs
 operator_secrets_store_enabled: true
 operator_crds: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml, agentdev.dev_mcpprojects.yaml]
+# MCP per project (#383): the operator's McpProject controller; same values as the role platform
+operator_mcp_admin_email: admin@agentdev.dev
 operator_timeout: 120

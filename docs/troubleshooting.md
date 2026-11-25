@@ -75,8 +75,8 @@
 |---|---|---|
 | The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
 | `scripts/mcp-sync.sh` stops with `has mcp: but ContextForge is not deployed`. Or the agents do not get MCP tools. | ContextForge is deployed only for the project specifications in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE). | 1. Add the path of the specification to `MCP_PROJECTS` in `config.env`, or to `mcp_projects` in `ansible/instance.yml`. 2. Run `./run.sh 08` or the playbook again. |
-| On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. The output is hidden (`no_log`). | The specification path is not correct, a server host is not in `mcp_allowed_hosts`, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Make sure that the host of each server in `mcp:` is in `mcp_allowed_hosts`. 3. Install `yq`, `jq` and `curl`. 4. Run the playbook again. 5. To see the error, run `scripts/mcp-sync.sh <spec>` with `KUBECTL`, `MCP_ALLOWED_HOSTS` and `CF_ADMIN_FILE` set. The script does not show tokens. |
-| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
+| `kubectl -n coding-agents get mcpp` shows `Ready` `False`. Or the agents do not get MCP tools. | The `McpProject` status gives the reason: `HostNotAllowed` (a server is not in the allow-list), `ContextForgeUnavailable` (ContextForge is not deployed, or the admin login failed), `NoTools` (a server does not answer), `SyncFailed` (the message names the step). | 1. Run `kubectl -n coding-agents describe mcpp <project>` and read the message. 2. For `ContextForgeUnavailable`, make sure that the specification is in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE) and run `./run.sh 08` or the playbook. 3. For `NoTools`, make sure that the MCP server pods operate. The operator tries again every minute. |
+| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`, or an `McpProject` shows `HostNotAllowed`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run `./run.sh 08`/`./run.sh 12` (kind) or the playbook (GKE): the operator gets the new list. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
 
 ## authentik, API and web UI
@@ -98,8 +98,16 @@
 | The agent waits, and a `/approve` comment has no effect | The comment is edited, the id is wrong, or the commenter does not have write access | Write a new comment with the correct id. Make sure that you have write access to the repository. |
 | No request gets a decision | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
 | A request shows "void" | The job ended, the issue or pull request closed, a new commit replaced the old commit, or the agent pod stopped | No action. If the agent needs the action again, it makes a new request. |
-| No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
+| No approvals comment | Web Push sent the request to a person with write access, so the agent wrote no comment. Or the job is not known, or the forge refused the comment | Open **Approvals** in the web UI. Examine the log of the `forge` container of the agent pod: "sent by Web Push, no forge comment" is the first cause. |
 | A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
+
+## Deployment CI (GKE)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The `preflight` job of the deployment CI stops at `get-credentials` or at `Required CRDs` with `NOT_FOUND` or `cluster agentdev not found`, and `infra` does not run. | The GKE cluster does not exist (a first install, or the cluster was deleted to stop the cost). The template from before #471 checks the cluster before `infra` can make it. | 1. Pin agentdev 1.2.0 or later (`ref=`, `image_tag`, `agentdev_ref`). 2. Copy `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke` of that release. 3. Run the workflow again (Actions, deploy, Run workflow). `preflight` then does only the checks that need no cluster, `infra` makes the cluster, and `preflight-cluster` checks the CRDs. Do not apply `terraform/` locally. |
+| `preflight-cluster` shows the notice `no cluster` and `deploy` or `render` continues. | `infra` ran, but the cluster is not there (an apply that made no cluster). | Examine the log of the `infra` job. The `deploy` job stops at `get-credentials` if the cluster is missing. |
+| `preflight-cluster` stops with `cannot read the GKE cluster`. | `gcloud container clusters describe` failed for a reason that is not "not found" (permission, API). The checks are not skipped. | Examine the gcloud message in the log. Make sure that the automation account has `roles/container.admin`. |
 
 ## kind cluster (run.sh step 01)
 

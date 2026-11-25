@@ -26,6 +26,8 @@ type kubeAgents struct {
 	c  kubernetes.Interface
 	d  dynamic.Interface
 	ns string
+	// source: agents_source (#58), only to mark Git-owned Agents in the overview
+	source string
 }
 
 // newKubeAgents uses the in-cluster service account, or KUBECONFIG when run outside the cluster.
@@ -59,6 +61,7 @@ func (k *kubeAgents) List(ctx context.Context) ([]agent, error) {
 		case err == nil:
 			for _, u := range ags.Items {
 				a := fromAgentObject(u)
+				a.Source = sourceOf(k.source, &u)
 				byName[a.Name] = a
 			}
 		case apierrors.IsNotFound(err) || meta.IsNoMatchError(err):

@@ -97,6 +97,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   | `docs/` | documentation only | `docs/60-owner-credentials` |
   | `chore/`, `ci/` | tooling, dependencies, workflows; `chore/release-X.Y.Z` cuts a release | `ci/64-api-image` |
   | `merge/` | a forward merge between release lines (`scripts/release-lines.sh forward`) | `merge/release-1.0-into-main` |
+  | `agent/<name>/release-`, `agent/<name>/merge-` | the same as `chore/release-` and `merge/`, for a sandboxed agent that can push only to `agent/<name>/*` (#510) | `agent/agentdev/release-1.2.0` |
+
+  Wherever this file says `chore/release-X.Y.Z` or `merge/`, the `agent/<name>/` form counts the same: the
+  `Release lines` and `Changelog` checks classify both (`scripts/release-lines.sh kind`).
 
   Work branches start from, and PRs target, the **line of the issue's milestone**
   ([ADR 0004](docs/adr/0004-branching-and-release-lines.md)): `main` for the next minor, `release/X.Y` for a frozen
@@ -152,7 +156,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   examples and docs in sync, in the same PR; if not, the PR links a follow-up issue.
 - **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
   adds or changes behaviour updates `docs/` (concepts, user guide, admin, troubleshooting as relevant), `README.md`
-  and `CHANGELOG.md` in the same PR. `docs/` is published to the wiki on merge.
+  and adds a changelog fragment `changelog.d/<issue>-<slug>.md` (#448) in the same PR. `docs/` is published to the wiki on merge.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
   given on: a push after the approval needs a new approval. Comments, `COMMENTED` reviews, chat messages, emoji and
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
@@ -194,7 +198,8 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
 
-- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** line in `CHANGELOG.md` lists
+- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** entry (a fragment with
+  `breaking: true`, its `## Upgrade` section) lists
   every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
   one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
 
@@ -209,7 +214,7 @@ The independent reviewer checks these items on every PR, and lists the result pe
    decision (limits, pause, reset, credentials). Telemetry comes through a channel the model cannot write.
 5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
    shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
-6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+6. **Docs:** `docs/`, `README.md` and a `changelog.d/` fragment change with the behaviour; manuals follow STE (`docs/writing.md`).
 7. **Internal interfaces:** a change to an internal interface (worker and forge images against router, operator,
    Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
    (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
@@ -252,15 +257,18 @@ required inputs.
 - **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
   alters behaviour). While the version is `0.x`, breaking changes bump **MINOR** instead.
 - **MINOR:** backwards-compatible features. **PATCH:** backwards-compatible fixes only.
-- Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
-  (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
-  **BREAKING** with the migration step.
+- Every PR that changes behaviour adds **one fragment file** `changelog.d/<issue>-<slug>.md` (#448; format in
+  [`changelog.d/README.md`](changelog.d/README.md)), never a direct edit of `## [Unreleased]` in `CHANGELOG.md`
+  (CI fails it). The fragment names its Keep a Changelog section (Added, Changed, Deprecated, Removed, Fixed,
+  Security); a breaking one has `breaking: true` and a `## Upgrade` section with the migration steps. A PR with no
+  user-visible change gets the label `no-changelog`. The lines already under `## [Unreleased]` before #448 stay.
 - Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
-- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
-  `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
+- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that assembles
+  the fragments and `Unreleased` into the new version with the date (`scripts/release-lines.sh release X.Y.Z`, which
+  runs `scripts/changelog.sh release`) and bumps any pinned examples. After the owner merges it, the owner
   (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward. An owner
   approval of the release PR on its current head is that permission for its one tag (§7a step 5).
-- `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
+- `CHANGELOG.md`: a fix's fragment goes to the lowest line's `changelog.d/`. A forward merge keeps the released sections
   of lower lines in version order.
 
 ### 7a. Milestone and release follow-up (regular, on every monitor check)
@@ -274,7 +282,7 @@ Owner request: #354.
    the set changes, do not add a new comment on each check.
 2. **Set the milestone of approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4)
    and **no milestone**, set it by these rules, in this order:
-   1. `merge/` forward merges and `chore(release)` PRs: no milestone.
+   1. `merge/` (or `agent/<name>/merge-`) forward merges and `chore(release)` PRs: no milestone.
    2. A stacked PR (base is not a line branch) takes the milestone of the PR at the bottom of its stack. This rule
       wins over the type of its title.
    3. A PR that closes or refers to an issue with a milestone takes that milestone.
@@ -293,12 +301,13 @@ Owner request: #354.
    - the `## [Unreleased]` section of its line is not empty;
    - its line branch exists. For a new minor `X.Y.0`, the scope freeze and the cut of `release/X.Y` are owner
      decisions: ask on the tracking issue, do not cut the line alone.
-   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
+   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z` (a sandboxed agent:
+   `agent/<name>/release-X.Y.Z`), CHANGELOG, pinned examples,
    `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested, an independent review
    (§4). For a patch, the version is the next free `X.Y.Z` on the line. Never open a second release PR for one
    milestone.
 5. **Run the full release after the owner approves the release PR.** Owner decision (#354, PR #355): an owner
-   `APPROVED` review on the current head of a `chore/release-X.Y.Z` PR is the explicit permission (§3) for the tag
+   `APPROVED` review on the current head of a `chore/release-X.Y.Z` (or `agent/<name>/release-X.Y.Z`) PR is the explicit permission (§3) for the tag
    `vX.Y.Z` and the other steps of that one release. It is not permission for any other tag. Before the merge, CI
    must be green (`Release lines` included) and the independent review line must name the head. Then, without a new
    question, follow `docs/release.md` §6 steps 5 to 9:
@@ -309,7 +318,7 @@ Owner request: #354.
       release from the CHANGELOG section. If the images are not there after 6 checks, comment and stop;
    5. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review. If
       the bot has no write access there, post the diff on the tracking issue and ask (§3);
-   6. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
+   6. merge the line forward, one `merge/` (or `agent/<name>/merge-`) PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
       without conflict resolution and with green CI merges without a new approval (§4);
    7. report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
    A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else

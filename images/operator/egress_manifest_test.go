@@ -33,7 +33,8 @@ func renderTmpl(t *testing.T, path string, vals map[string]string) []string {
 // operator renders (a label change in render.go must not silently open egress).
 func TestEgressManifest(t *testing.T) {
 	docs := renderTmpl(t, "../../manifests/egress.yaml.tmpl", map[string]string{"AGENTS_NS": ns, "PLATFORM_NS": "agentdev-platform",
-		"FORGE_NS": "forge", "BOTBOARD_NS": "botboard", "EGRESS_HOSTS": "api.anthropic.com .github.com", "EGRESS_PROXY_IMAGE": "img"})
+		"FORGE_NS": "forge", "BOTBOARD_NS": "botboard", "EGRESS_HOSTS": "api.anthropic.com .github.com", "EGRESS_PROXY_IMAGE": "img",
+		"SETUP_EGRESS_HOSTS": strings.Join(ToolchainHosts(), " ")})
 	var conf string
 	pols := map[string]networkingv1.NetworkPolicy{}
 	for _, d := range docs {
@@ -68,9 +69,28 @@ func TestEgressManifest(t *testing.T) {
 		"http_access deny private_dst\n",
 		"169.254.0.0/16", "::ffff:0:0/96", "64:ff9b::/96",
 		"http_access deny all\n",
+		// #499: setup hosts only with the toolchain init container's credential
+		"acl setup_hosts dstdomain -n dl.google.com static.rust-lang.org\n",
+		"http_access allow setup_hosts setup_client\nhttp_access deny setup_hosts\n",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("squid.conf lacks %q", want)
+		}
+	}
+	// #499: the setup hosts are denied before the general allow (an agent cannot reach them, even if EGRESS_HOSTS lists
+	// them), and the playbook and config.env defaults are the catalogue's hosts
+	if strings.Index(conf, "http_access deny setup_hosts") > strings.Index(conf, "http_access allow allowed") {
+		t.Error("setup hosts are not denied before the general allow")
+	}
+	for _, f := range []string{"../../config.env", "../../infra/ansible/group_vars/all.yml", "../../infra/ansible/roles/kind_agents/defaults/main.yml"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range ToolchainHosts() {
+			if !strings.Contains(string(b), h) {
+				t.Errorf("%s: setup egress hosts lack %s (images/operator/toolchain.go catalogue)", f, h)
+			}
 		}
 	}
 	// deny rules come before the allow rule (Squid uses the first match)
@@ -171,7 +191,7 @@ func TestChatSessionUsesClaudeProxy(t *testing.T) {
 	// the NetworkPolicies of egress.yaml.tmpl and claude-proxy.yaml.tmpl
 	vals := map[string]string{"AGENTS_NS": ns, "PLATFORM_NS": "agentdev-platform", "FORGE_NS": "forge", "BOTBOARD_NS": "botboard",
 		"EGRESS_HOSTS": ".github.com", "FORGE_EGRESS_HOSTS": "github.com", "EGRESS_PROXY_IMAGE": "img", "FORGE_PROXY_AUTH_SHA": "x",
-		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_TOKENS": "0", "CLAUDE_SECRET_SOURCES": "[]"}
+		"CLAUDE_PROXY_IMAGE": "img", "IMAGE_PULL_POLICY": "Never", "CLAUDE_BUDGET_UNITS": "0", "CLAUDE_PRICES_DATA": "{}", "TELEMETRY_OTLP_URL": "", "TELEMETRY_INSTANCE": "agentdev", "TELEMETRY_SCRAPER_NS": "monitoring", "TELEMETRY_SCRAPER_SELECTOR": `{"app.kubernetes.io/name": "prometheus"}`, "CLAUDE_SECRET_SOURCES": "[]"}
 	docs = append(renderTmpl(t, "../../manifests/egress.yaml.tmpl", vals), renderTmpl(t, "../../manifests/claude-proxy.yaml.tmpl", vals)...)
 	podLabels := labels.Set(job.Spec.Template.Labels)
 	// "agent" selects the agent Service (controller.go) and is the security attribution (security.go): not on a chat pod

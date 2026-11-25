@@ -78,7 +78,8 @@ Do only the run.sh steps that you need. Some run.sh steps are necessary before o
 
 CAUTION: This procedure deletes the cluster and all data in it.
 
-1. Run `./99-teardown.sh`.
+1. Run `ansible-playbook infra/ansible/kind.yml --tags teardown` (or the deprecated `./99-teardown.sh`).
+   The tag `teardown` is also tagged `never`: no other run of `kind.yml` deletes the cluster.
 
 ## Install agentdev for production (GCP/GKE)
 
@@ -118,22 +119,41 @@ WARNING: Do not put secret values in git, in issues or in logs. Put the secret v
 NOTE: The Billing Budgets API needs a quota project. Before plan and apply, set
 `GOOGLE_BILLING_PROJECT=<project_id>` and `USER_PROJECT_OVERRIDE=true`. The example `deploy.yml` sets them for CI.
 
-CAUTION: The first apply gives the automation account a role on the billing account (#199). The identity of the
-first apply must have `billing.accounts.setIamPolicy` on the billing account. Usually this is the owner. CI cannot
-give this role to itself. To make no budget and no billing role, set `create_budget = false`.
+CAUTION: The deployment CI uses the automation account. The first apply gives the automation account a role on the
+billing account (#199). The identity of that apply must have `billing.accounts.setIamPolicy` on the billing account.
+Usually this is the owner. CI cannot give this role to itself. To make no budget and no billing role, set
+`create_budget = false`.
 
-1. In the deployment repository, run `terraform plan`.
-2. Examine the plan.
-3. Run `terraform apply`.
-4. Get the CI values: `terraform output github_actions_auth`
-5. Set the CI variables of the deployment repository to these values.
-6. Put the secret values into Secret Manager. The list is in `infra/ansible/README.md`.
-7. Open a pull request in the deployment repository.
-   The CI does the Ansible dry run.
-8. Merge the pull request.
-   The CI deploys the instance.
+NOTE: You do not apply all of `terraform/` before the first deploy (#471). The owner makes only the CI identity.
+The CI makes the cluster and the other resources. The checks that need the cluster run after `terraform apply` in
+the CI. When you deleted the cluster to stop the cost, the next deploy makes it again. You do no local step.
 
-9. Do the end-to-end security checks. Refer to [e2e-security.md](e2e-security.md).
+1. In `terraform/` of the deployment repository, make only the CI identity (the owner does this step one time):
+
+   ```bash
+   terraform init -backend-config="bucket=<project_id>-tfstate"
+   terraform apply -var-file=instance.tfvars \
+     -target=module.agentdev.google_service_account_iam_member.github_wif \
+     -target=module.agentdev.google_project_iam_member.automation \
+     -target=module.agentdev.google_billing_account_iam_member.automation_budgets \
+     -target=module.agentdev.google_service_account_iam_member.github_pr_wif \
+     -target=module.agentdev.google_project_iam_member.plan \
+     -target=module.agentdev.google_storage_bucket_iam_member.plan_state \
+     -target=module.agentdev.google_billing_account_iam_member.plan_budgets
+   ```
+
+   Examine the plan before you type `yes`. It must show no cluster. Terraform warns that `-target` is for
+   exceptional use. This warning is expected here.
+2. Get the CI values: `terraform output github_actions_auth`
+3. Set the CI variables of the deployment repository to these values (refer to `AGENTS.md`, step 6).
+4. Put the secret values into Secret Manager. The list is in `infra/ansible/README.md`.
+5. Open a pull request in the deployment repository.
+   The CI does the checks and, with the plan identity, shows the `terraform plan`.
+6. Examine the plan.
+7. Merge the pull request.
+   The CI makes the infrastructure and deploys the instance.
+
+8. Do the end-to-end security checks. Refer to [e2e-security.md](e2e-security.md).
 
 NOTE: [Private deployment](private-deployment.md) gives the full procedure for GKE, GitHub and Google Workspace.
 

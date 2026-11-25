@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -43,6 +45,10 @@ func main() {
 	// read-only observability MCP tools (#205): same image, own Deployment (manifests/obs-mcp.yaml.tmpl)
 	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
 		os.Exit(runObsMCP(os.Stdout))
+	}
+	// optional setup of an external Gitea (#442): same image, Job forge-init-<hash> (infra/ansible/tasks/forge_init.yml)
+	if len(os.Args) > 1 && os.Args[1] == "forge-init" {
+		os.Exit(runForgeInit(os.Stdout))
 	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -113,6 +119,20 @@ func main() {
 		log.Error(err, "usage")
 		os.Exit(1)
 	}
+	// #196 (ADR 0002 D4): OpenTelemetry metrics on a separate port (9464), scraper only; "off" disables
+	if addr := env("METRICS_LISTEN", ":9464"); addr != "off" {
+		h, shutdown, err := newOperatorMetrics(os.Getenv("TELEMETRY_OTLP_URL"), usage.pausedNow)
+		if err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return serveOperatorMetrics(ctx, addr, h, shutdown)
+		})); err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
+	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
 		Drains: r.Drains, Requeue: r.requeueAgent,
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
@@ -173,6 +193,13 @@ func main() {
 			os.Exit(1)
 		}
 		log.Info("scoped secrets store on", "store", store)
+	}
+	// MCP per project (#383, was scripts/mcp-sync.sh): McpProject -> ContextForge; MCP_CONTEXTFORGE_URL=off disables
+	if on, err := setupMcpProjects(mgr, ns, os.Getenv); err != nil {
+		log.Error(err, "mcpproject controller")
+		os.Exit(1)
+	} else if on {
+		log.Info("mcp projects on")
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,

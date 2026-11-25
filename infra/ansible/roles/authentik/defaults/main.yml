@@ -19,10 +19,28 @@ authentik_trusted_proxy_cidrs: [35.191.0.0/16, 130.211.0.0/22, 10.0.0.0/8, 172.1
 # ranges shorter than /8 (IPv4) or /16 (IPv6), for example 0.0.0.0/0, are refused unless this is true (#198 review):
 # authentik would trust a forged X-Forwarded-For from any client
 authentik_trusted_proxy_allow_wide: false
-authentik_db_pod: platform-db-0
+# in-cluster Jobs (#382): psql from the platform Postgres image, ak shell from the authentik image of the chart
+authentik_db_init_image: postgres:17.11   # the Postgres image of the role platform (tests/db_init.yml checks it)
+authentik_image: "ghcr.io/goauthentik/server:{{ authentik_version }}"
 # break-glass (docs/admin.md): akadmin is added to agentdev-admins once; add only, never removed by the playbook
 authentik_breakglass_admin_group: true
+# inputs of the two Jobs, shared by tasks/main.yml (deploy) and tasks/render.yml (#447): secret values by Secret name only
+authentik_db_init_files:
+  authentik.sh: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik.sh', rstrip=false) }}"
+  authentik-roles.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/authentik-roles.sql', rstrip=false) }}"
+authentik_db_init_env:
+  - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}}
+  - {name: AUTHENTIK_DB_PASSWORD, valueFrom: {secretKeyRef: {name: authentik, key: AUTHENTIK_POSTGRESQL__PASSWORD}}}
+authentik_breakglass_command: [sh, -c, 'exec ak shell -c "$(cat /db-init/breakglass.py)"']
+authentik_breakglass_files:
+  breakglass.py: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/breakglass.py', rstrip=false) }}"
+authentik_breakglass_env:
+  - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
+authentik_breakglass_env_from: [{secretRef: {name: authentik}}]
 # kind (#106, kind.yml): secrets as files in .secrets/platform instead of Secret Manager
 authentik_secret_source: secret_manager    # files: authentik_secrets_dir (kind)
 authentik_secrets_dir: "{{ repo_root }}/.secrets/platform"
 authentik_file_keys: [pg-authentik, authentik-secret-key, authentik-secret-key2, authentik-admin]
+# #381: secrets_mode external reads no secret value (ExternalSecret authentik, Reloader restarts the pods)
+authentik_playbook_secrets: "{{ secrets_mode | default('playbook') == 'playbook' or authentik_secret_source == 'files' }}"
+authentik_es_refs: !unsafe {authentik-secret-key: "{{ .key }}", pg-authentik: "{{ .pg }}", authentik-admin: "{{ .admin }}"}

@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,6 +68,7 @@ type AgentReconciler struct {
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
 
@@ -88,6 +90,34 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "SecretNotBound", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "SecretNotBound", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the tool allow-list (#496): entries without commas or control characters (fail closed)
+	if msg := toolsValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidTools", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidTools", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the toolchain (#499): only catalogue versions, $TOOLCHAIN paths, refresh of at least 1h (fail closed)
+	if msg := toolchainValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidToolchain", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidToolchain", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the permission mode (#500): only dontAsk or auto, rules without control characters (fail closed)
+	if msg := permissionValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidPermission", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidPermission", msg, a.Generation))
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
@@ -99,6 +129,30 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return controllerutil.SetControllerReference(&a, svc, r.Scheme())
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
+	}
+
+	// workload identity (#352): the agent's own service account, before the pod that names it. No token is mounted
+	// from it automatically; the pod gets only a projected token with audience claude-proxy (render.go).
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.AutomountServiceAccountToken = ptr.To(false)
+		if sa.Labels == nil {
+			sa.Labels = map[string]string{}
+		}
+		sa.Labels["app"], sa.Labels["agent"] = "coding-agent", a.Name
+		return controllerutil.SetControllerReference(&a, sa, r.Scheme())
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("service account: %w", err)
+	}
+
+	// proxy key (#381): agent-<name>-proxy from claude-proxy-signing, before the pod that reads it
+	if _, err := r.ensureProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// setup proxy credential (#499): agent-<name>-setup-proxy, before the pod whose init container reads it
+	if err := r.ensureSetupProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// harness guide (#206): written before the pod that mounts it. The mount is optional, so a failure here never blocks
@@ -152,8 +206,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rollout: %w", err)
 	}
-	if err := r.updateStatus(ctx, &a, sts, updated); err != nil {
+	tc, tcErr := r.observeToolchain(ctx, &a)
+	if tcErr != nil {
+		l.Error(tcErr, "toolchain report not recorded, will retry", "agent", a.Name)
+	}
+	if err := r.updateStatus(ctx, &a, sts, tc, updated); err != nil {
 		return ctrl.Result{}, err
+	}
+	// refresh (#499): reconcile when the agent's epoch changes; the new template then waits for idle (drain)
+	if d := r.toolchainNextRefresh(&a); d > 0 && (after == 0 || d < after) {
+		after = d
+	}
+	if tcErr != nil && (after == 0 || after > 30*time.Second) {
+		after = 30 * time.Second
 	}
 	if guideRetry && (after == 0 || after > 30*time.Second) {
 		after = 30 * time.Second
@@ -204,14 +269,14 @@ func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool,
 	return pvc.DeletionTimestamp != nil, nil
 }
 
-func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, extra ...metav1.Condition) error {
+func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, tc *v1.AgentToolchainStatus, extra ...metav1.Condition) error {
 	want := int32(0)
 	if sts.Spec.Replicas != nil {
 		want = *sts.Spec.Replicas
 	}
 	// a copy: equalStatus compares against a.Status, so the new conditions must not be written into it first
 	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation,
-		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...)}
+		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...), Toolchain: tc}
 	for _, c := range extra {
 		meta.SetStatusCondition(&s.Conditions, c)
 	}
@@ -234,6 +299,10 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	}
 	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionTrue,
 		Reason: "Applied", Message: "service and statefulset match the spec", ObservedGeneration: a.Generation})
+	meta.SetStatusCondition(&s.Conditions, agentReady(s.Phase, true, "", "", a.Generation))
+	if cs := sts.Spec.Template.Spec.Containers; len(cs) > 0 {
+		s.Image = cs[0].Image // the version the agent runs at its next wake (#386)
+	}
 	if equalStatus(a.Status, s) {
 		return nil
 	}
@@ -245,12 +314,15 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {
-	if x.Phase != y.Phase || x.Ready != y.Ready || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
+	if !equality.Semantic.DeepEqual(x.Toolchain, y.Toolchain) {
+		return false
+	}
+	if x.Phase != y.Phase || x.Ready != y.Ready || x.Image != y.Image || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
 		return false
 	}
 	for _, c := range y.Conditions {
 		o := meta.FindStatusCondition(x.Conditions, c.Type)
-		if o == nil || o.Status != c.Status || o.Reason != c.Reason {
+		if o == nil || o.Status != c.Status || o.Reason != c.Reason || o.ObservedGeneration != c.ObservedGeneration {
 			return false
 		}
 	}
@@ -270,7 +342,7 @@ func (r *AgentReconciler) requeueAgent(agent string) {
 
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.wake = make(chan event.GenericEvent, 64)
-	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).
+	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).Owns(&corev1.ServiceAccount{}).
 		WatchesRawSource(source.Channel(r.wake, &handler.EnqueueRequestForObject{}))
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
