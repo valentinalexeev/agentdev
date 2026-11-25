@@ -71,6 +71,10 @@ While the version is `0.x`, breaking changes bump MINOR.
 - **Two flaky Go tests in credproxy and forge are stable (#535, #542).** `TestClassifierGzipRequest` (credproxy) reads every response before asserting on the logged events. The forge
   test fixture turns off git's detached automatic maintenance, which could still write into the mirror while the
   test's temporary directory was removed. Both pass 50 of 50 runs under `go test -race -count=50`.
+- **The compat e2e runs the API and chat-policy denial checks nightly and on demand (#556).** The nightly compat run and manual runs (input `api`, on by default) now deploy the PR-head API with `COMPAT_API=1`
+  and run the console chat NetworkPolicy and admission denial checks (`e2e-gke-security.sh --kind --only chat`),
+  including the #549 token-policy cases. A manual run with `real_model` and `api` runs the API checks in the real-model
+  pass. A failed API pass no longer skips the nightly real-model run. Per-PR compat runs are unchanged.
 
 ### Removed
 - **BREAKING** **run.sh and the numbered step scripts are removed; kind uses infra/ansible/kind.yml only (#417).** `run.sh`, the step scripts `00-prereqs.sh` to `13-secrets.sh` (with `04-coder.sh`) and `99-teardown.sh` are removed
@@ -105,7 +109,16 @@ While the version is `0.x`, breaking changes bump MINOR.
   digest, the pod is replaced after drain and the toolchain is installed again under a new key. With a toolchain the
   agent and `toolchain` containers run the worker image pinned to its digest; the chat Job policy admits that form.
   The digest only moves forward. Agents without `spec.toolchain` keep their pod template. See docs/admin.md. Re-run:
-  the playbook or `./run.sh 12`.
+  the playbook or `ansible-playbook infra/ansible/kind.yml --tags operator`.
+- **The kind SSO check applies the SSO blueprint on the restarted authentik worker (#557).** `kind.yml --tags authentik` (role `authentik_kind`) applied the SSO blueprint in the first Running worker pod after the
+  restart, which could be the old pod still terminating, without the `AGENTDEV_SSO_*` env. The blueprint then created no
+  source and the sign-in check failed with "source did not redirect to the stand-in (HTTP 404)". The role now waits for a
+  worker pod that is not being deleted and has the SSO env, and fails at the apply step when the source `agentdev-sso`
+  does not exist.
+- **The kind install of the platform images no longer fails on multi-arch images (#558).** On kind with Docker's containerd image store (GitHub runners included), `kind.yml --tags mcp` failed at "Load the
+  platform images into kind" for `postgres:17.11` with `content digest ... not found`. The role `platform` now pulls
+  its images for the engine's platform and re-tags them through a one-line build, as the role `kind_agents` already did
+  (#378). Both roles share `infra/ansible/tasks/kind_pull_platform.yml` and `kind_pull_image.yml`.
 
 ### Security
 - **Security events for auto mode classifier allows and severity scores (#506).** `claude-proxy` emits one low-severity security event `classifier-allow` for every tool call that Claude Code's auto
@@ -116,7 +129,7 @@ While the version is `0.x`, breaking changes bump MINOR.
   close the tool's `(<filter>) AND timestamp>=...` wrapper and drop the time bound.
 - **The chat Job policy pins the path of the projected claude-proxy token to token (#550).** The chat Job ValidatingAdmissionPolicy (`manifests/api.yaml.tmpl`) now requires `path: token` for the projected
   `claude-proxy` token, the path that the operator and the chat pods already use. A chat Job that projects the token under
-  another file name is refused. Re-run: the playbook or `./run.sh 12`.
+  another file name is refused. Re-run: the playbook or `ansible-playbook infra/ansible/kind.yml --tags operator`.
 
 ### Upgrade
 From 1.2.0 to 1.3.0-rc.1. Do the steps in this order. Step 2 is **BREAKING** for kind users of `run.sh`. GKE
