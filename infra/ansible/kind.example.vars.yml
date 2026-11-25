@@ -62,6 +62,10 @@ approvals: {enabled: false}                   # APPROVALS
 # operator_idle_seconds: 900                  # IDLE_SECONDS
 # operator_agent_storage_class: ""            # AGENT_STORAGE_CLASS
 # operator_agent_state_storage: 10Gi          # AGENT_STATE_STORAGE
+# operator_agent_ephemeral_request: 1Gi       # AGENT_EPHEMERAL_REQUEST (#251)
+# operator_agent_ephemeral_limit: 8Gi         # AGENT_EPHEMERAL_LIMIT
+# operator_forge_mirror_limit: 4Gi            # FORGE_MIRROR_LIMIT
+# operator_forge_ephemeral_limit: 5Gi         # FORGE_EPHEMERAL_LIMIT (at least the mirror limit)
 # operator_cost_labels: {service: agentdev, environment: dev}   # COST_LABELS
 # operator_security: {pause_after: 5, retention_days: 30, max_per_agent: 500, rate_per_min: 10, rate_burst: 20}
 #                                             # SECURITY_PAUSE_AFTER, SECURITY_RETENTION_DAYS, SECURITY_MAX_PER_AGENT, SECURITY_RATE_*

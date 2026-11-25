@@ -6,6 +6,7 @@ import {
 } from './api'
 import { ATTN_LABEL, ATTN_RANK, type AgentView } from './model'
 import { useData } from './useData'
+import { useStoredChoice } from './stored'
 import { GROUP_AT, short } from './format'
 import { AgentTag, Attention, Banner, Dots, Drawer, Empty, Icon, Lamp, PageHead } from './ui'
 
@@ -16,7 +17,7 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
   const [editing, setEditing] = useState<Agent | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const [filter, setFilter] = useState<'all' | 'attn' | 'working'>('all')
+  const [filter, setFilter] = useStoredChoice('agd-agents-filter', ['all', 'attn', 'working'] as const, 'all')
   const [fold, setFold] = useState<Record<string, boolean>>({})
 
   // run one change, then read the data again; returns true on success
