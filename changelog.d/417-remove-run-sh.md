@@ -37,3 +37,5 @@ agents because the role kind_agents needs it (06-agents.sh installed it when mis
 The removal ships in the 1.3.0 minor, not in a major (owner decision on PR #495, 2026-11-25). The 1.1.0 and 1.2.0
 entries announced it, `run.sh` is not on the public-interface list (CLAUDE.md §7), and `kind.vars.yml` keeps the
 meaning of every `config.env` value. This overrides milestone rule 6 (CLAUDE.md §7a) on purpose for this change.
+The live kind check of the Upgrade steps (CLAUDE.md §6) is the 1.3.0-rc.1 upgrade on the owner's cluster, because the
+coordinator host cannot run gVisor (its Podman VM has no `cpuset` cgroup). Corrections to the steps go into rc.2.
