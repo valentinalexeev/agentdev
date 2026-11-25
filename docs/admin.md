@@ -1973,6 +1973,11 @@ default. To turn on approvals on kind, do the steps that follow.
 3. Run `./run.sh 10` and then `./run.sh 12`.
    The operator starts the agent pods again with the new setting.
 
+NOTE: The agent asks for permission through Claude Code's `can_use_tool` host protocol (`permission-host` in the
+worker image, #539). The request then shows Claude Code's reason, the blocked path and the suggested rule. The
+decision rules do not change. The environment variable `APPROVAL_HOST=off` on the agent container switches back to
+the MCP prompt tool `mcp__agentdev__approve`, which sends only the tool and its input.
+
 NOTE: Decisions are in the audit log of the API (`AGENTDEV_AUDIT` lines with the action `approval-...`). The
 API also keeps them in Postgres. To see them, open `GET /api/audit` (admin group). A decision in the web UI has
 `"via": "ui"` and the user name of the person.
