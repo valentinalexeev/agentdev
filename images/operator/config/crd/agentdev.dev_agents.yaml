@@ -103,6 +103,30 @@ spec:
                 maximum: 500
                 minimum: 1
                 type: integer
+              merge:
+                description: 'Whether the agent may merge its own pull requests (#578).
+                  Unset or mode off: never, as before (a person merges).'
+                properties:
+                  method:
+                    description: Merge method, as the repository allows it. Default
+                      merge.
+                    enum:
+                    - merge
+                    - squash
+                    - rebase
+                    type: string
+                  mode:
+                    default: "off"
+                    description: |-
+                      off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when a person with
+                      write access approved the head commit, every check passed and no change is requested. GitHub only.
+                    enum:
+                    - "off"
+                    - gated
+                    type: string
+                required:
+                - mode
+                type: object
               model:
                 description: |-
                   Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model

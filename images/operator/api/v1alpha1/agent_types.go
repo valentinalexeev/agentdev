@@ -68,6 +68,9 @@ type AgentSpec struct {
 	// read-only to the agent. Unset: none, and the pod is as before.
 	// +optional
 	Toolchain *AgentToolchain `json:"toolchain,omitempty"`
+	// Whether the agent may merge its own pull requests (#578). Unset or mode off: never, as before (a person merges).
+	// +optional
+	Merge *AgentMerge `json:"merge,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -140,6 +143,21 @@ type AgentTools struct {
 	// +kubebuilder:validation:items:MaxLength=200
 	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f,]+$`
 	Allow []string `json:"allow,omitempty"`
+}
+
+// AgentMerge lets the agent merge its own pull request once a person approved its exact head commit (#578). Only the
+// administrator sets it (the Agent object), never the repository or issue text. The forge sidecar checks the approval,
+// the checks and the protected paths itself, from the forge, at the moment of the merge (images/forge/merge.go).
+type AgentMerge struct {
+	// off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when a person with
+	// write access approved the head commit, every check passed and no change is requested. GitHub only.
+	// +kubebuilder:validation:Enum=off;gated
+	// +kubebuilder:default=off
+	Mode string `json:"mode"`
+	// Merge method, as the repository allows it. Default merge.
+	// +kubebuilder:validation:Enum=merge;squash;rebase
+	// +optional
+	Method string `json:"method,omitempty"`
 }
 
 // AgentPermission is the Claude Code permission mode of the agent (#500). Only the administrator sets it (the Agent
