@@ -45,7 +45,7 @@
     - name: The external mode passes the checks without a certificate
       ansible.builtin.include_tasks: ../roles/ingress/tasks/checks.yml
 
-    - name: A deployed forwarder (ingress.forwarder.deploy, #316) passes the checks (#434)
+    - name: "A deployed forwarder (ingress.forwarder.deploy, #316) passes the checks (#434)"
       ansible.builtin.include_tasks: ../roles/ingress/tasks/checks.yml
       vars:
         ingress:
