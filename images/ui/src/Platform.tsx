@@ -42,7 +42,7 @@ export function PlatformPage({ token, onExpired }: { token: string; onExpired: (
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t) }, [load])
 
   const head = (
-    <PageHead title="Platform" sub="The parts of this agentdev instance. Admins only."
+    <PageHead sub="The parts of this agentdev instance. Admins only."
       actions={!(error?.status === 403) && <button className="agd-btn" type="button" disabled={busy} onClick={() => { setBusy(true); load() }}>Check again</button>} />
   )
   if (error?.status === 403) return <>{head}<Empty title="Only agentdev-admins can see the platform">Ask an administrator to add you to the group.</Empty></>

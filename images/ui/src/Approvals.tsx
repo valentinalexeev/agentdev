@@ -52,7 +52,7 @@ export function Approvals({ token, onExpired, openName = '' }: { token: string; 
   const pendingSorted = items && tab === 'pending' ? [...items].sort((a, b) => a.expires.localeCompare(b.expires)) : items
   return (
     <>
-      <PageHead title="Approvals" sub={<>
+      <PageHead sub={<>
         Requests from agents for a tool or a protected change. A person with write access to the repository decides
         here, or with a comment on the issue or PR: <code className="agd-code">/approve ID</code>, <code className="agd-code">/approve-job ID</code> or{' '}
         <code className="agd-code">/deny ID</code>. The first decision wins. Without a decision the agent continues without the action.

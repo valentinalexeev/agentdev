@@ -37,7 +37,7 @@ export function AgentsPage({ token, onExpired }: { token: string; onExpired: () 
   }, [d, onExpired])
 
   const head = (
-    <PageHead title="Agents" sub="Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work. This is normal."
+    <PageHead sub="Lifecycle and attention are separate. An idle agent has zero pods and wakes on new work. This is normal."
       actions={<button className="agd-btn agd-btn-primary" type="button" onClick={() => { setNotice(''); setCreating(true) }}><Icon name="plus" />Add agent</button>} />
   )
   if (!d.ready) return <>{head}<p className="agd-muted">Loading agents…</p></>

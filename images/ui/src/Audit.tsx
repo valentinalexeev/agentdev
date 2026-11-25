@@ -79,7 +79,7 @@ export function AuditPage({ token, onExpired }: { token: string; onExpired: () =
     listAudit(token, filter).then((r) => { setResult({ for: filter, rows: r.entries, next: r.next_cursor }); setError(null) }).catch(fail)
   }, [token, filter, fail])
 
-  const head = <PageHead title="Audit" sub="Every change to an agent through the API: who, what, and the result, and each change of the permission mode. Admins only." />
+  const head = <PageHead sub="Every change to an agent through the API: who, what, and the result, and each change of the permission mode. Admins only." />
   if (error?.status === 403) return <>{head}<Empty title="Only agentdev-admins can read the audit log">Ask an administrator to add you to the group, or ask them who changed an agent.</Empty></>
   const rows = result && result.for === filter ? result.rows : null
   const shown = rows?.filter(({ entry: e }) => (!person || (e.who?.username ?? '').toLowerCase().includes(person.toLowerCase()) || (e.who?.forgeUser ?? '').toLowerCase().includes(person.toLowerCase()))
