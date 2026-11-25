@@ -1,13 +1,7 @@
----
-issue: 539
-type: feature
-section: Added
-status: done
-breaking: false
-title: Approval prompts use Claude Code's can_use_tool host protocol
-components: [worker]
-pr: 540
----
+# Approval prompts use Claude Code's can_use_tool host protocol (#539)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: worker. PR: #540.
+
 ## Summary
 
 With approvals on, the worker runs Claude Code through `permission-host`, which answers Claude Code's `can_use_tool`

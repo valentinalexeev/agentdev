@@ -1,13 +1,7 @@
----
-issue: 251
-type: feature
-section: Added
-status: done
-breaking: false
-title: Ephemeral-storage limits for agent pods, the toolchain init container and chat sessions
-components: [operator, api, ansible]
-pr: 265
----
+# Ephemeral-storage limits for agent pods, the toolchain init container and chat sessions (#251)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: operator, api, ansible. PR: #265.
+
 ## Summary
 
 Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi with

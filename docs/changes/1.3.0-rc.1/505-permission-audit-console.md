@@ -1,12 +1,7 @@
----
-issue: 505
-type: feature
-section: Added
-status: done
-breaking: false
-title: Permission mode and auto-mode rules of an agent in the audit log and the console
-components: [api, ui]
----
+# Permission mode and auto-mode rules of an agent in the audit log and the console (#505)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: api, ui.
+
 ## Summary
 
 The API writes one audit entry (action `permission`) for each change of `spec.permission` of an agent, with the old

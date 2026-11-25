@@ -1,13 +1,7 @@
----
-issue: 506
-type: security
-section: Security
-status: done
-breaking: false
-title: Security events for auto mode classifier allows and severity scores
-components: [credproxy]
-pr: 532
----
+# Security events for auto mode classifier allows and severity scores (#506)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: security. Section: Security. Components: credproxy. PR: #532.
+
 ## Summary
 
 `claude-proxy` emits one low-severity security event `classifier-allow` for every tool call that Claude Code's auto

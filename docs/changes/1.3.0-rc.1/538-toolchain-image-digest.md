@@ -1,13 +1,7 @@
----
-issue: 538
-type: fix
-section: Fixed
-status: done
-breaking: false
-title: Toolchain installs follow the worker image digest, so a re-pushed tag installs again
-components: [operator, api]
-pr: 551
----
+# Toolchain installs follow the worker image digest, so a re-pushed tag installs again (#538)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: fix. Section: Fixed. Components: operator, api. PR: #551.
+
 ## Summary
 
 The toolchain key now follows the worker image digest (ADR 0010 D3). The operator reads the digest from the `imageID`

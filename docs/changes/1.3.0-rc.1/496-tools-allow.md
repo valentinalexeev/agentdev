@@ -1,12 +1,7 @@
----
-issue: 496
-type: feature
-section: Added
-status: done
-breaking: false
-title: Per-agent tool allow-list additions (spec.tools.allow)
-components: [operator, worker, ansible]
----
+# Per-agent tool allow-list additions (spec.tools.allow) (#496)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: operator, worker, ansible.
+
 ## Summary
 
 `Agent` has `spec.tools.allow`: Claude Code rules added to the worker's tool allow-list for that agent only, for

@@ -1,12 +1,7 @@
----
-issue: 492
-type: feature
-section: Added
-status: done
-breaking: false
-title: Chat answers as safe Markdown
-components: [ui]
----
+# Chat answers as safe Markdown (#492)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: feature. Section: Added. Components: ui.
+
 ## Summary
 
 The console Chat page shows the answers of Claude as formatted Markdown: headings, lists, GFM tables, bold, italic,

@@ -1,13 +1,7 @@
----
-issue: 250
-type: security
-section: Security
-status: done
-breaking: false
-title: obs-mcp refuses an unbalanced Cloud Logging filter
-components: [operator]
-pr: 268
----
+# obs-mcp refuses an unbalanced Cloud Logging filter (#250)
+
+Released in 1.3.0-rc.1 (2026-11-25). Type: security. Section: Security. Components: operator. PR: #268.
+
 ## Summary
 
 obs-mcp `cloud_logging_query` refuses a filter with unbalanced parentheses, an unterminated string, a newline in a
