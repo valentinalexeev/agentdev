@@ -91,15 +91,17 @@ if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
 fi
 
 kind_play --tags operator
+# #556: the API roles take minutes; deploy them before the agents so the idle timer does not stop alice before the
+# router check (mcp needs the operator's McpProject CRD, the chat admission checks need agent-alice's StatefulSet later)
+if [[ "${COMPAT_API:-0}" == 1 ]]; then
+  kind_play --tags mcp; kind_play --tags authentik; kind_play --tags api
+fi
 kind_play --tags agents
 if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
   # the tag agents renders the production proxy; point it at the stub (plain http allowed only by this flag)
   k -n "${AGENTS_NS}" set env deploy/claude-proxy UPSTREAM="http://claude-stub.${AGENTS_NS}.svc.cluster.local:8080" \
     ALLOW_HTTP_UPSTREAM=true >/dev/null
   k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null
-fi
-if [[ "${COMPAT_API:-0}" == 1 ]]; then
-  kind_play --tags mcp; kind_play --tags authentik; kind_play --tags api
 fi
 
 ga() { curl -fsS -u "${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}" -X "$1" -H 'Content-Type: application/json' \
