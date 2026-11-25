@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ReactMarkdown from 'react-markdown'
-import { MAX_DEPTH, PlainOnError, markdownElement, options, tooDeep } from '../src/markdown.ts'
+import { MAX_BRACKETS, MAX_DEPTH, MAX_RUNS, PlainOnError, markdownElement, options, tooDeep, tooNested } from '../src/markdown.ts'
 
 const html = (md: string) => renderToStaticMarkup(createElement(ReactMarkdown, options, md))
 // text as React escapes it in the markup
@@ -126,4 +126,27 @@ test('the error boundary shows plain text when rendering throws (#494)', () => {
     b.state = { failed: false }
     assert.equal(b.render(), b.props.children)
   } finally { console.error = orig }
+})
+
+test('nested inline text and long text are shown plain, fast (#494)', () => {
+  const nested = [
+    '['.repeat(5000) + 'x' + '](u)'.repeat(5000), '[!'.repeat(3000) + '[x](u)' + '](u)'.repeat(3000),
+    '**'.repeat(4000) + 'x' + '**'.repeat(4000), '*_'.repeat(3000) + 'x' + '_*'.repeat(3000),
+    '['.repeat(MAX_BRACKETS + 1) + 'x', '*a '.repeat(MAX_RUNS + 1), '`'.repeat(40),
+  ]
+  for (const s of nested) {
+    assert.equal(tooNested(s), true, s.slice(0, 20))
+    const t = performance.now()
+    const out = renderToStaticMarkup(markdownElement(s))
+    assert.ok(performance.now() - t < 200, `render is slow: ${s.slice(0, 20)}`)
+    assert.match(out, /^<div class="agd-msg-text agd-plain">/)
+  }
+  // ordinary text is not too nested; runs and brackets reset at a blank line
+  for (const s of ['**bold** and _it_ and `code` and [x](u) [y]', '[a] [b] [[c]]', '```\ncode\n```',
+    ('*a* '.repeat(100) + '\n\n').repeat(10), ('[' + '\n\n').repeat(100), '['.repeat(MAX_BRACKETS) + 'x']) {
+    assert.equal(tooNested(s), false, s.slice(0, 20))
+  }
+  // text over 20,000 characters stays plain
+  assert.match(renderToStaticMarkup(markdownElement('a '.repeat(10_001))), /agd-plain/)
+  assert.match(renderToStaticMarkup(markdownElement('**a** '.repeat(100))), /agd-md/)
 })

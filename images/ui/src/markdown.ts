@@ -9,8 +9,8 @@ import remarkGfm from 'remark-gfm'
 import { Component, createElement, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 
-// longer text is shown plain (Markdown.tsx)
-const MAX_CHARS = 100_000
+// longer text is shown plain (Markdown.tsx): the inline parser grows faster than linear on some nested input (#494)
+const MAX_CHARS = 20_000
 
 // the part of an mdast node that safeText() reads and writes
 type MdNode = {
@@ -112,12 +112,45 @@ export class PlainOnError extends Component<BoundaryProps, { failed: boolean }> 
   }
 }
 
+// Nested inline constructs grow faster than linear in micromark: 5,000 nested links take 13 s, nested `**` 15 s
+// (#494). tooNested() is one linear scan. It shows the message plain when `[` (also `![`) nests deeper than
+// MAX_BRACKETS, a run of `*`, `_`, `~` or `` ` `` is longer than MAX_RUN, or one paragraph (up to a blank line) has
+// more than MAX_RUNS such runs.
+export const MAX_BRACKETS = 32
+const MAX_RUN = 32
+export const MAX_RUNS = 256
+
+export function tooNested(text: string): boolean {
+  let brackets = 0, runs = 0, run = 0, prev = -1, lineEmpty = true
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c === 42 || c === 95 || c === 126 || c === 96) { // * _ ~ `
+      if (c === prev) run++
+      else { run = 1; if (++runs > MAX_RUNS) return true }
+      if (run > MAX_RUN) return true
+      prev = c
+      lineEmpty = false
+      continue
+    }
+    prev = -1
+    if (c === 91) { if (++brackets > MAX_BRACKETS) return true } // [
+    else if (c === 93) { if (brackets > 0) brackets-- } // ]
+    if (c === 10) {
+      // a blank line ends the paragraph
+      if (lineEmpty) { runs = 0; brackets = 0 }
+      lineEmpty = true
+    } else if (c !== 32 && c !== 9 && c !== 13) lineEmpty = false
+  }
+  return false
+}
+
 const plain = (text: string) => createElement('div', { className: 'agd-msg-text agd-plain' }, text)
 
-// The element of one assistant message (Markdown.tsx): plain text when the text is too long or too deeply nested,
+// The element of one assistant message (Markdown.tsx): plain text when the text is too long or nested too deeply
+// (blocks or inline),
 // otherwise react-markdown with the options above inside PlainOnError.
 export function markdownElement(text: string): ReactElement {
-  if (text.length > MAX_CHARS || tooDeep(text)) return plain(text)
+  if (text.length > MAX_CHARS || tooDeep(text) || tooNested(text)) return plain(text)
   return createElement(PlainOnError, { text },
     createElement('div', { className: 'agd-msg-text agd-md' }, createElement(ReactMarkdown, options, text)))
 }
