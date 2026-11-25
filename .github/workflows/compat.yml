@@ -29,6 +29,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}   # tags: the previous release
+      # #566: on PRs the API and authentik run only when the PR touches them
+      - name: paths
+        id: paths
+        if: github.event_name == 'pull_request'
+        env: {BASE_REF: "${{ github.base_ref }}"}
+        run: |
+          if git diff --name-only "origin/${BASE_REF}...HEAD" \
+             | grep -Eq '^(images/api/|manifests/authentik|manifests/kind/sso|manifests/db-init/|infra/ansible/roles/(api|authentik[a-z_]*)/|scripts/sso-check\.py|scripts/e2e-gke-security\.sh|scripts/e2e-compat\.sh)'; then
+            echo "api=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "api=0" >> "$GITHUB_OUTPUT"
+          fi
       - uses: helm/kind-action@v1
         with: {install_only: true}
       - name: tools
@@ -38,14 +50,14 @@ jobs:
           ansible-galaxy collection install -r infra/ansible/requirements.yml
           pipx inject ansible-core kubernetes
       - uses: azure/setup-helm@v4
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.api)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.api) || steps.paths.outputs.api == '1'
       - name: e2e (stubbed Claude)
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.real_model)
         timeout-minutes: 35
         env:
           PREV_TAG: ${{ inputs.prev_tag }}
           # #556: the API and chat-policy denial checks run on demand, not on every PR (they need helm, Postgres, authentik)
-          COMPAT_API: ${{ (github.event_name == 'workflow_dispatch' && inputs.api) && '1' || '0' }}
+          COMPAT_API: ${{ ((github.event_name == 'workflow_dispatch' && inputs.api) || steps.paths.outputs.api == '1') && '1' || '0' }}
         run: scripts/e2e-compat.sh
       - name: e2e (stubbed Claude, API and chat policy, nightly)
         if: github.event_name == 'schedule'

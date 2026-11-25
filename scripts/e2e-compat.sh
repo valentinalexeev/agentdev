@@ -8,6 +8,9 @@
 #   PREV_TAG=1.0.0-rc.6 scripts/e2e-compat.sh   image tag of the previous release (without the v)
 #   KEEP_CLUSTER=1 ...                          keep the cluster for debugging
 #   COMPAT_API=1 ...                            also deploy the PR-head API (needs helm: Postgres, authentik)
+#   COMPAT_SSO=0 ...                            with COMPAT_API=1: skip the company SSO stand-in and its sign-in check
+#                                               (default 1; #566: PRs that touch no authentik/SSO path)
+#   IDLE_SECONDS=45 ...                         idle timeout of alice (default 15 with the stub, 45 with the real model)
 #   CLAUDE_REAL=1 ANTHROPIC_API_KEY=... ...     real model instead of the stub (nightly/manual only, never on PRs)
 # Needs: docker, kind, kubectl, ansible-playbook (with kubernetes.core), envsubst, jq, curl, openssl.
 set -euo pipefail
@@ -20,7 +23,7 @@ export CLUSTER_NAME="${CLUSTER_NAME:-agentdev-compat}"
 export KUBECTL="kubectl --context kind-${CLUSTER_NAME}"
 export FORGE_HOST_URL="http://localhost:${COMPAT_FORGE_PORT:-13000}"
 export AGENTS=alice REPO=owner/playground FORGE_KIND=gitea
-export SCALE_TO_ZERO=true IDLE_SECONDS="${IDLE_SECONDS:-45}" POLL_SECONDS=10 WAKE_POLL_SECONDS=30 MAX_CONCURRENT=1
+export SCALE_TO_ZERO=true IDLE_SECONDS="${IDLE_SECONDS:-$([[ "${CLAUDE_REAL:-0}" == 1 ]] && echo 45 || echo 15)}" POLL_SECONDS=10 WAKE_POLL_SECONDS=30 MAX_CONCURRENT=1
 export WORKER_IMAGE="ghcr.io/valentinalexeev/agentdev-worker:${PREV_TAG}"
 export FORGE_IMAGE="ghcr.io/valentinalexeev/agentdev-forge:${PREV_TAG}"
 export ROUTER_IMAGE=agentdev/router:compat CLAUDE_PROXY_IMAGE=agentdev/credproxy:compat
@@ -52,7 +55,8 @@ cleanup() {
   local rc=$?
   (( rc == 0 && fail == 0 )) || dump
   [[ "${KEEP_CLUSTER:-0}" == 1 ]] || kind delete cluster --name "${CLUSTER_NAME}" >/dev/null 2>&1 || true
-  rm -f "${vars_file:-}"
+  [[ -z "${platform_pid:-}" ]] || kill "${platform_pid}" 2>/dev/null || true
+  rm -f "${vars_file:-}" "${platform_log:-}"
 }
 trap cleanup EXIT
 
@@ -91,10 +95,16 @@ if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
 fi
 
 kind_play --tags operator
-# #556: the API roles take minutes; deploy them before the agents so the idle timer does not stop alice before the
-# router check (mcp needs the operator's McpProject CRD, the chat admission checks need agent-alice's StatefulSet later)
+# #566: mcp and authentik (about 6 min) run in the background while the agents are deployed and checked; the join
+# before --tags api (after the agent checks) waits for them. The API comes after the agent checks, so the idle timer
+# cannot stop alice before the router check (#556); the chat admission checks need agent-alice's StatefulSet only.
+platform_pid=""
 if [[ "${COMPAT_API:-0}" == 1 ]]; then
-  kind_play --tags mcp; kind_play --tags authentik; kind_play --tags api
+  sso_args=(); [[ "${COMPAT_SSO:-1}" == 1 ]] || sso_args=(-e authentik_kind_sso_standin=false)
+  platform_log=$(mktemp "${TMPDIR:-/tmp}/e2e-compat-platform.XXXXXX")
+  log "mcp and authentik in the background (log at the join)"
+  ( kind_play --tags mcp && kind_play --tags authentik "${sso_args[@]}" ) >"${platform_log}" 2>&1 &
+  platform_pid=$!
 fi
 kind_play --tags agents
 if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
@@ -151,6 +161,11 @@ fi
 desc="usage: claude-proxy printed an AGENTDEV_USAGE line for alice"
 check bash -c "${KUBECTL} -n ${AGENTS_NS} logs deploy/claude-proxy | grep 'AGENTDEV_USAGE' | grep -q '\"alice\"'"
 if [[ "${COMPAT_API:-0}" == 1 ]]; then
+  log "Join: mcp and authentik"
+  platform_rc=0; wait "${platform_pid}" || platform_rc=$?; platform_pid=""
+  cat "${platform_log}"
+  (( platform_rc == 0 )) || die "mcp or authentik failed (exit ${platform_rc}), log above"
+  kind_play --tags api
   desc="API: agentdev-api is ready"
   check k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=60s
   # console chat boundaries (#346, R101): NetworkPolicy shape and the admission policy (server dry run as the API)

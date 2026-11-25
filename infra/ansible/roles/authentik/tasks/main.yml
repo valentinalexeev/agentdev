@@ -161,6 +161,13 @@
     db_init_timeout: 900s
   when: authentik_breakglass_admin_group | bool
 
+# #566: the Job prints only markers (no secret): GROUP_WAIT_SECONDS shows how long the blueprint took, the rest of the
+# Job's time is the image pull and `ak shell` start-up
+- name: Result of the break-glass Job
+  ansible.builtin.debug:
+    msg: "{{ db_init_result.stdout_lines | default([]) | select('match', '^(GROUP_WAIT_SECONDS|BREAKGLASS|SUPERUSERS)=') | list }}"
+  when: authentik_breakglass_admin_group | bool and not ansible_check_mode
+
 - name: Warn when the break-glass admin akadmin is missing
   ansible.builtin.debug:
     msg: >-

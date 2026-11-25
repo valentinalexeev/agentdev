@@ -3,14 +3,18 @@
 # blueprint; here it is added to agentdev-admins with the REST API in-process: add_user only adds, a second run is a
 # no-op, no member is ever removed and no token is created or printed. A missing akadmin only gives a warning line;
 # the Job fails only when the group never appears or no active superuser exists (nobody could log in).
+# #566: the worker applies the blueprint shortly after its start; poll every second (same 10 min bound as before) and
+# print the wait, so a slow run shows whether the time went into `ak shell` start-up or into the blueprint.
 import sys, time
+t0 = time.monotonic()
 from rest_framework.test import APIClient
 from authentik.core.models import Group, User
-for _ in range(120):
+for _ in range(600):
     g = Group.objects.filter(name="agentdev-admins").first()
     if g: break
-    time.sleep(5)
+    time.sleep(1)
 else: sys.exit("group agentdev-admins missing: blueprint not applied")
+print("GROUP_WAIT_SECONDS=%d" % (time.monotonic() - t0))
 admin = User.objects.filter(username="akadmin").first()
 if admin is None:
     print("BREAKGLASS=missing WARNING: akadmin not found (renamed or deleted), nothing recreated; see docs/admin.md")
