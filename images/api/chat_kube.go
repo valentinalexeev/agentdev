@@ -184,7 +184,8 @@ func (k *kubeChat) SessionAddr(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, p := range pods.Items {
+	if len(pods.Items) > 0 { // the Job has one pod; only the first counts
+		p := pods.Items[0]
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			return "", errChatGone
 		}

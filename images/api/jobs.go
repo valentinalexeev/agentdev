@@ -196,6 +196,8 @@ func (c *jobCache) fetch(ctx context.Context, key, forge, repo, agent string) ([
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
 	}
+	ctx, cancel := context.WithCancel(ctx) // a failed call stops its sibling
+	defer cancel()
 	var (
 		prs             []forgePR
 		issues          []forgeIssue
@@ -205,9 +207,13 @@ func (c *jobCache) fetch(ctx context.Context, key, forge, repo, agent string) ([
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		prs, prErr = c.f.Pulls(ctx, forge, repo)
+		if prs, prErr = c.f.Pulls(ctx, forge, repo); prErr != nil {
+			cancel()
+		}
 	}()
-	issues, issueErr = c.f.AgentIssues(ctx, forge, repo, agent)
+	if issues, issueErr = c.f.AgentIssues(ctx, forge, repo, agent); issueErr != nil {
+		cancel()
+	}
 	wg.Wait()
 	if prErr != nil {
 		return nil, nil, prErr
@@ -266,10 +272,17 @@ func (w *writer) jobsOf(ctx context.Context, agents []agent, keepRepo func(forge
 		}
 	}
 	var wg sync.WaitGroup
+	limit := make(chan struct{}, jobForgeParallel) // goroutines per request; the cache bounds forge calls overall
 	for _, t := range tasks {
+		select {
+		case limit <- struct{}{}:
+		case <-ctx.Done():
+			t.err = ctx.Err()
+			continue
+		}
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer func() { <-limit; wg.Done() }()
 			prs, issues, err := w.jobs.get(ctx, t.a.Forge, t.repo, t.a.Name)
 			if err != nil {
 				t.err = err
