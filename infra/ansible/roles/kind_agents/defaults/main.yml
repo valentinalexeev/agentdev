@@ -30,6 +30,13 @@ kind_agents_forge_admin_user: owner
 kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
 kind_agents_max_concurrent: 2
 kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; formerly MAX_TURNS in config.env)
+# permission mode per agent (#500): {alice: {mode: auto, autoMode: {allow: ["..."]}}}; an agent not named: dontAsk
+kind_agents_permission: {}
+# tools added to the default allow-list per agent (#496): {alice: ["Bash(npm ci:*)"]}; an agent not named: default only
+kind_agents_tools: {}
+# toolchain per agent (#499, ADR 0010 D2): {alice: {presets: {go: "1.27.4"}, refresh: 168h}}; an agent not named: none.
+# Versions must be in the operator's catalogue (images/operator/toolchain.go).
+kind_agents_toolchain: {}
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true
@@ -55,6 +62,8 @@ kind_agents_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.co
                            files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
 kind_agents_egress_extra_hosts: []
 kind_agents_forge_egress_hosts: [api.github.com, github.com]
+# toolchain preset downloads (#499): only the init container toolchain, with the egress-setup-proxy credential
+kind_agents_setup_egress_hosts: [dl.google.com, static.rust-lang.org]
 kind_agents_timeout: 300
 # shared Claude credential (claude-shared), from the environment (set -a; source .env; set +a), never from -e
 kind_agents_shared_claude: >-

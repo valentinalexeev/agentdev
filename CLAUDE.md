@@ -98,6 +98,10 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
   | `docs/` | documentation only | `docs/60-owner-credentials` |
   | `chore/`, `ci/` | tooling, dependencies, workflows; `chore/release-X.Y.Z` cuts a release | `ci/64-api-image` |
   | `merge/` | a forward merge between release lines (`scripts/release-lines.sh forward`) | `merge/release-1.0-into-main` |
+  | `agent/<name>/release-`, `agent/<name>/merge-` | the same as `chore/release-` and `merge/`, for a sandboxed agent that can push only to `agent/<name>/*` (#510) | `agent/agentdev/release-1.2.0` |
+
+  Wherever this file says `chore/release-X.Y.Z` or `merge/`, the `agent/<name>/` form counts the same: the
+  `Release lines` and `Changelog` checks classify both (`scripts/release-lines.sh kind`).
 
   Work branches start from, and PRs target, the **line of the issue's milestone**
   ([ADR 0004](docs/adr/0004-branching-and-release-lines.md)): `main` for the next minor, `release/X.Y` for a frozen
@@ -281,7 +285,7 @@ Owner request: #354.
    the set changes, do not add a new comment on each check.
 2. **Set the milestone of approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4)
    and **no milestone**, set it by these rules, in this order:
-   1. `merge/` forward merges and `chore(release)` PRs: no milestone.
+   1. `merge/` (or `agent/<name>/merge-`) forward merges and `chore(release)` PRs: no milestone.
    2. A stacked PR (base is not a line branch) takes the milestone of the PR at the bottom of its stack. This rule
       wins over the type of its title.
    3. A PR that closes or refers to an issue with a milestone takes that milestone.
@@ -300,12 +304,13 @@ Owner request: #354.
    - the `## [Unreleased]` section of its line is not empty;
    - its line branch exists. For a new minor `X.Y.0`, the scope freeze and the cut of `release/X.Y` are owner
      decisions: ask on the tracking issue, do not cut the line alone.
-   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z`, CHANGELOG, pinned examples,
+   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z` (a sandboxed agent:
+   `agent/<name>/release-X.Y.Z`), CHANGELOG, pinned examples,
    `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested, an independent review
    (§4). For a patch, the version is the next free `X.Y.Z` on the line. Never open a second release PR for one
    milestone.
 5. **Run the full release after the owner approves the release PR.** Owner decision (#354, PR #355): an owner
-   `APPROVED` review on the current head of a `chore/release-X.Y.Z` PR is the explicit permission (§3) for the tag
+   `APPROVED` review on the current head of a `chore/release-X.Y.Z` (or `agent/<name>/release-X.Y.Z`) PR is the explicit permission (§3) for the tag
    `vX.Y.Z` and the other steps of that one release. It is not permission for any other tag. Before the merge, CI
    must be green (`Release lines` included) and the independent review line must name the head. Then, without a new
    question, follow `docs/release.md` §6 steps 5 to 9:
@@ -316,7 +321,7 @@ Owner request: #354.
       release from the CHANGELOG section. If the images are not there after 6 checks, comment and stop;
    5. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review. If
       the bot has no write access there, post the diff on the tracking issue and ask (§3);
-   6. merge the line forward, one `merge/` PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
+   6. merge the line forward, one `merge/` (or `agent/<name>/merge-`) PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
       without conflict resolution and with green CI merges without a new approval (§4);
    7. report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
    A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else

@@ -33,6 +33,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 # harness guide (#206): one key per agent, written by the operator only; agent pods mount their own key read-only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
+# toolchains (#499): the last good "<key>:<manifest hash>" per agent, read by the init container toolchain at pod start
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-toolchains], verbs: [get, update]}
 # scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
 # its fields); the operator never reads the synced Secrets
 - {apiGroups: [agentdev.dev], resources: [projectsecrets], verbs: [get, list, watch]}
@@ -46,6 +48,8 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 # applied in both secrets modes) limits writes to agent-*-proxy and agent-*-mcp and deletes to agent-*-mcp
 # (docs/security.md R52, R119)
 - {apiGroups: [""], resources: [secrets], resourceNames: [claude-proxy-signing], verbs: [get]}
+# toolchains (#499): the instance's setup proxy credential, copied into agent-<name>-setup-proxy
+- {apiGroups: [""], resources: [secrets], resourceNames: [egress-setup-proxy], verbs: [get]}
 - {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
 # MCP per project (#383, was scripts/mcp-sync.sh): McpProjects
 - {apiGroups: [agentdev.dev], resources: [mcpprojects], verbs: [get, list, watch, update, patch]}
@@ -79,7 +83,7 @@ spec:
   - expression: >-
       request.name.startsWith('agent-') && (request.name.endsWith('-mcp')
       || (request.operation != 'DELETE' && request.name.endsWith('-proxy')))
-    message: "the operator writes only agent-<name>-proxy and agent-<name>-mcp Secrets, and deletes only agent-<name>-mcp, in the agents namespace"
+    message: "the operator writes only agent-<name>-proxy (including agent-<name>-setup-proxy, #499) and agent-<name>-mcp Secrets, and deletes only agent-<name>-mcp, in the agents namespace"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

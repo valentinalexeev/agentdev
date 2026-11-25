@@ -17,9 +17,11 @@ case "${1:-}" in
     head_ref="${HEAD_REF:-}" labels=",${LABELS:-},"
     files=$(git diff --name-only "$base"..."$head")
     rc=0
-    case "$head_ref" in
-      chore/release-* | merge/*) echo "release or forward-merge branch '$head_ref': CHANGELOG.md edits allowed, no fragment needed"; exit 0 ;;
-    esac
+    # release and forward-merge branches, also in the agent/<name>/ form a sandboxed agent can push (#510);
+    # keep in step with scripts/release-lines.sh kind
+    if [[ "$head_ref" =~ ^(chore/release-|merge/|agent/[^/]+/(release|merge)-). ]]; then
+      echo "release or forward-merge branch '$head_ref': CHANGELOG.md edits allowed, no fragment needed"; exit 0
+    fi
     if printf '%s\n' "$files" | grep -qx CHANGELOG.md; then
       mb=$(git merge-base "$base" "$head")
       if ! diff -q <(git show "$mb:CHANGELOG.md" | py unreleased -) <(git show "$head:CHANGELOG.md" | py unreleased -) >/dev/null; then

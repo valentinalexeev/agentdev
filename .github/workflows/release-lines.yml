@@ -2,7 +2,9 @@ name: Release lines
 
 # ADR 0004: every line contains every lower one (release/X.Y -> ... -> main -> next/X.0).
 #   push to a line          report pending forward merges as warnings (main does not go red for a pending hop)
-#   PR chore/release-* into a line   fail if a lower line is not merged into the PR head
+#   PR chore/release-* (or agent/<name>/release-*) into a line   fail if a lower line is not merged into the PR head
+#   PR merge/* (or agent/<name>/merge-*)          classify the forward merge (mechanical or resolved)
+#   branch kinds: scripts/release-lines.sh kind (#510)
 on:
   push:
     branches: [main, "release/**", "next/**"]
@@ -25,11 +27,19 @@ jobs:
           fetch-depth: 0
       - name: Lines
         run: scripts/release-lines.sh list
+      - name: Branch kind tests
+        run: bash scripts/test/release-lines-test.sh
+      - name: Branch kind
+        id: kind
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: echo "kind=$(scripts/release-lines.sh kind "$HEAD_REF")" >> "$GITHUB_OUTPUT"
       - name: Ancestry (report)
         if: github.event_name == 'push'
         run: scripts/release-lines.sh check
       - name: Ancestry (release PR)
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'chore/release-')
+        if: github.event_name == 'pull_request' && steps.kind.outputs.kind == 'release'
         env:
           BASE: ${{ github.base_ref }}
         run: scripts/release-lines.sh check --strict "$BASE" HEAD
@@ -40,7 +50,7 @@ jobs:
         # and review (CLAUDE.md §4). Both outcomes pass: `check` is a required status, and failing here would block a
         # resolved forward merge even after the owner approves it. The result is a notice and the job summary.
         # The step fails only when the lower line is not an ancestor of the head (the PR does not do its job).
-        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'merge/')
+        if: github.event_name == 'pull_request' && steps.kind.outputs.kind == 'merge'
         env:
           BASE: ${{ github.base_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

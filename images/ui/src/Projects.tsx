@@ -20,7 +20,7 @@ export function ProjectsPage() {
   const n = (v: number, cls?: string) => (v ? (cls ? <span className={cls}>{v}</span> : v) : <span className="agd-muted">0</span>)
   return (
     <>
-      <PageHead title="Projects" sub="One row per repository with agents. Projects that need you sort first. Click a project to see only its work on every page." />
+      <PageHead sub="One row per repository with agents. Projects that need you sort first. Click a project to see only its work on every page." />
       <div className="agd-filters" style={{ marginBottom: 'var(--space-3)' }}>
         {d.mine && <button className="agd-chip" type="button" aria-pressed={d.scope === 'mine'} onClick={() => d.setScope('mine')}>My projects <span className="agd-data">{d.mine.length}</span></button>}
         <button className="agd-chip" type="button" aria-pressed={d.scope === ''} onClick={() => d.setScope('')}>All projects <span className="agd-data">{d.allProjects.length}</span></button>
