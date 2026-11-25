@@ -4,18 +4,24 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // fakeJobForge: one merged PR and one open PR for each repo, plus a queued issue and an issue with a pending approval.
-type fakeJobForge struct{ calls int }
+type fakeJobForge struct {
+	calls atomic.Int32
+	delay time.Duration // per call, for the timing tests
+}
 
 func (f *fakeJobForge) Pulls(_ context.Context, _, repo string) ([]forgePR, error) {
-	f.calls++
+	f.calls.Add(1)
+	time.Sleep(f.delay)
 	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	agent := map[string]string{"owner/x": "alice", "owner/y": "bob"}[repo]
 	return []forgePR{
@@ -28,6 +34,7 @@ func (f *fakeJobForge) Pulls(_ context.Context, _, repo string) ([]forgePR, erro
 }
 
 func (f *fakeJobForge) AgentIssues(_ context.Context, _, repo, _ string) ([]forgeIssue, error) {
+	time.Sleep(f.delay)
 	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	return []forgeIssue{
 		{Number: 2, Title: "has PR", Updated: t0},
@@ -39,8 +46,83 @@ func (f *fakeJobForge) AgentIssues(_ context.Context, _, repo, _ string) ([]forg
 func jobsEnv(t *testing.T) (http.Handler, *fakeJobForge) {
 	h, wr := detailEnv(t)
 	f := &fakeJobForge{}
-	wr.jobs = newJobCache(f, time.Minute)
+	wr.jobs = newJobCache(f, time.Minute, 10*time.Minute)
 	return h, f
+}
+
+// #519: a stale entry is served at once and refreshed in the background, one refresh per entry.
+func TestJobCacheStaleWhileRevalidate(t *testing.T) {
+	f := &fakeJobForge{}
+	c := newJobCache(f, time.Minute, 10*time.Minute)
+	ctx := context.Background()
+	if _, _, err := c.get(ctx, "gitea", "owner/x", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.calls.Load(); n != 1 {
+		t.Fatalf("cold get: %d forge calls", n)
+	}
+	key := "gitea\x00owner/x\x00alice"
+	c.mu.Lock()
+	e := c.m[key]
+	e.at = time.Now().Add(-2 * time.Minute)
+	e.prs = e.prs[:1]
+	c.m[key] = e
+	c.mu.Unlock()
+	f.delay = 200 * time.Millisecond
+	start := time.Now()
+	for range 3 {
+		prs, _, err := c.get(ctx, "gitea", "owner/x", "alice")
+		if err != nil || len(prs) != 1 {
+			t.Fatalf("stale get: %d PRs, %v", len(prs), err)
+		}
+	}
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Fatalf("stale get waited for the forge: %v", d)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		n, busy := len(c.m[key].prs), c.busy[key]
+		c.mu.Unlock()
+		if n == 3 && !busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background refresh did not finish: %d PRs, busy %v", n, busy)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := f.calls.Load(); n != 2 {
+		t.Fatalf("background refreshes: %d forge calls, want 2 in total", n)
+	}
+	c.mu.Lock()
+	e = c.m[key]
+	e.at = time.Now().Add(-11 * time.Minute)
+	c.m[key] = e
+	c.mu.Unlock()
+	f.delay = 0
+	if _, _, err := c.get(ctx, "gitea", "owner/x", "alice"); err != nil || f.calls.Load() != 3 {
+		t.Fatalf("entry past maxStale not read again: %d calls, %v", f.calls.Load(), err)
+	}
+}
+
+// #519: a cold cache reads the repositories at the same time, not one after the other.
+func TestJobsOfParallel(t *testing.T) {
+	_, wr := detailEnv(t)
+	f := &fakeJobForge{delay: 100 * time.Millisecond}
+	wr.jobs = newJobCache(f, time.Minute, 10*time.Minute)
+	var agents []agent
+	for i := range 6 {
+		agents = append(agents, agent{Name: "alice", Forge: "gitea", Repos: []string{fmt.Sprintf("owner/r%d", i)}})
+	}
+	start := time.Now()
+	js, failed := wr.jobsOf(context.Background(), agents, func(string, string) bool { return true })
+	if d := time.Since(start); d > 400*time.Millisecond { // serial: 6 repos x 2 calls x 100 ms = 1.2 s
+		t.Fatalf("cold jobsOf took %v", d)
+	}
+	if len(failed) != 0 || len(js) == 0 || f.calls.Load() != 6 {
+		t.Fatalf("jobs %d, failed %v, calls %d", len(js), failed, f.calls.Load())
+	}
 }
 
 type jobsResp struct {
@@ -98,9 +180,9 @@ func TestJobsPhasesAndVisibility(t *testing.T) {
 	if n := len(getJobs(t, h, "/api/jobs?repo=owner/y&phase=done", "group").Jobs); n != 1 {
 		t.Errorf("repo+phase: %d", n)
 	}
-	before := f.calls
+	before := f.calls.Load()
 	getJobs(t, h, "/api/jobs", "writer")
-	if f.calls != before {
+	if f.calls.Load() != before {
 		t.Errorf("forge called again within the cache TTL")
 	}
 	for _, bad := range []string{"?phase=x", "?scope=x", "?repo=bad", "?limit=0", "?cursor=!!"} {
