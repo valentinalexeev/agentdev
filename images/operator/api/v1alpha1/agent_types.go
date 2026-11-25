@@ -47,6 +47,16 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
+	// Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model
+	// name such as "claude-opus-5-5". Unset: the Claude Code CLI's own default for the credential, as before.
+	// +optional
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`
+	Model string `json:"model,omitempty"`
+	// Reasoning effort of the agent's runs (`claude --effort`, #564). Unset: the CLI's own default, as before.
+	// +optional
+	// +kubebuilder:validation:Enum=low;medium;high;xhigh;max
+	Effort string `json:"effort,omitempty"`
 	// How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
 	// approvals).
 	// +optional
