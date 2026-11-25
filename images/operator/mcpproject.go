@@ -279,7 +279,7 @@ func (r *McpProjectReconciler) agentToken(ctx context.Context, cf ContextForge, 
 	if owner, err := r.otherOwner(ctx, p, name); err != nil {
 		return err
 	} else if owner != "" {
-		return fmt.Errorf("Secret %s belongs to project %q (one project per agent)", name, owner)
+		return fmt.Errorf("secret %s belongs to project %q (one project per agent)", name, owner)
 	}
 	tok, tid, err := cf.MintToken(ctx, fmt.Sprintf("agent-%s-%s-%s", agent, p.Name, r.Now().UTC().Format("20060102150405")), sid)
 	if err != nil {
@@ -367,7 +367,7 @@ func (r *McpProjectReconciler) login(ctx context.Context) (ContextForge, error) 
 	}
 	pw := strings.TrimRight(string(s.Data[cfAdminKey]), "\n")
 	if pw == "" {
-		return nil, fmt.Errorf("Secret %s/%s has no %s", r.PlatformNS, CFAdminSecret, cfAdminKey)
+		return nil, fmt.Errorf("secret %s/%s has no %s", r.PlatformNS, CFAdminSecret, cfAdminKey)
 	}
 	return r.Dial(ctx, r.AdminEmail, pw)
 }

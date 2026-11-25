@@ -54,7 +54,7 @@
 - name: Notification channels
   ansible.builtin.include_tasks: notify.yml
 
-# kind.yml --tags api may run before steps 06 and 12 (#357)
+# kind.yml --tags api may run before the tags agents and operator (#357)
 - name: Agents namespace with the cost labels
   kubernetes.core.k8s:
     context: "{{ kube_context }}"

@@ -33,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -90,8 +89,11 @@ func goPreset(v, amd64, arm64 string) preset {
 		Arch:  map[string]download{"amd64": {u + "amd64.tar.gz", amd64}, "arm64": {u + "arm64.tar.gz", arm64}},
 		hosts: []string{"dl.google.com"},
 		allow: []string{"Bash(go mod:*)", "Bash(gofmt:*)", "Bash(go fmt:*)", "Bash(go run:*)"},
-		// GOTOOLCHAIN=local: go never downloads another toolchain on its own; module downloads stay on the agent's disk
-		env: map[string]string{"GOTOOLCHAIN": "local", "GOPATH": "/state/cache/go", "GOMODCACHE": "/state/cache/go/mod"}}
+		// GOTOOLCHAIN=local: go never downloads another toolchain on its own; module downloads stay on the agent's disk.
+		// GOCACHE too (#251): the default ~/.cache/go-build is on the container's writable layer, which counts against
+		// the agent's ephemeral-storage limit and is lost on restart
+		env: map[string]string{"GOTOOLCHAIN": "local", "GOPATH": "/state/cache/go", "GOMODCACHE": "/state/cache/go/mod",
+			"GOCACHE": "/state/cache/go/build"}}
 }
 
 func rustPreset(v string) preset {
@@ -439,14 +441,26 @@ func (r *AgentReconciler) toolchainInit(a *v1.Agent, ps []preset, digest, image 
 			AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi")}},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse(toolchainEphemeralRequest)},
+			// #251: the download archive and rustup-init's work files are in toolchain-tmp; the toolchain itself goes
+			// to the state volume (the PVC, not counted). The limit is the tmp volume plus room for logs.
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse(toolchainEphemeralLimit)}},
 	}
 }
 
+// ephemeral-storage of the toolchain init container (#251 part 3). The Go archive is about 75 MB and rustup-init about
+// 20 MB (rustup keeps its downloads under RUSTUP_HOME on the state volume), so 2Gi of /tmp leaves a wide margin.
+const (
+	toolchainTmpLimit         = "2Gi"
+	toolchainEphemeralRequest = "256Mi"
+	toolchainEphemeralLimit   = "3Gi"
+)
+
 func toolchainTmpVolume() corev1.Volume {
 	return corev1.Volume{Name: "toolchain-tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
-		SizeLimit: ptr.To(resource.MustParse("2Gi"))}}}
+		SizeLimit: ptr.To(resource.MustParse(toolchainTmpLimit))}}}
 }
 
 // ensureSetupProxyKey writes agent-<name>-setup-proxy from the instance's egress-setup-proxy for an agent with a
@@ -471,18 +485,7 @@ func (r *AgentReconciler) ensureSetupProxyKey(ctx context.Context, a *v1.Agent) 
 	if len(pw) < 16 {
 		return fmt.Errorf("secret %s: password missing or shorter than 16 characters", setupProxySecret)
 	}
-	ctrl := true
-	s := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-		ObjectMeta: metav1.ObjectMeta{Name: setupProxySecretName(a.Name), Namespace: a.Namespace,
-			Labels: map[string]string{"app": "coding-agent", "agent": a.Name},
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Agent", Name: a.Name,
-				UID: a.UID, Controller: &ctrl, BlockOwnerDeletion: &ctrl}}},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"password": []byte(pw)},
-	}
-	//nolint:staticcheck // same server-side apply as ensureProxyKey
-	if err := r.Client.Patch(ctx, s, client.Apply, client.FieldOwner("agentdev-operator"), client.ForceOwnership); err != nil {
+	if err := applyAgentSecret(ctx, r.Client, a, setupProxySecretName(a.Name), map[string][]byte{"password": []byte(pw)}); err != nil {
 		return fmt.Errorf("setup proxy key secret: %w", err)
 	}
 	return nil

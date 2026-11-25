@@ -10,8 +10,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -73,19 +74,23 @@ func (r *AgentReconciler) ensureProxyKey(ctx context.Context, a *v1.Agent) (bool
 	want := proxyKey(signing, a.Name)
 	// server-side apply: no read of the existing Secret; an unchanged value is a no-op (no new resourceVersion, no
 	// restart). Force takes the fields over from the playbook's client-side apply.
-	ctrl := true
-	s := &corev1.Secret{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-		ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name + "-proxy", Namespace: a.Namespace,
-			Labels: map[string]string{"app": "coding-agent", "agent": a.Name},
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Agent", Name: a.Name,
-				UID: a.UID, Controller: &ctrl, BlockOwnerDeletion: &ctrl}}},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{"ANTHROPIC_AUTH_TOKEN": []byte(want)},
-	}
-	//nolint:staticcheck // client.Apply with a typed object: the same as in controller-runtime 0.23 docs for Patch
-	if err := r.Client.Patch(ctx, s, client.Apply, client.FieldOwner("agentdev-operator"), client.ForceOwnership); err != nil {
+	if err := applyAgentSecret(ctx, r.Client, a, "agent-"+a.Name+"-proxy", map[string][]byte{"ANTHROPIC_AUTH_TOKEN": []byte(want)}); err != nil {
 		return false, fmt.Errorf("proxy key secret: %w", err)
 	}
 	return true, nil
+}
+
+// applyAgentSecret writes an Opaque Secret owned by the Agent with server-side apply (field owner agentdev-operator,
+// forced), through client.Client.Apply and an apply configuration (the supported API; Patch with client.Apply is
+// deprecated in controller-runtime 0.23). Only the fields set here are owned: labels app/agent, the controller
+// owner reference, the type and the data.
+func applyAgentSecret(ctx context.Context, c client.Client, a *v1.Agent, name string, data map[string][]byte) error {
+	ac := corev1ac.Secret(name, a.Namespace).
+		WithLabels(map[string]string{"app": "coding-agent", "agent": a.Name}).
+		WithOwnerReferences(metav1ac.OwnerReference().
+			WithAPIVersion(v1.GroupVersion.String()).WithKind("Agent").WithName(a.Name).WithUID(a.UID).
+			WithController(true).WithBlockOwnerDeletion(true)).
+		WithType(corev1.SecretTypeOpaque).
+		WithData(data)
+	return c.Apply(ctx, ac, client.FieldOwner("agentdev-operator"), client.ForceOwnership)
 }

@@ -1,10 +1,10 @@
 ---
-# authentik on GKE (#114): the same Helm chart, values and blueprints as ./run.sh 09. Instance values go into
+# authentik on GKE (#114): the same Helm chart, values and blueprints as kind.yml --tags authentik. Instance values go into
 # instance.yml under `authentik` (example.vars.yml). The role runs when authentik.enabled is true (the default when
 # ingress.auth_host is set), before the role api.
 authentik_cfg: "{{ authentik | default({}) }}"
-authentik_version: "{{ authentik_cfg.version | default('2026.8.5') }}"   # chart = app version; config.env AUTHENTIK_VERSION
-authentik_admin_email: "{{ authentik_cfg.admin_email | default('admin@agentdev.dev') }}"   # config.env AUTHENTIK_ADMIN_EMAIL
+authentik_version: "{{ authentik_cfg.version | default('2026.8.5') }}"   # chart = app version; formerly AUTHENTIK_VERSION
+authentik_admin_email: "{{ authentik_cfg.admin_email | default('admin@agentdev.dev') }}"   # formerly AUTHENTIK_ADMIN_EMAIL
 authentik_chart_repo: https://charts.goauthentik.io
 # public host of the login (Gateway route, role ingress); the issuer users and tokens see
 authentik_host: "{{ (ingress | default({})).auth_host | default('') }}"

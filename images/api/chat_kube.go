@@ -72,7 +72,15 @@ func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, id
 		hasState = hasState || v.Name == "state"
 	}
 	if !hasState {
-		p.Volumes = append([]corev1.Volume{{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}, p.Volumes...)
+		// #251: the session's /state is node disk, so it gets the agent container's ephemeral-storage limit as its size
+		// (the toolchain install, Go and cargo caches of a session land here); no limit on the agent: none here either
+		st := &corev1.EmptyDirVolumeSource{}
+		for _, c := range p.Containers {
+			if l, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; c.Name == "agent" && ok && l.Sign() > 0 {
+				st.SizeLimit = &l
+			}
+		}
+		p.Volumes = append([]corev1.Volume{{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: st}}}, p.Volumes...)
 	}
 	env := func(n, v string) corev1.EnvVar { return corev1.EnvVar{Name: n, Value: v} }
 	set := func(list []corev1.EnvVar, add ...corev1.EnvVar) []corev1.EnvVar {
