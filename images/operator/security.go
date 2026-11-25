@@ -15,6 +15,7 @@ import (
 	"io"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -476,6 +477,8 @@ func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityE
 }
 
 // maybePause pauses the agent on a high-severity event, or when the current run has more than PauseAfter events.
+// A run-events-invalid event counts once per job and refusal (#577): one misconfigured sender repeats the same
+// refusal for every batch, which says nothing new about the agent.
 // The run is the pod UID plus job: a new pod starts a new count, and events without a job share one per-pod bucket.
 // The count includes the event just created (name), even if the cache has not seen it yet. A person resumes the agent
 // (spec.paused=false) after looking; the reason stays in the SecurityPaused condition.
@@ -494,8 +497,18 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 			return err
 		}
 		n := 1 // the event just recorded
+		seen := map[string]bool{}
+		if k, once := countOnce(spec); once {
+			seen[k] = true
+		}
 		for _, e := range list.Items {
 			if e.Name != name && e.Spec.Job == spec.Job && e.Spec.Source != "egress" {
+				if k, once := countOnce(e.Spec); once {
+					if seen[k] {
+						continue
+					}
+					seen[k] = true
+				}
 				n++
 			}
 		}
@@ -515,9 +528,22 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 	if err := c.Direct.Get(ctx, key, &a); err != nil {
 		return client.IgnoreNotFound(err) // an agent from before the operator: nothing to pause here
 	}
-	if !a.Spec.Paused {
+	// #577: a pause for many low or medium events drains first (no new jobs, running jobs finish, then the pod stops;
+	// pauseDrain in the reconciler). A high-severity event stops the pod at once, also during such a drain.
+	_, draining := a.Annotations[pauseDrainAnnotation]
+	if !a.Spec.Paused || (reason == "HighSeverity" && draining) {
 		patch := client.MergeFrom(a.DeepCopy())
+		wasPaused := a.Spec.Paused
 		a.Spec.Paused = true
+		switch {
+		case reason == "HighSeverity":
+			delete(a.Annotations, pauseDrainAnnotation)
+		case !wasPaused:
+			if a.Annotations == nil {
+				a.Annotations = map[string]string{}
+			}
+			a.Annotations[pauseDrainAnnotation] = strconv.FormatInt(c.now().Unix(), 10)
+		}
 		// a merge patch of spec.paused only, under the operator's own field manager (#58): with agents from Git, Flux
 		// server-side apply owns the other spec fields and never spec.paused, so the two never fight
 		if err := c.Patch(ctx, &a, patch, client.FieldOwner(OperatorFieldManager)); err != nil {
@@ -534,6 +560,23 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 			Reason: reason, Message: msg, ObservedGeneration: a.Generation})
 		return c.Status().Update(ctx, &a)
 	})
+}
+
+// countOnce: the key under which repeats of an event count once toward PauseAfter (#577). Only refused run-event
+// batches from the forge sidecar: the refusal reason is the action text up to its details in parentheses.
+func countOnce(s v1.SecurityEventSpec) (string, bool) {
+	if s.Rule != "run-events-invalid" || s.Source != "forge" || s.Severity == "high" {
+		return "", false
+	}
+	reason, _, _ := strings.Cut(s.Action, " (")
+	return s.Rule + "\x00" + reason, true
+}
+
+func (c *Collector) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 // Prune deletes SecurityEvents older than Retention and, per agent, all but the newest MaxPerAgent.
