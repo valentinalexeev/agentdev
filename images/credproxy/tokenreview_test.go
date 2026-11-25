@@ -167,8 +167,11 @@ func TestTokenCache(t *testing.T) {
 	ctx := t.Context()
 
 	long := fakeJWT("alice", now.Add(time.Hour))
-	if r.verify(ctx, long) != "alice" || r.verify(ctx, long) != "alice" || calls != 1 {
-		t.Fatalf("positive cache: calls %d", calls)
+	if got := r.verify(ctx, long); got != "alice" || calls != 1 {
+		t.Fatalf("first verify: %q, calls %d", got, calls)
+	}
+	if got := r.verify(ctx, long); got != "alice" || calls != 1 {
+		t.Fatalf("positive cache hit: %q, calls %d", got, calls)
 	}
 	now = now.Add(posCacheMax + time.Second) // capped at 5 min even though exp is later
 	r.verify(ctx, long)

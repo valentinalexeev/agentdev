@@ -411,13 +411,26 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 ## Answer an approval request from an agent
 
 An agent can ask for permission when it needs a tool that is not on its list, or when it must change a protected
-path such as `.github/workflows/`. The administrator turns on this function (`APPROVALS`). The agent writes a comment
-on its issue or pull request: "waiting for approval `<id>`". The comment shows the tool and the request text.
+path such as `.github/workflows/`. The administrator turns on this function (`APPROVALS`).
+
+The request goes first to the web UI and to Web Push. If Web Push sends the request to a person with write access,
+the agent writes no comment on the forge. Otherwise the agent writes one approvals comment on its issue or pull
+request. This comment has a table with one row for each request of the job: the id, the tool and the state. The
+agent edits this comment for each new request and each new state. The text of each waiting request is below the
+table. The commands are in the section **How to decide**. A closed request has only its row.
+
+Below the text of a waiting request, the comment also shows why the agent asks. **Why it asks** is checked by
+agentdev (for example the protected paths of the push, or that no allow rule of the agent covers the tool). **Reason
+given by Claude Code and the agent** is the description of the call and Claude Code's reason, if there is one.
+agentdev does not check this reason.
+
+NOTE: If nobody makes a decision before the agent stops waiting, the agent also shows the request in the approvals
+comment.
 
 WARNING: Read the request text carefully before you approve it. The agent wrote this text, and it can contain a
 prompt injection from the issue.
 
-1. Read the comment "waiting for approval" on the issue or the pull request.
+1. Read the approvals comment on the issue or the pull request.
 2. Write a new comment with one of these lines:
    - `/approve <id>`: the agent can do this action one time.
    - `/approve-job <id>`: the agent can do this same action again until the job ends. The tool and the request
@@ -451,11 +464,11 @@ NOTE: Write the command at the start of a line, outside a code block and outside
 NOTE: Do not edit the comment with the decision. The system ignores an edited comment. Write a new comment.
 
 NOTE: The agent waits 30 minutes for your answer. Then the agent continues without the action. The request stays
-open, and the comment shows "still open". If the agent asks for the same action again, the agent uses your decision.
-The agent does not make a second request for the same action.
+open, and its row shows "the agent continued without it". If the agent asks for the same action again, the agent uses
+your decision. The agent does not make a second request for the same action.
 
 NOTE: A request becomes void when the agent does not need it. For example, the job ends, the issue closes, or a new
-commit replaces the old commit. The comment then shows "void". A decision on a void request has no effect.
+commit replaces the old commit. The row of the request then shows "void". A decision on a void request has no effect.
 
 NOTE: On GitHub, you need the role `write`, `maintain` or `admin` on the repository to make a decision. Comments
 of bot accounts have no effect.
@@ -469,10 +482,11 @@ requests that have no decision.
 ### Answer a cost request
 
 The administrator can set a cost limit for each job (`CLAUDE_JOB_APPROVAL_UNITS`). At this limit the agent stops and
-writes a comment "waiting for approval `<id>`" with the source `cost` and the tool `step-<n>`. The comment shows the
+adds a request to the approvals comment, with the source `cost` and the tool `step-<n>`. The request shows the
 units that the job used, the limit and the units of one more step. The proxy supplies these numbers, not the agent.
+Web Push does not send cost requests, so a cost request is always in the approvals comment.
 
-1. Read the numbers in the comment.
+1. Read the numbers in the approvals comment.
 2. Write a new comment with one of these lines:
    - `/approve <id>`: the job can use one more step of units. The agent continues in the same session.
    - `/deny <id>`: the job stops as failed.

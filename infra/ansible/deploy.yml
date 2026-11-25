@@ -91,6 +91,21 @@
       when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
+    - name: "Toolchain setup egress credential (generated once, kept in Secret Manager, #499)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ sm_egress_setup_proxy }}"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+        fi
+        gcloud secrets versions access latest --secret "$name" --project {{ gcp_project }}
+      args: {executable: /bin/bash}
+      register: setup_proxy_key
+      changed_when: false
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
+      no_log: true
+
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -243,6 +258,7 @@
              if kube_api.results is defined else [] }}
         # secrets_mode external: Reloader restarts the proxy on a new credential (no hash of it in pod metadata)
         forge_proxy_auth_sha: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] if secrets_mode == 'playbook' else 'reloader' }}"
+        setup_proxy_auth_sha: "{{ (setup_proxy_key.stdout | default('') | hash('sha256'))[:16] if secrets_mode == 'playbook' else 'reloader' }}"
       no_log: true
 
     # #449 review: a cluster that does not serve a CRD the values select fails here with a clear message, also under
@@ -336,6 +352,19 @@
           stringData:
             password: "{{ forge_proxy_key.stdout }}"
             auth: "^Basic {{ ('forge:' ~ forge_proxy_key.stdout) | b64encode }}$"
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
+      no_log: true
+
+    - name: Toolchain setup egress credential Secret (#499; the operator copies it per agent, Squid reads the regex)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: egress-setup-proxy, namespace: "{{ agents_ns }}"}
+          stringData:
+            password: "{{ setup_proxy_key.stdout }}"
+            auth: "^Basic {{ ('setup:' ~ setup_proxy_key.stdout) | b64encode }}$"
       when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
