@@ -1,0 +1,14 @@
+---
+# Pull a published image for one platform and re-tag it through a one-line build, so the local image has a single
+# manifest and `kind load docker-image` works with the containerd image store (#378, #558).
+# Inputs: kind_pull_engine, kind_pull_platform (from kind_pull_platform.yml), kind_pull_ref (the image reference).
+- name: Pull for one platform {{ kind_pull_ref }}
+  ansible.builtin.command:
+    argv: ["{{ kind_pull_engine }}", pull, -q, --platform, "{{ kind_pull_platform }}", "{{ kind_pull_ref }}"]
+  changed_when: false
+
+- name: One-platform image of {{ kind_pull_ref }}
+  ansible.builtin.command:
+    argv: ["{{ kind_pull_engine }}", build, -q, --platform, "{{ kind_pull_platform }}", -t, "{{ kind_pull_ref }}", "-"]
+    stdin: "FROM {{ kind_pull_ref }}"
+  changed_when: false

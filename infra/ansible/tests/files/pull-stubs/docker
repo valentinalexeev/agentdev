@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stub engine for tests/kind_pull_image.yml (#558). Never a real tool. Logs each call with its stdin to $STUB_LOG.
+#   docker info -f '{{.Architecture}}'  prints $STUB_ARCH (default x86_64)
+#   docker pull / build                 appends "argv | stdin" to $STUB_LOG
+case "$1" in
+  info) echo "${STUB_ARCH:-x86_64}" ;;
+  build) printf '%s | %s\n' "$*" "$(cat)" >> "${STUB_LOG:?}" ;;
+  *) printf '%s |\n' "$*" >> "${STUB_LOG:?}" ;;
+esac
+exit 0
