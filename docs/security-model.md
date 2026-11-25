@@ -84,6 +84,7 @@ AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medi
 | forge | `api-other-repo` | high | REST call for a repo other than `REPO` |
 | forge | `api-not-allowed` | medium | REST call outside the allow-list (merge, edit, hooks, ...) |
 | forge | `api-non-loopback` | high | a caller from outside the pod reached the localhost API |
+| forge | `chat-label-not-asked` | high for `agent:*`, else medium | a console chat pod sent a label write that no person allowed in the console (#571, ADR 0011) |
 | forge | `webhook-bad-token` | medium | wake call with a wrong token |
 | loop | `git-worktree-redirected` | high | a worktree `.git` or `commondir` pointed elsewhere (re-pinned) |
 | loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |
@@ -111,6 +112,12 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 - The localhost API needs no auth from inside the pod: the pod is one trust unit with respect to the forge policy,
   and the policy (own branches, protected paths) holds even if Claude calls the API directly. That is the point.
 - The operator renders both containers; the Agent CRD does not change.
+- **Labels (#227, #571, ADR 0011).** The loop may add only `agent:<name>` to its own PR. A console chat pod
+  (`CHAT_SESSION` set by the API) may add labels to any issue or PR of its repositories, `agent:*` included, but
+  only after the API confirms that a person allowed exactly that `Bash` command in the console in the last 5 minutes
+  (one allow, one write); the audit entry `chat-label` names the person. A label the chat adds on GitHub does not
+  start work by itself: the loop's labeler check needs a person with write access as the labeler. Tags, releases
+  and milestones are readable in both modes; their writes stay refused.
 
 ### Phase 2: egress allow-list (fixes R10)
 
@@ -485,8 +492,9 @@ sequenceDiagram
   content hash and comment id.
 - **API.** `GET /api/approvals?state=pending|decided|allowed|denied|void|all&agent=&project=` and
   `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
-  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
-  sidecar that made the request (per-request secret, see above) with state, scope, decider and decided hash only.
+  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods and console chat
+  pods, #571) answers the sidecar that made the request (per-request secret, see above) with state, scope, decider
+  and decided hash only.
 - **UI.** An **Approvals** tab with a pending count, Pending and History tabs, the request text shown as untrusted
   plain text.
 
