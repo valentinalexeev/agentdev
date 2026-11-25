@@ -9,9 +9,8 @@ components: [ui]
 ---
 ## Summary
 
-The chat transcript (`/chat`) has more space. Items have a gap of `space-5` (24px), not `space-4` (16px). The
+The chat transcript (`/chat`) has more space. Items have a gap of `space-5` (24px), not `space-4` (16px). In the transcript, the
 untrusted text block (`agd-untrusted`) has a left padding of `space-5`, which keeps 18px between the hatched edge and
-the text. This block is shared, so the new padding also applies outside the chat: the request text in the
-Approvals drawer and the agent text in the job drawer. The message box (`agd-composer`) has more padding: `space-4` above and `space-5` below it, and `space-3`
+the text. Other pages (the Approvals drawer and the job drawer) keep the old padding. The message box (`agd-composer`) has more padding: `space-4` above and `space-5` below it, and `space-3`
 around its button bar. On phones, the message box has `space-3` above and below and 16px at the sides, and it keeps
 clear of the bottom safe area. All values come from the spacing scale in `tokens.css`.
