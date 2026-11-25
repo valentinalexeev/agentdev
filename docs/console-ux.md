@@ -277,8 +277,9 @@ read code and write issues but never push. People reach it with `scripts/agent-c
 - **The session drafts, the person files.** Today the session posts issues itself with the chat account. In the
   console the draft is structured data shown as a card, and only a person's click creates it. So the issue has a
   human author, and a prompt injection in the repository cannot file issues by itself.
-- **Model text is untrusted.** Answers are Markdown rendered with raw HTML off, no remote images, and every link
-  shows its full address. Tool output uses the untrusted block. Nothing in a message is a button except the draft
+- **Model text is untrusted.** Answers are a safe Markdown subset (#492, `react-markdown` with `remark-gfm` and the options in `images/ui/src/markdown.ts`): raw HTML
+  shows as text, and images and links show their text and full address as text, never as an element that loads or
+  opens anything. A per-message toggle shows the exact text. Tool output uses the untrusted block. Nothing in a message is a button except the draft
   and permission cards, which the console builds from structured events, never from text.
 - **One session, many people.** Everyone with write access to the repository can open a live session of that
   project. The head shows who is here. Each message carries its author. A decision (allow, create, assign) records

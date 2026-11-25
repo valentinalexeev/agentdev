@@ -154,8 +154,20 @@ You can also use a session in the web console. The console and the terminal show
 13. To stop the session for all people, select **End**, then **End for everyone**.
 
 CAUTION: The text, the tool output and the drafts of the session come from the model. They can contain a prompt
-injection. The console shows them as plain text only. Decide on a permission request from the tool and its input,
-not from what the text asks.
+injection. Decide on a permission request from the tool and its input, not from what the text asks.
+
+The console shows the answers of Claude as formatted Markdown: headings, lists, tables, bold and italic text, code
+and quotes. All other model text shows as plain text. This includes the tool input and output, the permission
+requests and the drafts.
+
+NOTE: The console does not show HTML, images or links from the model. HTML shows as text. An image or a link shows
+its text and its address as text. To go to an address, copy it and examine it before you open it.
+
+To see the exact text of an answer:
+
+1. Select **Plain text** in the head of the answer.
+   The answer shows as Claude wrote it.
+2. To see the formatted answer again, select **Formatted**.
 
 NOTE: The head of the session shows who is in the session now, whose Claude budget it uses and the tokens so far.
 When nobody is in the session, the head shows when it ends.
