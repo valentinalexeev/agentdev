@@ -406,3 +406,36 @@ func TestChatJobAdmissionToolchain(t *testing.T) {
 		}
 	}
 }
+
+// #251: a chat session's /state is node disk; it is capped at the agent container's ephemeral-storage limit, and the
+// containers keep the agent's ephemeral-storage requests and limits
+func TestChatStateSizedByAgentEphemeralLimit(t *testing.T) {
+	for _, forge := range []string{"gitea", "github", "toolchain"} {
+		agent := agentFixture(t, forge).Spec
+		l := containerNamed(agent, "agent").Resources.Limits[corev1.ResourceEphemeralStorage]
+		if l.IsZero() {
+			t.Fatalf("%s: fixture agent has no ephemeral-storage limit", forge)
+		}
+		p := chatJobFor(t, forge).Spec.Template.Spec
+		for _, v := range p.Volumes {
+			if v.Name == "state" && (v.EmptyDir == nil || v.EmptyDir.SizeLimit == nil || v.EmptyDir.SizeLimit.Cmp(l) != 0) {
+				t.Errorf("%s: chat /state %+v, want sizeLimit %s", forge, v.VolumeSource, l.String())
+			}
+		}
+		if c := containerNamed(p, "chat"); c.Resources.String() != containerNamed(agent, "agent").Resources.String() {
+			t.Errorf("%s: chat resources %v differ from the agent's", forge, c.Resources)
+		}
+	}
+	// an agent pod without a limit: the session's /state has none either
+	agent := agentFixture(t, "gitea")
+	for i := range agent.Spec.Containers {
+		delete(agent.Spec.Containers[i].Resources.Limits, corev1.ResourceEphemeralStorage)
+	}
+	p, err := chatPod(agent, chatSession{ID: "chat-alice-0000abcd", Agent: "alice"}, strings.Repeat("a", 64), 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Volumes[0].Name != "state" || p.Volumes[0].EmptyDir.SizeLimit != nil {
+		t.Errorf("state %+v", p.Volumes[0])
+	}
+}
