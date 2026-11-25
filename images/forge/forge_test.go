@@ -40,9 +40,18 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	// fetch, commit and push start a detached `git maintenance run --auto` that can outlive the test and write into
+	// side/repo.git while t.TempDir removes it ("directory not empty", #542). Every git here (sh and the sidecar's
+	// run) inherits this environment, so none of them starts it.
+	for k, v := range map[string]string{"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
+		"GIT_CONFIG_KEY_1": "gc.auto", "GIT_CONFIG_VALUE_1": "0"} {
+		t.Setenv(k, v)
+	}
 	tmp := t.TempDir()
 	forge := filepath.Join(tmp, "forge", "owner", "repo.git")
 	sh(t, tmp, "init", "-q", "--bare", "-b", "main", forge)
+	// receive-pack runs its own auto maintenance after each push and the local transport drops GIT_CONFIG_* for it
+	sh(t, tmp, "--git-dir", forge, "config", "receive.autogc", "false")
 	seed := filepath.Join(tmp, "seed")
 	sh(t, tmp, "init", "-q", "-b", "main", seed)
 	os.WriteFile(filepath.Join(seed, "README"), []byte("hi\n"), 0o644)

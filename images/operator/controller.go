@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -99,6 +100,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
+	// same for the toolchain (#499): only catalogue versions, $TOOLCHAIN paths, refresh of at least 1h (fail closed)
+	if msg := toolchainValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidToolchain", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidToolchain", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
 	// same for the permission mode (#500): only dontAsk or auto, rules without control characters (fail closed)
 	if msg := permissionValid(&a); msg != "" {
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
@@ -134,6 +144,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// proxy key (#381): agent-<name>-proxy from claude-proxy-signing, before the pod that reads it
 	if _, err := r.ensureProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// setup proxy credential (#499): agent-<name>-setup-proxy, before the pod whose init container reads it
+	if err := r.ensureSetupProxyKey(ctx, &a); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -188,8 +203,19 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rollout: %w", err)
 	}
-	if err := r.updateStatus(ctx, &a, sts, updated); err != nil {
+	tc, tcErr := r.observeToolchain(ctx, &a)
+	if tcErr != nil {
+		l.Error(tcErr, "toolchain report not recorded, will retry", "agent", a.Name)
+	}
+	if err := r.updateStatus(ctx, &a, sts, tc, updated); err != nil {
 		return ctrl.Result{}, err
+	}
+	// refresh (#499): reconcile when the agent's epoch changes; the new template then waits for idle (drain)
+	if d := r.toolchainNextRefresh(&a); d > 0 && (after == 0 || d < after) {
+		after = d
+	}
+	if tcErr != nil && (after == 0 || after > 30*time.Second) {
+		after = 30 * time.Second
 	}
 	if guideRetry && (after == 0 || after > 30*time.Second) {
 		after = 30 * time.Second
@@ -240,14 +266,14 @@ func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool,
 	return pvc.DeletionTimestamp != nil, nil
 }
 
-func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, extra ...metav1.Condition) error {
+func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, tc *v1.AgentToolchainStatus, extra ...metav1.Condition) error {
 	want := int32(0)
 	if sts.Spec.Replicas != nil {
 		want = *sts.Spec.Replicas
 	}
 	// a copy: equalStatus compares against a.Status, so the new conditions must not be written into it first
 	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation,
-		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...)}
+		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...), Toolchain: tc}
 	for _, c := range extra {
 		meta.SetStatusCondition(&s.Conditions, c)
 	}
@@ -285,6 +311,9 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {
+	if !equality.Semantic.DeepEqual(x.Toolchain, y.Toolchain) {
+		return false
+	}
 	if x.Phase != y.Phase || x.Ready != y.Ready || x.Image != y.Image || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
 		return false
 	}

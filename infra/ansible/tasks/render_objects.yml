@@ -36,7 +36,7 @@
   ansible.builtin.set_fact:
     egress_fqdn_matches: >-
       {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2',
-         template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts) | unique | list}) | from_yaml }}
+         template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts + setup_egress_hosts) | unique | list}) | from_yaml }}
     exec_egress_fqdn_matches: >-
       {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
          'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
@@ -137,6 +137,8 @@
         FORGE_EGRESS_HOSTS: "{{ (forge_egress_hosts + forge_gitea_egress_hosts) | unique | join(' ') }}"
         # deploy.yml: a hash of the forge sidecar credential, so a new credential restarts the proxy. Render: empty.
         FORGE_PROXY_AUTH_SHA: "{{ forge_proxy_auth_sha | default('') }}"
+        SETUP_EGRESS_HOSTS: "{{ setup_egress_hosts | join(' ') }}"
+        SETUP_PROXY_AUTH_SHA: "{{ setup_proxy_auth_sha | default('') }}"
         EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
       replace: []
     agent_egress_hosts: >-

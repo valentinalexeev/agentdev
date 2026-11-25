@@ -413,6 +413,9 @@ in the phase `blocked`. Refer to "Add an agent" in `admin.md`.
 An agent can ask for permission when it needs a tool that is not on its list, or when it must change a protected
 path such as `.github/workflows/`. The administrator turns on this function (`APPROVALS`). The agent writes a comment
 on its issue or pull request: "waiting for approval `<id>`". The comment shows the tool and the request text.
+It also shows why the agent asks: **Why it asks** is checked by agentdev (for example the protected paths of the
+push, or that no allow rule of the agent covers the tool). **Reason given by Claude Code and the agent** is the
+description of the call and Claude Code's reason, if there is one. agentdev does not check this reason.
 
 WARNING: Read the request text carefully before you approve it. The agent wrote this text, and it can contain a
 prompt injection from the issue.
