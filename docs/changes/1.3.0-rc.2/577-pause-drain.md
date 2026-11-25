@@ -1,12 +1,7 @@
----
-issue: 577
-type: fix
-section: Fixed
-status: done
-title: A security pause for many low or medium events lets the running jobs finish
-components: [operator, forge, worker]
-pr: 579
----
+# A security pause for many low or medium events lets the running jobs finish (#577)
+
+Released in 1.3.0-rc.2 (2026-11-25). Type: fix. Section: Fixed. Components: operator, forge, worker. PR: #579.
+
 ## Summary
 
 A `TooManyEvents` security pause now drains the agent first: the loop starts no new job, the running jobs finish

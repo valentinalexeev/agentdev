@@ -1,12 +1,7 @@
----
-issue: 573
-type: fix
-section: Fixed
-status: done
-title: An agent works on any pull request assigned to it, whatever its author or branch
-components: [worker]
-pr: 575
----
+# An agent works on any pull request assigned to it, whatever its author or branch (#573)
+
+Released in 1.3.0-rc.2 (2026-11-25). Type: fix. Section: Fixed. Components: worker. PR: #575.
+
 ## Summary
 
 The agent now also works on a pull request that it did not open: the label `agent:<name>` (GitHub) or an assignment
