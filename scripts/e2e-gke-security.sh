@@ -470,6 +470,9 @@ if section chat; then
         out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.expirationSeconds) = $exp"); denied "$out"
         check $? "admission: the API cannot create a chat Job whose claude-proxy token lives ${exp} s (not 600)" "$(echo "$out" | head -1)"
       done
+      # #550: the token keeps its file name (path token), so it cannot appear under another name in the chat container
+      out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.path) = \"other\""); denied "$out"
+      check $? "admission: the API cannot create a chat Job whose claude-proxy token has another path (not token)" "$(echo "$out" | head -1)"
       out=$(try "$pt | (.containers[]|select(.name==\"forge\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"
       check $? "admission: the forge container of a chat Job cannot mount the claude-proxy token" "$(echo "$out" | head -1)"
       out=$(try "$pt | (.initContainers[]|select(.name==\"state-init\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"

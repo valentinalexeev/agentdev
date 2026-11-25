@@ -60,6 +60,18 @@ func envMap(c *corev1.Container) map[string]corev1.EnvVar {
 	return m
 }
 
+// proxyToken: the service account token projection of the proxy-token volume (the fixture has it, as the operator renders it)
+func proxyToken(t *testing.T, p *corev1.PodSpec) *corev1.ServiceAccountTokenProjection {
+	t.Helper()
+	for _, v := range p.Volumes {
+		if v.Name == "proxy-token" && v.Projected != nil && len(v.Projected.Sources) == 1 && v.Projected.Sources[0].ServiceAccountToken != nil {
+			return v.Projected.Sources[0].ServiceAccountToken
+		}
+	}
+	t.Fatal("no proxy-token volume")
+	return nil
+}
+
 // The chat pod equals the agent pod except for the interactive entry point: the forge sidecar is the agent's sidecar
 // (image, Secrets, egress key, security context, mounts) minus router registration and wakes.
 func TestChatPodIsAgentPod(t *testing.T) {
@@ -276,6 +288,10 @@ func TestChatJobAdmission(t *testing.T) {
 			containerNamed(*p, "chat").SecurityContext = &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN"}}}
 		}},
 		{"the agent label (agent Service, approvals)", func(_ *corev1.PodSpec, j *batchv1.Job) { j.Spec.Template.Labels["agent"] = "alice" }},
+		// #550: the projected claude-proxy token keeps its file name; another path (or none, so the default) is refused
+		{"the claude-proxy token under another path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "other" }},
+		{"the claude-proxy token under a nested path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "token/x" }},
+		{"the claude-proxy token without a path", func(p *corev1.PodSpec, _ *batchv1.Job) { proxyToken(t, p).Path = "" }},
 	}
 	for _, tc := range cases {
 		j := chatJobFor(t, "github")
