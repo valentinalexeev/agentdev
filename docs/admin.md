@@ -74,7 +74,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.model`, `spec.effort`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -225,6 +225,34 @@ after the retention removed the old entries, or after a restart of an API withou
 
 NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
 sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
+
+### Set the model and effort of an agent
+
+The model and the effort level decide how Claude Code does the work of an agent (#570). The model also decides how
+fast the agent uses its budget: `claude-proxy` counts the units with the multiplier of the model (see "Cost units").
+Each agent has its own values. Its chat sessions start with the same values.
+
+- Model: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full name of one of these families, for example
+  `claude-sonnet-5-5`.
+- Effort: `low`, `medium`, `high`, `xhigh` or `max`.
+- Not set: the default of Claude Code, as before.
+
+1. On `kind`: set `kind_agents_model` and `kind_agents_effort` for the agent, for example `{alice: sonnet}` and
+   `{alice: high}`.
+   On GKE: set `agents[].model` and `agents[].effort` for the agent.
+   In Git mode: set `spec.model` and `spec.effort` in the `Agent` manifest.
+2. Deploy again.
+
+NOTE: The operator refuses a model or an effort that is not on these lists. The agent then has the phase `invalid`.
+Thus a typing error cannot make the agent count at the highest multiplier.
+
+Each change of `spec.model` or `spec.effort` makes one entry in the audit log: action `model`, with the old and the
+new values in `before.claude` and `after.claude`. The API also returns the values in `GET /api/agents` (`model`,
+`effort`).
+
+A person with write access can change the model or the effort of a running chat session with
+`POST /api/sessions/{id}/settings` and the body `{"model": "...", "effort": "..."}`. The session log shows a `settings`
+event when Claude applies or refuses the change.
 
 ### Allow extra tools for an agent
 
