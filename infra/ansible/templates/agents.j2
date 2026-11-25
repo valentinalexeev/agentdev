@@ -2,7 +2,8 @@
     (#5). Blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0.
     agents[].permission (#500): {mode: auto, autoMode: {allow, softDeny, environment}}, the Agent's spec.permission;
     unset keeps dontAsk. agents[].tools (#496): {allow: [...]}, the Agent's spec.tools, added to the default tool
-    allow-list; unset or empty: the default only. -#}
+    allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, path, refresh}, the
+    Agent's spec.toolchain; unset: no toolchain. -#}
 {%- set out = [] -%}
 {%- for a in agents -%}
 {%-   set spec = {'repo': a.repos, 'forge': forge_kind,
@@ -15,6 +16,9 @@
 {%-   endif -%}
 {%-   if (a.tools | default({})).allow | default([]) -%}
 {%-     set _ = spec.update({'tools': {'allow': a.tools.allow}}) -%}
+{%-   endif -%}
+{%-   if a.toolchain | default({}) -%}
+{%-     set _ = spec.update({'toolchain': a.toolchain}) -%}
 {%-   endif -%}
 {%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
         'metadata': {'name': a.name, 'namespace': agents_ns}, 'spec': spec}) -%}

@@ -24,6 +24,7 @@ export FORGE_ADMIN_PASSWORD ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" CLAUDE_CO
 json_list() { if [[ -z "${1// }" ]]; then echo '[]'; else printf '%s\n' $1 | jq -R . | jq -sc .; fi; }
 vars=$(jq -nc --argjson a "$(json_list "${AGENTS}")" --argjson eh "$(json_list "${EGRESS_HOSTS}")" \
   --argjson ex "$(json_list "${EGRESS_EXTRA_HOSTS:-}")" --argjson fh "$(json_list "${FORGE_EGRESS_HOSTS}")" \
+  --argjson sh "$(json_list "${SETUP_EGRESS_HOSTS:-dl.google.com static.rust-lang.org}")" \
   --arg s2z "${SCALE_TO_ZERO}" --arg cp "${CLAUDE_PROXY:-true}" \
   --arg bu "${CLAUDE_BUDGET_UNITS:-}" --arg bt "${CLAUDE_BUDGET_TOKENS:-}" --arg pr "${CLAUDE_PRICES:-}" \
   --arg jb "${CLAUDE_JOB_BUDGET_UNITS:-0}" --arg ja "${CLAUDE_JOB_APPROVAL_UNITS:-0}" \
@@ -31,7 +32,7 @@ vars=$(jq -nc --argjson a "$(json_list "${AGENTS}")" --argjson eh "$(json_list "
   --arg tu "${TELEMETRY_OTLP_URL:-}" --arg ti "${TELEMETRY_INSTANCE:-agentdev}" --arg tn "${TELEMETRY_SCRAPER_NS:-monitoring}" \
   --argjson tsel "${TELEMETRY_SCRAPER_SELECTOR}" \
   '{kind_agents_agents: $a, kind_agents_egress_hosts: $eh, kind_agents_egress_extra_hosts: $ex,
-    kind_agents_forge_egress_hosts: $fh, kind_agents_scale_to_zero: ($s2z | ascii_downcase | IN("true", "1", "yes")),
+    kind_agents_forge_egress_hosts: $fh, kind_agents_setup_egress_hosts: $sh, kind_agents_scale_to_zero: ($s2z | ascii_downcase | IN("true", "1", "yes")),
     kind_agents_claude_proxy: ($cp == "true"),
     kind_agents_claude_budget_units: (if $bu == "" then null else $bu end),
     kind_agents_claude_budget_tokens: (if $bt == "" then null else $bt end),
