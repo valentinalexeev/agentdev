@@ -12,6 +12,7 @@ on:
     inputs:
       real_model: {description: "Use the real Claude model (secret COMPAT_ANTHROPIC_API_KEY)", type: boolean, default: false}
       prev_tag: {description: "Image tag of the previous release (default: newest v* tag)", type: string, default: ""}
+      api: {description: "Also deploy the PR-head API and run the chat-policy denial checks (COMPAT_API=1)", type: boolean, default: true}
 
 concurrency:
   group: compat-${{ github.event.pull_request.number || github.ref }}
@@ -36,10 +37,19 @@ jobs:
           pipx install --include-deps ansible-core
           ansible-galaxy collection install -r infra/ansible/requirements.yml
           pipx inject ansible-core kubernetes
+      - uses: azure/setup-helm@v4
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.api)
       - name: e2e (stubbed Claude)
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.real_model)
         env:
           PREV_TAG: ${{ inputs.prev_tag }}
+          # #556: the API and chat-policy denial checks run on demand, not on every PR (they need helm, Postgres, authentik)
+          COMPAT_API: ${{ (github.event_name == 'workflow_dispatch' && inputs.api) && '1' || '0' }}
+        run: scripts/e2e-compat.sh
+      - name: e2e (stubbed Claude, API and chat policy, nightly)
+        if: github.event_name == 'schedule'
+        env:
+          COMPAT_API: "1"
         run: scripts/e2e-compat.sh
       - name: e2e (real model)
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_model)
