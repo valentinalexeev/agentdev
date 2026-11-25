@@ -3,17 +3,19 @@
 // result. The API filters agent and result; person and action are filtered here on the loaded pages.
 import { useCallback, useEffect, useState } from 'react'
 import { listAudit, statusOf, Unauthorized, type AuditEntry, type AuditFilter, type AuditResult } from './api'
-import { verb } from './format'
-import { AgentTag, Empty, PageHead, PersonTag } from './ui'
+import { permissionText, verb } from './format'
+import { AgentTag, Empty, PageHead, PersonTag, RuleLists } from './ui'
 
 type Row = { id: number; entry: AuditEntry }
 const RESULTS: [AuditResult | '', string][] = [['', 'all'], ['ok', 'ok'], ['denied', 'denied'], ['invalid', 'invalid'], ['error', 'error']]
-const ACTIONS = ['', 'pause', 'resume', 'change', 'create', 'delete']
+const ACTIONS = ['', 'pause', 'resume', 'change', 'create', 'delete', 'permission']
 const SINCE: [string, string][] = [['24h', '24 h'], ['168h', '7 days'], ['720h', '30 days'], ['', 'all']]
 
 const PAST: Record<string, string> = { pause: 'paused', resume: 'resumed', change: 'changed the settings of', create: 'created', delete: 'deleted' }
 
 function changes(e: AuditEntry): string {
+  // a permission entry with before null: first seen, the old value is not known (#505)
+  if (e.action === 'permission') return `${permissionText(e.before?.permission)} → ${permissionText(e.after?.permission)}`
   if (!e.before || !e.after) return ''
   const out: string[] = []
   for (const k of ['maxConcurrent', 'scaleToZero', 'paused', 'repo'] as const) {
@@ -22,7 +24,32 @@ function changes(e: AuditEntry): string {
   return out.join(', ')
 }
 
+// PermissionStory (#505): the operator-side change of spec.permission. The API does not know who made it (Ansible,
+// Git or kubectl), so the story names the Agent object; the raw view and the rule lists show the full old and new rules.
+function PermissionStory({ e }: { e: AuditEntry }) {
+  const rules = (label: string, s: AuditEntry['before']) => {
+    const r = s?.permission?.autoMode
+    if (!r) return null
+    return (
+      <details className="agd-muted" style={{ fontSize: 13 }}>
+        <summary>{label} rules</summary>
+        <RuleLists r={r} />
+      </details>
+    )
+  }
+  return (
+    <span>
+      The permission mode of {e.agent ? <AgentTag name={e.agent} /> : 'an agent'} changed in the Agent object
+      <span className="agd-muted"> · {changes(e)}</span>
+      {e.reason && !e.before && <span className="agd-muted"> ({e.reason})</span>}
+      {rules('Old', e.before)}
+      {rules('New', e.after)}
+    </span>
+  )
+}
+
 function Story({ e }: { e: AuditEntry }) {
+  if (e.action === 'permission') return <PermissionStory e={e} />
   const who = e.who?.username || e.who?.forgeUser || e.remote || 'unknown'
   const v = verb(e)
   const ok = e.result === 'ok'
@@ -52,7 +79,7 @@ export function AuditPage({ token, onExpired }: { token: string; onExpired: () =
     listAudit(token, filter).then((r) => { setResult({ for: filter, rows: r.entries, next: r.next_cursor }); setError(null) }).catch(fail)
   }, [token, filter, fail])
 
-  const head = <PageHead title="Audit" sub="Every change to an agent through the API: who, what, and the result. Admins only." />
+  const head = <PageHead title="Audit" sub="Every change to an agent through the API: who, what, and the result, and each change of the permission mode. Admins only." />
   if (error?.status === 403) return <>{head}<Empty title="Only agentdev-admins can read the audit log">Ask an administrator to add you to the group, or ask them who changed an agent.</Empty></>
   const rows = result && result.for === filter ? result.rows : null
   const shown = rows?.filter(({ entry: e }) => (!person || (e.who?.username ?? '').toLowerCase().includes(person.toLowerCase()) || (e.who?.forgeUser ?? '').toLowerCase().includes(person.toLowerCase()))

@@ -1,6 +1,6 @@
 // Small design-system components (docs/design-system.md, #341). Markup only: every style is in the design-system CSS.
 import { useEffect, useRef } from 'react'
-import type { Agent, Severity } from './api'
+import type { Agent, AgentAutoMode, Severity } from './api'
 import { lane } from './format'
 
 // Lucide outlines, 24px viewBox, stroke-width 2.2 (design-system.md, "Icons")
@@ -160,5 +160,22 @@ export function Dots({ agents }: { agents: { name: string; life: string; attn: s
             : a.life === 'paused' || a.life === 'usage-paused' ? 'agd-d-paused' : a.life === 'running' || a.life === 'starting' ? 'agd-d-run' : ''} />
       ))}
     </span>
+  )
+}
+
+// RuleLists (#505): the classifier rules of permission mode auto, read-only, as plain text (an administrator wrote
+// them in the Agent object). An empty list shows "none".
+export function RuleLists({ r }: { r: AgentAutoMode }) {
+  const lists: [string, string[]][] = [['Allow', r.allow], ['Soft deny', r.softDeny], ['Environment', r.environment]]
+  return (
+    <dl className="agd-dl">
+      {lists.map(([label, items]) => (
+        <div key={label} style={{ display: 'contents' }}>
+          <dt>{label}</dt>
+          <dd>{items.length === 0 ? <span className="agd-muted">none</span>
+            : <ul style={{ margin: 0, paddingLeft: '1.2em' }}>{items.map((x, i) => <li key={i} style={{ overflowWrap: 'anywhere' }}>{x}</li>)}</ul>}</dd>
+        </div>
+      ))}
+    </dl>
   )
 }
