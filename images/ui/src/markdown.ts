@@ -10,7 +10,7 @@ import { Component, createElement, type ReactElement, type ReactNode } from 'rea
 import ReactMarkdown from 'react-markdown'
 
 // longer text is shown plain (Markdown.tsx)
-export const MAX_CHARS = 100_000
+const MAX_CHARS = 100_000
 
 // the part of an mdast node that safeText() reads and writes
 type MdNode = {
