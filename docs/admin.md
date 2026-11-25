@@ -864,7 +864,8 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
    `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
 3. Run `./run.sh 08` (kind) or the playbook (GKE). The operator syncs the `McpProject`.
    You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
-   `scripts/mcp-sync.sh <spec>` still works until 1.2.0 ships. The bootstrap still runs it.
+   NOTE: Since 1.2.0, the operator does the sync (#383). `scripts/mcp-sync.sh <spec>` is deprecated. It stays only
+   because `scripts/bootstrap-project.sh` still runs it. It is removed when the bootstrap writes an `McpProject` (#547).
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run `./run.sh 08`, the bootstrap stops before it deploys the
@@ -1462,7 +1463,7 @@ subscribe again.
 | `GET /api/audit` | audit trail of the write API (#91), newest first. Only `agentdev-admins` (403 for other users). Filters: `agent`, `result` (`ok`, `denied`, `invalid`, `error`, `unauthenticated`), `since`, `limit` (1..500, default 100), `cursor` as for security events. The action `permission` (#505) records a change of `spec.permission` of an Agent, with `before.permission` and `after.permission` |
 | `GET /api/agents/{name}` | one agent for the agent drawer (#344): the fields of `GET /api/agents`, plus `pods` (`name`, `phase`, `ready`, `restarts`, `started`, `reason`), `waitingOn` (items of kind `approval`, `usage-pause`, `paused`, `blocked` or `invalid`), `recentJobs` and `guide` (the harness guide that the operator writes). Only for `agentdev-admins` members: `permission` (#505), the permission mode `mode` (`dontAsk` or `auto`) and the classifier rules `autoMode` (`allow`, `softDeny`, `environment`). An `agentdev-admins` member sees every agent. Other users see only agents with a repository where they have write access. For other agents the API gives 404. |
 | `GET /api/platform` | the health of the platform for the Platform page (#344). Only `agentdev-admins` (403 for other users). It gives `version`, `checked` and `components`: `api`, `router`, `operator`, `claude-proxy`, `authentik`, `forge-token`, `egress-proxy` and `agent-pool`. Each has `status` (`ok`, `degraded`, `down`, `absent`, `unknown`), `detail` and a `command` to look deeper. It gives no Secret values. |
-| `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 30 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. Same visibility as the agent drawer. |
+| `GET /api/jobs` | the jobs for the Work board (#345), newest update first. A job is one issue handed to an agent and the PR of the agent for it. Fields: `id`, `agent`, `repo`, `forge`, `issue`, `pr`, `title` (untrusted text), `url`, `prUrl`, `phase` (`queued`, `build`, `review`, `done`), `outcome` (`merged` or `closed`, for `done`), `created`, `updated`, `closed`. Filters: `agent`, `repo`, `phase`, `scope`, `limit` (1..500, default 100), `cursor`. `unavailable` lists the repositories the forge did not answer for. The source is the forge, read with the API's read-only credential and kept for 90 s, plus the pending Approval objects (phase `build`). It never reads agent output, botboard or the worker state. After 90 s, the API sends the kept data at once and reads the forge again in the background (#519). Data older than 10 min is not sent: the request waits for the forge. The API reads at most 8 repositories at the same time. Same visibility as the agent drawer. |
 | `GET /api/stream` | live updates for the console (#345), server-sent events. Each message is `event: <type>`, `id: <n>`, `data: {"type", "time", "data"}`. Types: `hello` (`heartbeatSeconds`), `heartbeat` (every 15 s), `agents` (the visible agent list), `approval` (one approval, on create and change), `approval-removed` (`name`), `security-event` (one event), `usage` (read `GET /api/usage` again), `bye` (`reason`; reconnect). Only items the caller may see, with the rules of their list. The stream ends after 30 minutes, max. 5 streams for each user (429). Read it with `fetch()` and the bearer token. |
 | `GET /api/security-events` | security events (`agentdev.security/v1`), newest first. Filters: `agent`, `severity`, `since` (RFC 3339 or a duration such as `24h`), `limit` (1..500, default 100); `next_cursor` in the answer, pass it as `cursor` for the next page (#70). An `agentdev-admins` member sees every event. Other users see only the events of agents with a repository where they have write access on the forge (R35, #308). `repo` and `scope` as below |
 
@@ -3001,9 +3002,10 @@ The template `examples/deployment/gcp-gke/gitops/flux/` has four layers. Flux ap
 | reloader | `agentdev-reloader` | Stakater Reloader v2.0.0-beta.2 (chart 3.0.0-beta.5), after the platform layer |
 
 Reloader runs in scoped mode. It makes a Role in each namespace that it watches, thus it starts after the platform
-layer made these namespaces. The workflow sets the watched namespaces to the namespaces of the render
-(`rendered/reloader`). Thus `agentdev-executors` is watched only with executors, and the forwarder namespace only when
-the forwarder is deployed.
+layer made these namespaces. The workflow sets the watched namespaces to the namespaces that have a
+rendered SecretStore (`rendered/reloader`). This is the same set as the Ansible role `external_secrets` (#466).
+Thus `agentdev-executors` is watched only with executors, and the forwarder namespace only when the forwarder is
+deployed.
 
 All layers use `prune: true`: Flux removes an object that is removed from Git. Flux also corrects drift: it applies
 the state of Git again at each interval, and the HelmReleases use drift detection. The Flux controllers, the External
