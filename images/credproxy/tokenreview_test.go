@@ -31,7 +31,7 @@ func fakeAPIServer(t *testing.T, answers map[string]reviewAnswer, calls *int32) 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(calls, 1)
 		if r.URL.Path != "/apis/authentication.k8s.io/v1/tokenreviews" || r.Header.Get("Authorization") != "Bearer proxy-sa" {
-			http.Error(w, "no", 403)
+			http.Error(w, "no", http.StatusForbidden)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
