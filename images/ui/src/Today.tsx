@@ -80,10 +80,10 @@ export function TodayPage({ token, onExpired }: { token: string; onExpired: () =
     .filter(([, , w]) => w && w.resetsAt * 1000 > now)
   const low = windows.map(([k, n, w, lim]) => ({ k, n, left: Math.max(0, lim - Math.round(w.utilization * 100)) })).sort((a, b) => a.left - b.left)[0]
   const firstDue = d.inbox.find((i) => i.due)
-  if (!d.ready) return <><PageHead title="Today" /><p className="agd-muted">Loading…</p></>
+  if (!d.ready) return <p className="agd-muted">Loading…</p>
   return (
     <>
-      <PageHead title="Today" sub={<>
+      <PageHead sub={<>
         What waits for you, the first to expire on top.
         {d.hiddenInbox > 0 && <> {d.hiddenInbox} more {d.hiddenInbox === 1 ? 'item waits' : 'items wait'} in projects that are not shown:{' '}
           <button className="agd-btn agd-btn-quiet" type="button" style={{ height: 'auto', padding: 0 }} onClick={() => d.setScope('')}>show all projects</button>.</>}

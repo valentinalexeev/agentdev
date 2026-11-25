@@ -30,11 +30,11 @@ stream=$(jq -cn --arg big "${big}" '
 out=$(printf '%s\n' "${stream}" | run_events)
 check "prints nothing (never the container log)" "[[ -z \"\${out}\" ]]"
 check "five events: text, tool_use, 2 tool_result, result" "[[ \$(events | jq -s 'map(.kind) | join(\",\")') == '\"text,tool_use,tool_result,tool_result,result\"' ]]"
-check "assistant text kept as text (the UI escapes it)" "events | jq -e 'select(.kind==\"text\") | .text | contains(\"<img src=x onerror\")' >/dev/null"
-check "tool_use: name and redacted input" "events | jq -e 'select(.kind==\"tool_use\") | .tool == \"Bash\" and (.input | contains(\"ghp_aaaa\") | not) and (.input | contains(\"[redacted]\"))' >/dev/null"
-check "tool_result: error, full size, clipped to 2 KB" "events | jq -e 'select(.kind==\"tool_result\" and .ok==false) | .size == 3000 and (.text | length) <= 2048 + 10 and (.text | endswith(\"[clipped]\"))' >/dev/null"
-check "tool_result: key=value and env token redacted" "events | jq -e 'select(.kind==\"tool_result\" and .ok==true) | (.text | contains(\"hunter22\") | not) and (.text | contains(\"s3cr3t-value-123\") | not)' >/dev/null"
-check "result: turns and tokens" "events | jq -e 'select(.kind==\"result\") | .turns == 3 and .input_tokens == 15 and .output_tokens == 7' >/dev/null"
+check "assistant text kept as text (the UI escapes it)" "events | jq -se 'map(select(.kind==\"text\")) | any(.text | contains(\"<img src=x onerror\"))' >/dev/null"
+check "tool_use: name and redacted input" "events | jq -se 'map(select(.kind==\"tool_use\")) | any(.tool == \"Bash\" and (.input | contains(\"ghp_aaaa\") | not) and (.input | contains(\"[redacted]\")))' >/dev/null"
+check "tool_result: error, full size, clipped to 2 KB" "events | jq -se 'map(select(.kind==\"tool_result\" and .ok==false)) | any(.size == 3000 and (.text | length) <= 2048 + 10 and (.text | endswith(\"[clipped]\")))' >/dev/null"
+check "tool_result: key=value and env token redacted" "events | jq -se 'map(select(.kind==\"tool_result\" and .ok==true)) | any((.text | contains(\"hunter22\") | not) and (.text | contains(\"s3cr3t-value-123\") | not))' >/dev/null"
+check "result: turns and tokens" "events | jq -se 'map(select(.kind==\"result\")) | any(.turns == 3 and .input_tokens == 15 and .output_tokens == 7)' >/dev/null"
 check "bytes sent are kept per job" "[[ \$(cat \"\${STATE}/jobs/issue-7.runlog\") -gt 2048 ]]"
 
 # cap per job: past RUN_LOG_MAX one truncated event, then nothing

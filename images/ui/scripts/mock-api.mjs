@@ -329,7 +329,11 @@ function detail(res, name) {
   if (pz) waitingOn.push({ kind: 'usage-pause', reason: pz.reason, until: iso(pz.until * 1000) })
   const pods = a.replicas ? [{ name: `agent-${name}-0`, phase: a.ready ? 'Running' : 'Pending', ready: !!a.ready, restarts: a.phase === 'blocked' ? 3 : 0, started: iso(now - 4 * hr), ...(a.ready ? {} : { reason: 'ContainerCreating' }) }] : []
   const guide = `# How ${name} works\n\nRepository: ${a.repos[0]} (${a.forge})\nMax. concurrent: ${a.maxConcurrent}\n\n- Assign an issue to the bot user to start a job.\n- Comment on the PR to give feedback; the agent reads new comments.\n- /approve <id> or the console decides an approval request.\n`
-  send(res, 200, { ...a, pods, waitingOn, recentJobs: JOBS.filter((j) => j.agent === name).slice(0, 10), guide })
+  // #505: spec.permission for agentdev-admins only; alice runs in mode auto with rules (one is markup, shown as text)
+  const permission = !admin ? undefined : name === 'alice'
+    ? { mode: 'auto', autoMode: { allow: ['Install dependencies declared in the repository', '<img src=x onerror=alert(1)>'], softDeny: ['Deploy to production'], environment: [] } }
+    : { mode: 'dontAsk' }
+  send(res, 200, { ...a, pods, waitingOn, recentJobs: JOBS.filter((j) => j.agent === name).slice(0, 10), guide, permission })
 }
 function platform() {
   const c = (name, status, detail, command) => ({ name, status, detail, command })
@@ -349,6 +353,11 @@ const AUDIT = (() => {
   const st = (repo, paused, max = 2) => ({ repo, forge: 'github', maxConcurrent: max, scaleToZero: true, paused })
   const e = (m, u, action, agent, result, extra) => ({ time: iso(now - m * min), who: who(u), action, agent, result, before: null, after: null, ...extra })
   return [
+    { time: iso(now - 20 * min), who: { sub: '', username: '', forgeUser: '' }, action: 'permission', agent: 'alice', result: 'ok', reason: 'spec.permission of the Agent object changed',
+      before: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'dontAsk' } },
+      after: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'auto', autoMode: { allow: ['Install dependencies declared in the repository'], softDeny: ['Deploy to production'], environment: [] } } } },
+    { time: iso(now - 50 * min), who: { sub: '', username: '', forgeUser: '' }, action: 'permission', agent: 'dave', result: 'ok', reason: 'first seen (no earlier entry)',
+      before: null, after: { repo: '', forge: '', maxConcurrent: 0, scaleToZero: false, paused: false, permission: { mode: 'auto' } } },
     e(55, 'valentinalexeev', 'patch', 'carol', 'ok', { request: { paused: true }, before: st('acme/web', false), after: st('acme/web', true), grant: 'admin-group' }),
     e(80, 'mia', 'delete', 'gus', 'denied', { reason: 'needs admin access' }),
     e(140, 'lee', 'patch', 'alice', 'ok', { request: { maxConcurrent: 2 }, before: st('acme/shop-api', false, 1), after: st('acme/shop-api', false, 2), grant: 'repo-write' }),

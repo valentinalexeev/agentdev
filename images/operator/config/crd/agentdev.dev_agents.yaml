@@ -157,6 +157,63 @@ spec:
                   Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
                   Default true (#181): an Agent without the field scales to zero; set false to keep it running.
                 type: boolean
+              toolchain:
+                description: |-
+                  Toolchains installed before the agent starts (#499, ADR 0010 D2/D3): presets of agentdev with pinned checksums,
+                  read-only to the agent. Unset: none, and the pod is as before.
+                properties:
+                  path:
+                    description: |-
+                      PATH entries for the agent container, below $TOOLCHAIN, for example "$TOOLCHAIN/bin"; no segment starts with a
+                      dot. The presets add their own.
+                    items:
+                      maxLength: 200
+                      pattern: ^\$TOOLCHAIN(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$
+                      type: string
+                    maxItems: 10
+                    type: array
+                  presets:
+                    description: |-
+                      Preset versions. The operator accepts only the versions of its catalogue (a changed catalogue is an agentdev
+                      release); another version makes the Agent invalid.
+                    properties:
+                      go:
+                        description: Go, for example "1.27.4" (go.dev archive, sha256
+                          pinned in the operator).
+                        pattern: ^[0-9]+\.[0-9]+(\.[0-9]+)?$
+                        type: string
+                      rust:
+                        description: Rust, for example "1.100.0" (rustup with this
+                          toolchain, profile minimal; rustup-init sha256 pinned).
+                        pattern: ^[0-9]+\.[0-9]+\.[0-9]+$
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: spec.toolchain.presets needs at least one preset
+                      rule: has(self.go) || has(self.rust)
+                  refresh:
+                    description: |-
+                      Install again after this time, for example 168h (at least 1h). Each agent has its own offset, and the new install
+                      waits until the agent is idle (drain). Unset: only when the spec, the worker image or the catalogue changes.
+                    type: string
+                required:
+                - presets
+                type: object
+              tools:
+                description: 'Tools added to the worker''s default allow-list for
+                  this agent (#496, ADR 0010 D1). Unset: the default only.'
+                properties:
+                  allow:
+                    description: |-
+                      Claude Code permission rules added to the allow-list, for example "Bash(npm ci:*)". One rule per entry, no
+                      commas and no control characters.
+                    items:
+                      maxLength: 200
+                      pattern: ^[^\x00-\x1f\x7f,]+$
+                      type: string
+                    maxItems: 50
+                    type: array
+                type: object
             required:
             - claudeSecret
             - repo
@@ -239,6 +296,28 @@ spec:
                 description: Ready pods (0 or 1).
                 format: int32
                 type: integer
+              toolchain:
+                description: The toolchain init container's last report (#499); unset
+                  without spec.toolchain.
+                properties:
+                  hash:
+                    description: SHA-256 manifest of the installed directory (every
+                      path, mode and content hash); checked on the next start.
+                    type: string
+                  key:
+                    description: 'SHA-256 of the canonical toolchain spec and the
+                      architecture: the directory /state/toolchain/<key>.'
+                    type: string
+                  message:
+                    type: string
+                  pod:
+                    description: Pod that reported it.
+                    type: string
+                  reason:
+                    description: 'Installed, Verified, Reinstalled (the manifest had
+                      changed: a security event), StepFailed, Invalid.'
+                    type: string
+                type: object
             type: object
         type: object
         x-kubernetes-validations:

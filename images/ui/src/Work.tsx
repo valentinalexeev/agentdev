@@ -207,7 +207,7 @@ export function WorkPage({ token, onExpired, agent, repo }: { token: string; onE
 
   return (
     <>
-      <PageHead title="Work" sub={fresh
+      <PageHead sub={fresh
         ? `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'} in ${projects.size} ${projects.size === 1 ? 'project' : 'projects'}: ${n('queued')} plan, ${n('build')} build, ${n('review')} review, ${n('done')} done in ${DONE_DAYS} days. The review column is your turn.`
         : 'Every issue an agent works on, by phase. The review column is your turn.'}
         actions={<button className="agd-btn" type="button" onClick={() => setTick((t) => t + 1)}>Refresh</button>} />

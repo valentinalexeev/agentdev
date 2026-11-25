@@ -355,7 +355,12 @@ export interface AgentDetail extends Agent {
   waitingOn: WaitingItem[]
   recentJobs: Job[]
   guide?: string // the harness guide, written by the operator
+  permission?: AgentPermission // spec.permission (#505), agentdev-admins only
 }
+
+// The Claude Code permission mode of an agent (#500, #505). Set by an administrator in the Agent object; read-only here.
+export interface AgentAutoMode { allow: string[]; softDeny: string[]; environment: string[] }
+export interface AgentPermission { mode: 'dontAsk' | 'auto' | string; autoMode?: AgentAutoMode }
 
 export async function getAgentDetail(token: string, name: string): Promise<AgentDetail> {
   return (await call(token, 'GET', `/api/agents/${encodeURIComponent(name)}`)).json()
@@ -372,11 +377,11 @@ export async function getPlatform(token: string): Promise<Platform> {
 
 // Audit trail of the write API (#91), agentdev-admins only.
 export type AuditResult = 'ok' | 'denied' | 'invalid' | 'error' | 'unauthenticated'
-export interface AuditState { repo: string; forge: string; claudeSecret?: string; maxConcurrent: number; scaleToZero: boolean; paused: boolean }
+export interface AuditState { repo: string; forge: string; claudeSecret?: string; maxConcurrent: number; scaleToZero: boolean; paused: boolean; permission?: AgentPermission }
 export interface AuditEntry {
   time: string
   who: { sub: string; username: string; forgeUser: string; groups?: string[] }
-  action: 'patch' | 'create' | 'delete' | string
+  action: 'patch' | 'create' | 'delete' | 'permission' | string
   agent: string
   result: AuditResult
   reason?: string

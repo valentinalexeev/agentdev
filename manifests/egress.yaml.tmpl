@@ -11,6 +11,10 @@
 # - Forge hosts (FORGE_EGRESS_HOSTS, GitHub by default) are for the forge sidecar only: Squid allows them only with the
 #   proxy credential of Secret egress-forge-proxy, which the operator puts in the forge container's proxy URL and never
 #   in the agent container. An agent request to them is refused (and reported), even if EGRESS_HOSTS also lists them.
+# - Setup hosts (SETUP_EGRESS_HOSTS, the download hosts of the toolchain presets, #499) are for the init container
+#   toolchain only, the same way: Squid allows them only with the credential of Secret egress-setup-proxy, which the
+#   operator copies into agent-<name>-setup-proxy and puts only in the init container's proxy URL. The presets' hosts
+#   are the same for every agent, so one ACL serves all; per-agent hosts come with free-form steps (ADR 0010 D4 step 3).
 # - The Claude API is not on the agents' list when the credential proxy (#66) is on: agents call claude-proxy directly
 #   (in-cluster name, NO_PROXY; allowed below) and only claude-proxy reaches api.anthropic.com (docs/security.md R64).
 # - On GKE the playbook also adds an FQDNNetworkPolicy for the proxy itself, so even a misconfigured proxy cannot
@@ -36,6 +40,9 @@ data:
     # forge hosts: forge sidecar only (Proxy-Authorization from Secret egress-forge-proxy, a regex in the mounted file)
     acl forge_hosts dstdomain -n ${FORGE_EGRESS_HOSTS}
     acl forge_client req_header Proxy-Authorization "/etc/squid/forge/auth"
+    # setup hosts: toolchain init container only (#499, Secret egress-setup-proxy)
+    acl setup_hosts dstdomain -n ${SETUP_EGRESS_HOSTS}
+    acl setup_client req_header Proxy-Authorization "/etc/squid/setup/auth"
     # never a cluster, node, metadata, loopback, multicast or reserved address, even if a public name resolves to one
     # (IPv4-mapped and NAT64 IPv6 forms too)
     acl private_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4
@@ -47,6 +54,8 @@ data:
     http_access deny private_dst
     http_access allow forge_hosts forge_client
     http_access deny forge_hosts
+    http_access allow setup_hosts setup_client
+    http_access deny setup_hosts
     http_access allow allowed
     http_access deny all
     # one line per refused request: method and destination host:port only, never the path, query or userinfo (they
@@ -58,7 +67,7 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 # Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
-metadata: {name: egress-proxy, namespace: ${AGENTS_NS}, labels: {app: egress-proxy}, annotations: {secret.reloader.stakater.com/reload: "egress-forge-proxy"}}
+metadata: {name: egress-proxy, namespace: ${AGENTS_NS}, labels: {app: egress-proxy}, annotations: {secret.reloader.stakater.com/reload: "egress-forge-proxy,egress-setup-proxy"}}
 spec:
   replicas: 1   # a restart (each allow-list change) breaks agent egress for a few seconds; new pod first:
   strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 1, maxUnavailable: 0}}
@@ -67,7 +76,7 @@ spec:
     metadata:
       labels: {app: egress-proxy}
       # a changed list or forge proxy credential restarts the proxy (Squid reads the auth file only at start)
-      annotations: {agentdev/egress-hosts: "${EGRESS_HOSTS} | ${FORGE_EGRESS_HOSTS}", agentdev/forge-auth: "${FORGE_PROXY_AUTH_SHA}"}
+      annotations: {agentdev/egress-hosts: "${EGRESS_HOSTS} | ${FORGE_EGRESS_HOSTS} | ${SETUP_EGRESS_HOSTS}", agentdev/forge-auth: "${FORGE_PROXY_AUTH_SHA}", agentdev/setup-auth: "${SETUP_PROXY_AUTH_SHA}"}
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsUser: 13, runAsGroup: 13, runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
@@ -84,6 +93,7 @@ spec:
         volumeMounts:
         - {name: conf, mountPath: /etc/squid/squid.conf, subPath: squid.conf, readOnly: true}
         - {name: forge, mountPath: /etc/squid/forge, readOnly: true}
+        - {name: setup, mountPath: /etc/squid/setup, readOnly: true}
         - {name: logs, mountPath: /var/log/squid}
         - {name: tmp, mountPath: /tmp}
         resources:
@@ -92,6 +102,7 @@ spec:
       volumes:
       - {name: conf, configMap: {name: egress-proxy}}
       - {name: forge, secret: {secretName: egress-forge-proxy, items: [{key: auth, path: auth}], defaultMode: 0444}}
+      - {name: setup, secret: {secretName: egress-setup-proxy, items: [{key: auth, path: auth}], defaultMode: 0444}}
       - {name: logs, emptyDir: {sizeLimit: 256Mi}}
       - {name: tmp, emptyDir: {}}
 ---

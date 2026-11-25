@@ -103,7 +103,7 @@
 # the Claude proxy signing key (#66), the forge sidecar's egress proxy key (#65), and one wake token per agent
 - name: Generated secret files
   ansible.builtin.include_tasks: secret_file.yml
-  loop: "{{ ['router-gitea.secret', 'router-register.token', 'claude-proxy-signing.key', 'egress-forge-proxy.key']
+  loop: "{{ ['router-gitea.secret', 'router-register.token', 'claude-proxy-signing.key', 'egress-forge-proxy.key', 'egress-setup-proxy.key']
             + kind_agents_agents | map('regex_replace', '$', '.wake') | list }}"
   loop_control: {loop_var: kind_agents_sf}
 
@@ -256,6 +256,19 @@
     kind_agents_forge_auth: "^Basic {{ ('forge:' ~ kind_agents_secret['egress-forge-proxy.key']) | b64encode }}$"
   no_log: true
 
+- name: Toolchain setup egress credential Secret (#499; the operator copies it per agent, Squid reads the regex)
+  kubernetes.core.k8s:
+    context: "{{ kind_agents_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: egress-setup-proxy, namespace: "{{ kind_agents_ns }}"}
+      type: Opaque
+      stringData:
+        password: "{{ kind_agents_secret['egress-setup-proxy.key'] }}"
+        auth: "^Basic {{ ('setup:' ~ kind_agents_secret['egress-setup-proxy.key']) | b64encode }}$"
+  no_log: true
+
 - name: Egress proxy and agent NetworkPolicy
   kubernetes.core.k8s:
     context: "{{ kind_agents_context }}"
@@ -273,6 +286,9 @@
         EGRESS_PROXY_IMAGE: "{{ kind_agents_egress_proxy_image }}"
         FORGE_PROXY_AUTH_SHA: >-
           {{ (('^Basic ' ~ (('forge:' ~ kind_agents_secret['egress-forge-proxy.key']) | b64encode) ~ '$') | hash('sha256'))[:16] }}
+        SETUP_EGRESS_HOSTS: "{{ kind_agents_setup_egress_hosts | join(' ') }}"
+        SETUP_PROXY_AUTH_SHA: >-
+          {{ (('^Basic ' ~ (('setup:' ~ kind_agents_secret['egress-setup-proxy.key']) | b64encode) ~ '$') | hash('sha256'))[:16] }}
       replace: []
 
 - name: Egress proxy may reach any address on 80/443 (kind has no FQDN policy; Squid enforces the list)

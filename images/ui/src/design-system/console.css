@@ -20,7 +20,7 @@
 .agd-rail-foot { margin-top: auto; padding: var(--space-3) var(--space-2) 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: var(--space-2); }
 
 .agd-topbar { grid-column: 2; display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-5); background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; min-width: 0; }
-.agd-crumbs { display: flex; gap: var(--space-2); align-items: center; color: var(--ink-muted); font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agd-crumbs { margin: 0; display: flex; gap: var(--space-2); align-items: center; color: var(--ink-muted); font-size: 14px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agd-crumbs strong { color: var(--ink); font-weight: 600; }
 .agd-search { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); height: 32px; padding: 0 var(--space-2) 0 var(--space-3); min-width: 220px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--ground); color: var(--ink-muted); font: 400 14px/20px var(--font-sans); cursor: pointer; }
 .agd-search .agd-kbd { margin-left: auto; }

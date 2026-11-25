@@ -72,7 +72,8 @@
           replace: []
         - src: "{{ kind_agents_repo_root }}/manifests/egress.yaml.tmpl"
           values: {AGENTS_NS: a, PLATFORM_NS: p, FORGE_NS: f, BOTBOARD_NS: b, EGRESS_HOSTS: pypi.org,
-                   FORGE_EGRESS_HOSTS: github.com, EGRESS_PROXY_IMAGE: i, FORGE_PROXY_AUTH_SHA: "0123456789abcdef"}
+                   FORGE_EGRESS_HOSTS: github.com, EGRESS_PROXY_IMAGE: i, FORGE_PROXY_AUTH_SHA: "0123456789abcdef",
+                   SETUP_EGRESS_HOSTS: dl.google.com, SETUP_PROXY_AUTH_SHA: "0123456789abcdef"}
           replace: []
       loop_control: {label: "{{ item.src | basename }}"}
 
@@ -82,7 +83,7 @@
         quiet: true
       loop: [AGENTS_NS, FORGE_SECRETS, REGISTER_TOKEN, ROUTER_IMAGE, IMAGE_PULL_POLICY, WAKE_POLL_SECONDS, GITEA_URL,
              GITHUB_API_URL, PLATFORM_NS, FORGE_NS, BOTBOARD_NS, EGRESS_HOSTS, FORGE_EGRESS_HOSTS, EGRESS_PROXY_IMAGE,
-             FORGE_PROXY_AUTH_SHA, CLAUDE_PROXY_IMAGE]
+             FORGE_PROXY_AUTH_SHA, SETUP_EGRESS_HOSTS, SETUP_PROXY_AUTH_SHA, CLAUDE_PROXY_IMAGE]
 
 # ---------- Claude proxy settings ported from main's 06-agents.sh (#196, #310, #352) ----------
 - name: Role kind_agents Claude proxy settings

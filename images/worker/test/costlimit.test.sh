@@ -46,6 +46,7 @@ run() {  # run <answer> <refusals> -> rc in ${tmp}/rc, output in ${tmp}/out
   echo "${rc}" > "${tmp}/rc"
 }
 export ANTHROPIC_BASE_URL=http://claude-proxy:8080 APPROVALS=true
+export APPROVAL_HOST=off   # the stub records -p <prompt>; the can_use_tool host has its own test (#539)
 
 # ---- 1. allowed: the same session is resumed with the cost resume prompt, and the run succeeds
 run allowed 1
