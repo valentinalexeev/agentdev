@@ -3001,9 +3001,10 @@ The template `examples/deployment/gcp-gke/gitops/flux/` has four layers. Flux ap
 | reloader | `agentdev-reloader` | Stakater Reloader v2.0.0-beta.2 (chart 3.0.0-beta.5), after the platform layer |
 
 Reloader runs in scoped mode. It makes a Role in each namespace that it watches, thus it starts after the platform
-layer made these namespaces. The workflow sets the watched namespaces to the namespaces of the render
-(`rendered/reloader`). Thus `agentdev-executors` is watched only with executors, and the forwarder namespace only when
-the forwarder is deployed.
+layer made these namespaces. The workflow sets the watched namespaces to the namespaces that have a
+rendered SecretStore (`rendered/reloader`). This is the same set as the Ansible role `external_secrets` (#466).
+Thus `agentdev-executors` is watched only with executors, and the forwarder namespace only when the forwarder is
+deployed.
 
 All layers use `prune: true`: Flux removes an object that is removed from Git. Flux also corrects drift: it applies
 the state of Git again at each interval, and the HelmReleases use drift detection. The Flux controllers, the External
