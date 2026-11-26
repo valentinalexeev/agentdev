@@ -9,14 +9,11 @@ components: [operator, worker, forge]
 ---
 ## Summary
 
-A job whose pod is stopped by the infrastructure (pod deleted, node preemption, node drain, autoscaler scale-down,
-upgrade) is retried on the next pod, resuming from its work in progress, at most `spec.retries.infrastructure` times
-(new Agent field, default 2: at most 3 attempts; 0 never retries). A security pause, a deadline and the job's own
-errors are never retried. The comment says, for example, "Interrupted by node preemption, retried (attempt 2 of 3)";
-the attempt goes to the job's run log. On SIGTERM the loop records the reason first, then commits and pushes each
-job's work in progress to `agent/<agent>/wip/<job>` within a 20 s budget (Spot gives 30 s), never to the job's branch.
-The operator tells a preemption from a drain or a scale-down by the pod's `DisruptionTarget` condition and the node's
-taints, and records it as a `PodStopped` Event on the Agent.
+A job whose pod is stopped by the infrastructure (pod deleted, Spot preemption, drain, scale-down, upgrade) is retried
+on the next pod from its pushed work, at most `spec.retries.infrastructure` times (new Agent field, default 2; 0: never).
+A security pause, a deadline and the job's own errors never retry. The comment says, for example, "Interrupted by node
+preemption, retried (attempt 2 of 3)". On SIGTERM the loop records the reason, then pushes work in progress to
+`agent/<agent>/wip/<job>` within 20 s. The operator detects the cause from pod conditions and node taints.
 
 ## Upgrade
 
