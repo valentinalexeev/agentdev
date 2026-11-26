@@ -1,4 +1,0 @@
-go 1.26.0
-
-use ../images/operator
-replace github.com/segmentio/encoding v0.5.4 => ./
