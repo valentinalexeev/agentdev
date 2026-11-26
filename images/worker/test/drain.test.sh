@@ -61,7 +61,7 @@ check "SIGTERM: nothing left uncommitted" "[[ -z \$(git -C '${wt}' status --porc
 check "SIGTERM: the job state stays, so the job continues on the next pod (#175)" "[[ -e '${STATE}/jobs/issue-7.active' ]]"
 check "SIGTERM: logged" "grep -q 'saved work in progress of 1 job' '${tmp}/log'"
 check "SIGTERM: the stop reason outlives the killed job, for its next run (#588)" \
-  "[[ \$(cat '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
+  "[[ \$(cut -d' ' -f1 '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
 
 check "SIGTERM outside a security pause: the job is not marked interrupted by it (#581)" "[[ ! -e '${STATE}/jobs/issue-7.interrupted' ]]"
 

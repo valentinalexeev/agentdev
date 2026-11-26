@@ -310,9 +310,6 @@ start_job() {
     # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
     # skipped). Removed when the job succeeds.
     RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
-    # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
-    STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
-    [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE})"
     # #581: the drain time of a security pause ran out and stopped this job (save_work marked it); say so on its
     # issue or PR, one time. The marker's content is never read (the agent container can write the state volume).
     if (( RESUMING )) && [[ -e "${JOBS}/${key}.interrupted" ]]; then
@@ -320,7 +317,15 @@ start_job() {
       comment "${key#*-}" "🤖 \`${FORGE_USER}\`: a security pause stopped this job before it ended. A person resumed the agent, and the job continues from its saved work in progress." \
         && rm -f "${JOBS}/${key}.interrupted"
     fi
+    # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
+    STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
+    STOP_ATTEMPT=1 STOP_DECISION=""; [[ -n "${STOPPED_BEFORE}" ]] && stop_state "${key}"   # #593
+    [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE}, attempt ${STOP_ATTEMPT}, ${STOP_DECISION})"
     touch "${JOBS}/${key}.active"
+    [[ -s "${JOBS}/${key}.started" ]] || date +%s > "${JOBS}/${key}.started"   # #593: the job's wall time, across pods
+    # #593: only an infrastructure kill within spec.retries.infrastructure runs the job again; the job of any other stop
+    # ends here with a note (not_retried), and its state is cleared like a finished job's
+    if [[ -n "${STOPPED_BEFORE}" && "${STOP_DECISION}" != retry ]]; then set -- not_retried "${key}" "${STOPPED_BEFORE}"; fi
     # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
           [[ "${APPROVALS:-false}" == true ]] && curl -fsS -m 30 -X POST "${FORGE_API}/job-done?job=${key}" >/dev/null 2>&1 || true' EXIT
@@ -330,7 +335,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,stopped,interrupted}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,interrupted,stopped,attempts,started,killed,exit}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -495,7 +500,100 @@ new_session_id() {
 # run event and names it in its comment (stopped_before). The other reasons come from the run that exited
 # (stop_reason). The reason only names a cause in a note: it never decides an action. The operator records what it
 # knows in the Agent's SecurityPaused condition and its Kubernetes Events.
-STOP_REASONS="security-pause pod-deleted node-preempted oom evicted deadline unknown"
+STOP_REASONS="security-pause pod-deleted node-preempted drain scale-down upgrade oom evicted deadline unknown"
+# ---------- retry of infrastructure kills (#593) ----------
+# A job stopped by SIGTERM continues on the next pod (#175). It is retried only when the infrastructure stopped it:
+# the reasons in INFRA_RETRY_REASONS (images/operator/retry.go infraRetryReasons holds the same list, a test keeps
+# them equal). A security pause, a deadline and the job's own errors never retry: the next pod ends the job with a
+# note instead. INFRA_RETRIES (the Agent's spec.retries.infrastructure, default 2) bounds the retries of one job; the
+# attempt count is kept in <jobs>/<key>.attempts, posted to the run log and named in the comment.
+INFRA_RETRY_REASONS="pod-deleted node-preempted drain scale-down upgrade"
+INFRA_RETRIES="${INFRA_RETRIES:-2}"
+[[ "${INFRA_RETRIES}" =~ ^[0-9]{1,2}$ ]] && (( 10#${INFRA_RETRIES} <= 10 )) || INFRA_RETRIES=2
+INFRA_RETRIES=$(( 10#${INFRA_RETRIES} ))
+# The operator records what it saw of the stopped pod (its pod conditions: node shutdown, eviction, its own upgrade) in
+# the ConfigMap agentdev-usage (already mounted at USAGE_DIR, so the pod template does not change), key
+# stop.<agent> = "<reason> <unix seconds>". It refines pod-deleted.
+STOPS_DIR="${STOPS_DIR:-${USAGE_DIR:-/etc/agentdev/usage}}"
+infra_retryable() { case " ${INFRA_RETRY_REASONS} " in *" $1 "*) [[ -n "$1" ]];; *) return 1;; esac; }
+# stop_words <reason>: the reason in words, for the comment
+stop_words() {
+  case "$1" in
+    node-preempted) echo "node preemption";; drain) echo "a node drain";; scale-down) echo "a scale-down";;
+    upgrade) echo "an upgrade";; pod-deleted) echo "a pod deletion";; security-pause) echo "a security pause";;
+    deadline) echo "the job's time limit";; evicted) echo "an eviction";; oom) echo "running out of memory";;
+    *) echo "an unknown cause";;
+  esac
+}
+# refine_reason <reason> <unix seconds of the stop>: pod-deleted becomes what the operator saw, when its record is
+# within two minutes of the stop
+refine_reason() {
+  local r=$1 t=$2 or="" ot="" f="${STOPS_DIR}/stop.${AGENT_NAME:-${FORGE_USER:-}}"
+  [[ "${r}" == pod-deleted && "${t}" =~ ^[0-9]{1,12}$ && -r "${f}" ]] || { echo "${r}"; return 0; }
+  read -r or ot < "${f}" 2>/dev/null
+  if [[ "${ot}" =~ ^[0-9]{1,12}$ ]] && (( ot - t <= 120 && t - ot <= 120 )) && case " ${STOP_REASONS} " in *" ${or} "*) [[ -n "${or}" ]];; *) false;; esac; then
+    echo "${or}"
+  else
+    echo "${r}"
+  fi
+}
+# job_attempt <key> [count]: the attempt of the job (1 when it never was stopped); with count, a stop is counted first
+job_attempt() {
+  local f="${JOBS}/$1.attempts" a=1
+  [[ -r "${f}" ]] && read -r a < "${f}"
+  [[ "${a}" =~ ^[0-9]{1,3}$ ]] || a=1
+  a=$(( 10#${a} ))
+  [[ "${2:-}" == count ]] && { a=$(( a + 1 )); echo "${a}" > "${f}"; }
+  echo "${a}"
+}
+# retry_decision <reason> <attempt>: retry when the reason is an infrastructure kill and the attempt is within the bound
+retry_decision() {
+  infra_retryable "$1" || { echo no-retry; return 0; }
+  (( $2 <= INFRA_RETRIES + 1 )) && echo retry || echo exhausted
+}
+# retry_note <reason> <attempt> <decision>: the fixed sentence of the comment, e.g.
+#   Interrupted by node preemption, retried (attempt 2 of 3).
+retry_note() {
+  local of=$(( INFRA_RETRIES + 1 ))
+  case "$3" in
+    retry) printf '%s' "Interrupted by $(stop_words "$1"), retried (attempt $2 of ${of}).";;
+    exhausted) printf '%s' "Interrupted by $(stop_words "$1") again, not retried: the job used all ${of} attempts (\`spec.retries.infrastructure\` is ${INFRA_RETRIES}).";;
+    *) printf '%s' "Interrupted by $(stop_words "$1"), not retried.";;
+  esac
+}
+# Push work early (#593): the job's commits go to the branch agent/<user>/wip/<key> before its Claude run (only when
+# the job has commits the forge does not have yet, so a fresh job pushes nothing) and on SIGTERM, with a short timeout,
+# after the reason is recorded. It is a separate branch: the job branch (and so a PR) only ever gets finished work. The
+# next pod resumes from it when its own state volume has no newer tree (issue_job, feedback_job).
+WIP_PUSH_TIMEOUT="${WIP_PUSH_TIMEOUT:-8}"
+[[ "${WIP_PUSH_TIMEOUT}" =~ ^[0-9]{1,3}$ ]] && (( 10#${WIP_PUSH_TIMEOUT} >= 1 )) || WIP_PUSH_TIMEOUT=8
+WIP_PUSH_TIMEOUT=$(( 10#${WIP_PUSH_TIMEOUT} ))
+wip_branch() { printf 'agent/%s/wip/%s' "${FORGE_USER}" "$1"; }
+# wip_push <dir> <key> [timeout]: push HEAD of the job's tree to its wip branch; 0 when pushed, 1 when nothing new or failed
+wip_push() {
+  local dir=$1 key=$2 to=${3:-${WIP_PUSH_TIMEOUT}} b bundle out
+  [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -d "${dir}" && -n "${FORGE_API:-}" ]] || return 1
+  b=$(wip_branch "${key}")
+  [[ -n "$(lgit -C "${dir}" log --oneline -1 HEAD --not --remotes 2>/dev/null)" ]] || return 1
+  bundle="${STATE}/jobs/wip-$$-${RANDOM}.bundle"
+  lgit -C "${dir}" bundle create -q "${bundle}" HEAD --not --remotes 2>/dev/null || { rm -f "${bundle}"; return 1; }
+  out=$(curl -sS -m "${to}" -w '\n%{http_code}' -X POST --data-binary "@${bundle}" -H 'Content-Type: application/octet-stream' \
+        -H "X-Agentdev-Job: ${key}" "${FORGE_API}/push?branch=${b}" 2>&1); rm -f "${bundle}"
+  if [[ "${out##*$'\n'}" != 200 ]]; then log "${key}: work in progress not pushed to ${b}: ${out%$'\n'*}"; return 1; fi
+  lgit -C "${dir}" update-ref "refs/remotes/origin/${b}" HEAD 2>/dev/null
+  log "${key}: work in progress pushed to ${b}"
+  return 0
+}
+# resume_from <key> <from>: where an interrupted job's tree starts when its local tree is gone: its wip branch, if pushed
+resume_from() {
+  local b; b=$(wip_branch "$1")
+  if [[ "${RESUMING:-0}" == 1 ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${b}" >/dev/null 2>&1; then
+    echo "origin/${b}"
+  else
+    echo "$2"
+  fi
+}
+# ---------- end retry of infrastructure kills ----------
 CGROUP_DIR="${CGROUP_DIR:-/sys/fs/cgroup}"
 # oom_kills: the container's OOM kill counter (cgroup v2 memory.events, else v1 memory.oom_control); empty if unreadable
 oom_kills() {
@@ -517,21 +615,36 @@ term_reason() {
 }
 # mark_stopped <reason>: on SIGTERM, before the jobs are killed: the reason for each running job, kept for its next run
 mark_stopped() {
-  local f
-  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && echo "$1" > "${f%.lock}.stopped"; done
+  local f t; t=$(date +%s)
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && echo "$1 new ${t}" > "${f%.lock}.stopped"; done
   return 0
 }
 # stopped_before <key>: the reason an earlier run of this job was stopped (from mark_stopped), else nothing. The first
 # call posts it as a run event and marks it as posted; the file goes when the job succeeds.
+# #593: a new stop counts one attempt and is refined with the operator's record (refine_reason); the attempt and the
+# decision of retry_decision are kept with it (stop_state reads them).
 stopped_before() {
-  local f="${JOBS}/$1.stopped" r="" posted=""
-  [[ -r "${f}" ]] && read -r r posted < "${f}"
+  local f="${JOBS}/$1.stopped" r="" posted="" t="" a d
+  [[ -r "${f}" ]] && read -r r posted t < "${f}"
   case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] || return 0;; *) return 0;; esac
   if [[ "${posted}" != posted ]]; then
-    stop_event 137 "${r}"   # the loop stopped Claude with SIGKILL
-    echo "${r} posted" > "${f}"
+    r=$(refine_reason "${r}" "${t}")
+    a=$(job_attempt "$1" count); d=$(retry_decision "${r}" "${a}")
+    stop_event 137 "${r}" "${a}" "${d}" "$(killed_by "$1")"   # the loop stopped Claude with SIGKILL
+    echo "${r} posted ${a} ${d}" > "${f}"
   fi
   echo "${r}"
+}
+# stop_state <key>: sets STOP_ATTEMPT and STOP_DECISION from the job's .stopped file (stopped_before runs in $(...), so
+# its variables do not reach the caller)
+stop_state() {
+  local f="${JOBS}/$1.stopped" r="" a="" d=""
+  STOP_ATTEMPT=1 STOP_DECISION=""
+  [[ -r "${f}" ]] && read -r r _ a d < "${f}"
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] || return 0;; *) return 0;; esac
+  [[ "${a}" =~ ^[0-9]{1,3}$ ]] && STOP_ATTEMPT=$(( 10#${a} ))
+  case "${d}" in retry|no-retry|exhausted) STOP_DECISION=${d};; *) STOP_DECISION=$(retry_decision "${r}" "${STOP_ATTEMPT}");; esac
+  return 0
 }
 # stop_reason <oom kills before the run>: the reason of a run of class error that just ended (not stopped by SIGTERM)
 stop_reason() {
@@ -542,9 +655,13 @@ stop_reason() {
 }
 # stop_event <rc> <reason>: the reason in the job's run log (a result event, as when Claude ends with an error), so the
 # console's job record shows it. Best effort, like every run event.
-stop_event() {
+stop_event() {  # stop_event <rc> <reason> [attempt decision [killed by]] (#593: attempt, retry decision, who killed)
   declare -F run_events_post >/dev/null || return 0
-  run_events_post "$(jq -cn --arg s "stopped:$2" --arg t "exit code $1, reason $2" \
+  local sig; sig=$(signal_name "$1")
+  local t="exit code $1${sig:+ (${sig})}, reason $2"
+  [[ -n "${3:-}" ]] && t+=", next attempt $3, at most $(( INFRA_RETRIES + 1 )) attempts, ${4:-no-retry}"
+  [[ -n "${5:-}" ]] && t+=", ${5}"
+  run_events_post "$(jq -cn --arg s "stopped:$2" --arg t "${t}" \
     '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
 }
 # ---------- resource samples (#588) ----------
@@ -582,6 +699,65 @@ resource_sampler_stop() {
   resource_sample end
   return 0
 }
+# ---------- how the agent process ended (#593 addendum) ----------
+# Kills the worker causes itself: every place of this script that sends a signal to a job or to Claude first calls
+# mark_killed, which writes "<cause>" to <jobs>/<key>.killed (job state of #175, state volume). A non-zero exit then
+# reads it, so a SIGKILL the worker sent is told apart from one from outside (kernel OOM killer, runtime, a person).
+# mark_killed <cause> [key]: the cause for one job, else for each running job
+mark_killed() {
+  local f c=${1//[^A-Za-z0-9 ,.:_()\/-]/}
+  if [[ -n "${2:-}" ]]; then printf '%s %s\n' "$(date +%s)" "${c}" > "${JOBS}/$2.killed"; return 0; fi
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && printf '%s %s\n' "$(date +%s)" "${c}" > "${f%.lock}.killed"; done
+  return 0
+}
+# killed_by <key>: "killed by worker: <cause>" when mark_killed named one for the job, else nothing
+killed_by() {
+  local f="${JOBS}/$1.killed" t c
+  [[ -r "${f}" ]] && read -r t c < "${f}" && [[ "${t}" =~ ^[0-9]{1,12}$ && -n "${c}" ]] && printf 'killed by worker: %s' "${c:0:200}"
+  return 0
+}
+# signal_name <rc>: SIGKILL for 137, SIGTERM for 143 (any rc above 128), else nothing
+signal_name() {
+  [[ "$1" =~ ^[0-9]{1,3}$ ]] && (( $1 > 128 && $1 < 160 )) || return 0
+  local n; n=$(kill -l $(( $1 - 128 )) 2>/dev/null) || return 0
+  [[ -n "${n}" ]] && printf 'SIG%s' "${n#SIG}"
+}
+# STDERR_CAP: bytes of Claude's stderr kept in the per-job file while it runs; STDERR_TAIL: bytes reported at the end
+STDERR_CAP=65536 STDERR_TAIL=4096
+# stderr_tail <file>: the last STDERR_TAIL bytes (whole lines), redacted like the run log (REDACT_JQ), on one line
+STDERR_TAIL_JQ='(if (utf8bytelength) >= ($cap | tonumber) then (split("\n") | .[1:] | join("\n")) else . end)
+  | redact | rtrimstr("\n") | explode | map(select(. == 10 or (. >= 32 and . != 127))) | implode | gsub("\n"; " | ")
+  | until((utf8bytelength) <= ($cap | tonumber); .[((length / 8) | ceil):])'
+stderr_tail() {
+  [[ -s "$1" ]] || return 0
+  local secrets; secrets=$(jq -cn '[env | to_entries[] | select(.key | test("TOKEN|SECRET|KEY|PASSWORD")) | .value | strings]' 2>/dev/null) || secrets='[]'
+  tail -c "${STDERR_TAIL}" "$1" | jq -Rrs --argjson secrets "${secrets}" --arg cap "${STDERR_TAIL}" \
+    "${REDACT_JQ#$'\n'} ${STDERR_TAIL_JQ}" 2>/dev/null
+}
+# exit_record <rc> <class> <reason> <stderr file> <run start>: the evidence of a non-zero exit, in the job log line
+# (stderr, like the other log lines of a run), in <jobs>/<key>.exit (job state, survives the pod's log rotation) and
+# as a result run event (the console's job record). Memory figures are n/a where the cgroup is not readable (gVisor).
+exit_record() {
+  local rc=$1 now sig by peak oom wall job_wall="n/a" t0="" tail txt
+  now=$(date +%s); sig=$(signal_name "${rc}"); by=$(killed_by "${JOB:-none}")
+  [[ -n "${sig}" && -z "${by}" ]] && by="not by the worker"   # #593: no mark_killed before the signal
+  peak=$(cg_value memory.peak memory/memory.max_usage_in_bytes); oom=$(oom_kills); [[ -n "${oom}" ]] || oom=n/a
+  wall=$(( now - $5 ))
+  [[ -r "${JOBS}/${JOB:-none}.started" ]] && read -r t0 < "${JOBS}/${JOB}.started"
+  [[ "${t0}" =~ ^[0-9]{1,12}$ ]] && job_wall="$(( now - t0 ))s"
+  tail=$(stderr_tail "$4")
+  txt="exit ${rc}${sig:+ (${sig})}, class $2${3:+, reason $3}${by:+, ${by}}, run wall ${wall}s, job wall ${job_wall}, memory.peak=${peak}, oom_kill=${oom}"
+  log "claude exited ${txt#exit }; stderr tail: ${tail:-(empty)}" >&2
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 0
+  jq -cn --argjson rc "${rc}" --arg sig "${sig}" --arg c "$2" --arg r "$3" --arg by "${by}" --argjson w "${wall}" \
+    --arg jw "${job_wall%s}" --arg p "${peak}" --arg o "${oom}" --arg e "${tail}" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{time: $t, exit: $rc, signal: $sig, class: $c, reason: $r, killed_by: $by, run_wall_seconds: $w,
+      job_wall_seconds: ($jw | tonumber? // null), memory_peak: $p, oom_kill: $o, stderr_tail: $e}' > "${JOBS}/${JOB}.exit" 2>/dev/null
+  declare -F run_events_post >/dev/null || return 0
+  run_events_post "$(jq -cn --arg s "exit:${sig:-rc${rc}}" --arg t "${txt}; stderr tail: ${tail:-(empty)}" \
+    '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
+}
+# ---------- end how the agent process ended ----------
 
 # stopped_note <rc> <class> [reason]: fixed text for a run where Claude exited non-zero (#336). Only the exit code, the
 # fixed class (error, max-turns, rate-limit) and the fixed reason of #588; never the result text or stderr.
@@ -609,7 +785,22 @@ stop_hint() {
 }
 # interrupted_note <reason>: fixed text for a job that an earlier stop interrupted and that then continued (#588)
 interrupted_note() {
-  printf '%s' "An earlier run of this job was stopped (reason \`$1\`).$(stop_hint "$1") The job continued from its saved work."
+  local retried=""
+  [[ "${STOP_DECISION:-}" == retry ]] && retried=" $(retry_note "$1" "${STOP_ATTEMPT:-2}" retry)"
+  printf '%s' "An earlier run of this job was stopped (reason \`$1\`).$(stop_hint "$1")${retried} The job continued from its saved work."
+}
+# not_retried <key> <reason>: #593, the job of a stop that is not retried ends here, with a note and without another
+# Claude run. Its work so far stays on the branch agent/<user>/wip/<key> (pushed at the stop); nothing half-done
+# becomes a PR or a summary. An issue is not picked up again (assign a new issue, or comment on the PR, to go on).
+not_retried() {
+  local key=$1 r=$2 n=${1#*-} d=${STOP_DECISION:-no-retry}
+  comment "${n}" "🤖 $(retry_note "${r}" "${STOP_ATTEMPT:-1}" "${d}")$(stop_hint "${r}") The work so far is on the branch \`agent/${FORGE_USER}/wip/${key}\` (when it could be pushed); no PR or summary was made from it."
+  case "${key}" in
+    issue-*) touch "${STATE}/seen/issue-${n}.done";;
+    pr-*) date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${n}";;
+  esac
+  log "${key}: stopped by ${r}, not retried (${d}, attempt ${STOP_ATTEMPT:-1})"
+  return 0
 }
 
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
@@ -671,8 +862,10 @@ job_header_env() {
 }
 # ---------- end soft job cost limit ----------
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
-  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler; shift 2
-  err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
+  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler t_run; shift 2
+  # outside the worktree, so `git add -A` can never pick it up; per job, at most STDERR_CAP bytes (#593)
+  err="${STATE}/jobs/claude-${JOB:-$$-${RANDOM}}.stderr"; rm -f "${err}" "${err}.part"
+  t_run=$(date +%s); [[ -n "${JOB:-}" ]] && rm -f "${JOBS:-${STATE}/jobs}/${JOB}.killed"
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
   local pm settings=() cfg="${MCP_CONFIG}" runner=(claude) pflag=(-p "${prompt}")
   pm=$(permission_mode)
@@ -704,17 +897,20 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
           "${margs[@]}" "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
-          "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
+          "${mcp[@]}" 2> >(tail -c "${STDERR_CAP:-65536}" > "${err}.part"; mv -f "${err}.part" "${err}") | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
           exit "${PIPESTATUS[0]}"); rc=$?   # #425 run log: the reader always drains (no SIGPIPE); rc is claude's own
   resource_sampler_stop "${sampler}"
+  local _w; for _w in $(seq 30); do [[ -e "${err}.part" ]] || break; sleep 0.1; done   # the stderr tail is written
+  [[ -e "${err}" ]] || mv -f "${err}.part" "${err}" 2>/dev/null
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
     log "claude output is not stream-json: nothing posted" >&2
     (( rc == 0 )) && rc=1
   fi
-  # stderr is never logged (review #102: with --verbose it can carry transcript or tool output); only the exit code and
-  # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
+  # stderr is never logged raw (review #102: with --verbose it can carry transcript or tool output). #593: on a non-zero
+  # exit, exit_record logs its last STDERR_TAIL bytes redacted like the run log, with the signal, wall time and memory
+  # figures; the class stays fixed. The file is then deleted.
   # The class goes to stderr: stdout of run_claude is the result text that becomes a PR body or comment (#336).
   # The caller gets "<rc> <class>" in ${CLAUDE_EXIT_FILE}, because result=$(run_claude ...) runs in a subshell.
   if [[ ${rc} -ne 0 ]]; then
@@ -734,7 +930,8 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
        == error_max_turns ]] && why="max-turns"
     local reason=""
     if [[ "${why}" == error ]]; then reason=$(stop_reason "${oom0}"); stop_event "${rc}" "${reason}"; fi   # #588
-    log "claude exited ${rc} (${why}${reason:+, reason ${reason}}; stderr not logged)" >&2
+    log "claude exited ${rc} (${why}${reason:+, reason ${reason}})" >&2
+    declare -F exit_record >/dev/null && JOBS="${JOBS:-${STATE}/jobs}" exit_record "${rc}" "${why}" "${reason}" "${err}" "${t_run}"   # #593 addendum
     [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s%s\n' "${rc}" "${why}" "${reason:+ ${reason}}" > "${CLAUDE_EXIT_FILE}"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
@@ -753,13 +950,17 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
 # the sidecar or the API is down, the events are dropped: the job goes on.
 RUN_EVENT_CLIP="${RUN_EVENT_CLIP:-2048}"
 RUN_LOG_MAX="${RUN_LOG_MAX:-2097152}"
-# jq: one stream-json line in, zero or more run events out (compact). The regex is the forge sidecar's secretRe.
-RUN_EVENTS_JQ='
+# jq: the redaction of run output, with $secrets (the token values of this environment). The regex is the forge
+# sidecar's secretRe. #593: the stderr tail of an abnormal exit goes through the same filter.
+REDACT_JQ='
 def redact: gsub("(?<s>(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----))"; "[redacted]")
   | gsub("(?<k>(?i)(password|passwd|secret|token|api[_-]?key|authorization)[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?(bearer\\s+|token\\s+)?)[^\\s\"'"'"',}]{6,}"; "\(.k)[redacted]")
   | gsub("(?<b>(?i)bearer\\s+)[^\\s\"'"'"',}]{12,}"; "\(.b)[redacted]")
   | gsub("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*$"; "[redacted]")
   | reduce ($secrets[] | select(length >= 8)) as $t (.; split($t) | join("[redacted]"));
+'
+# jq: one stream-json line in, zero or more run events out (compact).
+RUN_EVENTS_JQ="${REDACT_JQ}"'
 def clip: if (utf8bytelength) > $clip then .[0:$clip] + " [clipped]" else . end;
 def txt: if type == "string" then . elif type == "array" then [.[] | objects | .text? // empty | strings] | join("\n") else tojson end;
 def now_s: now | todate;
@@ -910,6 +1111,7 @@ jobf() { printf '%s/jobs/%s.%s' "${STATE}" "${JOB:-none}" "$1"; }
 claude_step() {
   local f; f=$(jobf result)
   if [[ "${RESUMING:-0}" == 1 && -e "${f}" ]]; then log "${JOB}: Claude already finished before the restart"; cat "${f}"; return 0; fi
+  [[ -n "${JOB:-}" ]] && wip_push "$1" "${JOB}" >/dev/null 2>&1   # #593: before the long step; nothing new: no push
   local out rc=0; out=$(run_claude "$1" "$2") || rc=$?
   (( rc == 0 )) && [[ -n "${JOB:-}" ]] && printf '%s' "${out}" > "${f}"
   printf '%s' "${out}"; return ${rc}
@@ -1022,6 +1224,7 @@ issue_job() {
   # #175: continue from the job branch when it exists (pushed before a kill), else from the base
   local from="origin/${base}"
   lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${branch}" >/dev/null 2>&1 && from="origin/${branch}"
+  from=$(resume_from "${JOB:-issue-${n}}" "${from}")   # #593: the work pushed at the stop, when the local tree is gone
   dir=$(worktree "${branch}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"   # #174: the SIGTERM handler saves work in progress here
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
@@ -1470,6 +1673,7 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
   sync_repo || return 1
   local from="origin/${branch}"
   [[ "${work}" != "${branch}" ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${work}" >/dev/null 2>&1 && from="origin/${work}"
+  from=$(resume_from "${JOB:-pr-${pr}}" "${from}")   # #593
   dir=$(worktree "${work}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
@@ -1678,6 +1882,7 @@ security_draining() { draining && grep -qx 'agentdev/drain-reason="security-paus
 # stays, so the job continues on the next pod: it resumes the Claude session and pushes the saved commit with its work.
 # #581: a job that a security pause stops (its drain time ran out) gets the marker <jobs>/<key>.interrupted; the job
 # says so on its issue or PR when it continues, and the saved commit names the reason.
+SAVED_DIRS=()
 save_work() {
   local f key dir n=0 why=""
   security_draining && why=", interrupted by security pause"
@@ -1696,6 +1901,7 @@ save_work() {
     if ! lgit -C "${dir}" diff --cached --quiet 2>/dev/null; then
       lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key}${why})" >/dev/null 2>&1 && n=$((n+1))
     fi
+    SAVED_DIRS+=("${key} ${dir}")
   done
   log "shutdown: saved work in progress of ${n} job(s); interrupted jobs continue on the next start"
 }
@@ -1705,15 +1911,36 @@ kill_tree() {
   for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${c}"; done
   kill -KILL "$1" 2>/dev/null
 }
+# TERM_PUSH_SECONDS (#593): how long the SIGTERM handler may spend pushing work in progress, counted from the signal.
+# A Spot VM gets about 30 s: the reason is written first (instant), the pushes come last and stop at this deadline.
+TERM_PUSH_SECONDS="${TERM_PUSH_SECONDS:-20}"
+[[ "${TERM_PUSH_SECONDS}" =~ ^[0-9]{1,3}$ ]] || TERM_PUSH_SECONDS=20
+TERM_PUSH_SECONDS=$(( 10#${TERM_PUSH_SECONDS} ))
+# push_saved_work <deadline>: wip_push each job saved_work committed, while time is left
+push_saved_work() {
+  local e key dir left n=0
+  for e in "${SAVED_DIRS[@]}"; do
+    key=${e%% *}; dir=${e#* }
+    left=$(( $1 - $(date +%s) )); (( left >= 1 )) || { log "shutdown: no time left to push ${key}"; continue; }
+    (( left > WIP_PUSH_TIMEOUT )) && left=${WIP_PUSH_TIMEOUT}
+    wip_push "${dir}" "${key}" "${left}" && n=$((n+1))
+  done
+  log "shutdown: pushed work in progress of ${n} job(s)"
+}
 on_term() {
   trap '' TERM
+  local deadline=$(( $(date +%s) + TERM_PUSH_SECONDS ))
   log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
   mark_stopped "$(term_reason)"   # #588: the jobs die below before they can name the cause; their next run does
+  mark_killed "SIGKILL from the SIGTERM handler (on_term, kill_tree)"   # #593: before any signal is sent
   # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
   # Claude. The job state (#175) stays: the next pod continues each job.
   local p; for p in $(jobs -p); do kill_tree "${p}"; done
   pkill -KILL -x claude 2>/dev/null
   save_work
+  push_saved_work "${deadline}"   # #593: after the reason, with a short timeout
+  # #593: the forge sidecar keeps serving after its own SIGTERM until this line (or its own deadline)
+  echo "$(date +%s) loop-exit" >> "${WAKE_FILE}" 2>/dev/null
   exit 0
 }
 trap on_term TERM

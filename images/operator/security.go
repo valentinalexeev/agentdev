@@ -88,8 +88,9 @@ type Collector struct {
 	Recorder record.EventRecorder
 
 	mu      sync.Mutex
-	forged  map[string]bool // pod UID/container with a usage line outside the forge container already reported
-	streams map[string]bool // podUID/container being followed
+	noted   map[string]time.Time // #593: agent pods whose stop got an Event (retry.go)
+	forged  map[string]bool      // pod UID/container with a usage line outside the forge container already reported
+	streams map[string]bool      // podUID/container being followed
 
 	bmu     sync.Mutex
 	buckets map[string]*bucket // podUID/container -> token bucket (flood protection)
@@ -299,6 +300,7 @@ func (c *Collector) scan(ctx context.Context) {
 	if err := c.List(ctx, &proxies, client.InNamespace(c.NS), client.MatchingLabels{"app": egressApp}); err != nil {
 		log.FromContext(ctx).Error(err, "list egress proxy pods")
 	}
+	c.noteStops(ctx, pods.Items) // #593: why a stopping agent pod stops, for its next pod
 	pods.Items = append(pods.Items, proxies.Items...)
 	for i := range pods.Items {
 		p := pods.Items[i]
