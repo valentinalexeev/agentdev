@@ -284,7 +284,7 @@ sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses
 # MAX_CONCURRENT at a time. MAX_CONCURRENT=1 is the old one-at-a-time behaviour.
 MAX_CONCURRENT="${MAX_CONCURRENT:-2}"
 JOBS="${STATE}/jobs"; mkdir -p "${JOBS}"
-rm -f "${JOBS}"/*.lock "${JOBS}/stopping"   # a restarted pod has no running jobs and was not stopped (#588)
+rm -f "${JOBS}"/*.lock   # a restarted pod has no running jobs
 
 running_jobs() { local n=0 f; for f in "${JOBS}"/*.lock; do [[ -e "$f" ]] && n=$((n+1)); done; echo "$n"; }
 is_running()   { [[ -e "${JOBS}/$1.lock" ]]; }
@@ -310,6 +310,9 @@ start_job() {
     # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
     # skipped). Removed when the job succeeds.
     RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
+    # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
+    STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
+    [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE})"
     touch "${JOBS}/${key}.active"
     # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
@@ -320,7 +323,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,stopped}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -474,14 +477,17 @@ new_session_id() {
 }
 
 # ---------- why a run stopped (#588) ----------
-# A run of class error (often exit code 137, SIGKILL) gets a reason from a fixed list, for the note and the run log:
+# A job that is stopped gets a reason from a fixed list, for its comment and the run log of its job record:
 #   security-pause, node-preempted, evicted  the pod got SIGTERM, and the operator had marked it with this reason
 #                                            (pod annotation agentdev/stop-reason, read through the downward API file)
 #   pod-deleted   the pod got SIGTERM without such a mark (scale-down, node drain, autoscaler, an upgrade)
 #   oom           the container's cgroup counted an OOM kill during the run (memory.events oom_kill, when readable)
 #   unknown       none of these
-# The reason only names a cause in a note: it never decides an action. The operator records what it knows in the
-# Agent's SecurityPaused condition and its Kubernetes Events.
+# On SIGTERM the loop kills its jobs before they can classify anything, so on_term writes the reason to
+# <jobs>/<key>.stopped of each running job (state volume). The job that continues on the next start posts it once as a
+# run event and names it in its comment (stopped_before). The other reasons come from the run that exited
+# (stop_reason). The reason only names a cause in a note: it never decides an action. The operator records what it
+# knows in the Agent's SecurityPaused condition and its Kubernetes Events.
 STOP_REASONS="security-pause pod-deleted node-preempted oom evicted deadline unknown"
 CGROUP_DIR="${CGROUP_DIR:-/sys/fs/cgroup}"
 # oom_kills: the container's OOM kill counter (cgroup v2 memory.events, else v1 memory.oom_control); empty if unreadable
@@ -502,11 +508,27 @@ term_reason() {
   case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] && { echo "${r}"; return 0; };; esac
   echo pod-deleted
 }
-# stop_reason <oom kills before the run>: the reason of a run of class error that just ended
+# mark_stopped <reason>: on SIGTERM, before the jobs are killed: the reason for each running job, kept for its next run
+mark_stopped() {
+  local f
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && echo "$1" > "${f%.lock}.stopped"; done
+  return 0
+}
+# stopped_before <key>: the reason an earlier run of this job was stopped (from mark_stopped), else nothing. The first
+# call posts it as a run event and marks it as posted; the file goes when the job succeeds.
+stopped_before() {
+  local f="${JOBS}/$1.stopped" r="" posted=""
+  [[ -r "${f}" ]] && read -r r posted < "${f}"
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] || return 0;; *) return 0;; esac
+  if [[ "${posted}" != posted ]]; then
+    stop_event 137 "${r}"   # the loop stopped Claude with SIGKILL
+    echo "${r} posted" > "${f}"
+  fi
+  echo "${r}"
+}
+# stop_reason <oom kills before the run>: the reason of a run of class error that just ended (not stopped by SIGTERM)
 stop_reason() {
-  local r="" after
-  [[ -r "${JOBS:-}/stopping" ]] && read -r r < "${JOBS}/stopping"
-  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] && { echo "${r}"; return 0; };; esac
+  local after
   after=$(oom_kills)
   [[ "$1" =~ ^[0-9]{1,18}$ && "${after}" =~ ^[0-9]{1,18}$ ]] && (( 10#${after} > 10#$1 )) && { echo oom; return 0; }
   echo unknown
@@ -560,8 +582,14 @@ stopped_note() {
   local hint="" why=""
   [[ "$2" == max-turns ]] && hint=" The run used all ${MAX_TURNS} turns (\`max_turns\`). A larger value in \`instance.yml\` can help."
   [[ "$2" == cost-* ]] && hint=" The job reached its cost limit (\`CLAUDE_JOB_APPROVAL_UNITS\`) and more was not approved (${2#cost-})."
-  case "${3:-}" in
-    "") ;;
+  [[ -n "${3:-}" ]] && hint=$(stop_hint "$3")
+  [[ -n "${3:-}" ]] && why=", reason \`$3\`"
+  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`${why}).${hint} Review the diff with care."
+}
+# stop_hint <reason>: one fixed sentence, with a leading space, on the cause
+stop_hint() {
+  local hint
+  case "$1" in
     security-pause) hint=" The operator paused the agent for security events: the \`SecurityPaused\` condition of the Agent names the jobs and events.";;
     pod-deleted) hint=" The pod was stopped (scale-down, node drain, autoscaler or upgrade): the Agent's Kubernetes Events and the cluster events name the cause.";;
     node-preempted) hint=" The node of the pod was preempted or shut down.";;
@@ -570,8 +598,11 @@ stopped_note() {
     deadline) hint=" The job reached its time limit.";;
     *) hint=" The cause is not known. With \`spec.diagnostics.resources\` on the Agent, the log shows the memory use of each run.";;
   esac
-  [[ -n "${3:-}" ]] && why=", reason \`$3\`"
-  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`${why}).${hint} Review the diff with care."
+  printf '%s' "${hint}"
+}
+# interrupted_note <reason>: fixed text for a job that an earlier stop interrupted and that then continued (#588)
+interrupted_note() {
+  printf '%s' "An earlier run of this job was stopped (reason \`$1\`).$(stop_hint "$1") The job continued from its saved work."
 }
 
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
@@ -999,6 +1030,7 @@ issue_job() {
     stopped=$(stopped_note "${erc}" "${ewhy}" "${ereason}"); result=""
   fi
   rm -f "${exitf}"
+  [[ -n "${STOPPED_BEFORE:-}" ]] && stopped="$(interrupted_note "${STOPPED_BEFORE}")${stopped:+ ${stopped}}"   # #588
   local status summary
   status=$(run_status "${result}"); summary=$(run_summary "${result}")
   # #234: a question or a blocker is answered on the issue and nothing is pushed, even if the tree has changes
@@ -1447,6 +1479,9 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
     status=$(run_status "${result}"); result=$(run_summary "${result}")
   fi
   rm -f "${exitf}"
+  [[ -n "${STOPPED_BEFORE:-}" ]] && result="${result}
+
+> $(interrupted_note "${STOPPED_BEFORE}")"   # #588
   if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
     # #234: reply only; the working tree is not pushed. The reviewers' next comment starts a new run.
     reply_threads "${pr}" "${threads}" "${result}" "" ""
@@ -1657,7 +1692,7 @@ kill_tree() {
 on_term() {
   trap '' TERM
   log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
-  term_reason > "${JOBS}/stopping"   # #588: before Claude is stopped, so a job that sees it exit names the cause
+  mark_stopped "$(term_reason)"   # #588: the jobs die below before they can name the cause; their next run does
   # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
   # Claude. The job state (#175) stays: the next pod continues each job.
   local p; for p in $(jobs -p); do kill_tree "${p}"; done

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Unit test for the stop reason of a run (#588): a run of class error gets a reason from a fixed list (the operator's
-# mark on the pod at SIGTERM, pod-deleted without a mark, oom from the cgroup counter, else unknown), the note names it,
-# and the resource sampler is off by default.
+# Unit test for the stop reason of a job (#588): a job stopped by SIGTERM keeps a reason from a fixed list for its next
+# run (the operator's mark on the pod, pod-deleted without a mark), which posts it once and names it in its comment; a
+# run of class error gets oom from the cgroup counter, else unknown; the note names it; the resource sampler is off by
+# default. drain.test.sh checks that the reason outlives the real SIGTERM handler.
 #   bash images/worker/test/stopreason.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -10,6 +11,7 @@ unset DIAG_RESOURCES DIAG_INTERVAL_SECONDS
 export JOBS="${tmp}/jobs" CGROUP_DIR="${tmp}/cg" POD_ANNOTATIONS="${tmp}/annotations" MAX_TURNS=5 JOB=issue-7
 mkdir -p "${JOBS}" "${CGROUP_DIR}"
 log() { echo "LOG $*"; }
+run_events_post() { echo "$1" >> "${tmp}/posted"; }
 # shellcheck disable=SC1090
 source <(sed -n '/^# ---------- why a run stopped (#588)/,/^run_claude() {/p' "${here}/../agent-loop.sh" | sed '$d')
 fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }
@@ -32,13 +34,28 @@ check "memory.events oom_kill" "[[ \$(oom_kills) == 2 ]]"
 check "no stop, same counter: unknown" "[[ \$(stop_reason 2) == unknown ]]"
 check "counter went up: oom" "[[ \$(stop_reason 1) == oom ]]"
 check "counter before not readable: unknown" "[[ \$(stop_reason '') == unknown ]]"
-echo security-pause > "${JOBS}/stopping"
-check "SIGTERM with the pause mark wins over oom" "[[ \$(stop_reason 1) == security-pause ]]"
-echo pod-deleted > "${JOBS}/stopping"
-check "SIGTERM without a mark: pod-deleted" "[[ \$(stop_reason 2) == pod-deleted ]]"
-echo '$(touch x)' > "${JOBS}/stopping"
-check "a value outside the list in the stopping file is ignored" "[[ \$(stop_reason 2) == unknown ]]"
-rm -f "${JOBS}/stopping"
+
+# ---- mark_stopped / stopped_before: the reason of a SIGTERM, kept per running job for its next run
+printf 'agentdev/stop-reason="security-pause"\n' > "${POD_ANNOTATIONS}"
+echo 1 > "${JOBS}/issue-7.lock"; echo 1 > "${JOBS}/pr-9.lock"
+mark_stopped "$(term_reason)"
+check "each running job gets the reason" "[[ \$(cat '${JOBS}/issue-7.stopped') == security-pause && \$(cat '${JOBS}/pr-9.stopped') == security-pause ]]"
+check "a job that was not running gets none" "[[ ! -e '${JOBS}/issue-8.stopped' ]]"
+rm -f "${JOBS}"/*.lock
+check "the next run reads it" "[[ \$(stopped_before issue-7) == security-pause ]]"
+check "and posts it once as a result run event" \
+  "[[ \$(wc -l < '${tmp}/posted') == 1 ]] && jq -e '.[0] | .kind == \"result\" and .ok == false and .subtype == \"stopped:security-pause\"' '${tmp}/posted' >/dev/null"
+check "a later run still names it" "[[ \$(stopped_before issue-7) == security-pause ]]"
+check "but does not post it again" "[[ \$(wc -l < '${tmp}/posted') == 1 ]]"
+check "no file: nothing" "[[ -z \$(stopped_before issue-8) ]]"
+echo '$(touch x)' > "${JOBS}/issue-8.stopped"
+check "a value outside the list is ignored and not posted" "[[ -z \$(stopped_before issue-8) && \$(wc -l < '${tmp}/posted') == 1 ]]"
+printf 'agentdev/forge="github"\n' > "${POD_ANNOTATIONS}"; echo 1 > "${JOBS}/issue-5.lock"
+mark_stopped "$(term_reason)"; rm -f "${JOBS}"/*.lock
+check "SIGTERM without a mark: pod-deleted" "[[ \$(stopped_before issue-5) == pod-deleted ]]"
+n=$(interrupted_note security-pause)
+check "interrupted note: reason, SecurityPaused, continued" \
+  "[[ \"\${n}\" == 'An earlier run of this job was stopped (reason \`security-pause\`).'*SecurityPaused*'The job continued from its saved work.' ]]"
 
 # ---- stopped_note: the reason and its fixed hint; no reason: the text of #336
 n=$(stopped_note 137 error)
