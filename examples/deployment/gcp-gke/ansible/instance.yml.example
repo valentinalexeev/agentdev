@@ -23,7 +23,7 @@ agents:
 # plan_identity: true
 # plan_identity_billing_account: "000000-000000-000000"   # terraform billing_account_id; "" with create_budget = false
 agentdev_labels: {environment: prod}   # agentdev #184: same as terraform labels; service: agentdev is added
-# project specs with an `mcp:` section; the playbook runs agentdev scripts/mcp-sync.sh for each (#51)
+# project specs with an `mcp:` section; the playbook applies one McpProject for each, the operator syncs it (#51, #383)
 mcp_projects: []
 # trusted MCP server hosts (host or host:port); a spec server on another host is refused (agentdev docs/security.md R51)
 mcp_allowed_hosts: []             # for example [docs-mcp.tools.svc.cluster.local:8080]

@@ -23,7 +23,7 @@ MAX_TURNS="${MAX_TURNS:-40}"
 WAKE_FILE="${WAKE_FILE:-/state/agent-wake}"   # appended by the sidecar's webhook listener on a router wake (#3)
 STATE="${STATE_DIR:-/state}"
 WORK="${STATE}/repo"
-# MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp from scripts/mcp-sync.sh) Claude gets the project's tools.
+# MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp written by the operator's McpProject controller, #383) Claude gets the project's tools.
 # The file holds only a reference to the token; the token itself stays in the environment.
 MCP_CONFIG="${STATE}/mcp.json"
 if [[ -n "${CF_URL:-}" ]]; then
