@@ -26,12 +26,18 @@ report() {  # report <reason> <message>: the termination message (at most 4 KiB,
 }
 fail() { report "$1" "$2"; exit "${3:-1}"; }
 
-# manifest_hash <dir>: sha256 over "path type mode sha256-or-link-target" of every entry, sorted, NUL-safe
+# manifest_hash <dir>: sha256 over "path type mode sha256-or-link-target" of every entry, sorted, NUL-safe.
+# #581: the mode is only the bits the kubelet leaves alone. With the pod's fsGroup, the kubelet adds u+rw,g+rw to every
+# file and ug+rwx,g+s to every directory of the volume on each mount, so the full mode changed on every new pod and an
+# unchanged toolchain was reinstalled (a toolchain-manifest event each start). Files keep their execute and
+# setuid/setgid/sticky bits (07111); directories keep none. The content hash and the agent's read-only mount cover the rest.
 manifest_hash() {
   (cd "$1" && find . -mindepth 1 -printf '%P\0' | LC_ALL=C sort -z | while IFS= read -r -d '' p; do
     if [[ -L "${p}" ]]; then printf '%s\tl\t-\t%s\n' "${p}" "$(readlink "${p}")"
-    elif [[ -d "${p}" ]]; then printf '%s\td\t%s\t-\n' "${p}" "$(stat -c %a "${p}")"
-    elif [[ -f "${p}" ]]; then printf '%s\tf\t%s\t%s\n' "${p}" "$(stat -c %a "${p}")" "$(sha256sum < "${p}" | cut -d' ' -f1)"
+    elif [[ -d "${p}" ]]; then printf '%s\td\t-\t-\n' "${p}"
+    elif [[ -f "${p}" ]]; then
+      m=$(stat -c %a "${p}"); [[ "${m}" =~ ^[0-7]{1,4}$ ]] || m=0   # stat output only, still checked before $(( ))
+      printf '%s\tf\t%o\t%s\n' "${p}" "$(( 8#${m} & 07111 ))" "$(sha256sum < "${p}" | cut -d' ' -f1)"
     else printf '%s\to\t-\t-\n' "${p}"; fi
   done) | sha256sum | cut -d' ' -f1
 }
