@@ -313,6 +313,13 @@ start_job() {
     # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
     STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
     [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE})"
+    # #581: the drain time of a security pause ran out and stopped this job (save_work marked it); say so on its
+    # issue or PR, one time. The marker's content is never read (the agent container can write the state volume).
+    if (( RESUMING )) && [[ -e "${JOBS}/${key}.interrupted" ]]; then
+      log "${key}: this job was interrupted by a security pause"
+      comment "${key#*-}" "🤖 \`${FORGE_USER}\`: a security pause stopped this job before it ended. A person resumed the agent, and the job continues from its saved work in progress." \
+        && rm -f "${JOBS}/${key}.interrupted"
+    fi
     touch "${JOBS}/${key}.active"
     # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
@@ -323,7 +330,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,stopped}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,stopped,interrupted}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -1102,7 +1109,8 @@ ${stopped:-${summary}}"
 #   blocked         the rules or the environment prevent it; explain, do not push
 RUN_CONTRACT="Rules for this task:
 - Read the repository's own instructions first if they exist (CLAUDE.md, AGENTS.md, CONTRIBUTING.md) and follow them.
-- Do only what the task asks. No unrelated refactoring, formatting or dependency changes.
+- Do only what the task asks. No unrelated refactoring, formatting or dependency changes. The docs, changelog entry
+  and other files that the repository's own instructions require for a change are part of the task.
 - Do not change CI workflow files (.github/workflows/, .gitea/workflows/, .forgejo/workflows/): a person must make
   those changes. If the task needs one, put the exact change in your summary instead.
 - Run the tests that cover your change. Report what you ran and the result; never claim a test passed that you did
@@ -1662,15 +1670,23 @@ maybe_stop() {
 # annotation (the pod has no service account token).
 POD_ANNOTATIONS="${POD_ANNOTATIONS:-/etc/agentdev/pod/annotations}"
 draining() { [[ -r "${POD_ANNOTATIONS}" ]] && grep -q '^agentdev/drain=' "${POD_ANNOTATIONS}"; }
+# security_draining: the drain is for a security pause (#577), not a replacement. The operator sets
+# agentdev/drain-reason="security-pause" when the drain starts, so the file has it long before the drain time runs out.
+security_draining() { draining && grep -qx 'agentdev/drain-reason="security-pause"' "${POD_ANNOTATIONS}"; }
 # Graceful stop: on SIGTERM (pod deleted, node drained, Spot preemption) start nothing new, stop Claude, and save the
 # work in progress of each running job as a local commit on its job branch (never pushed here). The job state of #175
 # stays, so the job continues on the next pod: it resumes the Claude session and pushes the saved commit with its work.
+# #581: a job that a security pause stops (its drain time ran out) gets the marker <jobs>/<key>.interrupted; the job
+# says so on its issue or PR when it continues, and the saved commit names the reason.
 save_work() {
-  local f key dir n=0
+  local f key dir n=0 why=""
+  security_draining && why=", interrupted by security pause"
   for f in "${JOBS}"/*.lock; do
     [[ -e "${f}" ]] || continue
     key=${f##*/}; key=${key%.lock}
-    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -r "${JOBS}/${key}.dir" ]] || continue
+    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ ]] || continue
+    [[ -n "${why}" ]] && { : > "${JOBS}/${key}.interrupted"; log "${key}: interrupted by security pause"; }
+    [[ -r "${JOBS}/${key}.dir" ]] || continue
     read -r dir < "${JOBS}/${key}.dir"
     [[ "${dir}" == "${STATE}/work/"* && -d "${dir}" ]] || continue
     ( flock -w 10 9 && scrub_git_config ) 9>"${STATE}/git.lock"
@@ -1678,7 +1694,7 @@ save_work() {
     rm -f "${dir}/.git/index.lock" "$(lgit -C "${dir}" rev-parse --git-dir 2>/dev/null)/index.lock" 2>/dev/null
     lgit -C "${dir}" add -A >/dev/null 2>&1
     if ! lgit -C "${dir}" diff --cached --quiet 2>/dev/null; then
-      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key})" >/dev/null 2>&1 && n=$((n+1))
+      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key}${why})" >/dev/null 2>&1 && n=$((n+1))
     fi
   done
   log "shutdown: saved work in progress of ${n} job(s); interrupted jobs continue on the next start"

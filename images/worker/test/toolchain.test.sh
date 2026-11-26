@@ -52,7 +52,15 @@ check "the installed tree is not writable" "[[ ! -w '${TOOLCHAIN_DIR}/${key}/go/
 mv "${tmp}/go1.0.0.linux-amd64.tar.gz" "${tmp}/away-amd64"; mv "${tmp}/go1.0.0.linux-arm64.tar.gz" "${tmp}/away-arm64"
 run "${spec}" "${key}:${hash}"; rc=$?
 check "a wake with the recorded hash only verifies (no download)" "[[ ${rc} == 0 && \$(rep reason) == Verified && \$(rep hash) == '${hash}' ]]"
+# #581: the kubelet's fsGroup change on each mount (files u+rw,g+rw; directories ug+rwx,g+s) is not a changed manifest
+find "${TOOLCHAIN_DIR}/${key}" -type f -exec chmod ug+rw {} +
+find "${TOOLCHAIN_DIR}/${key}" -type d -exec chmod ug+rwx,g+s {} +
+run "${spec}" "${key}:${hash}"; rc=$?
+check "the kubelet's fsGroup mode change on a new pod only verifies (#581)" "[[ ${rc} == 0 && \$(rep reason) == Verified && \$(rep hash) == '${hash}' ]]"
 mv "${tmp}/away-amd64" "${tmp}/go1.0.0.linux-amd64.tar.gz"; mv "${tmp}/away-arm64" "${tmp}/go1.0.0.linux-arm64.tar.gz"
+chmod a-x "${TOOLCHAIN_DIR}/${key}/go/bin/go"
+run "${spec}" "${key}:${hash}"; rc=$?
+check "a removed execute bit is still a changed manifest (#581)" "[[ ${rc} == 0 && \$(rep reason) == Reinstalled && \$(rep hash) == '${hash}' ]]"
 chmod u+w "${TOOLCHAIN_DIR}/${key}/go/bin" "${TOOLCHAIN_DIR}/${key}/go/bin/go"
 printf '#!/bin/sh\necho pwned\n' > "${TOOLCHAIN_DIR}/${key}/go/bin/go"
 run "${spec}" "${key}:${hash}"; rc=$?

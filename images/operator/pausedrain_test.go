@@ -63,8 +63,8 @@ func TestSecurityPauseDrainsOnTooManyLowEvents(t *testing.T) {
 	if s := getSTS(t, c, "alice"); s.Spec.Replicas == nil || *s.Spec.Replicas != 1 {
 		t.Fatal("six low events stopped the running pod at once")
 	}
-	if podOf(t, c, "alice").Annotations[drainAnnotation] == "" {
-		t.Fatal("pod not marked for drain")
+	if pa := podOf(t, c, "alice").Annotations; pa[drainAnnotation] == "" || pa[drainReasonAnnotation] != drainReasonSecurity {
+		t.Fatalf("pod not marked for a security-pause drain (#581): %v", pa)
 	}
 	// 2. its sidecar reports drained: stopped
 	r.Drains.Mark(p.UID, now)
@@ -137,15 +137,15 @@ func TestPersonPauseStopsAtOnceAndResumeUnmarks(t *testing.T) {
 		a.Annotations = map[string]string{pauseDrainAnnotation: "1800000000"}
 	}), func() *corev1.Pod {
 		q := agentPod("bob", "rev1")
-		q.Annotations = map[string]string{drainAnnotation: "1800000000"}
+		q.Annotations = map[string]string{drainAnnotation: "1800000000", drainReasonAnnotation: drainReasonSecurity}
 		return q
 	}())
 	reconcile(t, r2, "bob")
 	if _, ok := getAgent(t, c2, "bob").Annotations[pauseDrainAnnotation]; ok {
 		t.Fatal("drain mark kept on the resumed agent")
 	}
-	if podOf(t, c2, "bob").Annotations[drainAnnotation] != "" {
-		t.Fatal("resumed pod still drained")
+	if pa := podOf(t, c2, "bob").Annotations; pa[drainAnnotation] != "" || pa[drainReasonAnnotation] != "" {
+		t.Fatalf("resumed pod still drained: %v", pa)
 	}
 }
 
