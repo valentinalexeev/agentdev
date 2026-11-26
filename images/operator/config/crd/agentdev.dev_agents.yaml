@@ -186,6 +186,21 @@ spec:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
+              retries:
+                description: 'Retries of a job that the infrastructure stopped (#593).
+                  Unset: the defaults, and the pod is as before.'
+                properties:
+                  infrastructure:
+                    default: 2
+                    description: |-
+                      How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+                      preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+                      deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+                    format: int32
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
               scaleToZero:
                 default: true
                 description: |-

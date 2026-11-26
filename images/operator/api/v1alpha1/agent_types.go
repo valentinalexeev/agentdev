@@ -71,6 +71,9 @@ type AgentSpec struct {
 	// Diagnostics of the agent's jobs (#588). Unset: none, and the pod is as before.
 	// +optional
 	Diagnostics *AgentDiagnostics `json:"diagnostics,omitempty"`
+	// Retries of a job that the infrastructure stopped (#593). Unset: the defaults, and the pod is as before.
+	// +optional
+	Retries *AgentRetries `json:"retries,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -94,6 +97,18 @@ type AgentDiagnostics struct {
 	// +kubebuilder:validation:Minimum=5
 	// +kubebuilder:validation:Maximum=3600
 	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
+}
+
+// AgentRetries bounds how often a job is run again after an interruption (#593).
+type AgentRetries struct {
+	// How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+	// preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+	// deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+	// +optional
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	Infrastructure *int32 `json:"infrastructure,omitempty"`
 }
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).
