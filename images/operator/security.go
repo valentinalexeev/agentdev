@@ -472,7 +472,11 @@ func (c *Collector) Record(ctx context.Context, p *corev1.Pod, spec v1.SecurityE
 		}
 		return err
 	}
-	log.FromContext(ctx).Info("security event", "agent", spec.Agent, "rule", spec.Rule, "severity", spec.Severity, "job", spec.Job)
+	kv := []any{"agent", spec.Agent, "rule", spec.Rule, "severity", spec.Severity, "job", spec.Job}
+	if spec.Source == "egress" { // the refused host, for debugging; the full line stays in the SecurityEvent
+		kv = append(kv, "host", egressHostOf(spec.Action))
+	}
+	log.FromContext(ctx).Info("security event", kv...)
 	return c.maybePause(ctx, p, ev.Name, spec)
 }
 
