@@ -60,7 +60,7 @@ check "SIGTERM: nothing left uncommitted" "[[ -z \$(git -C '${wt}' status --porc
 check "SIGTERM: the job state stays, so the job continues on the next pod (#175)" "[[ -e '${STATE}/jobs/issue-7.active' ]]"
 check "SIGTERM: logged" "grep -q 'saved work in progress of 1 job' '${tmp}/log'"
 check "SIGTERM: the stop reason outlives the killed job, for its next run (#588)" \
-  "[[ \$(cat '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
+  "[[ \$(cut -d' ' -f1 '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
 
 # ---- a job dir outside the state volume's work tree is never touched
 mkdir -p "${tmp}/elsewhere"; echo x > "${tmp}/elsewhere/f"; git -C "${tmp}/elsewhere" init -q
