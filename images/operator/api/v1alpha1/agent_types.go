@@ -68,6 +68,9 @@ type AgentSpec struct {
 	// read-only to the agent. Unset: none, and the pod is as before.
 	// +optional
 	Toolchain *AgentToolchain `json:"toolchain,omitempty"`
+	// Diagnostics of the agent's jobs (#588). Unset: none, and the pod is as before.
+	// +optional
+	Diagnostics *AgentDiagnostics `json:"diagnostics,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -76,6 +79,20 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentDiagnostics turns on extra records of the agent's jobs (#588). Default off: no extra load.
+type AgentDiagnostics struct {
+	// Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+	// container every intervalSeconds while Claude runs, and once at the end of each run. It tells a real OOM kill
+	// from a pause or a pod stop under gVisor, where the Kubernetes signal is not reliable.
+	// +optional
+	Resources bool `json:"resources,omitempty"`
+	// Seconds between two samples. Default 60.
+	// +optional
+	// +kubebuilder:validation:Minimum=5
+	// +kubebuilder:validation:Maximum=3600
+	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
 }
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).

@@ -63,6 +63,23 @@ spec:
                   Only claude-* names (claude-shared or claude-<agent>), for the same reason.
                 pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              diagnostics:
+                description: 'Diagnostics of the agent''s jobs (#588). Unset: none,
+                  and the pod is as before.'
+                properties:
+                  intervalSeconds:
+                    description: Seconds between two samples. Default 60.
+                    format: int32
+                    maximum: 3600
+                    minimum: 5
+                    type: integer
+                  resources:
+                    description: |-
+                      Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+                      container every intervalSeconds while Claude runs, and once at the end of each run. It tells a real OOM kill
+                      from a pause or a pod stop under gVisor, where the Kubernetes signal is not reliable.
+                    type: boolean
+                type: object
               effort:
                 description: 'Reasoning effort of the agent''s runs (`claude --effort`,
                   #564). Unset: the CLI''s own default, as before.'

@@ -284,7 +284,7 @@ sync_repo() {  # shared clone; jobs use worktrees of it. Serialized: git refuses
 # MAX_CONCURRENT at a time. MAX_CONCURRENT=1 is the old one-at-a-time behaviour.
 MAX_CONCURRENT="${MAX_CONCURRENT:-2}"
 JOBS="${STATE}/jobs"; mkdir -p "${JOBS}"
-rm -f "${JOBS}"/*.lock   # a restarted pod has no running jobs
+rm -f "${JOBS}"/*.lock "${JOBS}/stopping"   # a restarted pod has no running jobs and was not stopped (#588)
 
 running_jobs() { local n=0 f; for f in "${JOBS}"/*.lock; do [[ -e "$f" ]] && n=$((n+1)); done; echo "$n"; }
 is_running()   { [[ -e "${JOBS}/$1.lock" ]]; }
@@ -473,13 +473,105 @@ new_session_id() {
   u=${u,,}; [[ "${u}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && echo "${u}"
 }
 
-# stopped_note <rc> <class>: fixed text for a run where Claude exited non-zero (#336). Only the exit code and the fixed
-# class (error, max-turns, rate-limit); never the result text or stderr.
+# ---------- why a run stopped (#588) ----------
+# A run of class error (often exit code 137, SIGKILL) gets a reason from a fixed list, for the note and the run log:
+#   security-pause, node-preempted, evicted  the pod got SIGTERM, and the operator had marked it with this reason
+#                                            (pod annotation agentdev/stop-reason, read through the downward API file)
+#   pod-deleted   the pod got SIGTERM without such a mark (scale-down, node drain, autoscaler, an upgrade)
+#   oom           the container's cgroup counted an OOM kill during the run (memory.events oom_kill, when readable)
+#   unknown       none of these
+# The reason only names a cause in a note: it never decides an action. The operator records what it knows in the
+# Agent's SecurityPaused condition and its Kubernetes Events.
+STOP_REASONS="security-pause pod-deleted node-preempted oom evicted deadline unknown"
+CGROUP_DIR="${CGROUP_DIR:-/sys/fs/cgroup}"
+# oom_kills: the container's OOM kill counter (cgroup v2 memory.events, else v1 memory.oom_control); empty if unreadable
+oom_kills() {
+  local f k v
+  for f in "${CGROUP_DIR}/memory.events" "${CGROUP_DIR}/memory/memory.oom_control"; do
+    [[ -r "${f}" ]] || continue
+    while read -r k v; do
+      [[ "${k}" == oom_kill && "${v}" =~ ^[0-9]{1,18}$ ]] && { echo "$(( 10#${v} ))"; return 0; }
+    done < "${f}"
+  done
+  return 0
+}
+# term_reason: why this pod got SIGTERM: the operator's mark when the downward API file already shows it, else pod-deleted
+term_reason() {
+  local r=""
+  [[ -r "${POD_ANNOTATIONS:-}" ]] && r=$(sed -n 's/^agentdev\/stop-reason="\([a-z-]\{1,32\}\)"$/\1/p' "${POD_ANNOTATIONS}" 2>/dev/null | head -n1)
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] && { echo "${r}"; return 0; };; esac
+  echo pod-deleted
+}
+# stop_reason <oom kills before the run>: the reason of a run of class error that just ended
+stop_reason() {
+  local r="" after
+  [[ -r "${JOBS:-}/stopping" ]] && read -r r < "${JOBS}/stopping"
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] && { echo "${r}"; return 0; };; esac
+  after=$(oom_kills)
+  [[ "$1" =~ ^[0-9]{1,18}$ && "${after}" =~ ^[0-9]{1,18}$ ]] && (( 10#${after} > 10#$1 )) && { echo oom; return 0; }
+  echo unknown
+}
+# stop_event <rc> <reason>: the reason in the job's run log (a result event, as when Claude ends with an error), so the
+# console's job record shows it. Best effort, like every run event.
+stop_event() {
+  declare -F run_events_post >/dev/null || return 0
+  run_events_post "$(jq -cn --arg s "stopped:$2" --arg t "exit code $1, reason $2" \
+    '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
+}
+# ---------- resource samples (#588) ----------
+# With the Agent's spec.diagnostics.resources (DIAG_RESOURCES=true, set by the operator), each Claude run logs the
+# memory use of the agent container every DIAG_INTERVAL_SECONDS and once at its end. Off (the default): no sampler.
+DIAG_RESOURCES="${DIAG_RESOURCES:-false}"
+DIAG_INTERVAL_SECONDS="${DIAG_INTERVAL_SECONDS:-60}"
+[[ "${DIAG_INTERVAL_SECONDS}" =~ ^[0-9]{1,4}$ ]] && (( 10#${DIAG_INTERVAL_SECONDS} >= 5 && 10#${DIAG_INTERVAL_SECONDS} <= 3600 )) \
+  || DIAG_INTERVAL_SECONDS=60
+DIAG_INTERVAL_SECONDS=$(( 10#${DIAG_INTERVAL_SECONDS} ))
+# cg_value <file>...: the first readable cgroup file of the list that holds one number, else n/a
+cg_value() {
+  local f v
+  for f in "$@"; do
+    [[ -r "${CGROUP_DIR}/${f}" ]] && read -r v < "${CGROUP_DIR}/${f}" && [[ "${v}" =~ ^[0-9]{1,20}$ ]] && { echo "${v}"; return 0; }
+  done
+  echo n/a
+}
+# resource_sample <when>: one log line (on stderr: stdout of a run is its result)
+resource_sample() {
+  local disk oom; disk=$(df -kP / 2>/dev/null | awk 'NR == 2 {print $3}'); [[ "${disk}" =~ ^[0-9]+$ ]] || disk=n/a
+  oom=$(oom_kills); [[ -n "${oom}" ]] || oom=n/a
+  log "${JOB:-loop}: resources ($1): memory.current=$(cg_value memory.current memory/memory.usage_in_bytes)" \
+    "memory.peak=$(cg_value memory.peak memory/memory.max_usage_in_bytes) oom_kill=${oom} rootfs_used_kib=${disk}" >&2
+}
+# resource_sampler_start: prints the sampler's pid (nothing when off); resource_sampler_stop <pid> ends it
+resource_sampler_start() {
+  [[ "${DIAG_RESOURCES}" == true ]] || return 0
+  ( while sleep "${DIAG_INTERVAL_SECONDS}"; do resource_sample sample; done ) >/dev/null &
+  echo $!
+}
+resource_sampler_stop() {
+  [[ -n "${1:-}" ]] || return 0
+  pkill -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null
+  resource_sample end
+  return 0
+}
+
+# stopped_note <rc> <class> [reason]: fixed text for a run where Claude exited non-zero (#336). Only the exit code, the
+# fixed class (error, max-turns, rate-limit) and the fixed reason of #588; never the result text or stderr.
 stopped_note() {
-  local hint=""
+  local hint="" why=""
   [[ "$2" == max-turns ]] && hint=" The run used all ${MAX_TURNS} turns (\`max_turns\`). A larger value in \`instance.yml\` can help."
   [[ "$2" == cost-* ]] && hint=" The job reached its cost limit (\`CLAUDE_JOB_APPROVAL_UNITS\`) and more was not approved (${2#cost-})."
-  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`).${hint} Review the diff with care."
+  case "${3:-}" in
+    "") ;;
+    security-pause) hint=" The operator paused the agent for security events: the \`SecurityPaused\` condition of the Agent names the jobs and events.";;
+    pod-deleted) hint=" The pod was stopped (scale-down, node drain, autoscaler or upgrade): the Agent's Kubernetes Events and the cluster events name the cause.";;
+    node-preempted) hint=" The node of the pod was preempted or shut down.";;
+    evicted) hint=" The pod was evicted (node pressure or ephemeral storage).";;
+    oom) hint=" The agent container ran out of memory: the cgroup counted an OOM kill. A larger memory limit can help.";;
+    deadline) hint=" The job reached its time limit.";;
+    *) hint=" The cause is not known. With \`spec.diagnostics.resources\` on the Agent, the log shows the memory use of each run.";;
+  esac
+  [[ -n "${3:-}" ]] && why=", reason \`$3\`"
+  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`${why}).${hint} Review the diff with care."
 }
 
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
@@ -541,7 +633,7 @@ job_header_env() {
 }
 # ---------- end soft job cost limit ----------
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
-  local dir=$1 out rc err mcp=() prompt=$2; shift 2
+  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler; shift 2
   err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
   local pm settings=() cfg="${MCP_CONFIG}" runner=(claude) pflag=(-p "${prompt}")
@@ -567,6 +659,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   local jenv=(); [[ -n "$(job_header_env)" ]] && jenv=("$(job_header_env)")
   local margs=(); mapfile -t margs < <(model_args)
+  oom0=$(oom_kills); sampler=$(resource_sampler_start)   # #588
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${jenv[@]}" \
           "${runner[@]}" "${CLAUDE_AUTH[@]}" "${pflag[@]}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
@@ -575,6 +668,7 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
           --append-system-prompt "$(system_prompt)" \
           "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
           exit "${PIPESTATUS[0]}"); rc=$?   # #425 run log: the reader always drains (no SIGPIPE); rc is claude's own
+  resource_sampler_stop "${sampler}"
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
@@ -600,8 +694,10 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
     # max turns: read only the subtype field of the result event, never its text (#336)
     [[ "$(jq -rs '[.[] | objects | select(.type == "result")] | last | .subtype // empty | strings' <<<"${out}" 2>/dev/null)" \
        == error_max_turns ]] && why="max-turns"
-    log "claude exited ${rc} (${why}; stderr not logged)" >&2
-    [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s\n' "${rc}" "${why}" > "${CLAUDE_EXIT_FILE}"
+    local reason=""
+    if [[ "${why}" == error ]]; then reason=$(stop_reason "${oom0}"); stop_event "${rc}" "${reason}"; fi   # #588
+    log "claude exited ${rc} (${why}${reason:+, reason ${reason}}; stderr not logged)" >&2
+    [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s%s\n' "${rc}" "${why}" "${reason:+ ${reason}}" > "${CLAUDE_EXIT_FILE}"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"
@@ -899,8 +995,8 @@ issue_job() {
   fi
   # Claude failed or stopped early (#336): the fixed note replaces the summary. The work tree may still have a change.
   if [[ ${claude_rc:-0} != 0 ]]; then
-    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
-    stopped=$(stopped_note "${erc}" "${ewhy}"); result=""
+    local erc=${claude_rc} ewhy=error ereason=""; [[ -r "${exitf}" ]] && read -r erc ewhy ereason < "${exitf}"
+    stopped=$(stopped_note "${erc}" "${ewhy}" "${ereason}"); result=""
   fi
   rm -f "${exitf}"
   local status summary
@@ -1345,8 +1441,8 @@ before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' 
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
   local status="done"
   if [[ ${claude_rc:-0} != 0 ]]; then   # failed or stopped early (#336): a fixed note, never a log line
-    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
-    result=$(stopped_note "${erc}" "${ewhy}")
+    local erc=${claude_rc} ewhy=error ereason=""; [[ -r "${exitf}" ]] && read -r erc ewhy ereason < "${exitf}"
+    result=$(stopped_note "${erc}" "${ewhy}" "${ereason}")
   else
     status=$(run_status "${result}"); result=$(run_summary "${result}")
   fi
@@ -1561,6 +1657,7 @@ kill_tree() {
 on_term() {
   trap '' TERM
   log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
+  term_reason > "${JOBS}/stopping"   # #588: before Claude is stopped, so a job that sees it exit names the cause
   # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
   # Claude. The job state (#175) stays: the next pod continues each job.
   local p; for p in $(jobs -p); do kill_tree "${p}"; done
