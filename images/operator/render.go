@@ -172,7 +172,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...)...),
+		), append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...)...),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
@@ -317,6 +317,21 @@ func modelEnv(a *v1.Agent) []corev1.EnvVar {
 	}
 	if a.Spec.Effort != "" {
 		e = append(e, corev1.EnvVar{Name: "AGENT_EFFORT", Value: a.Spec.Effort})
+	}
+	return e
+}
+
+// diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
+// the resource samples of each run. Nothing when off (the default), so the pod template of an agent without the field
+// is unchanged (no restart on upgrade) and the worker adds no load.
+func diagnosticsEnv(a *v1.Agent) []corev1.EnvVar {
+	d := a.Spec.Diagnostics
+	if d == nil || !d.Resources {
+		return nil
+	}
+	e := []corev1.EnvVar{{Name: "DIAG_RESOURCES", Value: "true"}}
+	if d.IntervalSeconds >= 5 && d.IntervalSeconds <= 3600 {
+		e = append(e, corev1.EnvVar{Name: "DIAG_INTERVAL_SECONDS", Value: strconv.Itoa(int(d.IntervalSeconds))})
 	}
 	return e
 }

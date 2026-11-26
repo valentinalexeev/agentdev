@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -39,6 +40,7 @@ const eventPrefix = "AGENTDEV_SECURITY_EVENT "
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=agentdev.dev,resources=securityevents,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents,verbs=patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=create
@@ -82,6 +84,8 @@ type Collector struct {
 	// again at once. Both optional.
 	Drains  *DrainSignals
 	Requeue func(agent string)
+	// Recorder writes the Kubernetes Event of a security pause on the Agent (#588); nil: none.
+	Recorder record.EventRecorder
 
 	mu      sync.Mutex
 	forged  map[string]bool // pod UID/container with a usage line outside the forge container already reported
@@ -489,13 +493,14 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 		// counted toward the pause until a person can approve a host (phase 4, #67)
 		return nil
 	}
+	// the events of this pod: the count below, and the jobs and events the pause message names (#588)
+	var list v1.SecurityEventList
+	if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agentdev/pod-uid": string(p.UID), "agent": spec.Agent}); err != nil {
+		return err
+	}
 	if spec.Severity == "high" {
 		reason, msg = "HighSeverity", fmt.Sprintf("high severity %s/%s: %s", spec.Source, spec.Rule, clip(spec.Action, 200))
 	} else {
-		var list v1.SecurityEventList
-		if err := c.List(ctx, &list, client.InNamespace(c.NS), client.MatchingLabels{"agentdev/pod-uid": string(p.UID), "agent": spec.Agent}); err != nil {
-			return err
-		}
 		n := 1 // the event just recorded
 		seen := map[string]bool{}
 		if k, once := countOnce(spec); once {
@@ -523,6 +528,7 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 	if reason == "" {
 		return nil
 	}
+	msg += "; " + pauseDetail(spec, name, list.Items)
 	key := types.NamespacedName{Namespace: c.NS, Name: spec.Agent}
 	var a v1.Agent
 	if err := c.Direct.Get(ctx, key, &a); err != nil {
@@ -544,12 +550,21 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 			}
 			a.Annotations[pauseDrainAnnotation] = strconv.FormatInt(c.now().Unix(), 10)
 		}
+		// #588: the loop reads this annotation (downward API) when it gets SIGTERM, and names the cause of a job that
+		// is stopped by the pause. Set before the Agent is paused, so the kubelet can refresh the downward API file
+		// before the reconciler scales the pod down. Best effort: the pause does not depend on it.
+		if err := c.markStopReason(ctx, p, stopReasonSecurityPause); err != nil {
+			log.FromContext(ctx).Error(err, "mark the pod with the stop reason", "pod", p.Name)
+		}
 		// a merge patch of spec.paused only, under the operator's own field manager (#58): with agents from Git, Flux
 		// server-side apply owns the other spec fields and never spec.paused, so the two never fight
 		if err := c.Patch(ctx, &a, patch, client.FieldOwner(OperatorFieldManager)); err != nil {
 			return fmt.Errorf("pause %s: %w", a.Name, err)
 		}
 		log.FromContext(ctx).Info("agent paused by security event", "agent", a.Name, "reason", reason)
+		if c.Recorder != nil {
+			c.Recorder.Event(&a, corev1.EventTypeWarning, "SecurityPaused", reason+": "+msg)
+		}
 	}
 	// the reconciler writes status too: re-read and retry on a conflict so the reason is not lost
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -560,6 +575,81 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 			Reason: reason, Message: msg, ObservedGeneration: a.Generation})
 		return c.Status().Update(ctx, &a)
 	})
+}
+
+// stopReasonAnnotation on an agent pod (#588): why the operator is about to stop it. The loop reads it through the
+// downward API file when it gets SIGTERM and names it in the note of a job that was stopped. Only the operator (or an
+// admin) can set it: the agent container has no service account token.
+const (
+	stopReasonAnnotation    = "agentdev/stop-reason"
+	stopReasonSecurityPause = "security-pause"
+)
+
+func (c *Collector) markStopReason(ctx context.Context, p *corev1.Pod, reason string) error {
+	if p == nil || p.Labels["app"] != "coding-agent" || p.Annotations[stopReasonAnnotation] == reason {
+		return nil
+	}
+	pod := p.DeepCopy()
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[stopReasonAnnotation] = reason
+	return client.IgnoreNotFound(c.Patch(ctx, pod, patch))
+}
+
+// pauseDetail names what a security pause stops (#588): the jobs of the pod that have security events, and the events
+// of the triggering job grouped by source and rule, with the number and the first action (for run-events-invalid, the
+// refused repo and batch). The event just recorded (name) may not be in items yet. Capped: it goes into a condition.
+func pauseDetail(trigger v1.SecurityEventSpec, name string, items []v1.SecurityEvent) string {
+	type group struct {
+		key    string
+		n      int
+		action string
+	}
+	jobs := map[string]bool{}
+	var groups []*group
+	byKey := map[string]*group{}
+	add := func(s v1.SecurityEventSpec) {
+		if s.Job != "" {
+			jobs[s.Job] = true
+		}
+		if s.Job != trigger.Job || (s.Source == "egress" && s.Severity != "high") {
+			return
+		}
+		k := s.Source + "/" + s.Rule
+		g := byKey[k]
+		if g == nil {
+			g = &group{key: k, action: clip(s.Action, 120)}
+			byKey[k] = g
+			groups = append(groups, g)
+		}
+		g.n++
+	}
+	add(trigger)
+	for _, e := range items {
+		if e.Name != name {
+			add(e.Spec)
+		}
+	}
+	names := make([]string, 0, len(jobs))
+	for j := range jobs {
+		names = append(names, j)
+	}
+	sort.Strings(names)
+	js := "none"
+	if len(names) > 0 {
+		js = strings.Join(names, ", ")
+	}
+	ev := make([]string, 0, len(groups))
+	for i, g := range groups {
+		if i == 5 {
+			ev = append(ev, fmt.Sprintf("%d more", len(groups)-i))
+			break
+		}
+		ev = append(ev, fmt.Sprintf("%s x%d (%s)", g.key, g.n, g.action))
+	}
+	return clip("jobs with events in pod: "+js+"; events: "+strings.Join(ev, ", "), 1500)
 }
 
 // countOnce: the key under which repeats of an event count once toward PauseAfter (#577). Only refused run-event
