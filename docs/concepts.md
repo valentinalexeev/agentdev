@@ -74,7 +74,8 @@ carries untrusted text from all earlier rounds.
 ### Run contract (#234)
 
 Issue runs and feedback runs share one set of rules, added after the forge text: read the repository's own
-instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`), stay in the scope of the task, leave CI workflow files to
+instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`), stay in the scope of the task (the docs and changelog
+entry those instructions require count as part of it, #591), leave CI workflow files to
 a person (the sidecar refuses them anyway), report only tests that really ran, and ask instead of guessing when a
 wrong guess is costly. An issue run also gets the issue's comments (fenced, at most `ISSUE_CONTEXT_CHARS`
 characters, default 8000, newest kept), because maintainer decisions often live there.
