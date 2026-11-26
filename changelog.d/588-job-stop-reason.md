@@ -10,12 +10,12 @@ pr: 590
 ---
 ## Summary
 
-A run that ends with class `error` (often exit code 137) now names a `reason` in the job comment and the run log of
-the job record: `security-pause`, `pod-deleted`, `oom` (the cgroup `oom_kill` counter rose) or `unknown`. New Agent
-field `spec.diagnostics.resources` (default off; `intervalSeconds`, default 60) logs the memory and root file system use
-of each run. A security pause names the jobs with events and, per source and rule, the count and first recorded action (never run event text) in the `SecurityPaused`
-condition and a Kubernetes Event `SecurityPaused` on the Agent. The operator's generated Role
-(`images/operator/config/rbac/role.yaml`) gains `events` `create`/`patch`; `manifests/operator.yaml.tmpl` already grants it.
+A run that ends with class `error` names a `reason` in the job comment and run log: `oom` or `unknown`. A job stopped
+by SIGTERM names `security-pause` or `pod-deleted` when it continues on the next pod (preemption, eviction and deadline
+are not detected yet and show as `pod-deleted`). New Agent field `spec.diagnostics.resources` (default off) logs memory
+and disk use of each run. A security pause names its jobs and events (counts, first action; never run event text) in
+the `SecurityPaused` condition and Event. The operator's Role gains `events` `create`/`patch`
+(`manifests/operator.yaml.tmpl` already grants it).
 
 ## Upgrade
 
@@ -24,8 +24,11 @@ condition and a Kubernetes Event `SecurityPaused` on the Agent. The operator's g
 
 ## Description
 
-The operator marks the pod with the annotation `agentdev/stop-reason=security-pause` when it pauses the agent. The
-loop reads it from the downward API file on SIGTERM and writes it to `jobs/stopping`; a SIGTERM without the mark gives
-`pod-deleted`. Without SIGTERM, a rise of `memory.events` `oom_kill` during the run gives `oom`. The values
-`node-preempted`, `evicted` and `deadline` are in the fixed list but no component sets them yet: that needs the operator
-to read the pod's last state and the node conditions before the pod is gone.
+The operator marks the pod with the annotation `agentdev/stop-reason=security-pause` before it pauses the agent. On
+SIGTERM, before it kills the jobs, the loop reads the mark from the downward API file and writes it into the state of
+each running job (`jobs/<job>.stopped`, kept across the restart with the job state of #175); without the mark the
+reason is `pod-deleted`. The job that continues on the next pod posts the reason once to its run log, names it in its
+comment, and removes the file when it succeeds. Without SIGTERM, a rise of `memory.events` `oom_kill` during the run
+gives `oom` (where the sandbox exposes the counter; else `unknown`). The values `node-preempted`, `evicted` and
+`deadline` are in the fixed list but nothing sets them yet: those stops show as `pod-deleted`. Detecting them needs the
+operator to read the pod's last state and the node conditions before the pod is gone.
