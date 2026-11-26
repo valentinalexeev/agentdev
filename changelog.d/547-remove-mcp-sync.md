@@ -3,7 +3,7 @@ issue: 547
 type: removal
 section: Removed
 status: done
-breaking: false
+breaking: true
 title: scripts/mcp-sync.sh is removed; the bootstrap applies an McpProject
 components: [scripts]
 pr: 585
@@ -14,7 +14,8 @@ pr: 585
 `McpProject` for a specification with `mcp:` and waits until the operator reports it `Ready` before it deploys the
 agents. A specification without `mcp:` removes the `McpProject` that an earlier bootstrap made. The allow-list is the
 operator's `mcp_allowed_hosts`. Docs: `docs/admin.md`, "Add MCP servers to a project"; `docs/troubleshooting.md`, MCP tools.
-Not breaking: `scripts/` is not part of the public interface (CLAUDE.md §7), and the script was deprecated in 1.2.0.
+Breaking for operators who call the script directly or keep MCP hosts in `MCP_ALLOWED_HOSTS` of `config.env`,
+which is no longer read: follow the upgrade steps.
 
 ## Upgrade
 
