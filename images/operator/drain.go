@@ -36,7 +36,11 @@ import (
 
 const (
 	drainAnnotation = "agentdev/drain"
-	drainedPrefix   = "AGENTDEV_DRAINED"
+	// drainReasonAnnotation on a pod (#581): why it drains, when it is not a replacement. The agent loop reads it
+	// through the downward API: a job that the drain time of a security pause cuts off is marked "interrupted".
+	drainReasonAnnotation = "agentdev/drain-reason"
+	drainReasonSecurity   = "security-pause"
+	drainedPrefix         = "AGENTDEV_DRAINED"
 	// UpdatedCondition on the Agent: True when the pod runs the current template (or there is no pod).
 	UpdatedCondition = "Updated"
 )
@@ -172,7 +176,7 @@ func (r *AgentReconciler) rollout(ctx context.Context, a *v1.Agent, sts *appsv1.
 		return replace("Forced", fmt.Sprintf("jobs still running after %s: replaced, work in progress saved on the state volume", max))
 	}
 	return 15 * time.Second, metav1.Condition{Type: UpdatedCondition, Status: metav1.ConditionFalse, Reason: "Draining",
-		Message: fmt.Sprintf("waiting for running jobs to end (since %s, at most %s)", since.UTC().Format(time.RFC3339), max),
+		Message:            fmt.Sprintf("waiting for running jobs to end (since %s, at most %s)", since.UTC().Format(time.RFC3339), max),
 		ObservedGeneration: a.Generation}, nil
 }
 
@@ -230,6 +234,7 @@ func (r *AgentReconciler) pauseDrain(ctx context.Context, a *v1.Agent, sts *apps
 		if found && pod.Annotations[drainAnnotation] != "" && (rev == "" || pod.Labels[appsv1.ControllerRevisionHashLabelKey] == rev) {
 			patch := client.MergeFrom(pod.DeepCopy())
 			delete(pod.Annotations, drainAnnotation)
+			delete(pod.Annotations, drainReasonAnnotation)
 			if err := r.Patch(ctx, &pod, patch); client.IgnoreNotFound(err) != nil {
 				return false, 0, fmt.Errorf("unmark pod after resume: %w", err)
 			}
@@ -253,16 +258,22 @@ func (r *AgentReconciler) pauseDrain(ctx context.Context, a *v1.Agent, sts *apps
 		l.Info("security pause: jobs still running after the drain time, stopping the pod (work in progress is saved)")
 		return false, 0, nil
 	}
-	if _, ok := drainSince(&pod); !ok {
+	_, draining := drainSince(&pod)
+	if !draining || pod.Annotations[drainReasonAnnotation] != drainReasonSecurity {
 		patch := client.MergeFrom(pod.DeepCopy())
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		pod.Annotations[drainAnnotation] = strconv.FormatInt(r.now().Unix(), 10)
+		if !draining {
+			pod.Annotations[drainAnnotation] = strconv.FormatInt(r.now().Unix(), 10)
+		}
+		pod.Annotations[drainReasonAnnotation] = drainReasonSecurity // also on a rollout drain under way
 		if err := r.Patch(ctx, &pod, patch); err != nil {
 			return false, 0, fmt.Errorf("mark pod for drain: %w", err)
 		}
-		l.Info("draining the agent before the security pause stops it (no new jobs; running jobs finish)", "pod", pod.Name)
+		if !draining {
+			l.Info("draining the agent before the security pause stops it (no new jobs; running jobs finish)", "pod", pod.Name)
+		}
 	}
 	return true, 15 * time.Second, nil
 }

@@ -310,7 +310,7 @@ start_job() {
     # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
     # skipped). Removed when the job succeeds.
     RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
-    # #581: a security pause stopped this job (its drain time ran out, or a high-severity event came); say so on its
+    # #581: the drain time of a security pause ran out and stopped this job (save_work marked it); say so on its
     # issue or PR, one time. The marker's content is never read (the agent container can write the state volume).
     if (( RESUMING )) && [[ -e "${JOBS}/${key}.interrupted" ]]; then
       log "${key}: this job was interrupted by a security pause"
