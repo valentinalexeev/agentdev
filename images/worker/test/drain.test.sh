@@ -13,12 +13,13 @@ fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fa
 # ---- draining(): only the agentdev/drain annotation counts
 export POD_ANNOTATIONS="${tmp}/annotations"
 # shellcheck disable=SC1090
-source <(sed -n '/^draining() /p' "${loop}")
+source <(sed -n '/^draining() /p; /^security_draining() /p' "${loop}")
 check "no annotations file: not draining" "! draining"
 printf 'agentdev/forge="github"\nkubectl.kubernetes.io/restartedAt="x"\n' > "${POD_ANNOTATIONS}"
 check "other annotations: not draining" "! draining"
 printf 'agentdev/drain="1800000000"\n' >> "${POD_ANNOTATIONS}"
 check "drain annotation: draining" "draining"
+check "drain without a reason: not a security pause (#581)" "! security_draining"
 
 # ---- SIGTERM with a running job: a real loop process (the helper functions of agent-loop.sh and its trap), one job
 # that edits files in its worktree and then waits as if Claude were still running
@@ -61,6 +62,22 @@ check "SIGTERM: the job state stays, so the job continues on the next pod (#175)
 check "SIGTERM: logged" "grep -q 'saved work in progress of 1 job' '${tmp}/log'"
 check "SIGTERM: the stop reason outlives the killed job, for its next run (#588)" \
   "[[ \$(cut -d' ' -f1 '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
+
+check "SIGTERM outside a security pause: the job is not marked interrupted by it (#581)" "[[ ! -e '${STATE}/jobs/issue-7.interrupted' ]]"
+
+# ---- #581: SIGTERM during the drain of a security pause marks the stopped job, and the saved commit names the reason
+printf 'agentdev/drain="1800000000"\nagentdev/drain-reason="security-pause"\n' > "${POD_ANNOTATIONS}"
+sed -e 's/issue-7/issue-9/g' -e "s|${tmp}/started|${tmp}/started9|" "${tmp}/run.sh" > "${tmp}/run9.sh"
+bash "${tmp}/run9.sh" & loop_pid=$!
+for _ in $(seq 50); do [[ -e "${tmp}/started9" ]] && break; sleep 0.2; done
+kill -TERM "${loop_pid}"; wait "${loop_pid}"; rc=$?
+wt="${STATE}/work/agent_alice_issue-9"
+check "security pause: the stopped job is marked interrupted (#581)" "[[ ${rc} == 0 && -e '${STATE}/jobs/issue-9.interrupted' ]]"
+check "security pause: the saved commit names the reason (#581)" \
+  "git -C '${wt}' log -1 --format=%s agent/alice/issue-9 | grep -q 'shutdown (issue-9, interrupted by security pause)'"
+check "security pause: logged per job (#581)" "grep -q 'issue-9: interrupted by security pause' '${tmp}/log'"
+printf 'agentdev/drain="1800000000"\nagentdev/drain-reason="other"\n' > "${POD_ANNOTATIONS}"
+check "another drain reason is not a security pause" "! security_draining"
 
 # ---- a job dir outside the state volume's work tree is never touched
 mkdir -p "${tmp}/elsewhere"; echo x > "${tmp}/elsewhere/f"; git -C "${tmp}/elsewhere" init -q

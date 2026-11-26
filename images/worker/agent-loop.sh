@@ -310,6 +310,13 @@ start_job() {
     # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
     # skipped). Removed when the job succeeds.
     RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
+    # #581: the drain time of a security pause ran out and stopped this job (save_work marked it); say so on its
+    # issue or PR, one time. The marker's content is never read (the agent container can write the state volume).
+    if (( RESUMING )) && [[ -e "${JOBS}/${key}.interrupted" ]]; then
+      log "${key}: this job was interrupted by a security pause"
+      comment "${key#*-}" "🤖 \`${FORGE_USER}\`: a security pause stopped this job before it ended. A person resumed the agent, and the job continues from its saved work in progress." \
+        && rm -f "${JOBS}/${key}.interrupted"
+    fi
     # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
     STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
     STOP_ATTEMPT=1 STOP_DECISION=""; [[ -n "${STOPPED_BEFORE}" ]] && stop_state "${key}"   # #593
@@ -327,7 +334,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,stopped,attempts}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,interrupted,stopped,attempts}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -1794,16 +1801,24 @@ maybe_stop() {
 # annotation (the pod has no service account token).
 POD_ANNOTATIONS="${POD_ANNOTATIONS:-/etc/agentdev/pod/annotations}"
 draining() { [[ -r "${POD_ANNOTATIONS}" ]] && grep -q '^agentdev/drain=' "${POD_ANNOTATIONS}"; }
+# security_draining: the drain is for a security pause (#577), not a replacement. The operator sets
+# agentdev/drain-reason="security-pause" when the drain starts, so the file has it long before the drain time runs out.
+security_draining() { draining && grep -qx 'agentdev/drain-reason="security-pause"' "${POD_ANNOTATIONS}"; }
 # Graceful stop: on SIGTERM (pod deleted, node drained, Spot preemption) start nothing new, stop Claude, and save the
 # work in progress of each running job as a local commit on its job branch (never pushed here). The job state of #175
 # stays, so the job continues on the next pod: it resumes the Claude session and pushes the saved commit with its work.
+# #581: a job that a security pause stops (its drain time ran out) gets the marker <jobs>/<key>.interrupted; the job
+# says so on its issue or PR when it continues, and the saved commit names the reason.
 SAVED_DIRS=()
 save_work() {
-  local f key dir n=0
+  local f key dir n=0 why=""
+  security_draining && why=", interrupted by security pause"
   for f in "${JOBS}"/*.lock; do
     [[ -e "${f}" ]] || continue
     key=${f##*/}; key=${key%.lock}
-    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -r "${JOBS}/${key}.dir" ]] || continue
+    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ ]] || continue
+    [[ -n "${why}" ]] && { : > "${JOBS}/${key}.interrupted"; log "${key}: interrupted by security pause"; }
+    [[ -r "${JOBS}/${key}.dir" ]] || continue
     read -r dir < "${JOBS}/${key}.dir"
     [[ "${dir}" == "${STATE}/work/"* && -d "${dir}" ]] || continue
     ( flock -w 10 9 && scrub_git_config ) 9>"${STATE}/git.lock"
@@ -1811,7 +1826,7 @@ save_work() {
     rm -f "${dir}/.git/index.lock" "$(lgit -C "${dir}" rev-parse --git-dir 2>/dev/null)/index.lock" 2>/dev/null
     lgit -C "${dir}" add -A >/dev/null 2>&1
     if ! lgit -C "${dir}" diff --cached --quiet 2>/dev/null; then
-      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key})" >/dev/null 2>&1 && n=$((n+1))
+      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key}${why})" >/dev/null 2>&1 && n=$((n+1))
     fi
     SAVED_DIRS+=("${key} ${dir}")
   done
