@@ -1,12 +1,7 @@
----
-issue: 593
-type: fix
-section: Fixed
-status: done
-breaking: false
-title: A job stopped by a Spot preemption, drain, scale-down or upgrade pushes its work and is retried, bounded by spec.retries.infrastructure
-components: [operator, worker, forge]
----
+# A job stopped by a Spot preemption, drain, scale-down or upgrade pushes its work and is retried, bounded by spec.retries.infrastructure (#593)
+
+Released in 1.3.0-rc.3 (2026-11-26). Type: fix. Section: Fixed. Components: operator, worker, forge. PR: #594.
+
 ## Summary
 
 A job whose pod is stopped by the infrastructure (pod deleted, Spot preemption, drain, scale-down, upgrade) is retried

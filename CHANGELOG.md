@@ -6,6 +6,69 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
+## [1.3.0-rc.3] - 2026-11-26
+
+### Added
+- **Per-agent Claude Code permission mode (auto) with administrator rules (#500).** `Agent` has `spec.permission`: `mode: dontAsk` (default, as before) or `mode: auto`, with optional classifier rules in
+  `autoMode` (`allow`, `softDeny`, `environment`). In mode `auto` Claude Code's classifier decides a tool call outside the
+  allow-list; with approvals on, a call it blocks still goes to a person. Set it with `agents[].permission` (GKE) or
+  `kind_agents_permission` (kind). Docs: `docs/admin.md`, "Set the permission mode of an agent".
+- **A job that stops without a summary names the reason; optional resource samples; the security pause names its jobs and events (#588).** A run that ends with class `error` names a `reason` in the job comment and run log: `oom` or `unknown`. A job stopped
+  by SIGTERM names `security-pause` or `pod-deleted` when it continues on the next pod (preemption, eviction and deadline
+  are not detected yet and show as `pod-deleted`). New Agent field `spec.diagnostics.resources` (default off) logs memory
+  and disk use of each run. A security pause names its jobs and events (counts, first action; never run event text) in
+  the `SecurityPaused` condition and Event. The operator's Role gains `events` `create`/`patch`
+  (`manifests/operator.yaml.tmpl` already grants it).
+
+### Changed
+- **Definition of done for sandboxed agents, and required docs and changelog count as part of the task (#591).** `AGENTS.md` starts with a short definition of done for sandboxed agents (changelog fragment, docs, Conventional
+  Commits, STE, no scratch files), and `CLAUDE.md` marks the sections that do not apply to them. The run contract of
+  the worker now says that the docs and changelog entry the repository's instructions require are part of the task.
+- **Admin guide section on Spot VMs, preemptions and exit code 137 (#595).** `docs/admin.md` has a section "Spot VMs (GKE)". It tells the effect of a preemption on the system pool and on the agent pool, the other causes of exit code 137, how to find the cause, and what agentdev does to limit the effect.
+
+### Removed
+- **BREAKING** **scripts/mcp-sync.sh is removed; the bootstrap applies an McpProject (#547).** `scripts/mcp-sync.sh` is removed (deprecated since 1.2.0, #383). `scripts/bootstrap-project.sh` now applies an
+  `McpProject` for a specification with `mcp:` and waits until the operator reports it `Ready` before it deploys the
+  agents. A specification without `mcp:` removes the `McpProject` that an earlier bootstrap made. The allow-list is the
+  operator's `mcp_allowed_hosts`. Docs: `docs/admin.md`, "Add MCP servers to a project"; `docs/troubleshooting.md`, MCP tools.
+  Breaking for operators who call the script directly or keep MCP hosts in `MCP_ALLOWED_HOSTS` of `config.env`,
+  which is no longer read: follow the upgrade steps.
+
+### Fixed
+- **e2e-compat.sh no longer fails on an empty SSO argument list under bash 3.2 (#569).** `scripts/e2e-compat.sh` expands an empty `sso_args` array safely under `set -u`, so the compat run works with the
+  bash 3.2 of macOS when no SSO arguments are set.
+- **Security pause follow-ups, interrupted jobs marked and no toolchain reinstall on every pod (#581).** A job that the drain time of a security pause cuts off is marked "interrupted by security pause": the saved commit
+  names the reason, and after resume the job comments on its issue or PR (operator annotation `agentdev/drain-reason`).
+  An unchanged toolchain is no longer reinstalled on each new pod, because the kubelet's fsGroup mode change no longer
+  changes the manifest hash. `docs/admin.md` lists the default egress hosts and explains why a high-severity stop keeps
+  the normal grace period.
+- **A job stopped by a Spot preemption, drain, scale-down or upgrade pushes its work and is retried, bounded by spec.retries.infrastructure (#593).** A job whose pod is stopped by the infrastructure (pod deleted, Spot preemption, drain, scale-down, upgrade) is retried
+  on the next pod from its pushed work, at most `spec.retries.infrastructure` times (new Agent field, default 2; 0: never).
+  A security pause, a deadline and the job's own errors never retry. The comment says, for example, "Interrupted by node
+  preemption, retried (attempt 2 of 3)". On SIGTERM the loop records the reason, then pushes work in progress to
+  `agent/<agent>/wip/<job>` within 20 s. The operator detects the cause from pod conditions and node taints.
+
+### Upgrade
+**#547:**
+1. Find each direct call of `scripts/mcp-sync.sh <spec>` in your runbooks, cron jobs and CI.
+2. Replace each call with `scripts/bootstrap-project.sh <spec>`, the playbook (`mcp_projects`), or an `McpProject` that you apply.
+3. Copy the hosts from `MCP_ALLOWED_HOSTS` in `config.env` to `mcp_allowed_hosts`. On kind, use `kind.vars.yml`. On GKE, use `instance.yml`.
+4. On kind, apply the tags `mcp,operator` again: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp,operator`. On GKE, run the platform playbook again.
+5. Do not rotate the tokens. The operator adopts the `agent-<name>-mcp` Secrets that the script made, because they have the same labels.
+
+If you do not do step 3, the `McpProject` gets the reason `HostNotAllowed`. Then the bootstrap stops after 300 seconds.
+
+**#588:**
+1. Run the deploy playbook as usual: it applies the updated `agents` CRD, which `spec.diagnostics` needs. Without the
+   field nothing changes and agent pods are not restarted.
+
+**#593:**
+1. Run the deploy playbook as usual. It applies the updated `agents` CRD, which `spec.retries` needs, and the new
+   ClusterRole `agentdev-operator-nodes` (`get` on `nodes` only) in `manifests/operator.yaml.tmpl`. Without it the
+   operator cannot read the node and records drains and preemptions only from the pod's conditions.
+2. Nothing else: an Agent without `spec.retries` keeps its pod template (no restart on upgrade) and gets 2 retries.
+   To turn retries off for an agent, set `spec.retries.infrastructure: 0`.
+
 ## [1.3.0-rc.2] - 2026-11-25
 
 ### Added

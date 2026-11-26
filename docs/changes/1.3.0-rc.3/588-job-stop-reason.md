@@ -1,13 +1,7 @@
----
-issue: 588
-type: feature
-section: Added
-status: done
-breaking: false
-title: A job that stops without a summary names the reason; optional resource samples; the security pause names its jobs and events
-components: [operator, worker]
-pr: 590
----
+# A job that stops without a summary names the reason; optional resource samples; the security pause names its jobs and events (#588)
+
+Released in 1.3.0-rc.3 (2026-11-26). Type: feature. Section: Added. Components: operator, worker. PR: #590.
+
 ## Summary
 
 A run that ends with class `error` names a `reason` in the job comment and run log: `oom` or `unknown`. A job stopped
