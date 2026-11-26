@@ -2054,6 +2054,15 @@ When the operator pauses an agent for too many events, the running jobs continue
 not start new jobs. Then the operator stops the pod. The maximum time is `DRAIN_MAX_MINUTES`. When a high severity
 event occurs, the operator stops the pod immediately.
 
+When the drain time of a pause for too many events ends and jobs still run, the operator stops the pod. Each job that
+this stops is marked "interrupted by security pause" (#581): its saved commit names the reason, and when you resume
+the agent, the job writes a comment on its issue or pull request and continues from its saved work.
+
+A stop for a high severity event uses the usual termination grace period of the pod (`AGENT_GRACE_SECONDS`, default
+300 seconds), not a shorter one (#581). On SIGTERM the agent immediately stops all job processes and Claude, so no job
+can push or comment after the stop. The grace period is only for the save of the work in progress as a local commit
+on the state volume. A shorter grace period would lose that work and not stop the agent sooner.
+
 WARNING: Do not resume the agent before you read the events and the issue or the pull request of the job. The text
 of the issue can contain a prompt injection.
 
@@ -2249,9 +2258,10 @@ NOTE: The event shows only the method, the host and the port. The event does not
 
 | Setting | Default | Where |
 |---|---|---|
-| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
+| Allow-list | `api.anthropic.com`, `.github.com`, `.githubusercontent.com`, `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org`, `index.crates.io`, `static.crates.io` (a leading dot also allows the subdomains) | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
+| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`) | Ansible `setup_egress_hosts` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
 | Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
