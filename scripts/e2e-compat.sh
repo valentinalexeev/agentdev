@@ -103,7 +103,7 @@ if [[ "${COMPAT_API:-0}" == 1 ]]; then
   sso_args=(); [[ "${COMPAT_SSO:-1}" == 1 ]] || sso_args=(-e authentik_kind_sso_standin=false)
   platform_log=$(mktemp "${TMPDIR:-/tmp}/e2e-compat-platform.XXXXXX")
   log "mcp and authentik in the background (log at the join)"
-  ( kind_play --tags mcp && kind_play --tags authentik "${sso_args[@]}" ) >"${platform_log}" 2>&1 &
+  ( kind_play --tags mcp && kind_play --tags authentik ${sso_args[@]+"${sso_args[@]}"} ) >"${platform_log}" 2>&1 &
   platform_pid=$!
 fi
 kind_play --tags agents
