@@ -981,7 +981,8 @@ ${stopped:-${summary}}"
 #   blocked         the rules or the environment prevent it; explain, do not push
 RUN_CONTRACT="Rules for this task:
 - Read the repository's own instructions first if they exist (CLAUDE.md, AGENTS.md, CONTRIBUTING.md) and follow them.
-- Do only what the task asks. No unrelated refactoring, formatting or dependency changes.
+- Do only what the task asks. No unrelated refactoring, formatting or dependency changes. The docs, changelog entry
+  and other files that the repository's own instructions require for a change are part of the task.
 - Do not change CI workflow files (.github/workflows/, .gitea/workflows/, .forgejo/workflows/): a person must make
   those changes. If the task needs one, put the exact change in your summary instead.
 - Run the tests that cover your change. Report what you ran and the result; never claim a test passed that you did
