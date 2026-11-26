@@ -4,7 +4,12 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 `valentinalexeev/portfolio-dynamics-lab` (its CLAUDE.md, sections 5a and 5b, and its document 31,
 `docs/technical/31-process-raboty-ii-agenta-s-github.md`) to this project. Where this file is silent, that document applies.
 
-## 0. Starting a session
+**Sandboxed agents** (#591). An agent that runs under the agentdev harness (no `gh` login, no push, the harness
+opens the PR) follows the definition of done at the top of [`AGENTS.md`](AGENTS.md) first. In this file, each
+section heading carries a marker: **[sandbox: skip]** does not apply to it, **[sandbox: partial]** applies only in
+the part the heading names, no marker applies in full.
+
+## 0. Starting a session [sandbox: skip]
 
 1. Read this file.
 2. Load the bot identity: `source ~/.config/github-bot/env.sh`, then check `gh api user -q .login` prints `valentinalexeev-bot`.
@@ -27,7 +32,7 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
 `infra/ansible/kind.example.vars.yml`), `config.env` (knobs of the helper scripts in `scripts/`), `lib.sh` (shared helpers),
 `images/worker/` (the agent loop), `manifests/` (cluster objects), `seed/` (playground repo content).
 
-## 2. Status lives in GitHub Issues only
+## 2. Status lives in GitHub Issues only [sandbox: partial, only STE for text you write and `#NN` in commits]
 
 - Every piece of unfinished work is an issue: a step of the roadmap, a leftover found in a session, an incident.
   "To do later" in code comments, docs or commit messages without an issue link is not allowed.
@@ -47,7 +52,7 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
   it is also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the
   status comment of the umbrella issue (the open issue labelled `roadmap`), without reading the chat.
 
-## 3. Bot and owner
+## 3. Bot and owner [sandbox: skip, the harness sets the identity]
 
 | Action | Bot `valentinalexeev-bot` | Owner `valentinalexeev` |
 |---|---|---|
@@ -86,7 +91,7 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
 - **If the bot token fails** (401): tell the owner and stop the affected work; do not fall back to the owner
   account, do not merge anything.
 
-## 4. Pull requests
+## 4. Pull requests [sandbox: partial, only commit messages, docs and changelog rules]
 
 - **Branch names follow gitflow prefixes**, lower-case, with the issue number:
 
@@ -173,7 +178,7 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
 - After a merge: check other open PRs for conflicts with `main`; merge `main` into them if the conflict is two
   independent additions; ask the owner if it is a semantic conflict.
 
-## 5. Incidents
+## 5. Incidents [sandbox: skip, report a problem in your summary]
 
 An incident is something that already went wrong: red CI on `main`, a leaked or expired secret, an agent that
 damaged work, a broken `infra/ansible/kind.yml` run on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
@@ -206,7 +211,7 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   every `kind.yml` tag and every Ansible role or Terraform module the operator must apply again, not only the main
   one. The author checks that list by applying exactly those tags on a live cluster and says so in the PR.
 
-## Reviewer checklist
+## Reviewer checklist [sandbox: partial, only when you review]
 
 The independent reviewer checks these items on every PR, and lists the result per item in the review:
 
@@ -222,7 +227,7 @@ The independent reviewer checks these items on every PR, and lists the result pe
    Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
    (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
 
-## Coordination and resource limits
+## Coordination and resource limits [sandbox: skip]
 
 Applies when one coordinator session runs several worker agents (#110).
 
@@ -238,7 +243,7 @@ Applies when one coordinator session runs several worker agents (#110).
 - **Questions from workers:** when a worker raises a question for the owner, the coordinator puts it on the issue
   in the §3 *Questions* form and adds `needs-decision`. The worker does not wait silently in chat.
 
-## Bootstrapping on GCP
+## Bootstrapping on GCP [sandbox: partial, only for a bootstrap task]
 
 This repository is the **product**. An instance is deployed from a **separate deployment repository**
 (owner decision, #11), never from here. To set one up, copy `examples/deployment/gcp-gke/` into a new
@@ -246,7 +251,7 @@ repository and follow its README and this repo's `AGENTS.md`. Do not hand-roll d
 instance values (project ids, regions, people, agent lists) into this repository: modules take them as
 required inputs.
 
-## 7. Versioning and releases (strict SemVer)
+## 7. Versioning and releases (strict SemVer) [sandbox: partial, only SemVer and changelog fragments]
 
 - Releases are git tags `vMAJOR.MINOR.PATCH` on the line branch `release/MAJOR.MINOR`, never on `main` or `next/*`
   (ADR 0004). Images are published with the same version (#28). Deployments pin a tag; nothing deploys from a branch.
@@ -274,7 +279,7 @@ required inputs.
 - `CHANGELOG.md`: a fix's fragment goes to the lowest line's `changelog.d/`. A forward merge keeps the released sections
   of lower lines in version order.
 
-### 7a. Milestone and release follow-up (regular, on every monitor check)
+### 7a. Milestone and release follow-up (regular, on every monitor check) [sandbox: skip]
 
 The agent does this on each check of §0 (every `WATCH_POLL_SECONDS`, default 5 minutes), after the owner events.
 Owner request: #354.
