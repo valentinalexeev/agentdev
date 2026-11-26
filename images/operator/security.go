@@ -550,6 +550,12 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 			}
 			a.Annotations[pauseDrainAnnotation] = strconv.FormatInt(c.now().Unix(), 10)
 		}
+		// #588: the loop reads this annotation (downward API) when it gets SIGTERM, and names the cause of a job that
+		// is stopped by the pause. Set before the Agent is paused, so the kubelet can refresh the downward API file
+		// before the reconciler scales the pod down. Best effort: the pause does not depend on it.
+		if err := c.markStopReason(ctx, p, stopReasonSecurityPause); err != nil {
+			log.FromContext(ctx).Error(err, "mark the pod with the stop reason", "pod", p.Name)
+		}
 		// a merge patch of spec.paused only, under the operator's own field manager (#58): with agents from Git, Flux
 		// server-side apply owns the other spec fields and never spec.paused, so the two never fight
 		if err := c.Patch(ctx, &a, patch, client.FieldOwner(OperatorFieldManager)); err != nil {
@@ -558,11 +564,6 @@ func (c *Collector) maybePause(ctx context.Context, p *corev1.Pod, name string, 
 		log.FromContext(ctx).Info("agent paused by security event", "agent", a.Name, "reason", reason)
 		if c.Recorder != nil {
 			c.Recorder.Event(&a, corev1.EventTypeWarning, "SecurityPaused", reason+": "+msg)
-		}
-		// #588: the loop reads this annotation (downward API) when it gets SIGTERM, and names the cause of a job that
-		// is stopped by the pause. Best effort: the pause does not depend on it.
-		if err := c.markStopReason(ctx, p, stopReasonSecurityPause); err != nil {
-			log.FromContext(ctx).Error(err, "mark the pod with the stop reason", "pod", p.Name)
 		}
 	}
 	// the reconciler writes status too: re-read and retry on a conflict so the reason is not lost

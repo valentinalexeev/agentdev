@@ -76,8 +76,9 @@ spec:
                   resources:
                     description: |-
                       Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
-                      container every intervalSeconds while Claude runs, and once at the end of each run. It tells a real OOM kill
-                      from a pause or a pod stop under gVisor, where the Kubernetes signal is not reliable.
+                      container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+                      a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+                      values show as n/a.
                     type: boolean
                 type: object
               effort:

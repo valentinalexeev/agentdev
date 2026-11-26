@@ -84,8 +84,9 @@ type AgentSpec struct {
 // AgentDiagnostics turns on extra records of the agent's jobs (#588). Default off: no extra load.
 type AgentDiagnostics struct {
 	// Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
-	// container every intervalSeconds while Claude runs, and once at the end of each run. It tells a real OOM kill
-	// from a pause or a pod stop under gVisor, where the Kubernetes signal is not reliable.
+	// container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+	// a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+	// values show as n/a.
 	// +optional
 	Resources bool `json:"resources,omitempty"`
 	// Seconds between two samples. Default 60.
