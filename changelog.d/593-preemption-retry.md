@@ -46,6 +46,18 @@ Builds on #588 (#590), which records why a job stopped. This change adds the par
   and a Spot node that is no longer ready. It writes `stop.<agent>` into the `agentdev-usage` ConfigMap, which the agent
   pod already mounts, and the next pod uses it to name a plain `pod-deleted` more precisely.
 
+- **Keep the evidence of an abnormal exit** (addendum). Claude's stderr goes to a per-job file capped at 64 KiB
+  (`jobs/claude-<job>.stderr`, deleted after the run). On any non-zero exit the loop logs one line with the exit
+  status and signal name (137 SIGKILL, 143 SIGTERM), the class and reason, who sent the signal, the run and job wall
+  times, the container's `memory.peak` and `memory.events` `oom_kill` (cgroup v2, v1 fallback, `n/a` when not
+  readable, as under gVisor) and the last 4 KiB of stderr, redacted with the run log's filter (credential shapes and
+  this environment's token values). The same goes to `jobs/<job>.exit` (JSON, state volume, survives log rotation)
+  and as a result run event to the console's job record.
+- **Attribute the worker's own kills** (addendum). Before the SIGTERM handler sends any signal it writes
+  `jobs/<job>.killed` for each running job (`mark_killed`); the exit record and the next pod's stop event then say
+  `killed by worker: <cause>`, and a signal without that mark says `not by the worker`.
+
 Limits: the cause is best effort. When the operator does not see the pod in time (it scans every 15 s) the reason
-stays `pod-deleted`, which is retried all the same. The issue's addendum (stderr tail, signal name and memory figures
-of an abnormal exit; attributing self-inflicted kills) is not part of this change.
+stays `pod-deleted`, which is retried all the same. No run guard such as a job timeout or a budget kill exists in the
+worker yet, so the SIGTERM handler is the only place that marks a kill; a future guard must call `mark_killed` first.
+The memory figures are those of the whole container, not of the Claude process.

@@ -322,6 +322,7 @@ start_job() {
     STOP_ATTEMPT=1 STOP_DECISION=""; [[ -n "${STOPPED_BEFORE}" ]] && stop_state "${key}"   # #593
     [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE}, attempt ${STOP_ATTEMPT}, ${STOP_DECISION})"
     touch "${JOBS}/${key}.active"
+    [[ -s "${JOBS}/${key}.started" ]] || date +%s > "${JOBS}/${key}.started"   # #593: the job's wall time, across pods
     # #593: only an infrastructure kill within spec.retries.infrastructure runs the job again; the job of any other stop
     # ends here with a note (not_retried), and its state is cleared like a finished job's
     if [[ -n "${STOPPED_BEFORE}" && "${STOP_DECISION}" != retry ]]; then set -- not_retried "${key}" "${STOPPED_BEFORE}"; fi
@@ -334,7 +335,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,interrupted,stopped,attempts}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,interrupted,stopped,attempts,started,killed,exit}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -629,7 +630,7 @@ stopped_before() {
   if [[ "${posted}" != posted ]]; then
     r=$(refine_reason "${r}" "${t}")
     a=$(job_attempt "$1" count); d=$(retry_decision "${r}" "${a}")
-    stop_event 137 "${r}" "${a}" "${d}"   # the loop stopped Claude with SIGKILL
+    stop_event 137 "${r}" "${a}" "${d}" "$(killed_by "$1")"   # the loop stopped Claude with SIGKILL
     echo "${r} posted ${a} ${d}" > "${f}"
   fi
   echo "${r}"
@@ -654,10 +655,12 @@ stop_reason() {
 }
 # stop_event <rc> <reason>: the reason in the job's run log (a result event, as when Claude ends with an error), so the
 # console's job record shows it. Best effort, like every run event.
-stop_event() {  # stop_event <rc> <reason> [attempt decision] (#593: the attempt and the retry decision of a stop)
+stop_event() {  # stop_event <rc> <reason> [attempt decision [killed by]] (#593: attempt, retry decision, who killed)
   declare -F run_events_post >/dev/null || return 0
-  local t="exit code $1, reason $2"
+  local sig; sig=$(signal_name "$1")
+  local t="exit code $1${sig:+ (${sig})}, reason $2"
   [[ -n "${3:-}" ]] && t+=", next attempt $3, at most $(( INFRA_RETRIES + 1 )) attempts, ${4:-no-retry}"
+  [[ -n "${5:-}" ]] && t+=", ${5}"
   run_events_post "$(jq -cn --arg s "stopped:$2" --arg t "${t}" \
     '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
 }
@@ -696,6 +699,65 @@ resource_sampler_stop() {
   resource_sample end
   return 0
 }
+# ---------- how the agent process ended (#593 addendum) ----------
+# Kills the worker causes itself: every place of this script that sends a signal to a job or to Claude first calls
+# mark_killed, which writes "<cause>" to <jobs>/<key>.killed (job state of #175, state volume). A non-zero exit then
+# reads it, so a SIGKILL the worker sent is told apart from one from outside (kernel OOM killer, runtime, a person).
+# mark_killed <cause> [key]: the cause for one job, else for each running job
+mark_killed() {
+  local f c=${1//[^A-Za-z0-9 ,.:_()\/-]/}
+  if [[ -n "${2:-}" ]]; then printf '%s %s\n' "$(date +%s)" "${c}" > "${JOBS}/$2.killed"; return 0; fi
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && printf '%s %s\n' "$(date +%s)" "${c}" > "${f%.lock}.killed"; done
+  return 0
+}
+# killed_by <key>: "killed by worker: <cause>" when mark_killed named one for the job, else nothing
+killed_by() {
+  local f="${JOBS}/$1.killed" t c
+  [[ -r "${f}" ]] && read -r t c < "${f}" && [[ "${t}" =~ ^[0-9]{1,12}$ && -n "${c}" ]] && printf 'killed by worker: %s' "${c:0:200}"
+  return 0
+}
+# signal_name <rc>: SIGKILL for 137, SIGTERM for 143 (any rc above 128), else nothing
+signal_name() {
+  [[ "$1" =~ ^[0-9]{1,3}$ ]] && (( $1 > 128 && $1 < 160 )) || return 0
+  local n; n=$(kill -l $(( $1 - 128 )) 2>/dev/null) || return 0
+  [[ -n "${n}" ]] && printf 'SIG%s' "${n#SIG}"
+}
+# STDERR_CAP: bytes of Claude's stderr kept in the per-job file while it runs; STDERR_TAIL: bytes reported at the end
+STDERR_CAP=65536 STDERR_TAIL=4096
+# stderr_tail <file>: the last STDERR_TAIL bytes (whole lines), redacted like the run log (REDACT_JQ), on one line
+STDERR_TAIL_JQ='(if (utf8bytelength) >= ($cap | tonumber) then (split("\n") | .[1:] | join("\n")) else . end)
+  | redact | rtrimstr("\n") | explode | map(select(. == 10 or (. >= 32 and . != 127))) | implode | gsub("\n"; " | ")
+  | until((utf8bytelength) <= ($cap | tonumber); .[((length / 8) | ceil):])'
+stderr_tail() {
+  [[ -s "$1" ]] || return 0
+  local secrets; secrets=$(jq -cn '[env | to_entries[] | select(.key | test("TOKEN|SECRET|KEY|PASSWORD")) | .value | strings]' 2>/dev/null) || secrets='[]'
+  tail -c "${STDERR_TAIL}" "$1" | jq -Rrs --argjson secrets "${secrets}" --arg cap "${STDERR_TAIL}" \
+    "${REDACT_JQ#$'\n'} ${STDERR_TAIL_JQ}" 2>/dev/null
+}
+# exit_record <rc> <class> <reason> <stderr file> <run start>: the evidence of a non-zero exit, in the job log line
+# (stderr, like the other log lines of a run), in <jobs>/<key>.exit (job state, survives the pod's log rotation) and
+# as a result run event (the console's job record). Memory figures are n/a where the cgroup is not readable (gVisor).
+exit_record() {
+  local rc=$1 now sig by peak oom wall job_wall="n/a" t0="" tail txt
+  now=$(date +%s); sig=$(signal_name "${rc}"); by=$(killed_by "${JOB:-none}")
+  [[ -n "${sig}" && -z "${by}" ]] && by="not by the worker"   # #593: no mark_killed before the signal
+  peak=$(cg_value memory.peak memory/memory.max_usage_in_bytes); oom=$(oom_kills); [[ -n "${oom}" ]] || oom=n/a
+  wall=$(( now - $5 ))
+  [[ -r "${JOBS}/${JOB:-none}.started" ]] && read -r t0 < "${JOBS}/${JOB}.started"
+  [[ "${t0}" =~ ^[0-9]{1,12}$ ]] && job_wall="$(( now - t0 ))s"
+  tail=$(stderr_tail "$4")
+  txt="exit ${rc}${sig:+ (${sig})}, class $2${3:+, reason $3}${by:+, ${by}}, run wall ${wall}s, job wall ${job_wall}, memory.peak=${peak}, oom_kill=${oom}"
+  log "claude exited ${txt#exit }; stderr tail: ${tail:-(empty)}" >&2
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 0
+  jq -cn --argjson rc "${rc}" --arg sig "${sig}" --arg c "$2" --arg r "$3" --arg by "${by}" --argjson w "${wall}" \
+    --arg jw "${job_wall%s}" --arg p "${peak}" --arg o "${oom}" --arg e "${tail}" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{time: $t, exit: $rc, signal: $sig, class: $c, reason: $r, killed_by: $by, run_wall_seconds: $w,
+      job_wall_seconds: ($jw | tonumber? // null), memory_peak: $p, oom_kill: $o, stderr_tail: $e}' > "${JOBS}/${JOB}.exit" 2>/dev/null
+  declare -F run_events_post >/dev/null || return 0
+  run_events_post "$(jq -cn --arg s "exit:${sig:-rc${rc}}" --arg t "${txt}; stderr tail: ${tail:-(empty)}" \
+    '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
+}
+# ---------- end how the agent process ended ----------
 
 # stopped_note <rc> <class> [reason]: fixed text for a run where Claude exited non-zero (#336). Only the exit code, the
 # fixed class (error, max-turns, rate-limit) and the fixed reason of #588; never the result text or stderr.
@@ -800,8 +862,10 @@ job_header_env() {
 }
 # ---------- end soft job cost limit ----------
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
-  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler; shift 2
-  err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
+  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler t_run; shift 2
+  # outside the worktree, so `git add -A` can never pick it up; per job, at most STDERR_CAP bytes (#593)
+  err="${STATE}/jobs/claude-${JOB:-$$-${RANDOM}}.stderr"; rm -f "${err}" "${err}.part"
+  t_run=$(date +%s); [[ -n "${JOB:-}" ]] && rm -f "${JOBS:-${STATE}/jobs}/${JOB}.killed"
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
   local pm settings=() cfg="${MCP_CONFIG}" runner=(claude) pflag=(-p "${prompt}")
   pm=$(permission_mode)
@@ -833,17 +897,20 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
           "${margs[@]}" "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
-          "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
+          "${mcp[@]}" 2> >(tail -c "${STDERR_CAP:-65536}" > "${err}.part"; mv -f "${err}.part" "${err}") | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
           exit "${PIPESTATUS[0]}"); rc=$?   # #425 run log: the reader always drains (no SIGPIPE); rc is claude's own
   resource_sampler_stop "${sampler}"
+  local _w; for _w in $(seq 30); do [[ -e "${err}.part" ]] || break; sleep 0.1; done   # the stderr tail is written
+  [[ -e "${err}" ]] || mv -f "${err}.part" "${err}" 2>/dev/null
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
     log "claude output is not stream-json: nothing posted" >&2
     (( rc == 0 )) && rc=1
   fi
-  # stderr is never logged (review #102: with --verbose it can carry transcript or tool output); only the exit code and
-  # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
+  # stderr is never logged raw (review #102: with --verbose it can carry transcript or tool output). #593: on a non-zero
+  # exit, exit_record logs its last STDERR_TAIL bytes redacted like the run log, with the signal, wall time and memory
+  # figures; the class stays fixed. The file is then deleted.
   # The class goes to stderr: stdout of run_claude is the result text that becomes a PR body or comment (#336).
   # The caller gets "<rc> <class>" in ${CLAUDE_EXIT_FILE}, because result=$(run_claude ...) runs in a subshell.
   if [[ ${rc} -ne 0 ]]; then
@@ -863,7 +930,8 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
        == error_max_turns ]] && why="max-turns"
     local reason=""
     if [[ "${why}" == error ]]; then reason=$(stop_reason "${oom0}"); stop_event "${rc}" "${reason}"; fi   # #588
-    log "claude exited ${rc} (${why}${reason:+, reason ${reason}}; stderr not logged)" >&2
+    log "claude exited ${rc} (${why}${reason:+, reason ${reason}})" >&2
+    declare -F exit_record >/dev/null && JOBS="${JOBS:-${STATE}/jobs}" exit_record "${rc}" "${why}" "${reason}" "${err}" "${t_run}"   # #593 addendum
     [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s%s\n' "${rc}" "${why}" "${reason:+ ${reason}}" > "${CLAUDE_EXIT_FILE}"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
@@ -882,13 +950,17 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
 # the sidecar or the API is down, the events are dropped: the job goes on.
 RUN_EVENT_CLIP="${RUN_EVENT_CLIP:-2048}"
 RUN_LOG_MAX="${RUN_LOG_MAX:-2097152}"
-# jq: one stream-json line in, zero or more run events out (compact). The regex is the forge sidecar's secretRe.
-RUN_EVENTS_JQ='
+# jq: the redaction of run output, with $secrets (the token values of this environment). The regex is the forge
+# sidecar's secretRe. #593: the stderr tail of an abnormal exit goes through the same filter.
+REDACT_JQ='
 def redact: gsub("(?<s>(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----))"; "[redacted]")
   | gsub("(?<k>(?i)(password|passwd|secret|token|api[_-]?key|authorization)[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?(bearer\\s+|token\\s+)?)[^\\s\"'"'"',}]{6,}"; "\(.k)[redacted]")
   | gsub("(?<b>(?i)bearer\\s+)[^\\s\"'"'"',}]{12,}"; "\(.b)[redacted]")
   | gsub("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*$"; "[redacted]")
   | reduce ($secrets[] | select(length >= 8)) as $t (.; split($t) | join("[redacted]"));
+'
+# jq: one stream-json line in, zero or more run events out (compact).
+RUN_EVENTS_JQ="${REDACT_JQ}"'
 def clip: if (utf8bytelength) > $clip then .[0:$clip] + " [clipped]" else . end;
 def txt: if type == "string" then . elif type == "array" then [.[] | objects | .text? // empty | strings] | join("\n") else tojson end;
 def now_s: now | todate;
@@ -1859,6 +1931,7 @@ on_term() {
   local deadline=$(( $(date +%s) + TERM_PUSH_SECONDS ))
   log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
   mark_stopped "$(term_reason)"   # #588: the jobs die below before they can name the cause; their next run does
+  mark_killed "SIGKILL from the SIGTERM handler (on_term, kill_tree)"   # #593: before any signal is sent
   # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
   # Claude. The job state (#175) stays: the next pod continues each job.
   local p; for p in $(jobs -p); do kill_tree "${p}"; done
