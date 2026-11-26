@@ -39,7 +39,7 @@ check "counter before not readable: unknown" "[[ \$(stop_reason '') == unknown ]
 printf 'agentdev/stop-reason="security-pause"\n' > "${POD_ANNOTATIONS}"
 echo 1 > "${JOBS}/issue-7.lock"; echo 1 > "${JOBS}/pr-9.lock"
 mark_stopped "$(term_reason)"
-check "each running job gets the reason" "[[ \$(cat '${JOBS}/issue-7.stopped') == security-pause && \$(cat '${JOBS}/pr-9.stopped') == security-pause ]]"
+check "each running job gets the reason" "[[ \$(cut -d' ' -f1 '${JOBS}/issue-7.stopped') == security-pause && \$(cut -d' ' -f1 '${JOBS}/pr-9.stopped') == security-pause ]]"
 check "a job that was not running gets none" "[[ ! -e '${JOBS}/issue-8.stopped' ]]"
 rm -f "${JOBS}"/*.lock
 check "the next run reads it" "[[ \$(stopped_before issue-7) == security-pause ]]"
@@ -56,6 +56,33 @@ check "SIGTERM without a mark: pod-deleted" "[[ \$(stopped_before issue-5) == po
 n=$(interrupted_note security-pause)
 check "interrupted note: reason, SecurityPaused, continued" \
   "[[ \"\${n}\" == 'An earlier run of this job was stopped (reason \`security-pause\`).'*SecurityPaused*'The job continued from its saved work.' ]]"
+
+# ---- #593: retry of infrastructure kills
+export INFRA_RETRIES=2 FORGE_USER=alice AGENT_NAME=alice STOPS_DIR="${tmp}/stops"; mkdir -p "${STOPS_DIR}"
+check "pod-deleted, attempt 2 of 3: retry" "[[ \$(retry_decision pod-deleted 2) == retry ]]"
+check "node-preempted, attempt 3 of 3: retry" "[[ \$(retry_decision node-preempted 3) == retry ]]"
+check "attempt 4 with 2 retries: exhausted" "[[ \$(retry_decision node-preempted 4) == exhausted ]]"
+check "security-pause: never retried" "[[ \$(retry_decision security-pause 2) == no-retry ]]"
+check "deadline: never retried" "[[ \$(retry_decision deadline 2) == no-retry ]]"
+check "oom (the job's own error): never retried" "[[ \$(retry_decision oom 2) == no-retry ]]"
+check "retry note" "[[ \$(retry_note node-preempted 2 retry) == 'Interrupted by node preemption, retried (attempt 2 of 3).' ]]"
+check "the operator's record refines pod-deleted" \
+  "echo 'scale-down 1000' > '${STOPS_DIR}/stop.alice' && [[ \$(refine_reason pod-deleted 1050) == scale-down ]]"
+check "an old record does not" "[[ \$(refine_reason pod-deleted 5000) == pod-deleted ]]"
+check "a pause mark is never refined" "[[ \$(refine_reason security-pause 1050) == security-pause ]]"
+check "a record outside the list is ignored" "echo 'rm-rf 1000' > '${STOPS_DIR}/stop.alice' && [[ \$(refine_reason pod-deleted 1000) == pod-deleted ]]"
+rm -f "${JOBS}"/*.attempts
+check "first stop: next attempt 2" "[[ \$(job_attempt issue-3 count) == 2 && \$(job_attempt issue-3) == 2 ]]"
+echo '$(touch x)' > "${JOBS}/issue-4.attempts"
+check "a forged attempt count is read as 1" "[[ \$(job_attempt issue-4) == 1 ]]"
+# shellcheck disable=SC2034  # read by interrupted_note
+interrupted() { local STOP_DECISION=$1 STOP_ATTEMPT=$2; interrupted_note pod-deleted; }
+check "interrupted note of a retry names the attempt" "[[ \$(interrupted retry 2) == *'Interrupted by a pod deletion, retried (attempt 2 of 3).'* ]]"
+# shellcheck disable=SC1090
+retries() { (INFRA_RETRIES=$1; source <(sed -n '/^INFRA_RETRIES="/,/^INFRA_RETRIES=\$((/p' "${here}/../agent-loop.sh"); echo "${INFRA_RETRIES}"); }
+check "INFRA_RETRIES 0 is kept" "[[ \$(retries 0) == 0 ]]"
+check "INFRA_RETRIES 1+1 falls back to 2" "[[ \$(retries '1+1') == 2 ]]"
+check "INFRA_RETRIES 50 falls back to 2" "[[ \$(retries 50) == 2 ]]"
 
 # ---- stopped_note: the reason and its fixed hint; no reason: the text of #336
 n=$(stopped_note 137 error)

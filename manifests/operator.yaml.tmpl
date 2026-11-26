@@ -62,6 +62,19 @@ metadata: {name: agentdev-operator, namespace: ${AGENTS_NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
 subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
 ---
+# #593: why an agent pod stops (Spot preemption, autoscaler scale-down, drain): read the taints of its node. Nodes are
+# cluster-scoped, so this is the one ClusterRole of the operator: get only, no list or watch.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: agentdev-operator-nodes}
+rules: [{apiGroups: [""], resources: [nodes], verbs: [get]}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: agentdev-operator-nodes}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: agentdev-operator-nodes}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
 # Proxy keys (#381): the operator writes Secrets in the agents namespace only to keep agent-<name>-proxy (the HMAC of
 # the agent name, images/operator/proxykey.go). Its Role allows create and patch on all Secrets there (RBAC cannot
 # narrow them by a name pattern); this policy narrows the writes to agent-*-proxy names, and to agent-*-mcp

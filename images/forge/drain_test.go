@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -22,5 +24,29 @@ func TestDrainedLine(t *testing.T) {
 	}
 	if rec := call(t, h, "GET", "/drained", ""); rec.Code == 204 {
 		t.Fatal("GET accepted")
+	}
+}
+
+// #593: on SIGTERM the sidecar serves until the loop's loop-exit line, or the hold time
+func TestWaitLoopExit(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "wake")
+	if err := os.WriteFile(f, []byte("1 old loop-exit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if waitLoopExit(f, 300*time.Millisecond, 20*time.Millisecond) {
+		t.Fatal("a loop-exit line from before the signal counts")
+	}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		w, _ := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0)
+		_, _ = w.WriteString("2 loop-exit\n")
+		_ = w.Close()
+	}()
+	start := time.Now()
+	if !waitLoopExit(f, 5*time.Second, 20*time.Millisecond) || time.Since(start) > 2*time.Second {
+		t.Fatal("did not return on the loop's line")
+	}
+	if termHold("x") != 25*time.Second || termHold("400") != 25*time.Second || termHold("0") != 0 || termHold("10") != 10*time.Second {
+		t.Fatal("termHold")
 	}
 }
