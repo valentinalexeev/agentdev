@@ -115,8 +115,36 @@ for a in ${AGENTS}; do
 done
 
 log "MCP tools (#14)"
-# before the agents start, so their pods pick up the token Secret and the readiness report covers MCP
-"${SPIKE_DIR}/scripts/mcp-sync.sh" "${spec}"
+# an McpProject that the operator syncs (#383, #547: was scripts/mcp-sync.sh); before the agents start, so their pods
+# pick up the token Secret and the readiness report covers MCP. The allow-list is the operator's MCP_ALLOWED_HOSTS.
+mcpp=$(k -n "${AGENTS_NS}" get mcpproject "${project}" -o json 2>/dev/null) || mcpp=""
+mcp_src=$(jq -r '.metadata.labels["agentdev/mcp-source"] // ""' <<<"${mcpp:-null}")
+if [[ "$(yq -r '.mcp.servers // [] | length' "${spec}")" == 0 ]]; then
+  # the spec dropped mcp: remove what an earlier bootstrap made (the operator revokes the tokens, finalizer)
+  if [[ "${mcp_src}" == bootstrap ]]; then
+    k -n "${AGENTS_NS}" delete mcpproject "${project}" --wait=false >/dev/null
+    ok "no mcp.servers: McpProject ${project} removed"
+  else
+    ok "no mcp.servers in ${spec}: nothing to do"
+  fi
+else
+  [[ "${project}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#project} -le 50 ]] \
+    || die "spec: project '${project}' must be a DNS label of at most 50 characters (the McpProject name)"
+  k -n "${PLATFORM_NS}" get svc contextforge >/dev/null 2>&1 \
+    || die "${spec} has mcp: but ContextForge is not deployed: add the spec to mcp_projects in kind.vars.yml and run ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp (mcp_projects on GKE)"
+  k get crd mcpprojects.agentdev.dev >/dev/null 2>&1 \
+    || die "${spec} has mcp: but the McpProject CRD is not installed: run ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp,operator"
+  # an McpProject the playbook (or GitOps) already manages keeps its source label, so the playbook does not drop it
+  yq -o json '.' "${spec}" | jq --arg ns "${AGENTS_NS}" --arg p "${project}" --arg src "${mcp_src:-bootstrap}" \
+    '{apiVersion:"agentdev.dev/v1alpha1", kind:"McpProject",
+      metadata:{name:$p, namespace:$ns, labels:{"agentdev/mcp-source":$src}},
+      spec:{servers:[.mcp.servers[] | {name, url}], agents:[.agents[].name]}}' \
+    | k apply -f - >/dev/null
+  mcp_ready() { k -n "${AGENTS_NS}" get mcpproject "${project}" -o json | jq -e '.metadata.generation as $g
+    | .status.conditions[]? | select(.type == "Ready" and .status == "True" and .observedGeneration == $g)' >/dev/null; }
+  wait_for 300 "McpProject ${project} Ready (kubectl -n ${AGENTS_NS} describe mcpp ${project} gives the reason)" mcp_ready
+  ok "McpProject ${project}: $(k -n "${AGENTS_NS}" get mcpproject "${project}" -o jsonpath='{.status.tools}')"
+fi
 
 log "4. Agents and webhook"
 [[ "${MAX_CONCURRENT}" =~ ^[0-9]{1,3}$ ]] || die "spec: max_concurrent must be a whole number"

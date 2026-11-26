@@ -33,6 +33,7 @@ The bootstrap does these actions:
   replaces the rule.
 - It adds the labels.
 - It proposes the process pack in a pull request.
+- If the specification has `mcp:`, it applies an `McpProject` and waits until the operator syncs it (#547).
 - It deploys the agents and waits for the **ready** comment of each agent.
 
 Limits of v1:
@@ -901,12 +902,12 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
    `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
 3. Run the playbook (on kind, with the tag `mcp`). The operator syncs the `McpProject`.
    You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
-   NOTE: Since 1.2.0, the operator does the sync (#383). `scripts/mcp-sync.sh <spec>` is deprecated. It stays only
-   because `scripts/bootstrap-project.sh` still runs it. It is removed when the bootstrap writes an `McpProject` (#547).
+   NOTE: The operator does the sync (#383). `scripts/bootstrap-project.sh` also applies the `McpProject` of its
+   specification (#547). `scripts/mcp-sync.sh` is removed.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run the playbook tag `mcp`, the bootstrap stops before it deploys the
-agents. The bootstrap tells you the cause.
+agents. The bootstrap tells you the cause. The bootstrap also stops if the `McpProject` is not `Ready` after 5 minutes.
 
 ### Give agents the observability tools
 

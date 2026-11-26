@@ -118,7 +118,7 @@
   loop_control: {label: "{{ item.kind }}/contextforge"}
   when: not platform_contextforge_enabled | bool
 
-- name: Find MCP token Secrets of the agents (made by the operator or mcp-sync)
+- name: Find MCP token Secrets of the agents (made by the operator, or by scripts/mcp-sync.sh before 1.2.0)
   kubernetes.core.k8s_info:
     context: "{{ kube_context }}"
     kind: Secret
