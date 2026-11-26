@@ -748,10 +748,49 @@ NOTE: To change the `service` label, set `service` in `labels`.
 NOTE: The `labels` field of a notification channel is its configuration (`email_address`), not resource labels. A tag
 scanner that reads it reports a false positive.
 
-## Spot system pool (GKE)
+## Spot VMs (GKE)
 
-The system pool runs the router, the operator, the UI and the proxies. On GKE it can run on Spot VMs to cut its cost
-by about 60-70%. Spot is off by default.
+On GKE, agentdev can run its node pools on Spot VMs. A Spot VM costs about 60-70% less than a normal VM. Google can
+stop a Spot VM at any time, with about 30 seconds of notice. This is a preemption (also "reclaim"). Two settings in
+the deployment repository control the pools:
+
+- `system_pool_spot`: the system pool (router, operator, API, UI, proxies). Off by default.
+- `agent_pool_spot`: the agent pool (the pods of the agents and their jobs).
+
+### What Spot VMs change
+
+A preemption gives a different effect for each pool.
+
+| Node that Google stops | Effect |
+|---|---|
+| System node | The platform is down until the pool has a new node, usually about 1 minute. Webhooks sent in this time are lost. Each agent finds its work at the next poll (`poll_seconds`). |
+| Agent node | Each job on the node stops. The issue or pull request gets a comment that says the job was interrupted by a node preemption. The operator starts the job again, up to the retry limit (see "How agentdev limits the effect"). <!-- #594 --> |
+| Agent node, then no new node | The agent pod stays `Pending`. The reason is `FailedScheduling`. See "Agents stay Pending". |
+
+NOTE: A node upgrade has the same effect on the pods of the node as a preemption. GKE restarts the pods of each
+node, one node at a time.
+
+The agent volume stays when its node stops, because it is a separate disk. Do not trust work that the agent did not
+push to the forge. A job that did not finish does not continue on its own.
+
+#### Agents stay Pending
+
+The agent volume is a zonal disk. The agent pod can start only on a node in the zone of its volume. If this zone has
+no Spot capacity, GKE cannot make a node, and the pod stays `Pending`. This can take many hours. The agent starts
+no job in this time.
+
+#### Other causes of exit code 137
+
+Exit code 137 means that the process got SIGKILL. A preemption is only one cause. Other causes are:
+
+- a security auto-pause of the agent (`agent paused by security event` in the operator log)
+- a scale-down of the agent pool by the cluster autoscaler
+- a pod replaced during an upgrade
+- a memory limit of the pod (an out-of-memory kill)
+
+The comment on the issue shows the reason when agentdev can find it, for example `security-pause`, `node-preempted` or
+`oom`. <!-- #588 #590 --> If the comment shows `unknown` or `pod-deleted`, or only the exit code, use the next
+task to find the cause.
 
 ### Run the system pool on Spot VMs
 
@@ -772,6 +811,109 @@ by about 60-70%. Spot is off by default.
 NOTE: The platform components have one replica each, so no PodDisruptionBudget is set: a budget with one replica
 blocks node upgrades, and a Spot preemption does not respect it. The router has a readiness probe, so the Service
 sends traffic only to a ready pod.
+
+### How agentdev limits the effect
+
+agentdev 1.3.0-rc.3 has these measures. They reduce the loss from a preemption. They do not prevent it.
+
+1. **Drain before an upgrade.** The operator replaces an agent pod only when the agent has no running job, for at most
+   `rollout.drain_max_minutes`. This protects jobs from an upgrade of agentdev. It does not protect them from a
+   preemption, because Google gives no time to drain. (See "What happens to running jobs during an upgrade".)
+2. **The reason of a stop is recorded.** When a job ends without a summary, the comment and the job record show a
+   reason. The operator finds the reason before the pod is gone:
+
+   | Reason | Meaning | Job starts again |
+   |---|---|---|
+   | `node-preempted` | Google stopped the Spot node (the node shut down). | yes |
+   | `drain`, `scale-down` | A node drain or the cluster autoscaler evicted the pod. | yes |
+   | `upgrade` | agentdev replaced the pod during an upgrade. | yes |
+   | `pod-deleted` | The pod was deleted and agentdev cannot tell why. | yes |
+   | `security-pause` | The operator paused the agent. | no |
+   | `deadline`, `oom`, `evicted`, `unknown` | The job ended for its own reason, or agentdev cannot tell. | no |
+
+   <!-- #588 #590 #594 -->
+   For a `security-pause`, the `SecurityPaused` condition and the Kubernetes Event name the jobs and the events that
+   caused the pause.
+3. **The agent pushes its work when the pod stops.** On SIGTERM, the worker records the reason, stops the jobs, and
+   saves the work in progress as a commit. It pushes the commit to the branch `agent/<agent>/wip/<job>`, for at most
+   20 seconds (`TERM_PUSH_SECONDS`). This fits the 30 seconds of notice of a Spot VM. A job that resumes also pushes
+   its work before each Claude run, when the forge lacks commits. <!-- #594 -->
+
+   NOTE: The work in progress goes only to the `wip/` branch. It never reaches the job branch or a pull request. A
+   job that starts again on a new pod continues from the `wip/` branch if its volume has no copy.
+4. **The operator starts the job again after an infrastructure stop.** The job continues on the next pod, up to
+   `spec.retries.infrastructure` attempts (default 2, range 0 to 10). The comment shows the attempt, for example
+   "Interrupted by node preemption, retried (attempt 2 of 3)". When all attempts are used, the job ends. The comment
+   names the `wip/` branch, and the issue is marked as done. <!-- #594 -->
+
+   WARNING: A job that a security pause stopped never starts again. Set the limit with care: a job that stops again
+   and again can use the budget of the agent.
+5. **The end of the agent process is recorded.** When the agent process ends with an error, the worker writes one log
+   line, the file `jobs/<job>.exit` (JSON) and a run event for the job record. They have:
+   - the exit status and the signal, for example `137 (SIGKILL)`
+   - who sent the signal: `killed by worker: <cause>`, or `not by the worker`
+   - the run time and the job time
+   - `memory.peak` and the `oom_kill` count of the container (`n/a` if the node does not show them, for example under
+     gVisor)
+   - the last 4 KiB of the error output, with secrets removed <!-- #594 -->
+
+   NOTE: The memory figures are for the whole container, not for the Claude process, and only at the end of the
+   run. If the kernel kills the whole container, the loop dies too. No record is written in this case.
+
+To record the memory use of the agent container during a job, set `spec.diagnostics.resources: true`. It is off by
+default, and it adds no load when it is off. <!-- #588 -->
+
+#### Upgrade to 1.3.0-rc.3
+
+The deployment playbook applies the new Agent field and a new ClusterRole `agentdev-operator-nodes`. The role has
+only `get` on `nodes`. Without it, the operator finds the reason from the pod condition alone. An Agent without
+`spec.retries` keeps its pod template and gets 2 attempts. <!-- #594 -->
+
+### Find out if a preemption stopped a job
+
+Do this task when a job ends with exit code 137.
+
+1. Write down the time of the comment on the issue or pull request.
+2. Show the preemptions of the last two days. Replace `PROJECT` with the Google Cloud project:
+   `gcloud logging read 'logName="projects/PROJECT/logs/cloudaudit.googleapis.com%2Fsystem_event" AND protoPayload.methodName="compute.instances.preempted"' --project PROJECT --freshness=2d --format='value(timestamp,resource.labels.instance_id)'`
+3. Compare the times. A preemption a few minutes before the comment is the likely cause.
+4. If there is no preemption, look for a security pause:
+   `kubectl -n agentdev-platform logs deploy/agentdev-operator | grep 'paused by security event'`
+5. If there is also no pause, look at the node events:
+   `kubectl get events -A --field-selector reason=ScaleDown`
+
+NOTE: The Compute log keeps the preemptions of the project. The Kubernetes events stay for about 1 hour. Look for the
+cause soon after the job ends.
+
+### Get an e-mail for each preemption
+
+The example deployment has log-based metrics and two alerts: one for a security auto-pause and one for a Spot
+preemption. They send e-mail to `budget_alert_emails`.
+
+1. In the deployment repository, set `enable_diagnostic_alerts = true`.
+2. Make sure that `budget_alert_emails` has the address of the administrator.
+3. Run `terraform plan` and `terraform apply`.
+
+The alert for a preemption has a limit of one e-mail each hour.
+
+### Reduce the effect of preemptions
+
+Choose the options that fit the cost target of the instance.
+
+- Run the system pool on normal VMs. Set `system_pool_spot = false`. The platform no longer stops when Google
+  reclaims a node. The cost of the system pool increases.
+- Run the agent pool on normal VMs. Set `agent_pool_spot = false`. Jobs are no longer stopped by a preemption, and
+  agents do not wait for Spot capacity. The cost of each agent hour increases.
+- Make the system nodes larger with `system_machine_type`, if the nodes have too little memory (`kubectl top nodes`).
+- Keep `spec.retries.infrastructure` at its default of 2, or set it higher for an agent on Spot VMs. <!-- #594 -->
+- Give each issue a task of a size that a job can finish in a short time. A short job loses less in a preemption.
+
+CAUTION: A change of `system_pool_spot` or `agent_pool_spot` replaces the node pool. The platform, or the agents
+of the pool, are down until the new nodes are ready. Do the change when no job runs. Run `terraform plan` first and
+read which pool it replaces.
+
+NOTE: This work is a spending change. Put it in a pull request of the deployment repository and let the owner
+approve it.
 
 ### Make the system pool smaller
 
