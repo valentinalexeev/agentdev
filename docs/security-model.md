@@ -85,6 +85,7 @@ AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medi
 | forge | `api-not-allowed` | medium | REST call outside the allow-list (merge, edit, hooks, ...) |
 | forge | `api-non-loopback` | high | a caller from outside the pod reached the localhost API |
 | forge | `chat-label-not-asked` | high for `agent:*`, else medium | a console chat pod sent a label write that no person allowed in the console (#571, ADR 0011) |
+| forge | `chat-not-allowed` | medium | a console chat pod tried a write that a chat never makes: label removal, comment edit, ready for review (#236) or the gated merge (#578) |
 | forge | `webhook-bad-token` | medium | wake call with a wrong token |
 | loop | `git-worktree-redirected` | high | a worktree `.git` or `commondir` pointed elsewhere (re-pinned) |
 | loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |

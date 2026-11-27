@@ -38,4 +38,4 @@ pins the head (`sha`) and always uses `merge_method: merge` (a `MERGE_METHOD` ot
 cannot choose the approver or the method. A PR that is not ready (a check pending) gets HTTP 409 without an event;
 the loop asks again on its next pass. On Gitea the sidecar cannot tell a person from another agent's account, so it
 refuses explicitly: no endpoint. A console chat pod never merges: the API drops `MERGE_*` from its sidecar, and the
-sidecar refuses `POST /merge` with `CHAT_SESSION` set before any forge call (`chat-label-not-asked`).
+sidecar refuses `POST /merge` with `CHAT_SESSION` set before any forge call (`chat-not-allowed`).

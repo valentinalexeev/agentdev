@@ -400,7 +400,7 @@ func TestMergeRefusedInChat(t *testing.T) {
 	if calls != 0 || len(f.merged) != 0 {
 		t.Fatalf("github chat merge reached the forge: %d calls, merged %v", calls, f.merged)
 	}
-	if r := eventRules(&out); len(r) != 1 || r[0] != "chat-label-not-asked/medium" {
+	if r := eventRules(&out); len(r) != 1 || r[0] != "chat-not-allowed/medium" {
 		t.Fatalf("events %v, want the chat refusal", r)
 	}
 	if _, err := s.mergePR(context.Background(), "pr-20", "20"); err == nil || calls != 0 {
@@ -420,7 +420,7 @@ func TestMergeRefusedInChat(t *testing.T) {
 		t.Fatalf("gitea chat merge: %d, want 404", grec.Code)
 	}
 	var pe *policyError
-	if _, err := gs.mergePR(context.Background(), "pr-1", "1"); !errors.As(err, &pe) || pe.rule != "chat-label-not-asked" {
+	if _, err := gs.mergePR(context.Background(), "pr-1", "1"); !errors.As(err, &pe) || pe.rule != "chat-not-allowed" {
 		t.Fatalf("gitea mergePR in a chat: %v", err)
 	}
 	if gcalls != 0 {
