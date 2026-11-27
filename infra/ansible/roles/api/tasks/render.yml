@@ -23,7 +23,8 @@
       - api_chat_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
     fail_msg: >-
       api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents(_per_user) and
-      api.chat.* whole numbers, api.chat.models opus, sonnet, haiku, fable or claude-<family>-..., api.chat.efforts low..max, notifications.channels webpush only (example.vars.yml)
+      api.chat.* whole numbers, api.chat.models opus, sonnet, haiku, fable or claude-<family>-...,
+      api.chat.efforts low..max, notifications.channels webpush only (example.vars.yml)
     quiet: true
 
 - name: Render the Job agentdev-db-init (roles, database, schema, retention, grants)
