@@ -931,6 +931,35 @@ Do this task when a job ends with exit code 137.
 NOTE: The Compute log keeps the preemptions of the project. The Kubernetes events stay for about 1 hour. Look for the
 cause soon after the job ends.
 
+### Get an e-mail for each preemption
+
+Do this task to get an e-mail when Google reclaims a Spot node or when the operator pauses an agent for a security
+event. Both stop running jobs with exit code 137. This task is optional and off by default.
+
+1. In the deployment repository, copy `terraform/monitoring.tf` from `examples/deployment/gcp-gke/` of the pinned
+   agentdev release.
+2. In `terraform/instance.tfvars`, set `enable_diagnostic_alerts = true`. Make sure that `budget_alert_emails` has
+   the e-mail addresses that get the alerts.
+3. Optional: to also record the exit code and the last terminated reason of each container (kube-state-metrics), set
+   `monitoring_components = ["SYSTEM_COMPONENTS", "POD", "STATEFULSET"]`. In `terraform/main.tf`, remove the comment
+   mark from the line `monitoring_components = var.monitoring_components` in the module block.
+4. Run `terraform plan` and `terraform apply`.
+
+Result:
+
+- Four log-based metrics: `agentdev_security_pause`, `agentdev_node_preempted`, `agentdev_node_scale_down` and
+  `agentdev_agent_pod_pending`.
+- Two alert policies, for Spot preemptions and for security auto-pauses. Each policy sends at most one e-mail per
+  hour to each address in `budget_alert_emails`. An incident closes after 30 minutes.
+- The automation account gets two more roles: `roles/logging.configWriter` (log-based metrics) and
+  `roles/monitoring.alertPolicyEditor` (alert policies).
+
+NOTE: The security auto-pause filter uses the namespace `agentdev-platform`. If the instance uses a different platform
+namespace, change the filter in `monitoring.tf`.
+
+To stop the e-mails, set `enable_diagnostic_alerts = false`, then plan and apply. This removes the metrics, the alert
+policies, the notification channels and the two roles.
+
 ### Reduce the effect of preemptions
 
 Choose the options that fit the cost target of the instance.
@@ -972,6 +1001,57 @@ To keep an add-on, set the Terraform input in the deployment repository:
 
 NOTE: `gateway_enabled = false` with a `public_hosts` value is refused by Terraform. The managed certificate and the
 Gateway need the GKE load balancer.
+
+## Stop and start an instance (GKE)
+
+You can stop a GKE instance when nobody uses it for some days (#313). The cluster, the data and the configuration
+stay. Only the nodes of the system pool stop.
+
+What stays billed while the instance is stopped:
+- The GKE control plane (the cluster management fee).
+- The persistent disks of the PVCs (agent workspaces, Postgres).
+- Static IP addresses and the load balancer, if `public_hosts` is set.
+- The Terraform state bucket and Secret Manager.
+
+What stays: PVCs, Secrets, ConfigMaps and all Kubernetes objects. Only the replica counts change.
+
+CAUTION: While the instance is stopped, agents do not work and webhooks are lost. Polling finds the missed work
+after the start.
+
+### Stop the instance
+
+1. Make sure that `kubectl` uses the instance cluster:
+   `gcloud container clusters get-credentials agentdev --zone <zone> --project <project>`
+2. Run the stop script from an agentdev checkout:
+   `ZONE=<zone> PROJECT=<project> scripts/cluster-stop.sh`
+   The script shows the cluster, the zone and the project. Type `yes` to continue. Any other answer stops the
+   script, and nothing changes. For automation, add `--yes` or set `ASSUME_YES=1` to skip the question.
+3. Make sure that the last line is `stopped: pool system has 0 nodes, no running pods.`
+4. Keep the file `agentdev-stopped-state.env`. It is a copy of the ConfigMap `kube-system/agentdev-stopped-state`.
+5. In the deployment repository, set `system_pool_min_nodes = 0` in `terraform/instance.tfvars`.
+   Merge this change before the next `terraform apply`. If you do not do this step, the next apply sets the
+   autoscaler minimum to 1 again, and one node starts.
+
+The script does these steps:
+1. It records the replicas of all Deployments and StatefulSets in `agentdev-platform`, `coding-agents` and
+   `agentdev-executors`, and the autoscaling of the system pool.
+2. It scales the operator to 0 first, then the webhook router, then all other workloads.
+3. It disables the autoscaling of the system pool and resizes the pool to 0. It tries again until the pool has
+   0 nodes (`RETRIES`, default 10).
+4. It makes sure that no pod runs. If a check fails, it exits 1.
+
+NOTE: The script refuses to stop a stopped instance. Start it first.
+
+### Start the instance
+
+1. In the deployment repository, remove `system_pool_min_nodes = 0` (or set 1). Merge the change.
+2. Run the start script:
+   `ZONE=<zone> PROJECT=<project> scripts/cluster-start.sh`
+3. The script resizes the system pool, restores its autoscaling, and restores the replicas. The operator starts
+   last. Then the script deletes the ConfigMap.
+4. Make sure that the pods run: `kubectl -n coding-agents get pods`
+
+NOTE: If the ConfigMap is not there, the start script reads `agentdev-stopped-state.env` (`STATE_FILE`).
 
 ## Agent dashboard (botboard)
 
@@ -3114,6 +3194,11 @@ Do this task before maintenance of a node, for example.
 2. Look for the line `drain requested: no new jobs` in `kubectl -n coding-agents logs agent-<name>-0 -c agent`.
 3. If the pod has the current template, it stays drained. To end the drain, remove the annotation:
    `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`
+
+NOTE: During an upgrade, agent pods of the old version run next to the new platform. agentdev supports this for
+one MINOR step ([ADR 0006](adr/0006-mixed-version-compatibility.md)).
+
+agentdev supports an upgrade of one MINOR version at a time, for example 1.1 to 1.2, then 1.2 to 1.3.
 
 ### Show the plan on deployment pull requests
 

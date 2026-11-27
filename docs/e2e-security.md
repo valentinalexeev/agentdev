@@ -13,8 +13,8 @@ Secrets or policies, and it does not pause an agent. It does these writes only:
   with source `egress`. Egress events do not pause an agent.
 - One refused `POST /usage` from the agent container. The script skips this check when the pod has almost
   `SECURITY_PAUSE_AFTER` events.
-- With `--github`: one test issue, the pull request of the agent and one review comment. At the end, the script
-  closes the issue and the pull request and deletes the branch.
+- With `--github` or `--gitea`: one test issue, the pull request of the agent and one change-request review. At the
+  end, the script closes the issue and the pull request and deletes the branch.
 
 The script does not show secret values. It compares only the names of environment variables.
 
@@ -38,8 +38,20 @@ If your own reverse proxy publishes the instance (`ingress.mode: external`, #160
 `--auth-host <auth host>` to make sure that authentik publishes the correct issuer and accepts the UI callback.
 In external mode, the script does not examine the HTTP redirect and the TLS version. It shows them as `MANUAL`.
 
-The GitHub check (#2) takes up to 30 minutes for each step. To change this time, use `--github-timeout <minutes>`.
+The GitHub check (#2) and the Gitea check (#216) take up to 30 minutes for each step. To change this time, use `--github-timeout <minutes>`.
 To do only some sections, use `--only egress,claude`.
+
+### Do the Gitea check
+
+The `gitea` section does the same steps as the `github` section on a Gitea repository (#216). The script assigns the
+issue to the agent (on Gitea, an assignment gives work) and does not use a label.
+
+1. Make the Gitea API available on your computer. On kind: `kubectl -n forge port-forward svc/gitea 3000:3000`.
+2. Give the credential of your Gitea account (the `--owner` account). Use one of these:
+   - `E2E_GITEA_TOKEN`: a token with the scopes `write:issue` and `write:repository`.
+   - `FORGE_ADMIN_USER` and `FORGE_ADMIN_PASSWORD` (the kind default; `config.env`).
+3. Run the section:
+   `scripts/e2e-gke-security.sh --kind --only gitea --gitea <owner>/<repo> --owner <your Gitea login> --gitea-url http://localhost:3000`
 
 Then do the `MANUAL` checks that the script shows. Use a private browser window and test accounts. Do not change
 real users.
@@ -65,7 +77,8 @@ issue in agentdev. A `FAIL` blocks the release, unless the owner records an acce
 | `api` | no token or a forged token gives 401; a decision without a person's token gives 401; a reader gets 403 for a change and for the audit | R42, R90 |
 | `chat` | NetworkPolicy `chat-session-server` lets only `agentdev-api` reach port 7681; a live probe from the agent pod to a running console chat pod is refused (GKE; kind does not enforce NetworkPolicy); server dry runs as `system:serviceaccount:<platform>:agentdev-api`: a chat Job of the right shape is allowed, a Job with another image, another Secret or added capabilities is denied by `agentdev-api-chat-jobs`, and so is a Job whose projected `claude-proxy` token has an `expirationSeconds` other than 600 or is mounted in a container other than `chat` (`forge`, the `state-init` clone step, #416), and deleting a non-console Job is denied by `agentdev-api-chat-jobs-delete` (the script makes a suspended dummy Job for this and removes it). The kind e2e (`scripts/e2e-compat.sh` with `COMPAT_API=1`) runs this section | R101 |
 | `sso` | the SSO source is configured. MANUAL: a user outside the Workspace domain or the admin group is refused (#134) | |
-| `github` | the agent takes the labelled issue, opens a pull request with you as reviewer, and replies to your review (#2) | |
+| `github` | the agent takes the labelled issue, opens a pull request with you as reviewer, replies to your change request and pushes a new commit (#2, #216) | |
+| `gitea` | the same as `github` on Gitea: the agent takes the assigned issue, opens a pull request with you as reviewer and the label `agent:<name>`, replies to your change request and pushes a new commit (#216) | |
 
 ## Use the script on kind
 

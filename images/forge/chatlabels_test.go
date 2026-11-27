@@ -95,6 +95,8 @@ func TestChatLabelsGitHub(t *testing.T) {
 
 	refused := []struct{ name, p, b, sev string }{
 		{"nobody allowed it", "/api/v1/repos/octo-org/repo/issues/12/labels", `{"labels":["wontfix"]}`, "medium"},
+		// #236: the loop's allow-list (needs-decision, in-progress) gives a chat pod nothing without a person
+		{"loop allow-list label nobody allowed", "/api/v1/repos/octo-org/repo/issues/12/labels", `{"labels":["needs-decision"]}`, "medium"},
 		{"agent label nobody allowed", "/api/v1/repos/octo-org/repo/issues/13/labels", `{"labels":["agent:alice"]}`, "high"},
 		{"agent label, case", "/api/v1/repos/octo-org/repo/issues/13/labels", `{"labels":["Agent:alice"]}`, "high"},
 		{"allowed set plus one", "/api/v1/repos/octo-org/repo/issues/12/labels", `{"labels":["bug","triage","x"]}`, "medium"},
@@ -212,5 +214,80 @@ func TestReleaseReads(t *testing.T) {
 		if rec := call(t, c.h, "GET", "/api/v1/repos/other/repo/tags", ""); rec.Code != http.StatusForbidden {
 			t.Errorf("%s: other repo tags: want 403, got %d", name, rec.Code)
 		}
+	}
+}
+
+// #236 review: a chat pod never removes labels, edits comments or marks a PR ready (no console allow covers them);
+// each try is refused before the forge is written and raises the chat refusal event. Both drivers.
+func TestChatNoLoopWrites(t *testing.T) {
+	var events bytes.Buffer
+	old := eventOut
+	eventOut = &events
+	t.Cleanup(func() { eventOut = old })
+	api, asked := fakeChatAPI(t, map[string]bool{})
+
+	check := func(t *testing.T, name string, rec int, writes []string) {
+		t.Helper()
+		if rec != http.StatusForbidden {
+			t.Errorf("%s: want 403, got %d", name, rec)
+		}
+		for _, w := range writes {
+			t.Errorf("%s: a write reached the forge: %s", name, w)
+		}
+		if !strings.Contains(events.String(), `"rule":"chat-label-not-asked"`) {
+			t.Errorf("%s: no chat refusal event: %s", name, events.String())
+		}
+	}
+
+	t.Run("github", func(t *testing.T) {
+		d, _, calls := newTestGitHub(t)
+		d.c.ChatSession, d.c.APIURL = testChatSession, api.URL
+		s := newServer(d.c)
+		s.drv, s.rules = d, d.rules()
+		h := s.routes()
+		base := "/api/v1/repos/octo-org/repo"
+		for _, c := range []struct{ name, m, p, b string }{
+			{"remove in-progress", "DELETE", base + "/issues/12/labels/in-progress", ""},
+			{"remove needs-decision", "DELETE", base + "/issues/12/labels/needs-decision", ""},
+			{"edit own signed comment", "PATCH", base + "/issues/comments/501", `{"body":"x"}`},
+			{"ready own PR", "POST", base + "/pulls/14/ready_for_review", ""},
+		} {
+			events.Reset()
+			n := len(calls())
+			code := call(t, h, c.m, c.p, c.b).Code
+			var w []string
+			for _, x := range calls()[n:] {
+				if x.method != "GET" && !strings.Contains(x.path, "access_tokens") {
+					w = append(w, x.method+" "+x.path)
+				}
+			}
+			check(t, c.name, code, w)
+		}
+	})
+	t.Run("gitea", func(t *testing.T) {
+		forge, calls := fakeGitea(t)
+		s := newServer(&Config{ForgeURL: forge.URL, ForgeUser: "alice", Token: "s3cret", Repos: []string{"owner/repo"},
+			ChatSession: testChatSession, APIURL: api.URL})
+		h := s.routes()
+		base := "/api/v1/repos/owner/repo"
+		for _, c := range []struct{ name, m, p, b string }{
+			{"remove needs-decision (by id)", "DELETE", base + "/issues/3/labels/1", ""},
+			{"edit own comment", "PATCH", base + "/issues/comments/11", `{"body":"x"}`},
+			{"ready own PR", "POST", base + "/pulls/7/ready_for_review", ""},
+		} {
+			events.Reset()
+			n := len(calls())
+			code := call(t, h, c.m, c.p, c.b).Code
+			var w []string
+			for _, x := range calls()[n:] {
+				if !strings.HasPrefix(x, "GET ") {
+					w = append(w, x)
+				}
+			}
+			check(t, c.name, code, w)
+		}
+	})
+	if len(asked()) != 0 {
+		t.Errorf("these calls must not ask the console: %v", asked())
 	}
 }
