@@ -439,12 +439,13 @@ permission_mode() {
 }
 # Model and effort (#564): the operator sets AGENT_MODEL and AGENT_EFFORT from the Agent's spec.model and spec.effort,
 # never from the repository or issue text. Unset: no flag, the CLI's own default. A value that does not pass the same
-# check as the operator gets no flag and a log line (a model name never starts with a dash, so it is never a flag).
+# check as the operator gets no flag and a log line (#570: only a claude-proxy price family, so a typo never counts at
+# the highest multiplier, and a model name never starts with a dash, so it is never a flag).
 # model_args: prints one argument per line: --model <m> and --effort <e>, each only when set and valid.
 model_args() {
-  local re='^[A-Za-z0-9][]A-Za-z0-9._:@[-]*$'   # the operator's modelChars; "]" first and "-" last in the class
+  local re='^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$'   # the operator's modelChars
   if [[ -n "${AGENT_MODEL:-}" ]]; then
-    if [[ ${#AGENT_MODEL} -le 100 && "${AGENT_MODEL}" =~ ${re} ]]; then
+    if [[ ${#AGENT_MODEL} -le 80 && "${AGENT_MODEL}" =~ ${re} ]]; then
       printf '%s\n' --model "${AGENT_MODEL}"
     else log "AGENT_MODEL is not a model name: running with the CLI's default model" >&2; fi
   fi
