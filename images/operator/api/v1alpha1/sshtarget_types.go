@@ -5,7 +5,7 @@ import (
 )
 
 // SSH server access for executors (#204, docs/adr/0007). An SSHTarget is one server that one Executor may reach with
-// short-lived SSH certificates from the instance CA (step-ca in EXEC_NS). Written by cluster admins only; the
+// short-lived SSH certificates from the instance CA (step-ca in SSH_CA_NS). Written by cluster admins only; the
 // operator signs the server's host key only when it matches spec.hostKeyFingerprint, and sets Ready only after a
 // probe with a certificate succeeded against the signed host key.
 
