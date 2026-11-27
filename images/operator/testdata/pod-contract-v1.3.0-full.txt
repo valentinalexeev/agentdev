@@ -1,0 +1,102 @@
+container agent
+container agent env AGENT_NAME
+container agent env ANTHROPIC_AUTH_TOKEN
+container agent env ANTHROPIC_BASE_URL
+container agent env APPROVALS
+container agent env BOTBOARD_URL
+container agent env CARGO_HOME
+container agent env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+container agent env CLAUDE_TOOLS_EXTRA
+container agent env FORGE_API
+container agent env FORGE_PUBLIC_URL
+container agent env FORGE_URL
+container agent env FORGE_USER
+container agent env GOCACHE
+container agent env GOMODCACHE
+container agent env GOPATH
+container agent env GOTOOLCHAIN
+container agent env HTTPS_PROXY
+container agent env HTTP_PROXY
+container agent env IDLE_SECONDS
+container agent env MAX_CONCURRENT
+container agent env MAX_TURNS
+container agent env NO_PROXY
+container agent env PATH
+container agent env POLL_SECONDS
+container agent env READY_ISSUE
+container agent env REPO
+container agent env REVIEWER
+container agent env ROUTER_URL
+container agent env RUSTUP_HOME
+container agent env RUSTUP_TOOLCHAIN
+container agent env SCALE_TO_ZERO
+container agent env TOOLCHAIN
+container agent env WAKE_FILE
+container agent env http_proxy
+container agent env https_proxy
+container agent env no_proxy
+container agent mount guide /etc/agentdev/guide
+container agent mount podinfo /etc/agentdev/pod
+container agent mount proxy-token /var/run/secrets/agentdev/proxy
+container agent mount state /home/node/.claude
+container agent mount state /state
+container agent mount state /state/toolchain
+container agent mount usage /etc/agentdev/usage
+container forge
+container forge env AGENT_NAME
+container forge env APPROVALS
+container forge env APPROVALS_URL
+container forge env APPROVAL_TIMEOUT_MINUTES
+container forge env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+container forge env CLAUDE_PROXY_URL
+container forge env EGRESS_FORGE_KEY
+container forge env FORGE_API
+container forge env FORGE_KIND
+container forge env FORGE_URL
+container forge env FORGE_USER
+container forge env GITHUB_APP_ID
+container forge env GITHUB_APP_PRIVATE_KEY_FILE
+container forge env GITHUB_INSTALLATION_ID
+container forge env HTTPS_PROXY
+container forge env HTTP_PROXY
+container forge env MIRROR_DIR
+container forge env NO_PROXY
+container forge env REGISTER_TOKEN
+container forge env REPO
+container forge env ROUTER_URL
+container forge env SELF_URL
+container forge env USAGE_REPORTS
+container forge env WAKE_FILE
+container forge env WAKE_TOKEN
+container forge env http_proxy
+container forge env https_proxy
+container forge env no_proxy
+container forge mount forge /forge
+container forge mount github-app /var/run/agentdev/github-app
+container forge mount state /state
+container forge mount state /state/toolchain
+initContainer state-init
+initContainer state-init mount state /state
+initContainer toolchain
+initContainer toolchain env EGRESS_SETUP_KEY
+initContainer toolchain env HOME
+initContainer toolchain env HTTPS_PROXY
+initContainer toolchain env HTTP_PROXY
+initContainer toolchain env NO_PROXY
+initContainer toolchain env TMPDIR
+initContainer toolchain env TOOLCHAIN_DIR
+initContainer toolchain env TOOLCHAIN_EXPECT
+initContainer toolchain env TOOLCHAIN_SPEC
+initContainer toolchain env http_proxy
+initContainer toolchain env https_proxy
+initContainer toolchain env no_proxy
+initContainer toolchain mount state /state
+initContainer toolchain mount toolchain-tmp /tmp
+volume forge
+volume github-app
+volume guide
+volume podinfo
+volume proxy-token
+volume toolchain-tmp
+volume usage
+volumeClaimTemplate state
