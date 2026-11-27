@@ -130,6 +130,12 @@
               "name": "agent-alice-mcp",
               "optional": true
             }
+          },
+          {
+            "configMapRef": {
+              "name": "registry-proxy",
+              "optional": true
+            }
           }
         ],
         "env": [
