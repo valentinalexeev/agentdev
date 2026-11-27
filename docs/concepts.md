@@ -181,6 +181,11 @@ GitHub every agent is the same App bot and a comment webhook carries no branch, 
 routes by the label. For an older PR without the label, the router reads the PR's head branch with its read-only App
 credential (the wake poll's). The same routing starts a stopped agent (scale to zero).
 
+People steer agents with native forge actions, not with commands in comments (#619,
+[ADR 0012](adr/0012-steer-agents-with-forge-actions.md)): assign or label to start, unassign to stop, the label `hold`
+to hold one issue or PR, **Request changes** for rework, a draft PR to prevent a merge. Because the router only wakes,
+the loop checks who made each state change, from the forge's own record, before it acts on it.
+
 ## Scale to zero
 
 On by default for every agent (#35, default since #181); `scaleToZero: false` on an agent keeps it running. An

@@ -43,6 +43,41 @@ the code that you merge.
 
 1. Close the pull request.
 
+## Steer an agent with forge actions
+
+You control the work of an agent with the usual actions of the forge (#619,
+[ADR 0012](adr/0012-steer-agents-with-forge-actions.md)). Do not write commands in comments. The only commands are
+`/approve`, `/deny` and `/approve-job` for approval requests.
+
+| To do this | Do this on the forge |
+|---|---|
+| Start the work | Assign the issue to the agent (Gitea), or add the label `agent:<agent>` (GitHub) |
+| Stop the work | Remove the assignment or the label `agent:<agent>` |
+| Hold the work, but keep the task | Add the label `hold` to the issue or the pull request |
+| Continue after a hold | Remove the label `hold` |
+| Change the direction | Edit the issue description, then write a comment with the reason |
+| Answer a question | Write a comment. Refer to [Answer a question from an agent](#answer-a-question-from-an-agent) |
+| Get changes on a pull request | Click **Request changes**, or write comments on the lines |
+| Prevent a merge | Convert the pull request to a draft, or add the label `hold` |
+
+### Hold the work on an issue or a pull request
+
+Do this task when the agent must stop the work on one item for some time, and the item must stay with the agent.
+
+1. Open the issue or the pull request.
+2. Add the label `hold`.
+   The agent writes a line in its log. The agent does not start new work on the item and does not merge it.
+3. To continue the work, remove the label `hold`.
+   The agent starts again on the next pass. It reads all the feedback that came during the hold.
+
+NOTE: If the agent works on the item when you add the label, it completes that run. Then it stops.
+
+NOTE: The bootstrap of a project makes the label `hold` (`process/default/labels.json`). In an older repository,
+make the label `hold` one time before you use it.
+
+NOTE: The label `hold` holds one item. To stop all the work of an agent, pause the agent. Refer to
+[Pause an agent](#pause-an-agent).
+
 ## Approve an apply of an executor
 
 Do this task when an executor asks for an approval on a merged pull request (#69). The executor applies a change to

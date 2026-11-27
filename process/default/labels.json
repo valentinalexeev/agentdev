@@ -2,6 +2,7 @@
   {"name": "agent",          "color": "8a63d2", "description": "Created or handled by an agentdev agent"},
   {"name": "in-progress",    "color": "fbca04", "description": "An agent is working on it"},
   {"name": "needs-decision", "color": "d93f0b", "description": "Waits for an owner decision (question in a comment)"},
+  {"name": "hold",           "color": "c5def5", "description": "Agents do not start work on it or merge it until the label is removed"},
   {"name": "blocked",        "color": "b60205", "description": "Blocked by another issue or external factor"},
   {"name": "bug",            "color": "d73a4a", "description": "Something isn't working"},
   {"name": "security-finding", "color": "5319e7", "description": "A code-scanning or security advisory finding"},
