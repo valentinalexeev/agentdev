@@ -1,7 +1,7 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 # Register gVisor's runsc as a containerd runtime. The binaries are copied
-# into the node by 01-cluster.sh, so no host install is needed (works on macOS).
+# into the node by kind.yml (tag cluster, role kind_cluster), so no host install is needed (works on macOS).
 containerdConfigPatches:
 - |-
   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]

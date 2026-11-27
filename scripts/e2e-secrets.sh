@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with ./run.sh 13 done (and 12).
+# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with kind.yml --tags secrets done
+# (it also runs the operator).
 #   CLUSTER_NAME=t14 scripts/e2e-secrets.sh
 # Checks: ProjectSecret -> ExternalSecret -> ps-<n> sync, rotation, CRD CEL, admission policies, deletion.
 # The test value is random and never printed.
@@ -95,7 +96,7 @@ spec: {provider: {kubernetes: {remoteNamespace: kube-system, server: {url: "http
 EOF
 ) && { no "operator wrote a SecretStore"; k -n "$ns" delete secretstore evil >/dev/null; } || ok "agentdev service accounts cannot write a SecretStore"
 
-# credential broker (#202 part 2): needs ./run.sh 13 with the credential proxy on
+# credential broker (#202 part 2): needs kind.yml --tags secrets with the Claude proxy on
 if k -n "$ns" get deploy credential-broker >/dev/null 2>&1; then
   k -n "$ns" apply -f - >/dev/null <<EOF
 apiVersion: agentdev.dev/v1alpha1
@@ -106,12 +107,15 @@ spec: {repo: owner/repo, claudeSecret: claude-shared, paused: true}
 apiVersion: agentdev.dev/v1alpha1
 kind: ProjectSecret
 metadata: {name: e2e-web}
-spec: {scope: agent, agent: e2e-brk, mode: broker, broker: {upstream: "https://example.com"}}
+spec: {scope: agent, agent: e2e-brk, project: owner/repo, mode: broker, broker: {upstream: "https://example.com"}}
 EOF
   printf '%s' "$val1" | k -n "$vns" create secret generic agentdev-ps-e2e-web --from-file=value=/dev/stdin >/dev/null 2>&1
-  signing=$(k -n "$ns" get secret claude-proxy-signing -o jsonpath='{.data.key}' | base64 -d)
-  key_of() { printf '%s.%s' "$1" "$(printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "$signing" -r | cut -d' ' -f1)"; }
-  good=$(key_of e2e-brk) other=$(key_of e2e-other)
+  # R128: agents authenticate with a projected token (audience credential-broker); the operator makes agent-e2e-brk
+  k -n "$ns" create serviceaccount agent-e2e-other >/dev/null 2>&1 || true
+  for _ in $(seq 30); do k -n "$ns" get sa agent-e2e-brk >/dev/null 2>&1 && break; sleep 2; done
+  good=$(k -n "$ns" create token agent-e2e-brk --audience credential-broker --duration 10m)
+  other=$(k -n "$ns" create token agent-e2e-other --audience credential-broker --duration 10m)
+  proxyaud=$(k -n "$ns" create token agent-e2e-brk --audience claude-proxy --duration 10m)
   for _ in $(seq 60); do
     k -n "$ns" get configmap credential-broker-routes -o jsonpath='{.data.routes\.json}' 2>/dev/null | grep -q '"e2e-web".*"e2e-brk"' \
       && [[ "$(k -n "$ns" get projectsecret e2e-web -o jsonpath='{.status.phase}')" == ready ]] && break
@@ -121,12 +125,13 @@ EOF
   sleep 5   # the projected volume follows the new Secret
   burl="http://credential-broker.$ns.svc.cluster.local:8080/s/e2e-web/"
   codes=$(k -n "$ns" run e2e-brk-curl --rm -i --restart=Never --quiet --image=curlimages/curl:8.11.1 \
-    --labels=app=coding-agent,agent=e2e-brk --env="G=$good" --env="O=$other" --command -- sh -c \
-    "for a in \"Bearer \$G\" \"Bearer \$O\" 'Bearer e2e-brk.00'; do curl -s -o /dev/null -w '%{http_code} ' -H \"Authorization: \$a\" $burl; done" 2>/dev/null)
-  read -r c_good c_other c_bad <<<"$codes"
-  [[ "$c_good" == 200 ]] && ok "broker forwards with the agent's key (via https://example.com)" || no "broker forward: $c_good"
+    --labels=app=coding-agent,agent=e2e-brk --env="G=$good" --env="O=$other" --env="P=$proxyaud" --command -- sh -c \
+    "for a in \"Bearer \$G\" \"Bearer \$O\" \"Bearer \$P\" 'Bearer e2e-brk.00'; do curl -s -o /dev/null -w '%{http_code} ' -H \"Authorization: \$a\" $burl; done" 2>/dev/null)
+  read -r c_good c_other c_paud c_bad <<<"$codes"
+  [[ "$c_good" == 200 ]] && ok "broker forwards with the agent's token (via https://example.com)" || no "broker forward: $c_good"
   [[ "$c_other" == 403 ]] && ok "broker refuses an agent outside the secret's scope" || no "out-of-scope agent: $c_other"
-  [[ "$c_bad" == 401 ]] && ok "broker refuses a wrong key" || no "wrong key: $c_bad"
+  [[ "$c_paud" == 401 ]] && ok "broker refuses a claude-proxy token (R128)" || no "claude-proxy token: $c_paud"
+  [[ "$c_bad" == 401 ]] && ok "broker refuses a wrong token" || no "wrong token: $c_bad"
   for _ in $(seq 30); do
     k -n "$ns" get securityevents -o jsonpath='{range .items[*]}{.spec.source}/{.spec.rule} {end}' | grep -q 'credential-broker/broker-secret-denied' && break
     sleep 2
@@ -135,12 +140,59 @@ EOF
   [[ "$evs" == *credential-broker/broker-use* && "$evs" == *credential-broker/broker-secret-denied* ]] \
     && ok "broker use and refusal recorded as SecurityEvents" || no "broker events missing: $evs"
   k -n "$ns" logs deploy/credential-broker 2>/dev/null | grep -qF "$val1" && no "value in the broker log" || ok "value not in the broker log"
+  # acceptance of #202: a broker secret is not in any agent container (env, /proc/*/environ, files); needs running
+  # agents (kind.yml --tags agents), skipped otherwise. The value is passed on stdin, so it is not in the exec's own argv/env.
+  agent_pods=$(k -n "$ns" get pods -l app=coding-agent --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}')
+  if [[ -n "$agent_pods" ]]; then
+    for p in $agent_pods; do
+      hit=$(printf '%s' "$val1" | k -n "$ns" exec -i "$p" -c agent -- sh -c 'v=$(cat); { env; cat /proc/[0-9]*/environ; } 2>/dev/null | tr "\0" "\n" | grep -cF -- "$v"; grep -rIlF -- "$v" / --exclude-dir=proc --exclude-dir=sys 2>/dev/null | head -3' 2>/dev/null)
+      [[ "$(head -1 <<<"$hit")" == 0 && -z "$(tail -n +2 <<<"$hit")" ]] && ok "broker secret not in agent container $p" || no "broker secret found in $p: $hit"
+    done
+  else
+    echo "  SKIP no running agent pod for the container check"
+  fi
   k -n "$ns" delete projectsecret e2e-web --ignore-not-found >/dev/null; k -n "$ns" delete agent e2e-brk --ignore-not-found >/dev/null
   k -n "$vns" delete secret agentdev-ps-e2e-web --ignore-not-found >/dev/null
-  unset signing good other
+  k -n "$ns" delete serviceaccount agent-e2e-other --ignore-not-found >/dev/null
+  unset good other proxyaud
 else
   echo "  SKIP credential broker not deployed"
 fi
+
+# API RBAC (#202 part 3): the API writes values, never reads them
+api="system:serviceaccount:${PLATFORM_NS}:agentdev-api"
+[[ "$(k -n "$vns" auth can-i create secrets --as="$api")" == yes && "$(k -n "$vns" auth can-i update secrets --as="$api")" == yes ]] \
+  && ok "API can write values" || no "API cannot write values"
+[[ "$(k -n "$vns" auth can-i get secrets --as="$api")" == no && "$(k -n "$vns" auth can-i list secrets --as="$api")" == no ]] \
+  && ok "API cannot read values" || no "API can read values"
+[[ "$(k -n "$ns" auth can-i get secrets --as="$api")" == no ]] && ok "API cannot read ps-* Secrets" || no "API reads agent-namespace Secrets"
+
+# #381 acceptance 3: the agents namespace never reads a platform-* secret, and the operator reads no Secret but the
+# signing key. --dry-run=server runs the admission policies without creating anything (no platform store on kind).
+op="system:serviceaccount:${PLATFORM_NS}:agentdev-operator"
+[[ "$(k -n "$ns" auth can-i get secret/claude-shared --as="$op")" == no ]] \
+  && ok "operator cannot read claude-shared" || no "operator can read claude-shared"
+[[ "$(k -n "$ns" auth can-i get secret/claude-proxy-signing --as="$op")" == yes ]] \
+  && ok "operator reads claude-proxy-signing" || no "operator cannot read claude-proxy-signing"
+[[ "$(k -n "$ns" auth can-i list secrets --as="$op")" == no ]] && ok "operator cannot list Secrets" || no "operator lists Secrets"
+out=$(k -n "$ns" create secret generic claude-evil --from-literal=k=v --as="$op" --dry-run=server 2>&1) \
+  && no "operator wrote a Secret other than agent-*-proxy" || ok "policy limits operator writes to agent-*-proxy"
+readers=0
+for sa in $(k -n "$ns" get sa -o name | sed 's|serviceaccount/||'); do
+  [[ "$(k -n "$ns" auth can-i get secrets --as="system:serviceaccount:$ns:$sa")" == no ]] \
+    || { no "service account $sa in $ns can read Secrets"; readers=$((readers + 1)); }
+done
+[[ $readers -eq 0 ]] && ok "no service account of $ns reads Secrets (auth can-i)"
+out=$(k -n "$ns" apply --dry-run=server -f - 2>&1 <<EOF
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: {name: e2e-platform}
+spec:
+  secretStoreRef: {name: agentdev-platform-secrets, kind: SecretStore}
+  target: {name: e2e-platform}
+  data: [{secretKey: v, remoteRef: {key: platform-pg-admin}}]
+EOF
+) && no "ExternalSecret naming platform-* accepted in $ns" || ok "policy refuses a platform-* ExternalSecret in $ns"
 
 # deletion
 k -n "$ns" delete projectsecret "$name" >/dev/null

@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // fakeAPI answers the internal decision endpoint with whatever state is set; it also records forge comments.
@@ -23,6 +27,8 @@ type fakeAPI struct {
 	comments []string
 	edits    []string
 	voids    []string
+	push     bool     // answer of the reach endpoint (#523)
+	reaches  []string // reach queries
 }
 
 func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
@@ -44,6 +50,11 @@ func approvalSetup(t *testing.T) (*server, *fakeAPI, *bytes.Buffer) {
 			return
 		case strings.HasPrefix(r.URL.Path, "/api/v1/repos/o/r/pulls/"):
 			_, _ = io.WriteString(w, `{"head":{"ref":"agent/alice/x"}}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/reach") {
+			fa.reaches = append(fa.reaches, r.URL.Path+"?"+r.URL.RawQuery)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"push": fa.push})
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/void") {
@@ -184,7 +195,7 @@ func TestApprovalPushHeld(t *testing.T) {
 	if lastRequest(t, lines).ID != first || len(fa.comments) != 1 {
 		t.Fatalf("a retry after the wait opened a new request: %d comments", len(fa.comments))
 	}
-	if len(fa.edits) != 1 || !strings.Contains(fa.edits[0], "still open") {
+	if len(fa.edits) != 1 || !strings.Contains(fa.edits[0], "continued without it") {
 		t.Fatalf("comment not updated once: %v", fa.edits)
 	}
 	// a new commit on the same branch and paths supersedes the old request: void, then a new one
@@ -225,11 +236,12 @@ func TestApprovalPromptDedupAndJobDone(t *testing.T) {
 	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
 		t.Fatalf("decision on open record not used: %v", out)
 	}
-	// another input is another request
+	// another input is another request, in the same approvals comment (#523)
 	fa.state = "pending"
 	_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"make"}`)
-	if lastRequest(t, lines).ID == first || len(fa.comments) != 2 {
-		t.Fatalf("other input did not open a request: %d", len(fa.comments))
+	if lastRequest(t, lines).ID == first || len(fa.comments) != 1 ||
+		!strings.Contains(fa.edits[len(fa.edits)-1], lastRequest(t, lines).ID) {
+		t.Fatalf("other input did not open a request: %d %v", len(fa.comments), fa.edits)
 	}
 	// the job ends: the open record becomes void and its comment says so
 	req := httptest.NewRequest("POST", "/job-done?job=issue-3", nil)
@@ -328,7 +340,7 @@ func TestApprovalConcurrentDedup(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			r, err := s.appr.request("issue-3", "push", "git push", "agent/alice/x abc", "fp-1")
+			r, err := s.appr.request("issue-3", "push", "git push", "agent/alice/x abc", "fp-1", why{})
 			if err != nil {
 				t.Error(err)
 				return
@@ -346,6 +358,88 @@ func TestApprovalConcurrentDedup(t *testing.T) {
 	defer fa.mu.Unlock()
 	if len(fa.comments) != 1 {
 		t.Fatalf("comments: %d", len(fa.comments))
+	}
+}
+
+// #523 acceptance: one job with five approvals makes one bot comment. The comment is a table edited in place, the
+// instructions are in <details>, a closed request is one row without its text, and no line is a decision command.
+func TestApprovalOneCommentPerJob(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	s.appr.timeout = 20 * time.Millisecond
+	h := s.routes()
+	var ids []string
+	for i := 0; i < 5; i++ {
+		_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"step-`+strconv.Itoa(i)+`"}`)
+		ids = append(ids, lastRequest(t, lines).ID)
+	}
+	fa.mu.Lock()
+	if len(fa.comments) != 1 || len(fa.edits) == 0 {
+		t.Fatalf("comments %d, edits %d", len(fa.comments), len(fa.edits))
+	}
+	last := fa.edits[len(fa.edits)-1]
+	fa.mu.Unlock()
+	var body struct{ Body string }
+	_ = json.Unmarshal([]byte(last[strings.Index(last, " ")+1:]), &body)
+	for _, id := range ids {
+		if !strings.Contains(body.Body, "| `"+id+"` | claude `Bash` | **waiting** (the agent continued without it) |") {
+			t.Fatalf("row of %s missing:\n%s", id, body.Body)
+		}
+	}
+	if !strings.Contains(body.Body, "<details><summary>How to decide</summary>") || decisionCmdRe.MatchString(body.Body) {
+		t.Fatalf("instructions:\n%s", body.Body)
+	}
+	// the job ends: every request is one closed row, no request text and no instructions are left
+	req := httptest.NewRequest("POST", "/job-done?job=issue-3", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	fa.mu.Lock()
+	last = fa.edits[len(fa.edits)-1]
+	n := len(fa.comments)
+	fa.mu.Unlock()
+	_ = json.Unmarshal([]byte(last[strings.Index(last, " ")+1:]), &body)
+	if n != 1 || strings.Contains(body.Body, "step-") || strings.Contains(body.Body, "<details>") ||
+		strings.Count(body.Body, "void: the job ended") != 5 {
+		t.Fatalf("closed comment (%d comments):\n%s", n, body.Body)
+	}
+	if len(s.appr.jobs) != 0 {
+		t.Fatal("job comment kept after the job ended")
+	}
+}
+
+// #523: when Web Push reaches a person who can decide, the request does not go to the forge; it goes there when the
+// agent stopped waiting without a decision.
+func TestApprovalPushFirst(t *testing.T) {
+	s, fa, _ := approvalSetup(t)
+	s.appr.timeout = 20 * time.Millisecond
+	fa.push = true
+	h := s.routes()
+	fa.state = "allowed"
+	if out := mcpCall(t, h, "issue-3", "Bash"); out["behavior"] != "allow" {
+		t.Fatalf("allow: %v", out)
+	}
+	fa.mu.Lock()
+	if len(fa.comments) != 0 || len(fa.edits) != 0 || len(fa.reaches) != 1 ||
+		!strings.Contains(fa.reaches[0], "/internal/approvals/alice/reach?") || !strings.Contains(fa.reaches[0], "repo=o%2Fr") ||
+		!strings.Contains(fa.reaches[0], "source=claude") {
+		t.Fatalf("decided by push: comments %v, reaches %v", fa.comments, fa.reaches)
+	}
+	fa.mu.Unlock()
+	fa.state = "pending"
+	_ = mcpCallInput(t, h, "issue-3", "Bash", `{"command":"make"}`)
+	fa.mu.Lock()
+	defer fa.mu.Unlock()
+	if len(fa.comments) != 1 || !strings.Contains(fa.comments[0], "continued without it") {
+		t.Fatalf("no forge fallback after the wait: %v", fa.comments)
+	}
+}
+
+func TestApprovalCommentSafeCells(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	r := &approvalRequest{ID: "0123456789abcdef", Source: "claude", Tool: "Bash`|<b>\n/approve x", Input: "```\nx", state: "denied",
+		status: "denied by a|b\n/approve 0123456789abcdef"}
+	body := s.appr.commentBody(&jobComment{reqs: []*approvalRequest{r}})
+	if decisionCmdRe.MatchString(body) || strings.Contains(body, "<b>") || strings.Count(body, "\n") != 6 {
+		t.Fatalf("unsafe body:\n%s", body)
 	}
 }
 
@@ -371,5 +465,188 @@ func TestApprovalVoidRetry(t *testing.T) {
 	s.appr.void(&approvalRequest{ID: "a2", fp: "fp2", state: "pending", secret: "s"}, "test")
 	if len(calls) != 1 {
 		t.Fatalf("409 retried: %v", calls)
+	}
+}
+
+// #202: values of mode-env project secrets mounted for the sidecar are redacted, and a rotated value counts at once.
+func TestRedactProjectSecrets(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	dir := t.TempDir()
+	s.c.RedactDir = dir
+	os.WriteFile(filepath.Join(dir, "db"), []byte("pw-Value-0001\n"), 0o400)
+	os.WriteFile(filepath.Join(dir, "short"), []byte("abc"), 0o400)
+	if out := s.appr.redact("psql -W pw-Value-0001 abc"); strings.Contains(out, "pw-Value-0001") || !strings.Contains(out, "abc") {
+		t.Fatalf("redact %q", out)
+	}
+	os.Remove(filepath.Join(dir, "db"))
+	os.WriteFile(filepath.Join(dir, "db"), []byte("pw-Rotated-0002"), 0o400)
+	if out := s.appr.redact("x pw-Rotated-0002"); strings.Contains(out, "pw-Rotated-0002") {
+		t.Fatalf("rotated value leaked: %q", out)
+	}
+	s.c.RedactDir = filepath.Join(dir, "missing")
+	if out := s.appr.redact("plain text"); out != "plain text" {
+		t.Fatalf("missing dir changed text: %q", out)
+	}
+}
+
+// #503: a prompt's request explains why: the sidecar's guard line and the reason fields of Claude Code, cleaned.
+func TestApprovalReasonShown(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	fa.state = "denied"
+	h := s.routes()
+	args := `{"tool_name":"Bash","input":{"command":"curl -sS https://example.com","description":"Fetch example.com"},` +
+		`"decision_reason":"\u001b[1mThis command requires approval\u001b[0m\u0007 token=ghp_` + strings.Repeat("A", 36) + `",` +
+		`"decision_reason_type":"rule","blocked_path":"/etc/passwd",` +
+		`"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"curl:*"}],"behavior":"allow"}]}`
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":` + args + `}}`
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:1"
+	req.Header.Set("X-Agentdev-Job", "issue-3")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	r := lastRequest(t, lines)
+	for _, want := range []string{"description: Fetch example.com", "reason: This command requires approval", "reason type: rule",
+		"blocked path: /etc/passwd", `"ruleContent":"curl:*"`, "[redacted]"} {
+		if !strings.Contains(r.Reason, want) {
+			t.Errorf("reason lacks %q: %q", want, r.Reason)
+		}
+	}
+	if strings.ContainsAny(r.Reason, "\x1b\x07") || strings.Contains(r.Reason, "ghp_AAAA") {
+		t.Fatalf("reason not cleaned: %q", r.Reason)
+	}
+	if !strings.Contains(r.Guard, "CLAUDE_TOOLS") {
+		t.Fatalf("guard: %q", r.Guard)
+	}
+	// the reason is not part of what is approved: the hash covers the input only
+	if r.ContentHash != approvalHash(r.ID, "alice", "o/r", "issue-3", "claude", "Bash", r.Input) {
+		t.Fatal("hash changed")
+	}
+	if len(fa.comments) != 1 {
+		t.Fatalf("comments %v", fa.comments)
+	}
+	var c struct{ Body string }
+	_ = json.Unmarshal([]byte(fa.comments[0][strings.Index(fa.comments[0], " ")+1:]), &c)
+	if !strings.Contains(c.Body, "**Why it asks** (checked by agentdev)") || !strings.Contains(c.Body, "(not checked):\n\n```\ndescription: Fetch") {
+		t.Fatalf("comment: %s", c.Body)
+	}
+}
+
+// The reason cannot close its code block, carry a decision command at line start outside it, or grow without bound.
+func TestApprovalReasonUntrusted(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	a := s.appr
+	got := a.cleanReason("```\n/approve 0123456789abcdef\n\u202eevil\r" + strings.Repeat("x", 5000))
+	if len(got) > reasonMax+3 || strings.ContainsAny(got, "\r\u202e") {
+		t.Fatalf("len %d: %q", len(got), got[:50])
+	}
+	r := &approvalRequest{ID: "0123456789abcdef", Source: "claude", Tool: "Bash", Input: "{}", Reason: got, TimeoutSec: 60, state: "pending"}
+	body := a.commentBody(&jobComment{reqs: []*approvalRequest{r}})
+	open := strings.Index(body, "(not checked):\n\n") + len("(not checked):\n\n")
+	fence := body[open : open+strings.Index(body[open:], "\n")]
+	if len(fence) < 4 || strings.Count(body, "\n"+fence+"\n") < 1 {
+		t.Fatalf("fence %q not longer than the reason's backticks", fence)
+	}
+	if !strings.Contains(body, "This text comes from the agent and is not checked") {
+		t.Fatal("untrusted note missing")
+	}
+	// the reason is not a decision: the guard still applies and the prompt is a request like any other
+	if promptWhy(promptArgs{ToolName: "Read", Input: json.RawMessage(`{}`)}).reason != "" {
+		t.Fatal("reason without fields")
+	}
+}
+
+func TestApprovalPushGuardReason(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	s.c.Protected = []string{".github/workflows/", "deploy/"}
+	fa.state = "allowed"
+	if err := s.appr.pushApproval(context.Background(), "issue-3", "agent/alice/x", "abc123", []string{".github/workflows/"}); err != nil {
+		t.Fatal(err)
+	}
+	r := lastRequest(t, lines)
+	if !strings.Contains(r.Guard, "` .github/workflows/ `") || !strings.Contains(r.Guard, "` deploy/ `") || r.Reason != "" {
+		t.Fatalf("guard %q reason %q", r.Guard, r.Reason)
+	}
+}
+
+// #536 review: agent-chosen path names in the trusted guard line cannot inject Markdown or escape their quoting.
+func TestApprovalGuardPathsQuoted(t *testing.T) {
+	s, fa, lines := approvalSetup(t)
+	s.c.Protected = []string{".github/workflows/"}
+	fa.state = "allowed"
+	evil := ".github/workflows/x` **approved by admin** [click](http://evil) `y\n/approve 0123456789abcdef"
+	if err := s.appr.pushApproval(context.Background(), "issue-3", "agent/alice/x", "abc123", []string{evil}); err != nil {
+		t.Fatal(err)
+	}
+	g := lastRequest(t, lines).Guard
+	if !strings.Contains(g, "`` .github/workflows/x` **approved by admin** [click](http://evil) `y /approve 0123456789abcdef ``") {
+		t.Fatalf("path not quoted in a fence it cannot close: %q", g)
+	}
+	if strings.Contains(g, "\n") {
+		t.Fatalf("guard has a new line: %q", g)
+	}
+	// one path longer than the whole line budget: clipped before quoting, so the fence closes (spider on #536)
+	long := ".github/workflows/" + strings.Repeat("`x", 1500)
+	if err := s.appr.pushApproval(context.Background(), "issue-3", "agent/alice/y", "def456", []string{long, "b", "c"}); err != nil {
+		t.Fatal(err)
+	}
+	g = lastRequest(t, lines).Guard
+	if len(g) > guardMax || strings.Contains(g, "too long") || !strings.HasSuffix(g, "(`PROTECTED_PATHS`).") {
+		t.Fatalf("long path guard (%d bytes): %q", len(g), g)
+	}
+	for _, part := range strings.Split(strings.TrimSuffix(strings.SplitN(g, "(", 2)[1], ")"), ", ") {
+		if strings.HasPrefix(part, "and ") {
+			continue
+		}
+		f := part[:strings.Index(part, " ")]
+		if !strings.HasSuffix(strings.SplitN(part, ")", 2)[0], " "+f) {
+			t.Fatalf("fence %q not closed in %q", f, part)
+		}
+	}
+	many := make([]string, 200)
+	for i := range many {
+		many[i] = strings.Repeat("p", 100) + strconv.Itoa(i)
+	}
+	if got := s.appr.codeList(many); len(got) > guardListMax || !strings.Contains(got, "more") {
+		t.Fatalf("codeList over budget: %d", len(got))
+	}
+	if got := inlineCode("a``b"); got != "``` a``b ```" {
+		t.Fatalf("inlineCode: %q", got)
+	}
+}
+
+// #536 review: zero-width and bidi characters are removed before redaction, from the reason and the guard.
+func TestApprovalInvisibleCharsStripped(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	a := s.appr
+	tok := "ghp_" + strings.Repeat("A", 18) + "\u200b" + strings.Repeat("B", 18)
+	ins := []string{tok, "token=se\u200bcret-value", "x\u202ay\u202bz\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u200e\u200f\ufeff\u00ad\u2060w"}
+	// default-ignorable, not Cf (spider on #536): combining grapheme joiner, Hangul fillers, variation selectors
+	for _, c := range []string{"\u034f", "\u115f", "\u1160", "\u3164", "\uffa0", "\ufe0f", "\U000e0100", "\u180b"} {
+		ins = append(ins, "ghp_"+strings.Repeat("A", 18)+c+strings.Repeat("B", 18))
+	}
+	for _, in := range ins {
+		for name, got := range map[string]string{"reason": a.cleanReason(in), "guard path": a.codeList([]string{in})} {
+			if strings.ContainsFunc(got, func(r rune) bool {
+				return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Bidi_Control, r) || unicode.Is(defaultIgnorable, r)
+			}) {
+				t.Errorf("%s keeps an invisible character: %q", name, got)
+			}
+			if strings.Contains(got, "AAAA") || strings.Contains(got, "secret-value") {
+				t.Errorf("%s not redacted: %q", name, got)
+			}
+		}
+	}
+}
+
+// #536 review: clipping the guard (and the reason) never splits a UTF-8 character.
+func TestApprovalClipRuneBoundary(t *testing.T) {
+	s, _, _ := approvalSetup(t)
+	long := strings.Repeat("é", 2000) // 2 bytes each: an odd limit falls inside a character
+	for name, got := range map[string]string{"guard path": strings.Trim(s.appr.codeList([]string{"x" + long}), "` "), "reason": s.appr.cleanReason("x" + long)} {
+		if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") || strings.Contains(got, "\uFFFD") {
+			t.Errorf("%s clipped badly: ...%q", name, got[len(got)-10:])
+		}
+	}
+	if got := clipRunes("aé", 2); got != "a..." {
+		t.Fatalf("clipRunes: %q", got)
 	}
 }

@@ -8,7 +8,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 |---|---|
 | VPC, subnet, Cloud NAT | private nodes; egress narrowed later by #6 |
 | GKE Standard, zonal | Dataplane V2 (NetworkPolicy), Workload Identity, regular channel |
-| `system` node pool | `e2-standard-2`, 1 to 2 nodes, on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
+| `system` node pool | `e2-standard-2`, 1 to 2 nodes (minimum `system_pool_min_nodes`, 0 for a stopped instance, #313), on-demand (Spot with `system_pool_spot = true`, #171): router, operator, UI; boot disk `system_disk_size_gb`/`system_disk_type` (100 GB `pd-standard`) |
 | `agents` node pool | GKE Sandbox (gVisor), Spot `e2-standard-4`, **0** to 3 nodes, taint `agentdev/pool=sandboxes`; boot disk `agent_disk_size_gb`/`agent_disk_type` (100 GB `pd-standard`) |
 | Artifact Registry | `agentdev` Docker repo, keeps the 20 newest versions; optional: `create_artifact_registry = false` skips it, its API and its IAM roles (images are pulled from GHCR) |
 | Registry cache (optional) | `registry_proxy = true` (#203, needs `create_artifact_registry`): remote repositories `agentdev-npm`, `agentdev-pypi`, `agentdev-go` (upstreams npmjs, PyPI, proxy.golang.org; versions not pulled for 30 days are deleted), service account `agentdev-registry-cache` with `roles/artifactregistry.reader` on each repository only, bound to the Kubernetes service account `registry-cache` in `agents_namespace` (Workload Identity). Copy `terraform output registry_proxy` into Ansible `registry_proxy_artifact_registry` |
@@ -19,6 +19,7 @@ tag and provides `project_id`, `region`, `zone`, `billing_account_id`, `github_r
 | Billing budget | `budget_amount_usd` (150) per month in `budget_currency` (`USD`; must equal the billing account currency), alerts at 50/90/100% (alerts only; it does not stop spending). Optional: `create_budget = false` skips the budget, its notification channels and the billing IAM (#199) |
 | Billing IAM | with `create_budget` (default): `roles/billing.costsManager` on `billing_account_id` for the automation SA, so CI can read and update the budget (#199). It is the smallest predefined role with `billing.budgets.update`. The identity of the first apply needs `billing.accounts.setIamPolicy` on the billing account (normally the owner); CI cannot grant this role to itself |
 | Labels | `labels` (#184) merged over `service = "agentdev"` on every resource: provider `default_labels`, cluster and node pool `resource_labels`, notification channel `user_labels`. Set `environment` to `dev`, `stage` or `prod` |
+| Plan SA | `agentdev-plan` (`create_plan_identity`, default off since #421; needs one-time owner grants, docs/admin.md): read-only roles for `terraform plan` on deployment PRs (#291) |
 | Automation SA | `agentdev-automation`, least-privilege roles; GitHub Actions on `main` reach it through Workload Identity Federation (no key) |
 
 ## First run (owner, once)
@@ -49,6 +50,7 @@ Another region: change `region`/`zone` in the deployment's `instance.tfvars`.
 ## Automation credentials
 
 - **GitHub Actions (preferred, no key):** use `google-github-actions/auth` with the values from `terraform output github_actions_auth`. Only workflows on `main` of the **deployment repository** (`github_repository`) can impersonate the account.
+- **Pull requests (read only, #291):** `plan_workload_identity_provider` and `plan_service_account` in the same output. Only `pull_request` runs of the deployment repository get the account `agentdev-plan` (own pool `github-pr`). It reads resources, IAM policies and the state bucket, and runs `terraform plan -lock=false`; it cannot write. `create_plan_identity = false` removes it; `plan_state_bucket` sets another state bucket.
 - **Local fallback (key file):** only if needed, kept outside the repo:
   ```bash
   gcloud iam service-accounts keys create ~/.config/agentdev/automation-key.json \

@@ -10,17 +10,25 @@ import (
 	"time"
 )
 
-// Per-agent budget (#66): tokens (input, cache and output) in a rolling 24 h window, kept in hourly buckets. The
-// limit is CLAUDE_BUDGET_TOKENS for every agent (0 = no limit), or the file <budget dir>/<agent> (ConfigMap
+// Per-agent budget (#66): cost units (#196, prices.go) in a rolling 24 h window, kept in hourly buckets. The
+// limit is CLAUDE_BUDGET_UNITS for every agent (0 = no limit), or the file <budget dir>/<agent> (ConfigMap
 // claude-proxy-budgets) for one agent. A request is refused before it is sent when the agent's spend in the window
 // has reached its limit; a request that is running may finish, so the spend can go over the limit by one response.
 
 const bucketCount = 24
 
 type agentSpend struct {
-	Hours  [bucketCount]int64 `json:"hours"`  // tokens per hour, index = unix hour % 24
+	Hours  [bucketCount]int64 `json:"hours"`  // units per hour, index = unix hour % 24
 	Stamps [bucketCount]int64 `json:"stamps"` // unix hour of each bucket
 }
+
+// stateFile is the persisted spend; Unit marks the counting unit.
+type stateFile struct {
+	Unit  string                 `json:"unit"`
+	Spend map[string]*agentSpend `json:"spend"`
+}
+
+const stateUnit = "units"
 
 type budget struct {
 	mu       sync.Mutex
@@ -36,7 +44,15 @@ func newBudget(def int64, dir, state string) *budget {
 	b := &budget{spend: map[string]*agentSpend{}, def: def, dir: dir, state: state, now: time.Now, exceeded: map[string]bool{}}
 	if state != "" {
 		if data, err := os.ReadFile(state); err == nil {
-			_ = json.Unmarshal(data, &b.spend)
+			// only state written in units (#196): a file from the token-counting proxy, or without the marker, is
+			// dropped, so an in-place image change never reads token hours as units (review of #275)
+			var f stateFile
+			if json.Unmarshal(data, &f) == nil && f.Unit == stateUnit {
+				b.spend = f.Spend
+			}
+			if b.spend == nil {
+				b.spend = map[string]*agentSpend{}
+			}
 			for k, v := range b.spend {
 				if !agentRe.MatchString(k) || v == nil {
 					delete(b.spend, k)
@@ -47,7 +63,7 @@ func newBudget(def int64, dir, state string) *budget {
 	return b
 }
 
-// limit is the agent's limit in tokens per 24 h; 0 = no limit. A per-agent file must be a plain non-negative integer.
+// limit is the agent's limit in units per 24 h; 0 = no limit. A per-agent file must be a plain non-negative integer.
 func (b *budget) limit(agent string) int64 {
 	if b.dir != "" && agentRe.MatchString(agent) {
 		if data, err := os.ReadFile(filepath.Join(b.dir, agent)); err == nil {
@@ -95,9 +111,9 @@ func (b *budget) firstRefusal(agent string) bool {
 	return first
 }
 
-// add records tokens of a finished response.
-func (b *budget) add(agent string, tokens int64) {
-	if tokens <= 0 {
+// add records the units of a finished response.
+func (b *budget) add(agent string, units int64) {
+	if units <= 0 {
 		return
 	}
 	hour := b.now().Unix() / 3600
@@ -111,10 +127,10 @@ func (b *budget) add(agent string, tokens int64) {
 	if s.Stamps[i] != hour {
 		s.Stamps[i], s.Hours[i] = hour, 0
 	}
-	s.Hours[i] += tokens
+	s.Hours[i] += units
 	var data []byte
 	if b.state != "" {
-		data, _ = json.Marshal(b.spend)
+		data, _ = json.Marshal(stateFile{Unit: stateUnit, Spend: b.spend})
 	}
 	b.mu.Unlock()
 	if data != nil {
@@ -126,9 +142,10 @@ func (b *budget) add(agent string, tokens int64) {
 }
 
 type budgetStatus struct {
-	Agent string `json:"agent"`
-	Used  int64  `json:"used"`
-	Limit int64  `json:"limit"`
+	Agent   string   `json:"agent"`
+	Used    int64    `json:"used"`  // cost units (#196)
+	Limit   int64    `json:"limit"` // cost units; 0 = no limit
+	UsedUSD *float64 `json:"usedUsd,omitempty"`
 }
 
 // snapshot lists every agent with spend in the window (for GET /status, read by the API for the UI).
@@ -144,7 +161,7 @@ func (b *budget) snapshot() []budgetStatus {
 	b.mu.Unlock()
 	out := make([]budgetStatus, 0, len(agents))
 	for _, a := range agents {
-		out = append(out, budgetStatus{a, used[a], b.limit(a)})
+		out = append(out, budgetStatus{Agent: a, Used: used[a], Limit: b.limit(a)})
 	}
 	return out
 }

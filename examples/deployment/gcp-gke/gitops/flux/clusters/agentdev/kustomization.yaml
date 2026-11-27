@@ -1,0 +1,11 @@
+# Root of the cluster sync (agentdev #385, #472).
+#   flux-system   the Flux controllers. Remove this line when the cluster already runs Flux (docs/admin.md,
+#                 "Install an instance with Flux"): the existing controllers then apply agentdev's objects.
+#   sync          agentdev's GitRepository and root Kustomization, both named agentdev
+#   layers.yaml   the layer Kustomizations
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - sync
+  - layers.yaml

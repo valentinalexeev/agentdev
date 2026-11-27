@@ -7,6 +7,7 @@ results.md
 .env
 .coder/
 .secrets/
+kind.vars.yml
 __pycache__/
 *.py[cod]
 
@@ -25,3 +26,6 @@ images/api/api
 images/*/bin/
 images/**/*.test
 images/forge/forge
+images/credproxy/credproxy
+images/credproxy/credproxy
+images/operator/operator

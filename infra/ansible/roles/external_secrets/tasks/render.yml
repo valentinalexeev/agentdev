@@ -1,0 +1,36 @@
+---
+# Render mode of the role (#457, render.yml): the CEL policies, and per namespace the ServiceAccount and the SecretStore
+# agentdev-platform-secrets, the same objects as tasks/main.yml applies. No secret value: a store names only the Google
+# service account (Workload Identity), the project and the cluster. Not rendered: the ESO and Reloader Helm charts.
+# The GitOps engine installs them first (docs/admin.md, "Render the manifests for a GitOps engine"). No Namespace here:
+# render.yml writes these objects after the groups that make every namespace of external_secrets_namespaces.
+- name: Render the SecretStore of each namespace
+  ansible.builtin.set_fact:
+    external_secrets_store_docs: >-
+      {{ external_secrets_store_docs | default([])
+         + (lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_store) | from_yaml_all | list) }}
+  vars:
+    es_store:
+      src: "{{ repo_root }}/manifests/secrets-store-platform-gcp.yaml.tmpl"
+      values:
+        NS: "{{ item.ns }}"
+        STORE: "{{ external_secrets_store }}"
+        GSA: "{{ external_secrets_gsa[item.reader] }}"
+        GCP_PROJECT: "{{ gcp_project }}"
+        GKE_LOCATION: "{{ gcp_zone }}"
+        GKE_CLUSTER: "{{ cluster_name }}"
+      replace: []
+  loop: "{{ external_secrets_namespaces }}"
+  loop_control: {label: "{{ item.ns }}"}
+
+- name: Keep the policies and the stores
+  ansible.builtin.set_fact:
+    external_secrets_objects:
+      secrets_policy: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_policy) | from_yaml_all | list }}"
+      secrets_stores: "{{ external_secrets_store_docs }}"
+  vars:
+    es_policy:
+      src: "{{ repo_root }}/manifests/secrets-policy.yaml.tmpl"
+      values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}", ESO_NS: "{{ external_secrets_eso_ns }}",
+               ESO_SA: "{{ external_secrets_eso_sa }}"}
+      replace: []

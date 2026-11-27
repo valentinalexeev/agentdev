@@ -1,0 +1,14 @@
+#!/bin/sh
+# Stub host tool for tests/kind_prereqs.yml and tests/kind_teardown.yml (#106). The tests link it under the tool
+# names they want present. Never a real tool: nothing here touches a cluster.
+#   kind version            prints $STUB_KIND_VERSION (default kind v0.33.0)
+#   kind get clusters       prints $STUB_KIND_CLUSTERS
+#   kind delete cluster ... appends the arguments to $STUB_LOG
+#   docker info --format    prints "4 8589934592" (4 CPU, 8 GiB); STUB_ENGINE_DOWN=1 exits 1
+case "$(basename "$0") $1" in
+  "kind version") echo "${STUB_KIND_VERSION:-kind v0.33.0 go1.24 darwin/arm64}" ;;
+  "kind get") printf '%s\n' "${STUB_KIND_CLUSTERS:-}" ;;
+  "kind delete") echo "kind $*" >> "${STUB_LOG:?}" ;;
+  "docker info") [ "${STUB_ENGINE_DOWN:-0}" = 1 ] && exit 1; echo "4 8589934592" ;;
+esac
+exit 0

@@ -29,6 +29,10 @@ ingress_dns_re: '^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 # forwarder CIDRs shorter than /8 (for example 0.0.0.0/0, every address) are refused unless this is true (#198 review)
 ingress_forwarder_allow_wide_cidrs: "{{ (ingress | default({})).forwarder_allow_wide_cidrs | default(false) }}"
 ingress_cidr_re: '^(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})(\.(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}/([0-9]|[12][0-9]|3[0-2])$'
+# operator forwarder watch (#213): on with a forwarder namespace and pod_selector; SecurityEvent after N minutes not Ready
+ingress_forwarder_watch_ns: "{{ ingress_forwarder.namespace | default('') if ingress_forwarder is mapping else '' }}"
+ingress_forwarder_watch: >-
+  {{ ingress_forwarder_watch_ns | length > 0 and (ingress_forwarder.pod_selector | default({})) | length > 0 }}
 # post-deploy smoke test (#213, tasks/smoke.yml): at the end of deploy.yml, ask the public hosts from the operator
 # machine and wait for the forwarder pods. ingress.smoke: false turns it off; ingress.smoke_timeout (seconds) is the
 # wait per check (a new managed certificate can take longer on the first deploy: re-run, or turn the test off once).
@@ -38,6 +42,9 @@ ingress_smoke_delay: 10   # seconds between two tries of one check
 ingress_smoke_forwarder_pods: >-
   {{ ingress_forwarder_on | bool and (ingress_forwarder.namespace | default('')) | length > 0
      and (ingress_forwarder.pod_selector | default({})) | length > 0 }}
+# label selectors of the forwarder pods, one "key=value" per label (#489)
+ingress_smoke_label_selectors: >-
+  {{ (ingress_forwarder.pod_selector | default({})).items() | map('join', '=') | list }}
 # any answer of the application, no proxy error (502, 503, 504) and no connection error
 ingress_smoke_scheme: "{{ (ingress | default({})).smoke_scheme | default('https') }}"   # http only in tests/ingress_smoke.yml
 ingress_smoke_page_codes: [200, 301, 302, 303, 307, 308, 401, 403]
@@ -46,3 +53,31 @@ ingress_smoke_checks: >-
       {'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_webhook_host ~ '/status', 'want': [404]}]
      + ([{'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_host ~ '/', 'want': ingress_smoke_page_codes}] if ingress_ui | bool else [])
      + ([{'method': 'GET', 'url': ingress_smoke_scheme ~ '://' ~ ingress_auth_host ~ '/', 'want': ingress_smoke_page_codes}] if ingress_auth | bool else []) }}
+# deployed forwarder (#316): with ingress.forwarder.deploy the role runs the funnel-sidecar forwarder (headlamp) in
+# ingress.forwarder.namespace: one replica (Recreate, a second node would get 409), readiness and liveness on
+# /readyz. A pod that lost its route registration fails readiness, then liveness restarts it (headlamp#95).
+# The pre-auth key comes from Secret Manager (deploy.authkey_secret); the Secret in the cluster is funnel-sidecar.
+ingress_fwd_deploy: "{{ ingress_forwarder.deploy | default({}) if ingress_forwarder is mapping else {} }}"
+ingress_fwd_deploy_on: "{{ ingress_fwd_deploy is mapping and ingress_fwd_deploy | length > 0 }}"
+ingress_fwd_name: "{{ ingress_fwd_deploy.name | default('funnel-forwarder') }}"
+ingress_fwd_labels: "{{ ingress_forwarder.pod_selector | default({'app': ingress_fwd_name}) }}"
+ingress_fwd_image: "{{ ingress_fwd_deploy.image | default('') }}"   # pinned: a release (X.Y.Z), a sha tag or a digest
+ingress_fwd_api_url: "{{ ingress_fwd_deploy.api_url | default('http://funnel-ingress:9100') }}"
+ingress_fwd_control_url: "{{ ingress_fwd_deploy.control_url | default('') }}"
+ingress_fwd_ns_label: "{{ ingress_fwd_deploy.funnel_ns | default('agentdev') }}"   # FUNNEL_NS: route namespace on funnel-ingress
+# FUNNEL_SERVICES: name=tailnet-port@service-host:port; default the UI and the router's public port (never 8081)
+ingress_fwd_services: >-
+  {{ ingress_fwd_deploy.services | default(
+     ([('ui=8080@agentdev-ui.' ~ platform_ns ~ '.svc.cluster.local:8080')] if ingress_ui | bool else [])
+     + ['hook=8081@webhook-router.' ~ agents_ns ~ '.svc.cluster.local:8080']
+     + ([('auth=8082@authentik-server.' ~ platform_ns ~ '.svc.cluster.local:80')] if ingress_auth | bool else [])) }}
+ingress_fwd_authkey_secret: "{{ ingress_fwd_deploy.authkey_secret | default('funnel-sidecar-authkey') }}"
+# liveness: /readyz fails while a route is not registered; restart after period x threshold (default 10 min), so a
+# short registration retry does not restart the pod
+ingress_fwd_liveness_period: "{{ ingress_fwd_deploy.liveness_period_seconds | default(30) }}"
+ingress_fwd_liveness_threshold: "{{ ingress_fwd_deploy.liveness_failure_threshold | default(20) }}"
+# extra egress CIDRs (a headscale or funnel-ingress on a private or CGNAT address); public addresses are always allowed
+ingress_fwd_extra_egress_cidrs: "{{ ingress_fwd_deploy.egress_cidrs | default([]) }}"
+ingress_fwd_resources: >-
+  {{ ingress_fwd_deploy.resources | default({'requests': {'cpu': '20m', 'memory': '64Mi'},
+                                             'limits': {'memory': '256Mi'}}) }}

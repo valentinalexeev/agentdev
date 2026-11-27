@@ -56,7 +56,7 @@ before(async () => {
     bob: [{ number: 4, updated_at: ago(3600) }] };   // bob's issue is old: seen before he stopped
   pulls = [{ number: 9, head: { ref: 'agent/carol/issue-5' }, updated_at: ago(-10) }, { number: 10, head: { ref: 'feature/x' }, updated_at: ago(-10) }];
   router = spawn(process.execPath, [path.join(__dirname, '..', 'router.js')], { stdio: 'ignore',
-    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT,   // every call here goes to the internal port (#214)
+    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT, HEALTH_PORT: PORT + 6,   // every call here goes to the internal port (#214)
     FORGE_SECRETS: 'gitea=s', REGISTER_TOKEN: 'r', K8S_NAMESPACE: NS, K8S_API_URL: `http://127.0.0.1:${K8S}`,
       WAKE_POLL_SECONDS: '1', GITEA_URL: `http://127.0.0.1:${GITEA}/`, FORGE_POLL_DIR: dir } });
 });

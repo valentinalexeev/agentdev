@@ -29,7 +29,7 @@ const (
 )
 
 // defaultFiveHour and defaultWeekly: the global thresholds when none is set (#92: 80 and 90); USAGE_FIVE_HOUR and
-// USAGE_WEEKLY change them (same variables as the operator, config.env and Ansible usage.*).
+// USAGE_WEEKLY change them (same variables as the operator, set from Ansible usage.*).
 var (
 	defaultFiveHour = 80
 	defaultWeekly   = 90

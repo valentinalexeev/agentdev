@@ -1,5 +1,5 @@
-# authentik Helm values (#45), shared by kind (09-authentik.sh) and GKE. No instance values here: configuration and
-# credentials come from Secret `authentik` (created by 09-authentik.sh; on GKE from Secret Manager, #51).
+# authentik Helm values (#45), shared by kind (kind.yml tag authentik) and GKE. No instance values here: configuration
+# and credentials come from Secret `authentik` (created by the role authentik; on GKE from Secret Manager, #51).
 authentik:
   enabled: false                  # the chart must not create its own config Secret
   existingSecret: {secretName: authentik}
@@ -8,7 +8,7 @@ global:
   env:
     - {name: AUTHENTIK_POSTGRESQL__PORT, value: "5432"}
   # company SSO settings (#122) for manifests/authentik-blueprint-sso.yaml: AGENTDEV_SSO_* keys. Optional: without
-  # the Secret the SSO blueprint creates nothing. Written by 09-authentik.sh (kind stand-in) or the playbook (GKE).
+  # the Secret the SSO blueprint creates nothing. Written by the role authentik_kind (kind stand-in) or authentik_sso (GKE).
   envFrom:
     - secretRef: {name: authentik-sso, optional: true}
 server:

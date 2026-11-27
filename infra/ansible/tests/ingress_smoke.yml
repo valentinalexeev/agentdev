@@ -55,9 +55,20 @@
       ansible.builtin.assert:
         that:
           - ingress_smoke_forwarder_pods | bool
+          - ingress_smoke_label_selectors == ['app=ts']
         quiet: true
       vars:
         ingress: {mode: external, host: agentdev.example.com, forwarder: {namespace: tailscale, pod_selector: {app: ts}}}
+
+    - name: Each label of the pod selector becomes one key=value selector (#489)
+      ansible.builtin.assert:
+        that: ingress_smoke_label_selectors | sort == ['app=funnel-forwarder', 'tier=edge']
+        quiet: true
+      vars:
+        ingress:
+          mode: external
+          host: agentdev.example.com
+          forwarder: {namespace: agentdev-funnel, pod_selector: {app: funnel-forwarder, tier: edge}}
 
     - name: A forwarder with CIDRs only is not waited for (no pods to select)
       ansible.builtin.assert:

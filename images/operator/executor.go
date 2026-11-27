@@ -55,6 +55,10 @@ import (
 // +kubebuilder:rbac:groups=agentdev.dev,resources=approvals,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// Executor forge tokens: get exec-<name>-forge by name. controller-gen merges every marker into one ClusterRole
+// (config/rbac/role.yaml, a reference that no install applies), so this shows there as an unnamed get. The deployed
+// rule is in the Role of the executors namespace only (manifests/operator.yaml.tmpl); the agents namespace Role has
+// get on claude-proxy-signing by name only (#381, #452); tests/operator_render.yml asserts that.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 const (

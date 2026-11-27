@@ -26,7 +26,18 @@ func allPolicies(t *testing.T) map[string]networkingv1.NetworkPolicy {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, d := range strings.Split(os.Expand(string(b), func(string) string { return "x" }), "\n---\n") {
+		// a label map (TELEMETRY_SCRAPER_SELECTOR, #196) and a peer list (KUBE_API_EGRESS, #352) get their shape;
+		// every other variable a plain word
+		expand := func(k string) string {
+			switch {
+			case strings.HasSuffix(k, "_SELECTOR"):
+				return "{x: x}"
+			case strings.HasSuffix(k, "_EGRESS"):
+				return "[{ipBlock: {cidr: 10.0.0.1/32}}]"
+			}
+			return "x"
+		}
+		for _, d := range strings.Split(os.Expand(string(b), expand), "\n---\n") {
 			if !strings.Contains(d, "kind: NetworkPolicy") {
 				continue
 			}

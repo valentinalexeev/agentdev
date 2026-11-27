@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
@@ -43,6 +45,10 @@ func main() {
 	// read-only observability MCP tools (#205): same image, own Deployment (manifests/obs-mcp.yaml.tmpl)
 	if len(os.Args) > 1 && os.Args[1] == "obs-mcp" {
 		os.Exit(runObsMCP(os.Stdout))
+	}
+	// optional setup of an external Gitea (#442): same image, Job forge-init-<hash> (infra/ansible/tasks/forge_init.yml)
+	if len(os.Args) > 1 && os.Args[1] == "forge-init" {
+		os.Exit(runForgeInit(os.Stdout))
 	}
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
@@ -87,9 +93,21 @@ func main() {
 		StateStorage:     env("AGENT_STATE_STORAGE", "10Gi"),
 		AgentEgressHosts: os.Getenv("AGENT_EGRESS_HOSTS"), // harness guide text (#206)
 		ExecNS:           execNS,
-		Secrets:          os.Getenv("SECRETS_STORE") != "",
-		BrokerURL:        os.Getenv("CREDENTIAL_BROKER_URL"),
-	}}
+		// #251 part 3: empty or invalid gives the default (render.go)
+		AgentEphemeralRequest: os.Getenv("AGENT_EPHEMERAL_REQUEST"),
+		AgentEphemeralLimit:   os.Getenv("AGENT_EPHEMERAL_LIMIT"),
+		ForgeMirrorLimit:      os.Getenv("FORGE_MIRROR_LIMIT"),
+		ForgeEphemeralLimit:   os.Getenv("FORGE_EPHEMERAL_LIMIT"),
+		GraceSeconds:          env("AGENT_GRACE_SECONDS", "300"),
+		DrainMaxMinutes:       env("DRAIN_MAX_MINUTES", "60"),
+		Secrets:               os.Getenv("SECRETS_STORE") != "",
+		BrokerURL:             os.Getenv("CREDENTIAL_BROKER_URL"),
+	}, Drains: &DrainSignals{}, ns: ns}
+	// #251: a forge limit below its mirror evicts agent pods in a loop; refuse the configuration instead
+	if err := r.D.validateEphemeral(); err != nil {
+		log.Error(err, "configuration")
+		os.Exit(1)
+	}
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)
@@ -108,7 +126,22 @@ func main() {
 		log.Error(err, "usage")
 		os.Exit(1)
 	}
+	// #196 (ADR 0002 D4): OpenTelemetry metrics on a separate port (9464), scraper only; "off" disables
+	if addr := env("METRICS_LISTEN", ":9464"); addr != "off" {
+		h, shutdown, err := newOperatorMetrics(os.Getenv("TELEMETRY_OTLP_URL"), usage.pausedNow)
+		if err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			return serveOperatorMetrics(ctx, addr, h, shutdown)
+		})); err != nil {
+			log.Error(err, "metrics")
+			os.Exit(1)
+		}
+	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
+		Drains: r.Drains, Requeue: r.requeueAgent, Recorder: mgr.GetEventRecorderFor("agentdev-operator"), //nolint:staticcheck // core/v1 Events: the Role grants events in the core group only
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
 		C: SecurityConfig{
 			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),
@@ -122,6 +155,15 @@ func main() {
 	if err := mgr.Add(col); err != nil {
 		log.Error(err, "security collector")
 		os.Exit(1)
+	}
+	// external forwarder watch (#213): off unless FORWARDER_NS and FORWARDER_SELECTOR are set (ingress.forwarder)
+	if fns, sel := os.Getenv("FORWARDER_NS"), parseSelector(os.Getenv("FORWARDER_SELECTOR")); fns != "" && sel != nil {
+		fw := &ForwarderWatch{Reader: mgr.GetAPIReader(), Writer: mgr.GetClient(), NS: fns, Selector: sel, EventsNS: ns,
+			After: time.Duration(envInt("FORWARDER_NOT_READY_MINUTES", 10)) * time.Minute, Every: 30 * time.Second, Now: time.Now}
+		if err := mgr.Add(fw); err != nil {
+			log.Error(err, "forwarder watch")
+			os.Exit(1)
+		}
 	}
 	if execNS != "" {
 		if execNS == ns {
@@ -163,8 +205,15 @@ func main() {
 		}
 		log.Info("scoped secrets store on", "store", store)
 	}
+	// MCP per project (#383, was scripts/mcp-sync.sh): McpProject -> ContextForge; MCP_CONTEXTFORGE_URL=off disables
+	if on, err := setupMcpProjects(mgr, ns, os.Getenv); err != nil {
+		log.Error(err, "mcpproject controller")
+		os.Exit(1)
+	} else if on {
+		log.Info("mcp projects on")
+	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (run.sh 12,
+	// ready only once the caches synced (#161): a cache that cannot list/watch never syncs, so rollout status (kind.yml,
 	// deploy.yml) fails on kind and GKE alike instead of passing before the crash loop
 	_ = mgr.AddReadyzCheck("readyz", cacheSynced(mgr.GetCache()))
 	log.Info("agentdev-operator starting", "namespace", ns)

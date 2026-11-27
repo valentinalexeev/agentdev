@@ -66,6 +66,15 @@ variable "system_pool_spot" {
   type        = bool
   default     = false
 }
+variable "system_pool_min_nodes" {
+  description = "Minimum node count of the system pool autoscaler (#313). 0 lets scripts/cluster-stop.sh keep the pool at 0 nodes, and a later terraform apply does not start a node again. With platform pods, the autoscaler keeps at least one node."
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.system_pool_min_nodes >= 0 && var.system_pool_min_nodes <= 2 && floor(var.system_pool_min_nodes) == var.system_pool_min_nodes
+    error_message = "system_pool_min_nodes must be a whole number from 0 to 2 (the maximum of the system pool)."
+  }
+}
 
 # Cluster add-ons (#208). Lean by default: the system pool is sized for the platform, so add-ons agentdev does not use
 # are off. Every add-on costs CPU and memory on the system pool nodes. Set an input back to keep an old cluster as it was.
@@ -139,6 +148,18 @@ variable "github_repository" {
   type        = string
 }
 
+variable "create_plan_identity" {
+  description = "Create the read-only plan identity for deployment PRs (#291): service account agentdev-plan, Workload Identity pool github-pr for pull_request runs of github_repository, read access to the state bucket. Opt-in (#421): the apply account needs one-time owner grants first (docs/admin.md \"Show the plan on deployment pull requests\")."
+  type        = bool
+  default     = false
+}
+
+variable "plan_state_bucket" {
+  description = "State bucket the plan identity may read; null = \"<project_id>-tfstate\" (the bucket bootstrap/ creates)."
+  type        = string
+  default     = null
+}
+
 variable "public_hosts" {
   description = "DNS names of the public HTTPS entry point (#120): the webhook host and the UI host (can be the same). Each needs a DNS A record to webhook_ip. Empty: no certificate, no public entry point."
   type        = list(string)
@@ -210,6 +231,67 @@ variable "agent_disk_type" {
   }
 }
 
+# ---------- platform secrets (#381) ----------
+variable "external_secrets" {
+  description = "Platform secrets through the External Secrets Operator (#381): generate the secrets in Secret Manager and make the per-namespace reader accounts. Set together with external_secrets.mode: external in instance.yml. Default false: nothing from secrets.tf, as in 1.1."
+  type        = bool
+  default     = false
+}
+variable "agent_names" {
+  description = "Agent names (the `agents[].name` of instance.yml). Terraform makes the wake token agent-<name>-wake-token of each one once (#381)."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for a in var.agent_names : can(regex("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", a))])
+    error_message = "agent_names: DNS labels (lower-case letters, digits, -)."
+  }
+}
+
+variable "keep_existing_secret_values" {
+  description = "Generated secrets that already have a value (an upgrade from 1.1.x, where the playbook made them). Terraform adds no version for these names, so the values stay. See imports.tf.example of the deployment template."
+  type        = list(string)
+  default     = []
+}
+
+variable "forge_init" {
+  description = "The forge-init Job of an external Gitea runs (forge_init.enabled in instance.yml, #442). The platform reader may then read gitea-admin-token and github-app-webhook-secret (#459). Needs external_secrets = true."
+  type        = bool
+  default     = false
+}
+
+variable "platform_extra_secret_ids" {
+  description = "More Secret Manager ids the platform namespace may read (for example the forwarder pre-auth key funnel-sidecar-authkey). A trailing * is a prefix."
+  type        = list(string)
+  default     = []
+}
+
+variable "platform_namespace" {
+  type    = string
+  default = "agentdev-platform"
+}
+
+variable "agents_namespace" {
+  type    = string
+  default = "coding-agents"
+}
+
+variable "executors_namespace" {
+  type    = string
+  default = "agentdev-executors"
+}
+
+variable "forwarder_namespace" {
+  description = "Namespace of the deployed forwarder (instance.yml ingress.forwarder.namespace with deploy, #316). Empty: no forwarder secrets reader."
+  type        = string
+  default     = ""
+}
+
+variable "forwarder_authkey_secret" {
+  description = "Secret Manager id of the forwarder pre-auth key (ingress.forwarder.deploy.authkey_secret)."
+  type        = string
+  default     = "funnel-sidecar-authkey"
+}
+
 variable "registry_proxy" {
   description = "Create Artifact Registry remote repositories (npm, PyPI, Go) as the agents' package cache (#203), a reader service account with IAM per repository, and its Workload Identity binding. Needs create_artifact_registry. Set the Ansible registry_proxy to artifact_registry to use them."
   type        = bool
@@ -218,10 +300,4 @@ variable "registry_proxy" {
     condition     = !var.registry_proxy || var.create_artifact_registry
     error_message = "registry_proxy needs create_artifact_registry = true. Without Artifact Registry use the in-cluster caches (Ansible registry_proxy: cluster)."
   }
-}
-
-variable "agents_namespace" {
-  description = "Kubernetes namespace of the agents (Ansible agents_ns). The registry cache gateway runs there with the Kubernetes service account registry-cache (Workload Identity, #203)."
-  type        = string
-  default     = "coding-agents"
 }

@@ -56,6 +56,8 @@ type agentState struct {
 	MaxConcurrent int32  `json:"maxConcurrent"`
 	ScaleToZero   bool   `json:"scaleToZero"`
 	Paused        bool   `json:"paused"`
+	// Permission is set only in entries of action "permission" (#505, permission.go)
+	Permission *agentPermission `json:"permission,omitempty"`
 }
 
 // agentStore reads and writes Agent objects.
@@ -71,11 +73,12 @@ func (k *kubeAgents) Get(ctx context.Context, name string) (*unstructured.Unstru
 }
 
 func (k *kubeAgents) Create(ctx context.Context, u *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	return k.d.Resource(agentsGVR).Namespace(k.ns).Create(ctx, u, metav1.CreateOptions{})
+	return k.d.Resource(agentsGVR).Namespace(k.ns).Create(ctx, u, metav1.CreateOptions{FieldManager: agentPatchOptions().FieldManager})
 }
 
 func (k *kubeAgents) Patch(ctx context.Context, name string, patch []byte) (*unstructured.Unstructured, error) {
-	return k.d.Resource(agentsGVR).Namespace(k.ns).Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
+	// own field manager (#58): managedFields show that the API, not Flux, wrote spec.paused
+	return k.d.Resource(agentsGVR).Namespace(k.ns).Patch(ctx, name, types.MergePatchType, patch, agentPatchOptions())
 }
 
 // Delete removes the object only if it is still the one that was checked (same UID and resourceVersion).
@@ -108,7 +111,7 @@ func stateOf(u *unstructured.Unstructured) *agentState {
 type auditEntry struct {
 	Time      string      `json:"time"`
 	Who       auditWho    `json:"who"`
-	Action    string      `json:"action"` // patch | create | delete
+	Action    string      `json:"action"` // patch | create | delete | permission (#505) | ...
 	Agent     string      `json:"agent"`
 	Result    string      `json:"result"` // ok | denied | invalid | error | unauthenticated
 	Reason    string      `json:"reason,omitempty"`
@@ -147,9 +150,16 @@ type writer struct {
 	store      agentStore
 	perms      permChecker
 	adminGroup string
-	usage      usageStore // usage limits (#93); nil: the endpoints are not served
+	usage      usageStore  // usage limits (#93); nil: the endpoints are not served
+	secrets    *secretsAPI // project secrets (#202, secrets.go); nil: the endpoints are not served
 	limits     agentLimits
-	createMu   sync.Mutex // one create at a time, so two requests cannot both pass the caps (one API replica)
+	events     eventStore       // security event counts for the agent detail (#344); nil: 0
+	platform   *platformChecker // GET /api/platform (#344); nil: not served
+	jobs       *jobCache        // GET /api/jobs (#345), forge-backed; nil: no jobs
+	createMu   sync.Mutex       // one create at a time, so two requests cannot both pass the caps (one API replica)
+	notify     *notifyAPI       // notifications for each user (#347, notify.go); nil: not served
+	runlog     jobEventStore    // run log of jobs (#425, runlog.go); nil: not served
+	source     string           // agents_source (#58): "api" (default) or "git"; see gitops.go
 }
 
 // agentLimits (#27): caps on the number of Agent objects that POST /api/agents may reach. 0 = no cap.
@@ -157,8 +167,8 @@ type writer struct {
 //   - PerUser: the Agent objects that one person made through the API (annotation agentdev/created-by = OIDC
 //     subject). Members of the admin group are not limited by it. Objects made outside the API count only for Total.
 //
-// Admins set them on the instance (Ansible api.max_agents / api.max_agents_per_user, config.env MAX_AGENTS /
-// MAX_AGENTS_PER_USER). The ResourceQuota from the project spec stays the Kubernetes backstop.
+// Admins set them on the instance (Ansible api.max_agents / api.max_agents_per_user; on kind api_max_agents /
+// api_max_agents_per_user in kind.vars.yml). The ResourceQuota from the project spec stays the Kubernetes backstop.
 type agentLimits struct {
 	Total   int
 	PerUser int
@@ -360,6 +370,10 @@ func (w *writer) patch(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Before = stateOf(cur)
+	if err := w.gitOwnedPatch(cur, spec); err != nil {
+		w.fail(rw, e, err)
+		return
+	}
 	pauseOnly := len(spec) == 1 && spec["paused"] == true
 	grant, err := w.authorize(r.Context(), id, e.Before.Forge, e.Before.Repo, permWrite, pauseOnly)
 	if err != nil {
@@ -376,7 +390,7 @@ func (w *writer) patch(rw http.ResponseWriter, r *http.Request) {
 	}
 	e.After, e.Result = stateOf(out), "ok"
 	audit(e)
-	writeJSON(rw, http.StatusOK, fromAgentObject(*out))
+	writeJSON(rw, http.StatusOK, w.view(out))
 }
 
 // POST /api/agents: {name, repo, forge?, maxConcurrent?, scaleToZero? (default true, #181), claudeSecret?}. The Secrets agent-<name> and
@@ -466,7 +480,7 @@ func (w *writer) create(rw http.ResponseWriter, r *http.Request) {
 	}
 	e.After, e.Result = stateOf(out), "ok"
 	audit(e)
-	writeJSON(rw, http.StatusCreated, fromAgentObject(*out))
+	writeJSON(rw, http.StatusCreated, w.view(out))
 }
 
 // DELETE /api/agents/{name}[?keepState=true]. The volumes (state, claude) always stay: the operator sets the
@@ -488,6 +502,10 @@ func (w *writer) delete(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Before = stateOf(cur)
+	if w.gitOwned(cur) {
+		w.fail(rw, e, errGitOwned)
+		return
+	}
 	grant, err := w.authorize(r.Context(), id, e.Before.Forge, e.Before.Repo, permAdmin, true)
 	if err != nil {
 		w.fail(rw, e, err)

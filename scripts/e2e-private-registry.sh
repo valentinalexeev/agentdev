@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# kind e2e for project-scoped private npm registries (#248). Needs a kind cluster with ./run.sh 13 done (store and
-# credential broker). Uses registry.npmjs.org as the "private" upstream (it accepts any token), so the check is the
+# kind e2e for project-scoped private npm registries (#248). Needs a kind cluster with kind.yml --tags secrets done
+# (store and credential broker). Uses registry.npmjs.org as the "private" upstream (it accepts any token), so the check is the
 # path, the scope and the absence of the credential, not the upstream's own auth.
 #   CLUSTER_NAME=w17 scripts/e2e-private-registry.sh
 # Checks: an agent of project A installs @<A scope> through the broker; it cannot use project B's registry (403);
@@ -22,7 +22,7 @@ cleanup() {
 }
 trap cleanup EXIT
 cleanup
-k -n "$ns" get deploy credential-broker >/dev/null 2>&1 || { echo "  FAIL credential broker not deployed (./run.sh 13)"; exit 1; }
+k -n "$ns" get deploy credential-broker >/dev/null 2>&1 || { echo "  FAIL credential broker not deployed (kind.yml --tags secrets)"; exit 1; }
 
 k -n "$ns" apply -f - >/dev/null <<EOF
 apiVersion: agentdev.dev/v1alpha1
@@ -67,8 +67,8 @@ npmrc_b=$(k -n "$ns" get configmap agentdev-guides -o jsonpath='{.data.e2e-prb\.
 [[ "$npmrc_a" == *"@types:registry=http://credential-broker.$ns.svc.cluster.local:8080/s/e2e-npm-a/"* && "$npmrc_a" != *@babel* ]] \
   && ok "agent of project A gets only A's scope in its npm config" || no "npm config of A: $npmrc_a"
 [[ "$npmrc_b" == *"@babel:registry="* && "$npmrc_b" != *@types* ]] && ok "agent of project B gets only B's scope" || no "npm config of B: $npmrc_b"
-[[ "$npmrc_a$npmrc_b" != *"$tok_a"* && "$npmrc_a$npmrc_b" != *"$tok_b"* && "$npmrc_a" == *'${AGENTDEV_BROKER_KEY}'* ]] \
-  && ok "npm config holds no registry credential, only a reference to the agent key" || no "credential in the npm config"
+[[ "$npmrc_a$npmrc_b" != *"$tok_a"* && "$npmrc_a$npmrc_b" != *"$tok_b"* && "$npmrc_a" == *'${AGENTDEV_BROKER_TOKEN}'* ]] \
+  && ok "npm config holds no registry credential, only a reference to the agent's broker token" || no "credential in the npm config"
 sts_env=$(k -n "$ns" get sts agent-e2e-pra -o jsonpath='{range .spec.template.spec.containers[?(@.name=="agent")].env[*]}{.name}={.value}{" "}{end}')
 items=$(k -n "$ns" get sts agent-e2e-pra -o jsonpath='{.spec.template.spec.volumes[?(@.name=="guide")].configMap.items[*].key}')
 [[ "$sts_env" == *"NPM_CONFIG_GLOBALCONFIG=/etc/agentdev/guide/npmrc"* && "$items" == "e2e-pra e2e-pra.npmrc" ]] \
@@ -76,10 +76,10 @@ items=$(k -n "$ns" get sts agent-e2e-pra -o jsonpath='{.spec.template.spec.volum
 
 k -n "$ns" rollout status deploy/credential-broker --timeout=180s >/dev/null
 sleep 5   # the projected values follow the new Secrets
-# a pod shaped like agent A's container: same labels (NetworkPolicy), same npm config mount and env
-signing=$(k -n "$ns" get secret claude-proxy-signing -o jsonpath='{.data.key}' | base64 -d)
-key_a="e2e-pra.$(printf 'agentdev-claude-proxy/v1:%s' e2e-pra | openssl dgst -sha256 -hmac "$signing" -r | cut -d' ' -f1)"
-unset signing
+# a pod shaped like agent A's container: same labels (NetworkPolicy), same npm config mount and env, and A's
+# projected broker token (R128: TokenReview, audience credential-broker; the operator makes the SA agent-e2e-pra)
+for _ in $(seq 30); do k -n "$ns" get sa agent-e2e-pra >/dev/null 2>&1 && break; sleep 2; done
+key_a=$(k -n "$ns" create token agent-e2e-pra --audience credential-broker --duration 10m)
 k -n "$ns" apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Pod
@@ -93,7 +93,7 @@ spec:
     image: node:22-alpine
     command: [sleep, "600"]
     env:
-    - {name: AGENTDEV_BROKER_KEY, value: "$key_a"}
+    - {name: AGENTDEV_BROKER_TOKEN, value: "$key_a"}
     - {name: NPM_CONFIG_GLOBALCONFIG, value: /etc/agentdev/guide/npmrc}
     - {name: HOME, value: /tmp}
     - {name: NO_PROXY, value: ".svc,.svc.cluster.local"}

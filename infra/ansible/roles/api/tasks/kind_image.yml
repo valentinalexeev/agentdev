@@ -1,0 +1,23 @@
+---
+# kind (#106, was 10-api.sh): a local tag (agentdev-api:*) is built from images/api; a published image is pulled.
+# Then the image goes into the kind nodes. A changed load restarts the API (main.yml), because local tags keep their name.
+- name: Build the local API image
+  ansible.builtin.command:
+    argv: ["{{ api_container_engine }}", build, -q, -t, "{{ api_image }}", "{{ repo_root }}/images/api"]
+  changed_when: false
+  when: api_image is match('agentdev-api:')
+
+- name: Published API image present locally
+  ansible.builtin.shell: >-
+    {{ api_container_engine }} image inspect {{ api_image | quote }} >/dev/null 2>&1
+    || { {{ api_container_engine }} pull -q {{ api_image | quote }} >/dev/null && echo pulled; }
+  register: api_pull
+  changed_when: "'pulled' in api_pull.stdout"
+  when: api_image is not match('agentdev-api:')
+
+- name: Load the API image into kind
+  ansible.builtin.command:
+    argv: [kind, load, docker-image, "{{ api_image }}", --name, "{{ api_kind_cluster }}"]
+  register: api_load
+  # kind writes "already present on all nodes" to stderr on a skip
+  changed_when: "'already present on all nodes' not in (api_load.stdout ~ api_load.stderr)"

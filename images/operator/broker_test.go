@@ -19,8 +19,8 @@ func brokerPS(name, scope, owner string) *v1.ProjectSecret {
 		Spec: v1.ProjectSecretSpec{Scope: scope, Mode: "broker", Broker: &v1.ProjectSecretBroker{Upstream: "https://npm.example.com/base"}}}
 	if scope == "project" {
 		ps.Spec.Project = owner
-	} else {
-		ps.Spec.Agent = owner
+	} else { // scope agent records the agent's repository (fixtures: owner/repo, see agent())
+		ps.Spec.Agent, ps.Spec.Project = owner, "owner/repo"
 	}
 	return ps
 }
@@ -34,7 +34,11 @@ func envPS(name, scope, owner, variable string) *v1.ProjectSecret {
 
 func TestBrokerRoutesScopes(t *testing.T) {
 	agents := []v1.Agent{*agent("alice", nil), *agent("bob", nil), *agent("carol", func(a *v1.Agent) { a.Spec.Repo = "other/repo" })}
-	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), *brokerPS("mine", "agent", "carol"),
+	secrets := []v1.ProjectSecret{*brokerPS("npm", "project", "owner/repo"), func() v1.ProjectSecret {
+		p := brokerPS("mine", "agent", "carol")
+		p.Spec.Project = "other/repo"
+		return *p
+	}(),
 		*envPS("db", "project", "owner/repo", "DB_PASSWORD")}
 	routes, src := brokerRoutes(secrets, agents)
 	var m map[string]brokerRoute
@@ -105,11 +109,48 @@ func TestSecretEnvAndBrokerEnv(t *testing.T) {
 	if strings.Join(got, " ") != "DB_PASSWORD=ps-db" {
 		t.Errorf("env secrets %v", got)
 	}
-	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || !hasEnv(ag, "AGENTDEV_BROKER_KEY") {
+	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || envOfC(ag, "AGENTDEV_BROKER_TOKEN_FILE") != BrokerTokenDir+"/token" || hasEnv(ag, "AGENTDEV_BROKER_TOKEN") {
 		t.Error("broker env missing")
 	}
-	if fc := container(s, "forge"); hasEnv(fc, "DB_PASSWORD") {
+	// R128: the broker identity is a projected token (audience credential-broker, 600 s), mounted only in the agent
+	found := false
+	for _, v := range s.Spec.Template.Spec.Volumes {
+		if v.Name == brokerTokenVolume {
+			st := v.Projected.Sources[0].ServiceAccountToken
+			found = len(v.Projected.Sources) == 1 && st != nil && st.Audience == "credential-broker" && *st.ExpirationSeconds == 600 && st.Path == "token"
+		}
+	}
+	if !found {
+		t.Error("broker-token volume missing or wrong")
+	}
+	for _, c := range s.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == brokerTokenVolume && (c.Name != "agent" || m.MountPath != BrokerTokenDir || !m.ReadOnly) {
+				t.Errorf("broker token mounted in %s at %s", c.Name, m.MountPath)
+			}
+		}
+	}
+	fc := container(s, "forge")
+	if hasEnv(fc, "DB_PASSWORD") {
 		t.Error("env secret in the forge container")
+	}
+	// #202: the sidecar gets the value as a file for redaction; the agent container does not mount it
+	if envOfC(fc, "REDACT_DIR") != redactDir {
+		t.Error("REDACT_DIR missing in the forge container")
+	}
+	for _, m := range ag.VolumeMounts {
+		if m.Name == "redact" {
+			t.Error("redact volume in the agent container")
+		}
+	}
+	var redact *corev1.Volume
+	for i := range s.Spec.Template.Spec.Volumes {
+		if s.Spec.Template.Spec.Volumes[i].Name == "redact" {
+			redact = &s.Spec.Template.Spec.Volumes[i]
+		}
+	}
+	if redact == nil || len(redact.Projected.Sources) != 1 || redact.Projected.Sources[0].Secret.Name != "ps-db" {
+		t.Errorf("redact volume %+v", redact)
 	}
 	var cm corev1.ConfigMap
 	c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: guidesCM}, &cm)
@@ -138,6 +179,80 @@ func TestBrokerEventLineSource(t *testing.T) {
 	}
 }
 
+func envOfC(c *corev1.Container, k string) string {
+	for _, e := range c.Env {
+		if e.Name == k {
+			return e.Value
+		}
+	}
+	return ""
+}
+
+// Review of #272: a repository is (forge, name), and scope agent is bound to the agent's repository at creation.
+func TestUsableByForgeAndRecreatedAgent(t *testing.T) {
+	gh := agent("alice", func(a *v1.Agent) { a.Spec.Forge = "github" })
+	if usableBy(brokerPS("npm", "project", "owner/repo"), gh) {
+		t.Error("a Gitea project secret reached the GitHub agent of the same repository name")
+	}
+	ps := brokerPS("npm", "project", "owner/repo")
+	ps.Spec.Forge = "github"
+	if !usableBy(ps, gh) || usableBy(ps, agent("bob", nil)) {
+		t.Error("forge github: wrong agents")
+	}
+	recreated := agent("carol", func(a *v1.Agent) { a.Spec.Repo = "else/where" })
+	if usableBy(brokerPS("mine", "agent", "carol"), recreated) {
+		t.Error("an agent recreated under the same name for another repository inherited the secret")
+	}
+	if !usableBy(brokerPS("mine", "agent", "carol"), agent("carol", nil)) || usableBy(brokerPS("mine", "agent", "carol"), agent("dave", nil)) {
+		t.Error("scope agent: wrong agents")
+	}
+	if usableBy(&v1.ProjectSecret{Spec: v1.ProjectSecretSpec{Scope: "agent", Agent: "carol"}}, agent("carol", nil)) {
+		t.Error("scope agent without a recorded repository applied")
+	}
+}
+
+// Review of #272 (and #277): a mode-env secret named like a variable agentdev sets never overrides it, even when
+// the CRD rule does not refuse the name; the attempt is a SecurityEvent.
+func TestSecretEnvCannotOverridePlatformEnv(t *testing.T) {
+	r, c := setup(t, agent("alice", nil), envPS("a-repo", "project", "owner/repo", "REPO"),
+		envPS("b-poll", "project", "owner/repo", "POLL_SECONDS"), envPS("c-noproxy", "project", "owner/repo", "NO_PROXY"),
+		envPS("d-db", "project", "owner/repo", "DB_PASSWORD"))
+	r.D.Secrets, r.D.EgressProxy = true, "http://egress:3128"
+	reconcile(t, r, "alice")
+	ag := container(getSTS(t, c, "alice"), "agent")
+	count := map[string]int{}
+	for _, e := range ag.Env {
+		count[e.Name]++
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && strings.HasPrefix(e.ValueFrom.SecretKeyRef.Name, "ps-") && e.Name != "DB_PASSWORD" {
+			t.Errorf("%s comes from %s", e.Name, e.ValueFrom.SecretKeyRef.Name)
+		}
+	}
+	for _, n := range []string{"REPO", "POLL_SECONDS", "NO_PROXY", "no_proxy", "DB_PASSWORD"} {
+		if count[n] != 1 {
+			t.Errorf("%s rendered %d times", n, count[n])
+		}
+	}
+	if envOf(getSTS(t, c, "alice"), "POLL_SECONDS") != "20" || envOf(getSTS(t, c, "alice"), "REPO") != "owner/repo" {
+		t.Error("platform value lost")
+	}
+	var evs v1.SecurityEventList
+	_ = c.List(context.Background(), &evs)
+	rules := 0
+	for _, e := range evs.Items {
+		if e.Spec.Rule == "secret-env-reserved" && e.Spec.Agent == "alice" && e.Spec.Severity == "high" {
+			rules++
+		}
+	}
+	if rules != 3 {
+		t.Errorf("%d secret-env-reserved events, want 3", rules)
+	}
+	reconcile(t, r, "alice") // idempotent
+	_ = c.List(context.Background(), &evs)
+	if len(evs.Items) != 3 {
+		t.Errorf("%d events after a second reconcile", len(evs.Items))
+	}
+}
+
 // private npm registries (#248): an agent of project A gets A's scope through the broker, never B's; no credential
 func TestNpmrcPrivateRegistries(t *testing.T) {
 	scoped := func(name, scope, owner, npm string) *v1.ProjectSecret {
@@ -156,7 +271,7 @@ func TestNpmrcPrivateRegistries(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := cm.Data["alice.npmrc"]
-	want := "@acme:registry=" + r.D.BrokerURL + "/s/acme-npm/\n//credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/:_authToken=${AGENTDEV_BROKER_KEY}\n"
+	want := "@acme:registry=" + r.D.BrokerURL + "/s/acme-npm/\n//credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/:_authToken=${AGENTDEV_BROKER_TOKEN}\n"
 	if !strings.Contains(a, want) || strings.Contains(a, "@beta") || strings.Contains(a, "zz-dup") || strings.Contains(a, "plain") {
 		t.Errorf("alice npmrc %q", a)
 	}

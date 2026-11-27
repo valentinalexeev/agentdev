@@ -14,6 +14,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -56,18 +58,31 @@ type brokerRoute struct {
 // allowedAgents: the agents that may use a ProjectSecret, sorted.
 func allowedAgents(ps *v1.ProjectSecret, agents []v1.Agent) []string {
 	out := []string{}
-	for _, a := range agents {
-		if (ps.Spec.Scope == "agent" && a.Name == ps.Spec.Agent) || (ps.Spec.Scope == "project" && a.Spec.Repo == ps.Spec.Project) {
-			out = append(out, a.Name)
+	for i := range agents {
+		if usableBy(ps, &agents[i]) {
+			out = append(out, agents[i].Name)
 		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-// usableBy: the ProjectSecret applies to agent a.
+func orGitea(f string) string {
+	if f == "" {
+		return "gitea"
+	}
+	return f
+}
+
+// usableBy: the ProjectSecret applies to agent a. A repository is (forge, owner/name): acme/app on in-cluster Gitea,
+// where anyone may create the org, is not acme/app on GitHub. Scope agent also needs the agent to still work on the
+// repository recorded at creation, so an agent recreated under the same name for another repository does not
+// inherit the secret (review of #272).
 func usableBy(ps *v1.ProjectSecret, a *v1.Agent) bool {
-	return (ps.Spec.Scope == "agent" && ps.Spec.Agent == a.Name) || (ps.Spec.Scope == "project" && ps.Spec.Project == a.Spec.Repo)
+	if ps.Spec.Project == "" || ps.Spec.Project != a.Spec.Repo || orGitea(ps.Spec.Forge) != orGitea(a.Spec.Forge) {
+		return false
+	}
+	return ps.Spec.Scope == "project" || (ps.Spec.Scope == "agent" && ps.Spec.Agent == a.Name)
 }
 
 // brokerRoutes renders routes.json and the value sources for all broker secrets.
@@ -176,28 +191,54 @@ func (s *BrokerSync) Sync(ctx context.Context) error {
 	return nil
 }
 
-// brokerEnv: the agent container calls the broker with its proxy key (the same per-agent key as for claude-proxy;
-// worth nothing outside the cluster). Nothing without a broker URL.
-func (r *AgentReconciler) brokerEnv(n string) []corev1.EnvVar {
+// brokerEnv: the agent container calls the broker with a projected token of its own service account (audience
+// credential-broker, 10 minutes, renewed by the kubelet), read from AGENTDEV_BROKER_TOKEN_FILE on each call. No key:
+// the broker checks the token with TokenReview (#202, R128). Nothing without a broker URL.
+func (r *AgentReconciler) brokerEnv(string) []corev1.EnvVar {
 	if r.D.BrokerURL == "" {
 		return nil
 	}
 	return []corev1.EnvVar{{Name: "AGENTDEV_BROKER_URL", Value: r.D.BrokerURL},
-		{Name: "AGENTDEV_BROKER_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN", Optional: ptr.To(true)}}}}
+		{Name: "AGENTDEV_BROKER_TOKEN_FILE", Value: BrokerTokenDir + "/token"}}
+}
+
+const (
+	brokerTokenVolume   = "broker-token"
+	BrokerTokenDir      = "/var/run/secrets/agentdev/broker"
+	brokerTokenAudience = "credential-broker"
+)
+
+// brokerTokenVolumes: the projected token for the broker, only with a broker URL; only the agent container mounts it.
+func (r *AgentReconciler) brokerTokenVolumes() []corev1.Volume {
+	if r.D.BrokerURL == "" {
+		return nil
+	}
+	return []corev1.Volume{{Name: brokerTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+		DefaultMode: ptr.To[int32](0o444),
+		Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+			Audience: brokerTokenAudience, ExpirationSeconds: ptr.To[int64](proxyTokenSeconds), Path: "token"}}}}}}}
+}
+
+func (r *AgentReconciler) brokerTokenMounts() []corev1.VolumeMount {
+	if r.D.BrokerURL == "" {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: brokerTokenVolume, MountPath: BrokerTokenDir, ReadOnly: true}}
 }
 
 // secretEnv: ProjectSecrets in mode env for this agent become variables of the agent container (explicit opt-in,
 // riskAccepted, ADR 0003 D2). Optional: a value not synced yet never blocks the pod. Sorted by variable name; when two
-// secrets name the same variable the first by name wins and the other is left out.
-func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.EnvVar {
+// secrets name the same variable the first by name wins and the other is left out. Names in taken (the variables
+// agentdev renders itself) are always left out, whatever the CRD rule lets through; shadowedSecrets reports them.
+func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret, taken map[string]bool) []corev1.EnvVar {
 	sorted := append([]v1.ProjectSecret(nil), secrets...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	seen := map[string]bool{}
 	var out []corev1.EnvVar
 	for i := range sorted {
 		ps := &sorted[i]
-		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !ps.Spec.Env.RiskAccepted || !usableBy(ps, a) || seen[ps.Spec.Env.Name] {
+		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !ps.Spec.Env.RiskAccepted || !usableBy(ps, a) || seen[ps.Spec.Env.Name] ||
+			taken[ps.Spec.Env.Name] || taken[strings.ToLower(ps.Spec.Env.Name)] {
 			continue
 		}
 		seen[ps.Spec.Env.Name] = true
@@ -206,6 +247,49 @@ func secretEnv(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.EnvVar {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func envNames(env []corev1.EnvVar) map[string]bool {
+	m := make(map[string]bool, len(env))
+	for _, e := range env {
+		m[e.Name] = true
+	}
+	return m
+}
+
+// shadowedSecrets: the mode-env secrets of agent a that name a variable agentdev sets itself on the rendered
+// container c, so secretEnv left them out.
+func shadowedSecrets(a *v1.Agent, secrets []v1.ProjectSecret, c *corev1.Container) []v1.ProjectSecret {
+	var out []v1.ProjectSecret
+	for _, ps := range secrets {
+		if ps.Spec.Mode != "env" || ps.Spec.Env == nil || !usableBy(&ps, a) {
+			continue
+		}
+		for _, e := range c.Env {
+			if strings.EqualFold(e.Name, ps.Spec.Env.Name) && (e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+				!strings.HasPrefix(e.ValueFrom.SecretKeyRef.Name, ProjectSecretPrefix)) {
+				out = append(out, ps)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// reportShadowed records one SecurityEvent per ProjectSecret that tried to override a platform variable (high: only
+// a repository admin can create one, and the CRD rule should have refused it).
+func (r *AgentReconciler) reportShadowed(ctx context.Context, a *v1.Agent, secrets []v1.ProjectSecret, c *corev1.Container) {
+	for _, ps := range shadowedSecrets(a, secrets, c) {
+		h := sha256.Sum256([]byte("secret-env-reserved\x00" + string(a.UID) + "\x00" + string(ps.UID) + "\x00" + ps.Spec.Env.Name))
+		spec := v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "operator", Rule: "secret-env-reserved", Severity: "high",
+			Agent: a.Name, Action: "ProjectSecret " + ps.Name + " names " + ps.Spec.Env.Name + ", a variable agentdev sets: left out",
+			Time: metav1.Now(), Pod: "agent-" + a.Name + "-0", Container: "agent", Hash: hex.EncodeToString(h[:])}
+		ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: a.Namespace,
+			Labels: map[string]string{"agent": a.Name, "agentdev/severity": spec.Severity, "agentdev/source": spec.Source}}, Spec: spec}
+		if err := r.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
+			log.FromContext(ctx).Error(err, "security event not recorded", "rule", spec.Rule, "projectsecret", ps.Name)
+		}
+	}
 }
 
 // secretsFor lists the ProjectSecrets that apply to agent a; none when the store is off.
@@ -275,8 +359,22 @@ func (r *AgentReconciler) secretsGuide(ctx context.Context, a *v1.Agent) string 
 	if len(lines) > guideMaxExecs {
 		lines = lines[:guideMaxExecs]
 	}
-	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with $AGENTDEV_BROKER_KEY " +
-		"(Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
+	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with the token in the file " +
+		"$AGENTDEV_BROKER_TOKEN_FILE, read it again for each call (Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// redactDir: where the forge sidecar finds the mode-env values it removes from approval text (#202).
+const redactDir = "/var/run/agentdev/redact"
+
+// redactSources: one optional projected source per mode-env ProjectSecret of the agent, same order as secretEnv.
+func redactSources(a *v1.Agent, secrets []v1.ProjectSecret) []corev1.VolumeProjection {
+	var out []corev1.VolumeProjection
+	for _, e := range secretEnv(a, secrets, nil) { // every mode-env value, also a shadowed one: redacting more is safe
+		ref := e.ValueFrom.SecretKeyRef
+		out = append(out, corev1.VolumeProjection{Secret: &corev1.SecretProjection{LocalObjectReference: ref.LocalObjectReference,
+			Optional: ptr.To(true), Items: []corev1.KeyToPath{{Key: ProjectSecretKey, Path: ref.Name}}}})
+	}
+	return out
 }
 
 // npmrcKey: the key of agentdev-guides with the agent's npm config (#248). Agent names have no dots.
@@ -286,8 +384,9 @@ func npmrcKey(agent string) string { return agent + ".npmrc" }
 const npmrcPath = "/etc/agentdev/guide/npmrc"
 
 // npmrcText: private npm registries of agent a (#248). Every broker secret in its scope with spec.broker.npmScope maps
-// that scope to the broker; npm sends the agent's key (expanded by npm from $AGENTDEV_BROKER_KEY, so the file holds no
-// credential) and the broker adds the registry token. Sorted by scope; when two secrets name the same scope the first
+// that scope to the broker; npm sends the agent's projected broker token (expanded by npm from $AGENTDEV_BROKER_TOKEN,
+// which the agent sets from $AGENTDEV_BROKER_TOKEN_FILE for the npm call, so the file holds no credential; #272) and the
+// broker checks it with TokenReview and adds the registry token. Sorted by scope; when two secrets name the same scope the first
 // by name wins. "" when there is nothing to write.
 func npmrcText(brokerURL string, a *v1.Agent, secrets []v1.ProjectSecret) string {
 	if brokerURL == "" {
@@ -309,14 +408,15 @@ func npmrcText(brokerURL string, a *v1.Agent, secrets []v1.ProjectSecret) string
 		}
 		seen[ps.Spec.Broker.NpmScope] = true
 		base := strings.TrimRight(brokerURL, "/") + "/s/" + ps.Name + "/"
-		lines = append(lines, fmt.Sprintf("%s:registry=%s\n//%s%s/s/%s/:_authToken=${AGENTDEV_BROKER_KEY}\n",
+		lines = append(lines, fmt.Sprintf("%s:registry=%s\n//%s%s/s/%s/:_authToken=${AGENTDEV_BROKER_TOKEN}\n",
 			ps.Spec.Broker.NpmScope, base, u.Host, strings.TrimRight(u.EscapedPath(), "/"), ps.Name))
 	}
 	if len(lines) == 0 {
 		return ""
 	}
 	sort.Strings(lines)
-	return "# private npm registries of this agent (#248), written by the operator; no credential in this file\n" +
+	return "# private npm registries of this agent (#248), written by the operator; no credential in this file.\n" +
+		"# Run npm as: AGENTDEV_BROKER_TOKEN=$(cat \"$AGENTDEV_BROKER_TOKEN_FILE\") npm ci\n" +
 		strings.Join(lines, "")
 }
 
