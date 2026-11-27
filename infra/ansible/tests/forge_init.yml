@@ -1,0 +1,84 @@
+---
+# forge-init for an external Gitea (#442): the Job is opt-in, hash-named (same inputs: same name), runs the operator
+# image with `forge-init`, has no ServiceAccount token, gets secret values only by secretKeyRef from the ESO Secret
+# forge-init, and the Gitea host reaches the forge sidecar's egress hosts. No cluster needed.
+# Run: ansible-playbook infra/ansible/tests/forge_init.yml
+- name: Forge-init Job (#442)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    image_registry: ghcr.io/example
+    image_tag: v0.0.0
+    platform_ns: agentdev-platform
+    agents_ns: coding-agents
+    reviewer: owner
+    forge_kind: gitea
+    forge_url: https://git.example.com
+    agents: [{name: alice, user: alice-bot, repos: "o/r", claude: x}]
+  tasks:
+    - name: Load group_vars
+      ansible.builtin.include_vars: ../group_vars/all.yml
+
+    # include_vars wins over play vars: set the instance values again (set_fact wins over include_vars)
+    - name: Instance values of an external Gitea
+      ansible.builtin.set_fact: {forge_kind: gitea, forge_url: "https://git.example.com"}
+
+    - name: Defaults keep the Job off and add the Gitea host to the forge egress hosts
+      ansible.builtin.assert:
+        that:
+          - not forge_init.enabled
+          - forge_gitea_egress_hosts == ['git.example.com']
+          - sm_gitea_admin_token == 'gitea-admin-token'
+
+    - name: Render once
+      ansible.builtin.include_tasks: ../tasks/forge_init_render.yml
+      vars: {forge_init: {enabled: true}}
+
+    - name: Keep the first name
+      ansible.builtin.set_fact: {first: "{{ forge_init_full }}", job: "{{ forge_init_job }}", es: "{{ forge_init_es }}"}
+
+    - name: Render again with the same inputs
+      ansible.builtin.include_tasks: ../tasks/forge_init_render.yml
+      vars: {forge_init: {enabled: true}}
+
+    - name: Same name; the Job is locked down
+      ansible.builtin.assert:
+        that:
+          - forge_init_full == first
+          - first is match('^forge-init-[0-9a-f]{10}$')
+          - job.spec.template.spec.automountServiceAccountToken == false
+          - job.spec.template.spec.containers[0].image == operator_image
+          - job.spec.template.spec.containers[0].args == ['forge-init']
+          - (job.spec.template.spec.containers[0].env | selectattr('value', 'defined') | map(attribute='name') | list)
+            == ['FORGE_URL', 'FORGE_INIT_CONFIG']
+          - (job.spec.template.spec.containers[0].env | selectattr('valueFrom', 'defined')
+             | map(attribute='valueFrom.secretKeyRef.name') | unique | list) == ['forge-init']
+          - "'claude' not in (job.spec.template.spec.containers[0].env[1].value | from_json).agents[0]"
+          - (job.spec.template.spec.containers[0].env[1].value | from_json).create_accounts == false
+          - es.spec.secretStoreRef.name == 'agentdev-platform-secrets' and es.spec.secretStoreRef.kind == 'SecretStore'
+          - es.spec.data | map(attribute='remoteRef.key') | list == ['gitea-admin-token', 'github-app-webhook-secret']
+
+    - name: Render with another agent list
+      ansible.builtin.include_tasks: ../tasks/forge_init_render.yml
+      vars:
+        forge_init: {enabled: true}
+        agents: [{name: alice, user: alice-bot, repos: "o/r,o/s"}]
+
+    - name: A changed input gives a new Job
+      ansible.builtin.assert: {that: [forge_init_full != first]}
+
+    - name: Custom CA mounts a ConfigMap and sets SSL_CERT_FILE
+      ansible.builtin.include_tasks: ../tasks/forge_init_render.yml
+      vars: {forge_init: {enabled: true, ca_configmap: gitea-ca}}
+
+    - name: CA check
+      ansible.builtin.assert:
+        that:
+          - forge_init_job.spec.template.spec.volumes[0].configMap.name == 'gitea-ca'
+          - "'SSL_CERT_FILE' in (forge_init_job.spec.template.spec.containers[0].env | map(attribute='name'))"
+
+    - name: The kind-only role stays the only place with kubectl exec into Gitea; forge-init has none
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.file', '../tasks/forge_init.yml') is not search('exec, (-i|deploy/)')
+          - lookup('ansible.builtin.file', '../tasks/forge_init_render.yml') is not search('exec, (-i|deploy/)')

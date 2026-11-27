@@ -1,0 +1,45 @@
+# The API restart after a Secret change (#488): its condition evaluates when api_load is undefined (only kind
+# registers it), so a redeploy on GKE without a Secret change goes on. Evaluates the real `when` of the role.
+# No cluster. Run: ansible-playbook infra/ansible/tests/api_restart.yml
+- name: API restart condition (#488)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Read the condition of the restart task
+      ansible.builtin.set_fact:
+        t_when: >-
+          {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../roles/api/tasks/main.yml') | from_yaml
+              | selectattr('name', 'defined')
+              | selectattr('name', 'equalto', 'Restart the API after a Secret change') | first).when }}
+
+    - name: Write the condition as a template
+      ansible.builtin.copy:
+        dest: /tmp/agentdev-api-restart-when.j2
+        content: "{{ '{{ ' ~ (t_when | replace('not ansible_check_mode', 'true')) ~ ' }}' }}"
+        mode: "0600"
+      changed_when: false
+
+    # the role's condition, evaluated as an expression: undefined api_load raised an error here before the fix
+    - name: No kind image and no Secret change (GKE redeploy)
+      ansible.builtin.set_fact:
+        t_none: "{{ lookup('ansible.builtin.template', '/tmp/agentdev-api-restart-when.j2') | trim }}"
+
+    - name: A Secret change without api_load
+      ansible.builtin.set_fact:
+        t_secret: "{{ lookup('ansible.builtin.template', '/tmp/agentdev-api-restart-when.j2') | trim }}"
+      vars:
+        api_secrets_changed: true
+
+    - name: A new kind image
+      ansible.builtin.set_fact:
+        t_kind: "{{ lookup('ansible.builtin.template', '/tmp/agentdev-api-restart-when.j2') | trim }}"
+      vars:
+        api_load: {changed: true}
+
+    - name: Restart only on a Secret change or a new kind image
+      ansible.builtin.assert:
+        that:
+          - t_none == 'False'
+          - t_secret == 'True'
+          - t_kind == 'True'
+        quiet: true

@@ -1,0 +1,17 @@
+---
+- name: Settings (case {{ case }})
+  ansible.builtin.include_tasks: ../../roles/kind_agents/tasks/settings.yml
+  vars:
+    kind_agents_claude_budget_units: "{{ case.units }}"
+    kind_agents_claude_budget_tokens: "{{ case.tokens }}"
+    kind_agents_claude_prices: "{{ case.prices }}"
+    kind_agents_claude_job_budget_units: "{{ case.job | default(0) }}"
+    kind_agents_claude_job_approval_units: "{{ case.approval | default(0) }}"
+    kind_agents_claude_job_approval_step_units: "{{ case.step | default(0) }}"
+
+- name: Check (case {{ case }})
+  ansible.builtin.assert:
+    that:
+      - claude_budget_units_effective | int == case.want_units
+      - kind_agents_prices == case.want_prices
+    quiet: true

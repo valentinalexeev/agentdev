@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	if maxc == 0 {
 		maxc = 2
 	}
+	maxTurns := a.Spec.MaxTurns // #336
+	if maxTurns <= 0 {
+		maxTurns = 40
+	}
 	labels := withCostLabels(map[string]string{"app": "coding-agent", "agent": n}, r.D.CostLabels)
 
 	if s.Labels == nil {
@@ -51,8 +57,13 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 	s.Annotations["agentdev/user"] = n
 	s.Annotations["agentdev/repos"] = a.Spec.Repo
 	s.Annotations["agentdev/forge"] = forge
+	// Stakater Reloader (#381): a change of one of these Secrets changes the pod template. The StatefulSet is OnDelete,
+	// so the operator's drain (#174) then replaces the pod after its jobs end: a rotation never kills a running job.
+	s.Annotations[reloaderAnnotation] = r.reloadSecrets(a, forgeSecret)
 
 	s.Spec.ServiceName = "agent-" + n
+	// #174: the operator replaces outdated pods itself after draining them (drain.go), never the StatefulSet controller
+	s.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType}
 	s.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"agent": n}}
 	// keep the agent's state volume when the Agent is deleted: re-adding the agent resumes its work
 	s.Spec.PersistentVolumeClaimRetentionPolicy = &appsv1.StatefulSetPersistentVolumeClaimRetentionPolicy{
@@ -77,14 +88,18 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		{Key: "agentdev/pool", Operator: corev1.TolerationOpEqual, Value: "sandboxes", Effect: corev1.TaintEffectNoSchedule},
 		{Key: "sandbox.gke.io/runtime", Operator: corev1.TolerationOpEqual, Value: "gvisor", Effect: corev1.TaintEffectNoSchedule},
 	}
+	// #352: own service account per agent, but never its API token: only the projected claude-proxy token below
+	p.ServiceAccountName = "agent-" + n
 	p.AutomountServiceAccountToken = ptr.To(false)
+	// #174: time for the loop's SIGTERM handler to save the work in progress of running jobs
+	p.TerminationGracePeriodSeconds = ptr.To(r.D.graceSeconds())
 	// fsGroup 1000: both containers can write the shared /state (the sidecar appends the wake file there)
 	p.SecurityContext = &corev1.PodSecurityContext{RunAsUser: ptr.To[int64](1000), RunAsNonRoot: ptr.To(true), FSGroup: ptr.To[int64](1000)}
 	// own process namespace per container (the default, set explicitly): the agent container cannot read the
 	// sidecar's /proc/<pid>/environ, which is the point of the sidecar (#64, R4)
 	p.ShareProcessNamespace = ptr.To(false)
 	// the sidecar's own git mirror: only the sidecar mounts it, so nothing the agent writes is read by its git
-	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	p.Volumes = []corev1.Volume{{Name: "forge", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(r.D.qty(r.D.ForgeMirrorLimit, defForgeMirrorLimit))}}},
 		// usage pauses (#93): written by the operator, read by the loop before it starts a job; optional (no pauses yet)
 		{Name: "usage", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: usageCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444)}}},
@@ -92,7 +107,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// blocks the pod (the loop then runs with the security rules only)
 		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
-			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}}}
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}},
+		// drain (#174): the pod's own annotations, where the operator (or an admin) sets agentdev/drain
+		{Name: "podinfo", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0o444),
+			Items: []corev1.DownwardAPIVolumeFile{{Path: "annotations", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations"}}}}}}}
+	p.Volumes = append(p.Volumes, r.proxyTokenVolumes()...)
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -112,42 +131,58 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Items: []corev1.KeyToPath{{Key: "GITHUB_APP_PRIVATE_KEY", Path: "private-key.pem"}}}}})
 		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "github-app", MountPath: "/var/run/agentdev/github-app", ReadOnly: true})
 	}
+	// toolchain (#499): /state/toolchain read-only in every container but the init container that installs it
+	var tcMounts []corev1.VolumeMount
+	if a.Spec.Toolchain != nil {
+		tcMounts = []corev1.VolumeMount{toolchainMount()}
+		forgeMounts = append(forgeMounts, toolchainMount())
+	}
 	common := []corev1.EnvVar{env("FORGE_URL", forgeURL), env("FORGE_USER", n), env("AGENT_NAME", n), env("REPO", a.Spec.Repo),
 		env("WAKE_FILE", "/state/agent-wake"), env("FORGE_API", "http://127.0.0.1:7070")}
 	// the kubelet creates a missing subPath directory as root; created here first, it belongs to the agent (uid 1000)
 	p.InitContainers = []corev1.Container{{
 		Name: "state-init", Image: image, ImagePullPolicy: corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath: corev1.TerminationMessagePathDefault, TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Command:      []string{"mkdir", "-p", "/state/claude"},
+		Command:      stateInitCommand(a),
 		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}},
 		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi")}},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("16Mi")},
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}},
 	}}
+	if a.Spec.Toolchain != nil {
+		ps, _ := presetsOf(a.Spec.Toolchain)
+		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps, r.toolchainDigest(s), r.toolchainWorkerImage(a, s)))
+		p.Volumes = append(p.Volumes, toolchainTmpVolume())
+	}
 	p.Containers = []corev1.Container{{
 		Name:                     "agent",
-		Image:                    image,
+		Image:                    r.toolchainWorkerImage(a, s), // the tag, or with a toolchain its pinned digest (#538)
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
 		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("REVIEWER", r.D.Reviewer),
+			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), r.claudeProxyEnv(n)...),
+		), append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...)...),
+		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
+			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
 		EnvFrom: r.claudeEnvFrom(a),
-		// Claude Code's state is a directory of the one state volume (#173): one disk per agent
-		VolumeMounts: []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
-			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralRequest, defAgentEphemeralRequest)},
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"),
+				// writable layer (/tmp, caches outside /state): a runaway build is evicted, not the node's disk (#251)
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralLimit, defAgentEphemeralLimit),
 				// 3Gi fits 2 parallel items; ~1Gi per extra slot
 				corev1.ResourceMemory: *resource.NewQuantity(int64(1+maxc)*(1<<30), resource.BinarySI)},
 		},
@@ -162,6 +197,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
+			env("CLAUDE_PROXY_URL", r.D.ClaudeProxyURL), // #310: cost approvals read the job state from GET /status
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
 		), forgeCreds...),
 		// the router's wake calls land here; the agent container has no listener any more
@@ -172,10 +208,188 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			RunAsNonRoot: ptr.To(true), AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
 			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
-			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("20m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("256Mi")},
+			// the git mirror emptyDir counts here too: limit = mirror + a little writable layer
+			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceEphemeralStorage: r.D.qty(r.D.ForgeEphemeralLimit, defForgeEphemeralLimit)},
 		},
 	}}
+}
+
+// ephemeral-storage bounds (#251 part 3): the work tree lives on the state PVC, so node-local disk is only the
+// writable layers and the sidecar's mirror. Past a limit the kubelet evicts the pod and the StatefulSet recreates it.
+// Defaults; the operator env (AGENT_EPHEMERAL_REQUEST, AGENT_EPHEMERAL_LIMIT, FORGE_MIRROR_LIMIT,
+// FORGE_EPHEMERAL_LIMIT) overrides them.
+const (
+	defAgentEphemeralRequest = "1Gi"
+	defAgentEphemeralLimit   = "8Gi"
+	defForgeMirrorLimit      = "4Gi"
+	defForgeEphemeralLimit   = "5Gi"
+)
+
+// qty parses a configured quantity; an empty, invalid or non-positive value gives the default.
+func (d Defaults) qty(v, def string) resource.Quantity {
+	if q, err := resource.ParseQuantity(v); err == nil && q.Sign() > 0 {
+		return q
+	}
+	return resource.MustParse(def)
+}
+
+// ruleChars: one rule of spec.permission.autoMode, as the CRD pattern (#500): no control characters.
+var ruleChars = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
+
+// permissionValid is the operator's check behind the CRD rules (#500): "" when spec.permission is unset or valid.
+func permissionValid(a *v1.Agent) string {
+	p := a.Spec.Permission
+	if p == nil {
+		return ""
+	}
+	if p.Mode != "" && p.Mode != "dontAsk" && p.Mode != "auto" {
+		return fmt.Sprintf("spec.permission.mode: %q is not dontAsk or auto", p.Mode)
+	}
+	m := p.AutoMode
+	if m == nil {
+		return ""
+	}
+	if p.Mode != "auto" {
+		return "spec.permission.autoMode needs mode auto"
+	}
+	for name, l := range map[string][]string{"allow": m.Allow, "softDeny": m.SoftDeny, "environment": m.Environment} {
+		if len(l) > 50 {
+			return fmt.Sprintf("spec.permission.autoMode.%s: more than 50 rules", name)
+		}
+		for _, s := range l {
+			if len(s) > 500 || !ruleChars.MatchString(s) {
+				return fmt.Sprintf("spec.permission.autoMode.%s: a rule is empty, longer than 500 or has a control character", name)
+			}
+		}
+	}
+	return ""
+}
+
+// toolChars: one entry of spec.tools.allow, as the CRD pattern (#496): no control characters and no comma, since
+// CLAUDE_TOOLS is a comma-separated list.
+var toolChars = regexp.MustCompile(`^[^\x00-\x1f\x7f,]+$`)
+
+// toolsValid is the operator's check behind the CRD rules (#496): "" when spec.tools is unset or valid.
+func toolsValid(a *v1.Agent) string {
+	t := a.Spec.Tools
+	if t == nil {
+		return ""
+	}
+	if len(t.Allow) > 50 {
+		return "spec.tools.allow: more than 50 entries"
+	}
+	for _, s := range t.Allow {
+		if len(s) > 200 || !toolChars.MatchString(s) {
+			return "spec.tools.allow: an entry is empty, longer than 200 or has a comma or a control character"
+		}
+	}
+	return ""
+}
+
+// modelChars: spec.model, as the CRD pattern (#564): an alias or a full model name; never starts with a dash, so the
+// value cannot become a flag of claude.
+var modelChars = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`)
+
+// effortLevels: the levels of `claude --effort` in the pinned Claude Code CLI (#564), as the CRD enum.
+var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
+// modelValid is the operator's check behind the CRD rules (#564): "" when spec.model and spec.effort are unset or valid.
+func modelValid(a *v1.Agent) string {
+	if m := a.Spec.Model; m != "" && (len(m) > 100 || !modelChars.MatchString(m)) {
+		return "spec.model: longer than 100, or not a model name (letters, digits and ._:@[]-, not starting with -)"
+	}
+	if e := a.Spec.Effort; e != "" && !effortLevels[e] {
+		return "spec.effort: not one of low, medium, high, xhigh, max"
+	}
+	return ""
+}
+
+// modelEnv passes spec.model and spec.effort to the worker (#564) as AGENT_MODEL and AGENT_EFFORT, which become
+// `claude --model` and `--effort`. Nothing when unset (the CLI's own default), so the pod template of an agent without
+// the fields is unchanged (no restart on upgrade).
+func modelEnv(a *v1.Agent) []corev1.EnvVar {
+	var e []corev1.EnvVar
+	if a.Spec.Model != "" {
+		e = append(e, corev1.EnvVar{Name: "AGENT_MODEL", Value: a.Spec.Model})
+	}
+	if a.Spec.Effort != "" {
+		e = append(e, corev1.EnvVar{Name: "AGENT_EFFORT", Value: a.Spec.Effort})
+	}
+	return e
+}
+
+// diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
+// the resource samples of each run. Nothing when off (the default), so the pod template of an agent without the field
+// is unchanged (no restart on upgrade) and the worker adds no load.
+func diagnosticsEnv(a *v1.Agent) []corev1.EnvVar {
+	d := a.Spec.Diagnostics
+	if d == nil || !d.Resources {
+		return nil
+	}
+	e := []corev1.EnvVar{{Name: "DIAG_RESOURCES", Value: "true"}}
+	if d.IntervalSeconds >= 5 && d.IntervalSeconds <= 3600 {
+		e = append(e, corev1.EnvVar{Name: "DIAG_INTERVAL_SECONDS", Value: strconv.Itoa(int(d.IntervalSeconds))})
+	}
+	return e
+}
+
+// retriesEnv passes spec.retries.infrastructure to the worker (#593) as INFRA_RETRIES. Nothing when unset or at the
+// default (2), so the pod template of an agent without the field is unchanged (no restart on upgrade).
+func retriesEnv(a *v1.Agent) []corev1.EnvVar {
+	n := infraRetries(a)
+	if n == defaultInfraRetries {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "INFRA_RETRIES", Value: strconv.Itoa(n)}}
+}
+
+// toolsEnv passes spec.tools.allow to the worker (#496, ADR 0010 D1) as CLAUDE_TOOLS_EXTRA, comma-joined; the worker
+// appends it to CLAUDE_TOOLS. Nothing without entries, so the pod template of an agent without the field is unchanged
+// (no restart on upgrade).
+// The allow entries of the toolchain presets (#499) come first.
+func toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	extra := toolchainAllow(a)
+	if a.Spec.Tools != nil {
+		extra = append(extra, a.Spec.Tools.Allow...)
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "CLAUDE_TOOLS_EXTRA", Value: strings.Join(extra, ",")}}
+}
+
+// permissionEnv passes spec.permission to the worker (#500): CLAUDE_PERMISSION_MODE=auto and, with rules,
+// CLAUDE_AUTO_MODE, the autoMode section of the Claude Code settings as JSON. Built here from the Agent only, never
+// from the repository or issue text. Nothing for dontAsk, so the pod template of an agent without the field is
+// unchanged (no restart on upgrade).
+func permissionEnv(a *v1.Agent) []corev1.EnvVar {
+	p := a.Spec.Permission
+	if p == nil || p.Mode != "auto" {
+		return nil
+	}
+	out := []corev1.EnvVar{{Name: "CLAUDE_PERMISSION_MODE", Value: "auto"}}
+	if m := p.AutoMode; m != nil && len(m.Allow)+len(m.SoftDeny)+len(m.Environment) > 0 {
+		section := map[string][]string{}
+		for k, l := range map[string][]string{"allow": m.Allow, "soft_deny": m.SoftDeny, "environment": m.Environment} {
+			if len(l) > 0 {
+				section[k] = l
+			}
+		}
+		b, _ := json.Marshal(section) // map keys are sorted: the same Agent gives the same pod template
+		out = append(out, corev1.EnvVar{Name: "CLAUDE_AUTO_MODE", Value: string(b)})
+	}
+	return out
+}
+
+// graceSeconds: terminationGracePeriodSeconds of an agent pod (#174), 30..3600, default 300.
+func (d Defaults) graceSeconds() int64 {
+	if n, err := strconv.ParseInt(d.GraceSeconds, 10, 64); err == nil && n >= 30 && n <= 3600 {
+		return n
+	}
+	return 300
 }
 
 // claimTemplates is the agent's volume layout (#173): one claim, state, on the agent StorageClass (empty: the cluster
@@ -236,6 +450,23 @@ func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
 	return out
 }
 
+const reloaderAnnotation = "secret.reloader.stakater.com/reload"
+
+// reloadSecrets lists the Secrets an agent pod reads at start (env, file of the forge sidecar). The Claude credential
+// itself is only in the proxy pod when the proxy is on.
+func (r *AgentReconciler) reloadSecrets(a *v1.Agent, forgeSecret string) string {
+	names := []string{forgeSecret, "agent-" + a.Name + "-mcp"}
+	if r.D.EgressProxy != "" {
+		names = append(names, forgeProxySecret)
+	}
+	if r.D.ClaudeProxyURL != "" {
+		names = append(names, "agent-"+a.Name+"-proxy")
+	} else if a.Spec.ClaudeSecret != "" {
+		names = append(names, a.Spec.ClaudeSecret)
+	}
+	return strings.Join(names, ",")
+}
+
 // forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
 const forgeProxySecret = "egress-forge-proxy"
 
@@ -262,6 +493,33 @@ func (r *AgentReconciler) claudeProxyEnv(n string) []corev1.EnvVar {
 			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN"}}}}
 }
 
+// Workload identity (#352): a projected service account token of the agent's own service account, audience
+// claude-proxy, renewed by the kubelet. Only the agent container mounts it; the worker hands it to Claude Code through
+// apiKeyHelper, and the proxy checks it with TokenReview. Without the credential proxy there is nothing to call.
+const (
+	proxyTokenVolume   = "proxy-token"
+	ProxyTokenDir      = "/var/run/secrets/agentdev/proxy"
+	proxyTokenAudience = "claude-proxy"
+	proxyTokenSeconds  = 600
+)
+
+func (r *AgentReconciler) proxyTokenVolumes() []corev1.Volume {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.Volume{{Name: proxyTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+		DefaultMode: ptr.To[int32](0o444), // fsGroup gives group read; the agent runs as uid 1000
+		Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+			Audience: proxyTokenAudience, ExpirationSeconds: ptr.To[int64](proxyTokenSeconds), Path: "token"}}}}}}}
+}
+
+func (r *AgentReconciler) proxyTokenMounts() []corev1.VolumeMount {
+	if r.D.ClaudeProxyURL == "" {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: proxyTokenVolume, MountPath: ProxyTokenDir, ReadOnly: true}}
+}
+
 // usageReports: "off" when the Claude credential proxy reports usage (#66), so the sidecar refuses POST /usage.
 func (r *AgentReconciler) usageReports() string {
 	if r.D.ClaudeProxyURL != "" {
@@ -274,4 +532,25 @@ func (r *AgentReconciler) usageReports() string {
 // webhook deliveries.
 func routerURL(ns string) string {
 	return fmt.Sprintf("http://webhook-router.%s.svc.cluster.local:8081", ns)
+}
+
+// stateInitCommand: the directories of the state volume, created by the agent's UID before the kubelet mounts a
+// subPath of them (it would create a missing one as root). With a toolchain (#499) also /state/toolchain and the
+// caches; an agent without one keeps the earlier command, so its pod template is unchanged.
+func stateInitCommand(a *v1.Agent) []string {
+	if a.Spec.Toolchain == nil {
+		return []string{"mkdir", "-p", "/state/claude"}
+	}
+	return []string{"mkdir", "-p", "/state/claude", toolchainDir, "/state/cache"}
+}
+
+// validateEphemeral checks the documented rule FORGE_EPHEMERAL_LIMIT >= FORGE_MIRROR_LIMIT (#251): the mirror emptyDir
+// counts against the forge sidecar's ephemeral-storage limit, so a smaller limit evicts the pod before the mirror is
+// full, and the StatefulSet recreates it in a loop. Checked on the effective values (empty or invalid: the defaults).
+func (d Defaults) validateEphemeral() error {
+	mirror, limit := d.qty(d.ForgeMirrorLimit, defForgeMirrorLimit), d.qty(d.ForgeEphemeralLimit, defForgeEphemeralLimit)
+	if limit.Cmp(mirror) < 0 {
+		return fmt.Errorf("FORGE_EPHEMERAL_LIMIT (%s) must be at least FORGE_MIRROR_LIMIT (%s): the git mirror counts against the forge sidecar's limit", limit.String(), mirror.String())
+	}
+	return nil
 }

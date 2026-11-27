@@ -1,0 +1,28 @@
+---
+# one bad value (bad: {variable: value}); the settings must fail. The old values are restored afterwards.
+- name: Remember the current values ({{ bad.keys() | list }})
+  ansible.builtin.set_fact:
+    kind_agents_t_saved: "{{ dict(bad.keys() | zip(bad.keys() | map('extract', hostvars['localhost']))) }}"
+
+- name: Bad settings {{ bad }}
+  block:
+    - name: Set the bad value
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ item.value }}"
+      loop: "{{ bad | dict2items }}"
+
+    - name: Run the settings with the bad value
+      ansible.builtin.include_tasks: ../../roles/kind_agents/tasks/settings.yml
+
+    - name: Not reached
+      ansible.builtin.fail: {msg: "accepted {{ bad }}"}
+  rescue:
+    - name: The bad value was refused by the settings
+      ansible.builtin.assert:
+        that: ansible_failed_task.name != 'Not reached'
+        quiet: true
+  always:
+    - name: Restore the values
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ item.value }}"
+      loop: "{{ kind_agents_t_saved | dict2items }}"

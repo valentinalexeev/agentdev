@@ -420,3 +420,21 @@ func TestDeciderExecutorOnClosedPR(t *testing.T) {
 		t.Fatalf("executor approval on a closed PR: %+v", a)
 	}
 }
+
+// #310: a cost approval is one step of cost units: /approve-job counts as /approve (scope once), and the agent that
+// asked never decides it.
+func TestDeciderCostStepIsOnce(t *testing.T) {
+	obj := approvalObj("carol", aid, "owner/x", t0)
+	spec := obj.Object["spec"].(map[string]any)
+	spec["source"], spec["tool"] = "cost", "step-1"
+	k, _ := approvalEnv(t, obj)
+	fc := &fakeComments{ids: map[string]int64{}, list: []forgeComment{
+		{ID: 1, UserID: 99, Login: "carol", Body: "/approve " + aid, Created: t0.Add(time.Minute)},
+		{ID: 2, UserID: 10, Login: "wendy", Body: "/approve-job " + aid, Created: t0.Add(2 * time.Minute)}}}
+	d := newDecider(k, agentsFixed{{Name: "carol"}}, fc, permMap{"wendy": permWrite, "carol": permWrite})
+	d.now = func() time.Time { return t0.Add(5 * time.Minute) }
+	_ = d.pass(context.Background())
+	if a := status(t, k, "carol-"+aid); a.State != "allowed" || a.Scope != "once" || a.DecidedBy != "wendy" {
+		t.Fatalf("cost approval: %+v", a)
+	}
+}

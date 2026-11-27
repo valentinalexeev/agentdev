@@ -1,0 +1,42 @@
+# A plain run of kind.yml (#417) does what ./run.sh did without arguments: prereqs, cluster, forge, then the operator
+# before the agents (the role kind_agents fails without it). Every other step runs only with its tag.
+# Run: ansible-playbook infra/ansible/tests/kind_plain_run.yml
+- name: Plain run of kind.yml (#417)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    plain_want:
+      - Host prerequisites, tools, engine, kind version (was 00-prereqs.sh)
+      - Kind cluster with gVisor (was 01-cluster.sh)
+      - Gitea forge, owner and agent accounts, seeded repo, branch protection (was 05-forge.sh)
+      - Operator, CRDs and executor egress (was 12-operator.sh)
+      - Local images, router, Claude proxy, egress proxy, Agent objects, forge webhook (was 06-agents.sh)
+  tasks:
+    - name: Find ansible-playbook
+      ansible.builtin.command: {argv: [sh, -c, command -v ansible-playbook]}
+      register: plain_ap
+      changed_when: false
+
+    - name: List the tasks of a plain run and of --tags secrets
+      ansible.builtin.command:
+        argv: "{{ [plain_ap.stdout, playbook_dir ~ '/../kind.yml', '--list-tasks'] + item }}"
+      loop: [[], [--tags, secrets]]
+      register: plain_lists
+      changed_when: false
+
+    - name: The plain run lists exactly the former run.sh steps, in order; --tags secrets runs ESO, then the operator
+      ansible.builtin.assert:
+        that:
+          - plain_names == plain_want
+          - secrets_names == ['External Secrets Operator, policies and store (was 13-secrets.sh)', plain_want[3]]
+        quiet: true
+      vars:
+        plain_names: "{{ plain_lists.results[0].stdout_lines | select('search', '\\(was ') | map('regex_replace', '^\\s*', '')
+                         | map('regex_replace', '\\s+TAGS:.*$', '') | list }}"
+        secrets_names: "{{ plain_lists.results[1].stdout_lines | select('search', '\\(was ') | map('regex_replace', '^\\s*', '')
+                           | map('regex_replace', '\\s+TAGS:.*$', '') | list }}"
+
+    - name: The example settings file is valid YAML and a mapping
+      ansible.builtin.assert:
+        that: lookup('ansible.builtin.file', playbook_dir ~ '/../kind.example.vars.yml') | from_yaml is mapping
+        quiet: true

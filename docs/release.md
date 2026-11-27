@@ -61,12 +61,14 @@ Run on a real GKE cluster made from the template, at the release candidate image
 - [ ] Third-party images and charts (Postgres, authentik, ContextForge, gateway images) are pinned to a version, and
       where the manifests support it, to a digest.
 - [ ] `examples/deployment/gcp-gke/terraform/main.tf` uses `ref=vX.Y.Z` and `ansible/instance.yml.example` uses
-      `image_tag: "X.Y.Z"`, the same version.
+      `agentdev_ref: vX.Y.Z` and `image_tag: "X.Y.Z"`, the same version.
 - [ ] The private deployment repo used for the e2e run pins the same two values.
 
 ## 5. CHANGELOG and SemVer
 
-- [ ] Every merged behaviour change has a line under `## [Unreleased]`; **BREAKING** entries have a migration step.
+- [ ] Every merged behaviour change has a `changelog.d/` fragment with `status: done` (or an older line under
+      `## [Unreleased]`); `breaking: true` fragments have an `## Upgrade` section. Check with
+      `scripts/changelog.sh preview`.
 - [ ] `1.0.0` freezes the public interface (Terraform variables and outputs, Ansible instance vars, manifest
       template variables, image entrypoints and env vars, router and listener HTTP API). After it, a breaking change
       bumps MAJOR, not MINOR. Review the interface for names you do not want to keep.
@@ -80,8 +82,21 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
    does not exist yet. For a patch (`X.Y.Z`, Z > 0), use the existing `release/X.Y`; patches never get a branch.
    Check that every lower line is merged in: `scripts/release-lines.sh check --strict release/X.Y origin/release/X.Y`.
    Then branch `chore/release-X.Y.Z` from `release/X.Y`.
-2. In `CHANGELOG.md`, move `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]`.
-3. Bump the pinned examples (`ref=vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
+   A sandboxed agent can push only to `agent/<name>/*` branches. It uses `agent/<name>/release-X.Y.Z` for the
+   release PR and `agent/<name>/merge-<lower>-into-<upper>` for a forward merge (#510). The `Release lines` and
+   `Changelog` checks handle these the same as `chore/release-*` and `merge/*` (`scripts/release-lines.sh kind`).
+2. Write the release section from the fragments (#448): `scripts/release-lines.sh release X.Y.Z [YYYY-MM-DD]` does
+   step 1 and this step. It runs `scripts/changelog.sh release X.Y.Z YYYY-MM-DD`, which moves `## [Unreleased]` and
+   every `status: done` fragment in `changelog.d/` to `## [X.Y.Z] - YYYY-MM-DD`, moves `## Description` parts to
+   `docs/changes/X.Y.Z/`, deletes released and dropped fragments, and commits `chore(release): vX.Y.Z`.
+   Check the section and complete its `### Upgrade` part with numbered steps for an operator: what to do, whether it breaks, and
+   whether images and manifests must move together (#315). A pre-release tag (`X.Y.Z-rc.N`) gets its own section with
+   the same parts, so that the deployment repository can quote the steps from one place.
+   `scripts/upgrade-notes.sh <from> <to>` prints only these `### Upgrade` parts for the versions in (from, to]. It
+   reads `CHANGELOG.md` at tag `v<to>` of the agentdev repository that holds the script. It works from a
+   deployment repository too. `--repo <path or URL>` selects another agentdev clone. Before the tag exists, set `CHANGELOG_REF=chore/release-X.Y.Z`. Use its
+   output in the GitHub release and in the upgrade PR of the deployment repository.
+3. Bump the pinned examples (`ref=vX.Y.Z`, `agentdev_ref: vX.Y.Z`, `image_tag: "X.Y.Z"`). For `1.0.0`, also uncomment the #120 public entry
    point in `examples/deployment/gcp-gke/terraform/main.tf` (`public_hosts`, `cloud_armor` and `output "ingress"`),
    so the template matches `private-deployment.md`, which needs `public_hosts` and `terraform output ingress`.
 4. Commit `chore(release): vX.Y.Z`, open the PR into `release/X.Y` with this checklist, and request the owner's
@@ -94,4 +109,5 @@ Branches, tags and forward merges follow [ADR 0004](adr/0004-branching-and-relea
 6. Check that `images.yml` publishes the images at `X.Y.Z`, then make the GitHub release with the CHANGELOG section.
 7. Upgrade the reference private deployment by its normal PR flow.
 8. Merge the line forward, one PR per hop up to the highest line: `scripts/release-lines.sh forward release/X.Y`.
+   A sandboxed agent pushes each hop as `agent/<name>/merge-<lower>-into-<upper>` instead of `merge/...` (step 1).
 9. Report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
