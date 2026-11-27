@@ -13,7 +13,7 @@ pr: 280
 issue open while drift stays and writes the redacted report to ConfigMap `agentdev-drift`. `Executor.spec.probes`
 is a catalogue of read-only server checks; obs-mcp tools `server_checks`, `server_check` and `server_report` reach
 them through the operator, with rate limits, checked arguments, an Approval for `sensitive` checks and output fenced
-as untrusted. Docs: admin.md "Find drift on the servers", "Add a server check"; risk R131.
+as untrusted. Docs: admin.md "Find drift on the servers", "Add a server check"; risk R132.
 
 ## Description
 
