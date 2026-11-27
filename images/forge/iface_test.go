@@ -100,6 +100,7 @@ func TestGiteaForgeInterface236(t *testing.T) {
 		{"allowed with a forbidden one", "POST", base + "/issues/3/labels", `{"labels":["in-progress","approved"]}`},
 		{"agent label on an issue (self-assign)", "POST", base + "/issues/3/labels", `{"labels":["agent:alice"]}`},
 		{"another agent's label", "POST", base + "/issues/7/labels", `{"labels":["agent:bob"]}`},
+		{"own agent label in a mixed list on own PR", "POST", base + "/issues/7/labels", `{"labels":["agent:alice","in-progress"]}`},
 		{"issue of another agent", "POST", base + "/issues/4/labels", `{"labels":["needs-decision"]}`},
 		{"PR of another agent", "POST", base + "/issues/8/labels", `{"labels":["in-progress"]}`},
 		{"fork PR with an agent-like branch", "POST", base + "/issues/9/labels", `{"labels":["in-progress"]}`},
@@ -165,6 +166,7 @@ func TestGitHubForgeInterface236(t *testing.T) {
 	}
 	refused := []struct{ name, p, m, b string }{
 		{"agent label on an issue", base + "/issues/12/labels", "POST", `{"labels":["agent:alice"]}`},
+		{"own agent label in a mixed list on own PR", base + "/issues/14/labels", "POST", `{"labels":["agent:alice","in-progress"]}`},
 		{"issue given to bob", base + "/issues/13/labels", "POST", `{"labels":["needs-decision"]}`},
 		{"bob's PR", base + "/issues/15/labels", "POST", `{"labels":["in-progress"]}`},
 		{"other label", base + "/issues/12/labels", "POST", `{"labels":["approved"]}`},

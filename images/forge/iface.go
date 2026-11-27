@@ -103,29 +103,34 @@ func checkLabelAdd(s *server, ctx context.Context, m []string, body []byte) erro
 	if len(labels) == 1 && labels[0] == "agent:"+s.c.ForgeUser {
 		return checkOwnPRLabel(s, ctx, m, body)
 	}
-	self := false
 	for _, l := range labels {
+		// agent:<self> takes one path only (#227, checkOwnPRLabel above): never in a mixed list
+		if l == "agent:"+s.c.ForgeUser {
+			return refuseAs("label-not-allowed", "high", "label agent:%s only alone (one call, own PR)", s.c.ForgeUser)
+		}
 		if !labelAllowed(s, l) {
 			return refuseAs("label-not-allowed", "medium", "label %q is not on the agent allow-list", l)
 		}
-		self = self || l == "agent:"+s.c.ForgeUser
 	}
 	if len(m) < 3 {
 		return refuse("label: no issue number")
 	}
-	isPR, err := labelTarget(s, ctx, m[1], m[2])
-	if err != nil {
-		return err
-	}
-	if self && !isPR {
-		return refuseAs("label-not-allowed", "high", "label agent:%s only on the agent's own PR", s.c.ForgeUser)
-	}
-	return nil
+	_, err := labelTarget(s, ctx, m[1], m[2])
+	return err
+}
+
+// refuseChat: the loop-only #236 writes (label removal, comment edit, ready for review) have no console allow
+// (ADR 0011 gates only label adds), so a chat pod never makes them; same event as the other chat refusals.
+func refuseChat(s *server, what string) error {
+	return refuseAs("chat-label-not-asked", "medium", "%s: not allowed in the console chat %s", what, s.c.ChatSession)
 }
 
 // checkLabelRemove: DELETE /issues/{n}/labels/{name} (GitHub) or /labels/{id} (Gitea, the id is resolved to its
 // name first). Only needs-decision and in-progress; the agent's own routing label stays.
 func checkLabelRemove(s *server, ctx context.Context, m []string, _ []byte) error {
+	if s.c.ChatSession != "" {
+		return refuseChat(s, "label removal")
+	}
 	if len(m) < 4 {
 		return refuse("label: no issue number")
 	}
@@ -155,6 +160,9 @@ func checkLabelRemove(s *server, ctx context.Context, m []string, _ []byte) erro
 // Gitea the author is the agent's own user; on GitHub every agent is the same App bot, so the comment must also end
 // with this agent's signature line (added by this sidecar, so another agent's comment has another name).
 func checkCommentEdit(s *server, ctx context.Context, m []string, body []byte) error {
+	if s.c.ChatSession != "" {
+		return refuseChat(s, "comment edit")
+	}
 	var rq map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rq); err != nil {
 		return refuse("bad comment body")
@@ -192,6 +200,9 @@ func checkCommentEdit(s *server, ctx context.Context, m []string, body []byte) e
 
 // checkReady: POST /pulls/{n}/ready_for_review (a sidecar path, not a forge one), empty body, own PR only.
 func checkReady(s *server, ctx context.Context, m []string, body []byte) error {
+	if s.c.ChatSession != "" {
+		return refuseChat(s, "ready for review")
+	}
 	if len(bytes.TrimSpace(body)) != 0 && string(bytes.TrimSpace(body)) != "{}" {
 		return refuseAs("api-not-allowed", "medium", "ready for review: no body")
 	}
@@ -207,6 +218,9 @@ var wipRe = regexp.MustCompile(`(?i)^\s*(wip:|\[wip\])\s*`)
 
 // serveReady marks the PR ready: GitHub GraphQL markPullRequestReadyForReview, Gitea a title without the WIP prefix.
 func serveReady(s *server, ctx context.Context, m []string, _ []byte) (int, []byte, error) {
+	if s.c.ChatSession != "" { // checkReady refuses first; kept here so serveReady never runs alone in a chat
+		return 0, nil, refuseChat(s, "ready for review")
+	}
 	pr, err := ownPR(s, ctx, m[1], m[2])
 	if err != nil {
 		return 0, nil, err
