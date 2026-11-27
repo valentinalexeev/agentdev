@@ -48,7 +48,9 @@
       ansible.builtin.assert:
         that:
           - t_sec | rejectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['create', 'patch', 'delete']]
-          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list == [['claude-proxy-signing'], ['egress-setup-proxy'], ['egress-agent-proxy']]
+          - >-
+            t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list
+            == [['claude-proxy-signing'], ['egress-setup-proxy'], ['egress-agent-proxy']]
           - t_sec | selectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['get'], ['get'], ['get', 'update']]
           - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch']) | length == 0
           - t_pol[0].spec.validations[0].expression is search("egress-agent-proxy")
