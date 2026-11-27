@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SSH certificate authority for executors (#204, docs/adr/0007): the key ceremony. Run once per instance by an admin,
 # with kubectl pointing at the cluster. Makes the CA keys in a temporary directory with the pinned step-ca image,
-# writes two Secrets in EXEC_NS and deletes the directory:
+# writes two Secrets in SSH_CA_NS (the CA's own namespace, never EXEC_NS: R133) and deletes the directory:
 #   step-ca              the CA (config, X.509 intermediate for its TLS, SSH user and host CA keys, key password)
 #                        mounted only in the step-ca pod
 #   step-ca-provisioner  the operator's JWK provisioner key and the CA root certificate; read by the operator by name
@@ -10,7 +10,7 @@
 #
 #   scripts/ssh-ca-init.sh [--namespace NS] [--keep-root DIR] [--dry-run] [--out DIR | --from DIR]
 set -euo pipefail
-NS="${EXEC_NS:-agentdev-executors}"
+NS="${SSH_CA_NS:-agentdev-ssh-ca}"
 KEEP_ROOT="" DRY=false OUT="" FROM=""
 STEP_CA_IMAGE="${STEP_CA_IMAGE:-smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3}"
 ENGINE="${CONTAINER_ENGINE:-docker}"
@@ -26,6 +26,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "${NS}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "bad namespace ${NS}" >&2; exit 2; }
+# R133: the operator may get any Secret in EXEC_NS; the CA keys must never be there
+[[ "${NS}" != "${EXEC_NS:-agentdev-executors}" ]] || { echo "the CA namespace must not be EXEC_NS (${NS})" >&2; exit 2; }
 if ! ${DRY}; then
   for s in step-ca step-ca-provisioner; do
     if kubectl -n "${NS}" get secret "${s}" >/dev/null 2>&1; then

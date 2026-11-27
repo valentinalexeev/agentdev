@@ -14,12 +14,13 @@
       vars:
         r:
           src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
-          values: {EXEC_NS: agentdev-executors, PLATFORM_NS: agentdev-platform, STEP_CA_IMAGE: "{{ step_ca_image }}"}
+          values: {SSH_CA_NS: "{{ ssh_ca_ns }}", PLATFORM_NS: agentdev-platform, STEP_CA_IMAGE: "{{ step_ca_image }}"}
           replace: []
     - name: Check the manifest
       vars:
         dep: "{{ docs | selectattr('kind', 'equalto', 'Deployment') | first }}"
-        pol: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | first }}"
+        pol: "{{ docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'step-ca') | first }}"
+        role: "{{ docs | selectattr('kind', 'equalto', 'Role') | list }}"
         ctr: "{{ dep.spec.template.spec.containers[0] }}"
       ansible.builtin.assert:
         that:
@@ -34,3 +35,12 @@
           - pol.spec.ingress[0].from[0].podSelector.matchLabels.app == 'agentdev-operator'
           - pol.spec.ingress[0].from[0].namespaceSelector.matchLabels['kubernetes.io/metadata.name'] == 'agentdev-platform'
           - pol.spec.egress == []
+          # R133: own namespace, never exec_ns; the operator may get only the provisioner Secret, by name
+          - ssh_ca_ns != exec_ns
+          - docs | rejectattr('kind', 'equalto', 'Namespace') | map(attribute='metadata.namespace') | unique | list == [ssh_ca_ns]
+          - role | length == 1
+          - role[0].rules | length == 1
+          - role[0].rules[0].resources == ['secrets']
+          - role[0].rules[0].resourceNames == ['step-ca-provisioner']
+          - role[0].rules[0].verbs == ['get']
+          - docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'default-deny') | list | length == 1

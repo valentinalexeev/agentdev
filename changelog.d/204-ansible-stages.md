@@ -13,7 +13,7 @@ pr: 264
 apply one for `agentdev`. The pull request head runs `spec.prPlan` without any SSH credential. SSH goes through the
 executor egress proxy, only to the executor's `Ready` SSHTargets. `spec.snapshot` publishes redacted, untrusted
 server output in ConfigMap `agentdev-snapshots`. Ansible vars `ssh`, `pr_plan`, `snapshot`, `snapshot_hours`.
-Risk R104.
+Risk R135.
 
 ## Description
 

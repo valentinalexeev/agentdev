@@ -14,7 +14,7 @@ fails=0
 # the admin scripts call plain kubectl: give them one that uses this cluster's context
 kbin=$(mktemp -d); trap 'rm -rf "${kbin}"' EXIT
 printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v kubectl) --context kind-${CLUSTER_NAME}" > "${kbin}/kubectl"; chmod +x "${kbin}/kubectl"
-admin() { PATH="${kbin}:${PATH}" EXEC_NS="${EXEC_NS}" "$@"; }
+admin() { PATH="${kbin}:${PATH}" EXEC_NS="${EXEC_NS}" SSH_CA_NS="${SSH_CA_NS}" "$@"; }
 check() { if [[ "$1" == 0 ]]; then printf '  PASS %s\n' "$2"; else printf '  FAIL %s %s\n' "$2" "${3:-}"; fails=$((fails + 1)); fi; }
 wait_phase() { # target phase timeout
   local deadline=$(( $(date +%s) + $3 ))
@@ -26,12 +26,15 @@ wait_phase() { # target phase timeout
 }
 
 log "SSH CA (scripts/ssh-ca-init.sh)"
-if ! k -n "${EXEC_NS}" get secret step-ca >/dev/null 2>&1; then
+if ! k -n "${SSH_CA_NS}" get secret step-ca >/dev/null 2>&1; then
   admin "${SPIKE_DIR}/scripts/ssh-ca-init.sh" >/dev/null
 fi
-k -n "${EXEC_NS}" rollout restart deploy/step-ca >/dev/null 2>&1
-k -n "${EXEC_NS}" rollout status deploy/step-ca --timeout=180s >/dev/null; check $? "step-ca running"
-k -n "${EXEC_NS}" get secret step-ca-provisioner >/dev/null; check $? "provisioner Secret for the operator"
+k -n "${SSH_CA_NS}" rollout restart deploy/step-ca >/dev/null 2>&1
+k -n "${SSH_CA_NS}" rollout status deploy/step-ca --timeout=180s >/dev/null; check $? "step-ca running"
+k -n "${SSH_CA_NS}" get secret step-ca-provisioner >/dev/null; check $? "provisioner Secret for the operator"
+op="system:serviceaccount:${PLATFORM_NS}:agentdev-operator"
+r=$(k auth can-i get secret/step-ca -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); [[ "${r}" == no ]]; check $? "operator cannot read the CA keys (R133, can-i=${r})"
+r=$(k auth can-i get secret/step-ca-provisioner -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); [[ "${r}" == yes ]]; check $? "operator reads its provisioner key (can-i=${r})"
 
 log "Test SSH server (${SRV_IMAGE}) in ${SRV_NS}"
 if [[ "${SRV_IMAGE}" == agentdev-test-sshd:* ]]; then
@@ -93,7 +96,7 @@ grep -q 'Accepted publickey for agentdev-check' <<<"${slog}"; check $? "probe lo
 log "Only the operator reaches the CA"
 k -n "${SRV_NS}" delete pod e2e-curl --ignore-not-found >/dev/null
 k -n "${SRV_NS}" run e2e-curl --restart=Never --image=curlimages/curl:8.11.1 --command -- \
-  curl -sk -m 5 -o /dev/null -w '%{http_code}' "https://step-ca.${EXEC_NS}.svc:9000/health" >/dev/null
+  curl -sk -m 5 -o /dev/null -w '%{http_code}' "https://step-ca.${SSH_CA_NS}.svc:9000/health" >/dev/null
 k -n "${SRV_NS}" wait --for=jsonpath='{.status.phase}'=Failed pod/e2e-curl --timeout=90s >/dev/null 2>&1 ||
   k -n "${SRV_NS}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/e2e-curl --timeout=5s >/dev/null 2>&1
 code=$(k -n "${SRV_NS}" logs e2e-curl 2>/dev/null || true)

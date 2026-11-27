@@ -41,7 +41,7 @@ func newTestCA(t *testing.T, url string, root []byte) (*SSHCA, *ecdsa.PrivateKey
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	enc := func(b *big.Int) string { return base64.RawURLEncoding.EncodeToString(b.FillBytes(make([]byte, 32))) }
 	j, _ := json.Marshal(jwk{Kty: "EC", Crv: "P-256", Kid: "test-kid", X: enc(k.X), Y: enc(k.Y), D: enc(k.D)})
-	ca, err := newSSHCA(url, "step-ca.agentdev-executors.svc", j, root)
+	ca, err := newSSHCA(url, "step-ca.agentdev-ssh-ca.svc", j, root)
 	if err != nil {
 		t.Fatal(err)
 	}

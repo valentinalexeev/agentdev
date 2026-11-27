@@ -22,7 +22,7 @@
           values: {EXEC_NS: x}
           replace: []
         - src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
-          values: {EXEC_NS: x, PLATFORM_NS: p, STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
+          values: {SSH_CA_NS: c, PLATFORM_NS: p, STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
           replace: []
       register: t_render
 

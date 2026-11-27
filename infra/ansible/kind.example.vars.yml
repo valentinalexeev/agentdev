@@ -59,6 +59,7 @@ approvals: {enabled: false}                   # APPROVALS
 
 # ---- operator (tags operator, secrets) ----
 # operator_exec_ns: agentdev-executors        # EXEC_NS
+# operator_ssh_ca_ns: agentdev-ssh-ca         # SSH_CA_NS (step-ca, #204; never the EXEC_NS)
 # operator_botboard_url: ""                   # BOTBOARD_URL
 # operator_poll_seconds: 20                   # POLL_SECONDS
 # operator_idle_seconds: 900                  # IDLE_SECONDS

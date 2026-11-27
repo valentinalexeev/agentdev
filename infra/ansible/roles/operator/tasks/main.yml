@@ -102,6 +102,7 @@
         AGENT_GRACE_SECONDS: "{{ operator_rollout.grace_seconds }}"
         DRAIN_MAX_MINUTES: "{{ operator_rollout.drain_max_minutes }}"
         EXEC_NS: "{{ operator_exec_ns }}"
+        SSH_CA_NS: "{{ operator_ssh_ca_ns }}"
         EXECUTOR_POLL_SECONDS: "{{ operator_executor.poll_seconds }}"
         EXECUTOR_RETENTION_DAYS: "{{ operator_executor.retention_days }}"
         EXECUTOR_APPLY_START_MINUTES: "{{ operator_executor.apply_start_minutes }}"
@@ -141,7 +142,7 @@
       replace: []
     # SSH CA (#204): runs once scripts/ssh-ca-init.sh made Secret step-ca; until then the pod waits for the Secret
     - src: "{{ repo_root }}/manifests/step-ca.yaml.tmpl"
-      values: {EXEC_NS: "{{ operator_exec_ns }}", PLATFORM_NS: "{{ operator_platform_ns }}", STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
+      values: {SSH_CA_NS: "{{ operator_ssh_ca_ns }}", PLATFORM_NS: "{{ operator_platform_ns }}", STEP_CA_IMAGE: "{{ operator_step_ca_image }}"}
       replace: []
   loop_control: {label: "{{ item.src | basename }}"}
 

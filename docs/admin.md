@@ -2648,7 +2648,8 @@ Runs of stage `pr` do not wait.
 ## SSH access for executors
 
 An executor can connect to a server with SSH (#204). It uses an SSH certificate that is valid for some minutes. The
-certificate authority (step-ca) runs in the namespace `agentdev-executors`. Only the operator can get certificates
+certificate authority (step-ca) runs in its own namespace `agentdev-ssh-ca` (`SSH_CA_NS`). The operator can read only
+its provisioner key there, not the CA keys. Only the operator can get certificates
 from it. No agent and no AI process gets SSH access. Design: [ADR 0007](adr/0007-ssh-certificate-authority.md).
 
 Each server is an `SSHTarget` object. Only cluster admins can write `SSHTarget` objects. The server has two local
@@ -2673,7 +2674,7 @@ WARNING: The CA keys let a person log in to all enrolled servers. Do not copy th
    The script makes the CA keys in a temporary directory, makes the Secrets `step-ca` and `step-ca-provisioner`, and
    deletes the directory. It shows the public keys of the user CA and of the host CA.
 3. Run `ansible-playbook infra/ansible/kind.yml --tags operator` (`kind`) or the playbook (GKE).
-4. Make sure that the CA runs: `kubectl -n agentdev-executors rollout status deploy/step-ca`
+4. Make sure that the CA runs: `kubectl -n agentdev-ssh-ca rollout status deploy/step-ca`
 
 NOTE: The script never replaces a Secret. If the Secrets exist, the script stops.
 
@@ -2738,10 +2739,10 @@ replaces the file; add `-u` to add to it). Then reload sshd.
    The script shows the new user CA key. It makes no Secret.
 2. On each server, add the new user CA key to `/etc/ssh/agentdev_user_ca.pub`. Keep the old key. Then reload sshd.
    sshd accepts certificates of the two keys.
-3. Replace the two Secrets: run `kubectl -n agentdev-executors delete secret step-ca step-ca-provisioner`, then
+3. Replace the two Secrets: run `kubectl -n agentdev-ssh-ca delete secret step-ca step-ca-provisioner`, then
    `scripts/ssh-ca-init.sh --from <directory>`.
 4. Delete the directory.
-5. Run `kubectl -n agentdev-executors rollout restart deploy/step-ca`.
+5. Run `kubectl -n agentdev-ssh-ca rollout restart deploy/step-ca`.
    At the next poll, the operator signs new host certificates, because the host CA changed. The phase of each
    server changes to `NotReady` until step 6 is done.
 6. Run `scripts/ssh-enrol.sh <target>` again for each server and apply it.
@@ -2825,6 +2826,7 @@ each executor. The text can still contain data from the servers. The agents trea
 
 | Setting | Default | Where |
 |---|---|---|
+| `SSH_CA_NS` (namespace of the CA; never the executors namespace) | `agentdev-ssh-ca` | Ansible `ssh_ca_ns` (GKE), `operator_ssh_ca_ns` (kind) |
 | `STEP_CA_IMAGE` (image of the CA, by digest) | `smallstep/step-ca:0.28.4@sha256:...` | Ansible `step_ca_image` (GKE), `operator_step_ca_image` (kind) |
 | `SSH_ENROL_POLL_SECONDS` (time between two passes over the SSHTargets) | 60 | operator env |
 | `SSH_PROBE_MINUTES` (time between two probes of a `Ready` server) | 10 | operator env |
