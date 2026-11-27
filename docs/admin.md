@@ -2114,7 +2114,6 @@ Off by default: agents never merge. To let one agent merge its **own** PRs after
 spec:
   merge:
     mode: gated            # off (default) | gated
-    method: merge          # merge (default, a merge commit) | squash | rebase
     approvers: [your-login] # required with gated: whose approval counts
 ```
 
@@ -2129,7 +2128,7 @@ merges only when all hold:
 3. Every check run and commit status on the head passed, and GitHub reports the PR mergeable under the branch rules.
 4. No approval request of the agent on the PR is open, and changes to protected paths have a person's approval.
 
-The merge call pins the head sha and uses the configured method; the agent sends only the PR number. Each merge prints
+The merge call pins the head sha and always makes a merge commit (squash and rebase are not available: the repository rule is merge commits only); the agent sends only the PR number. Each merge prints
 an `AGENTDEV_AUDIT` line with `action: agent-merge` (PR, sha, approver, checks); a refusal is a `merge-refused`
 security event. A PR that is not ready (a check pending) is retried on the next loop pass without an event.
 

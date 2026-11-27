@@ -182,15 +182,12 @@ type AgentTools struct {
 // administrator sets it (the Agent object), never the repository or issue text. The forge sidecar checks the approval,
 // the checks and the protected paths itself, from the forge, at the moment of the merge (images/forge/merge.go).
 type AgentMerge struct {
-	// off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when a person with
-	// write access approved the head commit, every check passed and no change is requested. GitHub only.
+	// off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when an owner of
+	// approvers approved the head commit, every check passed and no change is requested. Always a merge commit (never
+	// squash or rebase: the merge method is not configurable). GitHub only.
 	// +kubebuilder:validation:Enum=off;gated
 	// +kubebuilder:default=off
 	Mode string `json:"mode"`
-	// Merge method, as the repository allows it. Default merge (a merge commit).
-	// +kubebuilder:validation:Enum=merge;squash;rebase
-	// +optional
-	Method string `json:"method,omitempty"`
 	// Forge logins of the owners whose approval of the exact head commit allows the merge. Required with mode gated:
 	// an approval by anyone else (another collaborator with write access, an agent, a bot) never merges.
 	// +kubebuilder:validation:MaxItems=20

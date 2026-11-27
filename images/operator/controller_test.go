@@ -614,14 +614,14 @@ func TestModelEffortInvalidRefused(t *testing.T) {
 	}
 }
 
-// #578: spec.merge gated reaches the forge sidecar (MERGE_MODE, MERGE_METHOD) and the worker (MERGE_MODE); off or
+// #578: spec.merge gated reaches the forge sidecar and the worker (MERGE_MODE, MERGE_APPROVERS); never MERGE_METHOD (always a merge commit); off or
 // unset: no variable in either container (pod template unchanged).
 func TestMergeFromSpec(t *testing.T) {
 	r, c := setup(t, agent("alice", nil),
 		agent("bob", func(a *v1.Agent) {
-			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Method: "squash", Approvers: []string{"owner"}}
+			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Approvers: []string{"owner"}}
 		}),
-		agent("carol", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "off", Method: "rebase"} }),
+		agent("carol", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "off"} }),
 		agent("dave", func(a *v1.Agent) {
 			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Approvers: []string{"owner", "co-owner"}}
 		}))
@@ -642,8 +642,8 @@ func TestMergeFromSpec(t *testing.T) {
 		return "<unset>"
 	}
 	for _, tc := range []struct{ agent, worker, mode, method, approvers string }{
-		{"alice", "<unset>", "<unset>", "<unset>", "<unset>"}, {"bob", "gated", "gated", "squash", "owner"},
-		{"carol", "<unset>", "<unset>", "<unset>", "<unset>"}, {"dave", "gated", "gated", "merge", "owner,co-owner"},
+		{"alice", "<unset>", "<unset>", "<unset>", "<unset>"}, {"bob", "gated", "gated", "<unset>", "owner"},
+		{"carol", "<unset>", "<unset>", "<unset>", "<unset>"}, {"dave", "gated", "gated", "<unset>", "owner,co-owner"},
 	} {
 		s := getSTS(t, c, tc.agent)
 		if got := envOf(s, "MERGE_MODE"); got != tc.worker {
@@ -670,7 +670,6 @@ func TestMergeFromSpec(t *testing.T) {
 func TestMergeInvalidRefused(t *testing.T) {
 	for name, m := range map[string]*v1.AgentMerge{
 		"mode":            {Mode: "always"},
-		"method":          {Mode: "gated", Method: "fast-forward", Approvers: []string{"owner"}},
 		"gated, no owner": {Mode: "gated"},
 		"bad approver":    {Mode: "gated", Approvers: []string{"owner,mallory"}},
 	} {

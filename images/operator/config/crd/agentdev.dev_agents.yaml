@@ -134,19 +134,12 @@ spec:
                       type: string
                     maxItems: 20
                     type: array
-                  method:
-                    description: Merge method, as the repository allows it. Default
-                      merge (a merge commit).
-                    enum:
-                    - merge
-                    - squash
-                    - rebase
-                    type: string
                   mode:
                     default: "off"
                     description: |-
-                      off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when a person with
-                      write access approved the head commit, every check passed and no change is requested. GitHub only.
+                      off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when an owner of
+                      approvers approved the head commit, every check passed and no change is requested. Always a merge commit (never
+                      squash or rebase: the merge method is not configurable). GitHub only.
                     enum:
                     - "off"
                     - gated

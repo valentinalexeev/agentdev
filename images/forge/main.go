@@ -40,9 +40,9 @@ type Config struct {
 	WakeToken, RegisterToken string
 	APIURL                   string // agentdev-api internal listener (#425 run log); empty: run events are dropped
 	AgentName, ForgeKind     string
-	// #578: MERGE_MODE off (default) | gated, MERGE_METHOD merge | squash | rebase (merge.go)
-	MergeMode, MergeMethod string
-	MergeApprovers         []string
+	// #578: MERGE_MODE off (default) | gated, MERGE_APPROVERS owner logins (merge.go); always a merge commit
+	MergeMode      string
+	MergeApprovers []string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
 	RegisterEvery                                   time.Duration
@@ -105,7 +105,7 @@ func loadConfig() (*Config, error) {
 		return nil, fmt.Errorf("REGISTER_EVERY: %q", os.Getenv("REGISTER_EVERY"))
 	}
 	c.RegisterEvery = time.Duration(every) * time.Second
-	if c.MergeMode, c.MergeMethod, c.MergeApprovers, err = mergeConfig(getenv); err != nil {
+	if c.MergeMode, c.MergeApprovers, err = mergeConfig(getenv); err != nil {
 		return nil, err
 	}
 	if c.ForgeKind == "github" {
@@ -150,7 +150,7 @@ func main() {
 	if c.MergeMode == "gated" && !s.mergeOn() {
 		s.logf("MERGE_MODE=gated is supported on GitHub only: the merge endpoint stays off on %s", drv.kind())
 	} else if s.mergeOn() {
-		s.logf("merge mode gated: the agent may merge its own PRs once a person approved the head (method %s)", c.MergeMethod)
+		s.logf("merge mode gated: the agent may merge its own PRs once an owner (%s) approved the head, as a merge commit", strings.Join(c.MergeApprovers, ", "))
 	}
 	if err := s.git.init(); err != nil {
 		log.Fatalf("forge: mirror: %v", err)

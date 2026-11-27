@@ -123,7 +123,7 @@ func mergeServer(t *testing.T, f *mergeForge, mode string) (http.Handler, *bytes
 	srv := httptest.NewServer(f.handler(t))
 	t.Cleanup(srv.Close)
 	c, _ := ghConfig(t, srv.URL)
-	c.MergeMode, c.MergeMethod, c.APIURL = mode, "squash", srv.URL
+	c.MergeMode, c.APIURL = mode, srv.URL
 	c.MergeApprovers = []string{"Owner"}
 	c.Protected = []string{".github/workflows/"}
 	d, err := newGH(c)
@@ -169,7 +169,7 @@ func TestMergeApprovedHead(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("merge: %d %s", rec.Code, rec.Body)
 	}
-	if len(f.merged) != 1 || !strings.Contains(f.merged[0], `"sha":"`+mergeHead+`"`) || !strings.Contains(f.merged[0], `"merge_method":"squash"`) {
+	if len(f.merged) != 1 || !strings.Contains(f.merged[0], `"sha":"`+mergeHead+`"`) || !strings.Contains(f.merged[0], `"merge_method":"merge"`) {
 		t.Fatalf("merge call must pin the head and the method: %v", f.merged)
 	}
 	var res mergeResult
@@ -326,11 +326,12 @@ func TestMergeConfig(t *testing.T) {
 		mode, method string
 		ok           bool
 		approvers    string
-	}{{"", "", true, ""}, {"off", "", true, ""}, {"gated", "squash", true, "owner"}, {"gated", "rebase", true, "a, b"},
-		{"on", "", false, "owner"}, {"gated", "fast-forward", false, "owner"},
+	}{{"", "", true, ""}, {"off", "", true, ""}, {"gated", "", true, "owner"}, {"gated", "merge", true, "a, b"},
+		{"on", "", false, "owner"}, {"gated", "squash", false, "owner"}, {"gated", "rebase", false, "owner"},
+		{"off", "squash", false, ""},
 		{"gated", "", false, ""}, {"gated", "", false, " , "}, {"gated", "", false, "bad login!"}} {
 		env := map[string]string{"MERGE_MODE": tc.mode, "MERGE_METHOD": tc.method, "MERGE_APPROVERS": tc.approvers}
-		_, _, _, err := mergeConfig(func(k, def string) string {
+		_, _, err := mergeConfig(func(k, def string) string {
 			if v := env[k]; v != "" {
 				return v
 			}
@@ -360,7 +361,7 @@ func TestMergeCallerCannotChooseMethodOrApprover(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:5555"
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 200 || len(f.merged) != 1 || !strings.Contains(f.merged[0], `"merge_method":"squash"`) {
-		t.Fatalf("method must come from MERGE_METHOD: %d %v", rec.Code, f.merged)
+	if rec.Code != 200 || len(f.merged) != 1 || !strings.Contains(f.merged[0], `"merge_method":"merge"`) {
+		t.Fatalf("the method is always merge: %d %v", rec.Code, f.merged)
 	}
 }

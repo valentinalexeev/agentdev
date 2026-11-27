@@ -41,34 +41,36 @@ import (
 // GitHub only: on Gitea the sidecar cannot tell a person from another agent's account, so MERGE_MODE=gated keeps the
 // endpoint off there (a log line at start).
 
-var mergeMethods = map[string]bool{"merge": true, "squash": true, "rebase": true}
+// mergeMethod is fixed: the repository rule is merge commits only (CLAUDE.md). Nothing configures it, so neither the
+// agent nor the Agent object can pick squash or rebase.
+const mergeMethod = "merge"
 
-// mergeConfig reads MERGE_MODE (off | gated), MERGE_METHOD (merge | squash | rebase, default merge) and
-// MERGE_APPROVERS (comma-separated owner logins; required with gated, else the sidecar does not start).
-func mergeConfig(get func(string, string) string) (mode, method string, approvers []string, err error) {
-	mode, method = get("MERGE_MODE", "off"), get("MERGE_METHOD", "merge")
+// mergeConfig reads MERGE_MODE (off | gated) and MERGE_APPROVERS (comma-separated owner logins; required with gated,
+// else the sidecar does not start). A MERGE_METHOD other than merge is refused at start (merge commits only).
+func mergeConfig(get func(string, string) string) (mode string, approvers []string, err error) {
+	mode = get("MERGE_MODE", "off")
 	if mode != "off" && mode != "gated" {
-		return "", "", nil, fmt.Errorf("MERGE_MODE %q: off or gated", mode)
+		return "", nil, fmt.Errorf("MERGE_MODE %q: off or gated", mode)
 	}
-	if !mergeMethods[method] {
-		return "", "", nil, fmt.Errorf("MERGE_METHOD %q: merge, squash or rebase", method)
+	if mm := get("MERGE_METHOD", mergeMethod); mm != mergeMethod {
+		return "", nil, fmt.Errorf("MERGE_METHOD %q: only merge (merge commits) is allowed", mm)
 	}
 	if mode == "off" {
-		return mode, method, nil, nil
+		return mode, nil, nil
 	}
 	for _, l := range strings.Split(get("MERGE_APPROVERS", ""), ",") {
 		if l = strings.TrimSpace(l); l == "" {
 			continue
 		}
 		if !ghLoginRe.MatchString(l) {
-			return "", "", nil, fmt.Errorf("MERGE_APPROVERS: %q is not a login", l)
+			return "", nil, fmt.Errorf("MERGE_APPROVERS: %q is not a login", l)
 		}
 		approvers = append(approvers, l)
 	}
 	if len(approvers) == 0 {
-		return "", "", nil, errors.New("MERGE_MODE=gated needs MERGE_APPROVERS (the owner logins)")
+		return "", nil, errors.New("MERGE_MODE=gated needs MERGE_APPROVERS (the owner logins)")
 	}
-	return mode, method, approvers, nil
+	return mode, approvers, nil
 }
 
 // isMergeApprover: login is one of MERGE_APPROVERS (case-insensitive, as GitHub logins are).
@@ -213,7 +215,7 @@ func (s *server) mergePR(ctx context.Context, job, pr string) (*mergeResult, err
 	if p.Draft {
 		return nil, refuseMerge("low", "merge refused: PR #%s is a draft", pr)
 	}
-	res := &mergeResult{Repo: repo, PR: n, SHA: p.Head.SHA, Base: p.Base.Ref, Method: s.c.MergeMethod}
+	res := &mergeResult{Repo: repo, PR: n, SHA: p.Head.SHA, Base: p.Base.Ref, Method: mergeMethod}
 
 	// 2. a person approved this exact head; nobody requests changes
 	approver, err := s.mergeApprover(ctx, base, p.Head.SHA)
@@ -253,14 +255,14 @@ func (s *server) mergePR(ctx context.Context, job, pr string) (*mergeResult, err
 		Merged bool   `json:"merged"`
 		SHA    string `json:"sha"`
 	}
-	code, err := s.forgeSend(ctx, http.MethodPut, base+"/merge", map[string]string{"sha": p.Head.SHA, "merge_method": s.c.MergeMethod}, &out)
+	code, err := s.forgeSend(ctx, http.MethodPut, base+"/merge", map[string]string{"sha": p.Head.SHA, "merge_method": mergeMethod}, &out)
 	switch {
 	case err != nil:
 		return nil, err
 	case code == http.StatusConflict:
 		return nil, refuseMerge("medium", "merge refused by the forge: the head of PR #%s moved (stale approval)", pr)
 	case code == http.StatusMethodNotAllowed || code == http.StatusUnprocessableEntity:
-		return nil, waitFor("the forge did not merge PR #%s (HTTP %d: branch rules or merge method %s)", pr, code, s.c.MergeMethod)
+		return nil, waitFor("the forge did not merge PR #%s (HTTP %d: branch rules, or merge commits not allowed)", pr, code)
 	case code/100 != 2 || !out.Merged:
 		return nil, fmt.Errorf("merge of PR #%s: forge HTTP %d", pr, code)
 	}
