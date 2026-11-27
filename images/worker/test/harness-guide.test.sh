@@ -5,6 +5,7 @@
 # run. Runs the real functions from agent-loop.sh with a fake claude that records its arguments.
 #   bash images/worker/test/harness-guide.test.sh      (bash >= 4, jq)
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 STATE="${tmp}/state"; mkdir -p "${STATE}/jobs" "${tmp}/bin" "${tmp}/repo"

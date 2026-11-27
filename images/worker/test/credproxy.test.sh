@@ -4,6 +4,7 @@
 #   bash images/worker/test/credproxy.test.sh      (bash >= 4, jq)
 # Each case runs in a child bash with its own fake home directory, so the real home is never touched.
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d); trap 'rm -rf "${work}"' EXIT
 fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }
