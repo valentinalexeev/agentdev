@@ -395,6 +395,13 @@
         definition: "{{ agentdev_objects.egress_web }}"
       when: platform_fqdn == 'none'
 
+    # registry cache (#203): gateway registry-cache and, for registry_proxy cluster, the in-cluster caches; off removes
+    # them. Before the agents: they read the ConfigMap registry-proxy at pod start.
+    - name: Registry cache for npm, PyPI and Go (#203)
+      ansible.builtin.include_role: {name: registry_cache}
+      vars:
+        registry_cache_fqdn_policy: "{{ platform_fqdn == 'gke' }}"
+
     - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, SSHTarget, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #204, #202, #383)"
       kubernetes.core.k8s:
         <<: *k8s

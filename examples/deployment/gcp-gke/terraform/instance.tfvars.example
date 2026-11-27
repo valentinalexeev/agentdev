@@ -34,3 +34,4 @@ labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service
 # autoscaler scale-down, Pending agent pod) and e-mail alerts for the first two, see terraform/monitoring.tf. Off by default.
 # It also grants the automation account roles/logging.configWriter and roles/monitoring.alertPolicyEditor.
 # enable_diagnostic_alerts = true
+# registry_proxy   = true    # Artifact Registry cache for npm, PyPI, Go (agentdev #203); then set registry_proxy in ansible/instance.yml

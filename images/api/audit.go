@@ -40,6 +40,9 @@ type auditStore interface {
 	// RecordPermission stores a "permission" entry for agent when cur differs from the newest one, atomically, also
 	// across API processes; it returns the stored entry, or nil when nothing changed. permission.go (#505)
 	RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error)
+	// RecordChange is the same rule for any operator-side field of the Agent (#570: action "model"): decide gets the
+	// newest entry of that action and agent (nil: none) and returns the entry to store, or nil.
+	RecordChange(ctx context.Context, action, agent string, decide func(last []byte) *auditEntry) (*auditEntry, []byte, error)
 }
 
 // auditDB receives every audit entry; nil keeps the stdout line only. Set once by main before serving.
@@ -98,24 +101,29 @@ var afterPermissionRead func()
 // RecordPermission: a transaction-scoped advisory lock per agent (the pattern of Insert in events.go) serialises the
 // read of the newest "permission" row and the insert, so two API processes that see the same change write one entry.
 func (s *pgStore) RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
+	return s.RecordChange(ctx, permissionAction, agent, func(last []byte) *auditEntry { return permissionEntry(agent, last, cur) })
+}
+
+// RecordChange: the lock key is per action and agent ('api_audit_permission:<agent>' for permission, as before #570).
+func (s *pgStore) RecordChange(ctx context.Context, action, agent string, decide func(last []byte) *auditEntry) (*auditEntry, []byte, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('api_audit_permission:' || $1))`, agent); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('api_audit_' || $1 || ':' || $2))`, action, agent); err != nil {
 		return nil, nil, err
 	}
 	var last []byte
 	err = tx.QueryRow(ctx, `SELECT entry FROM api_audit WHERE agent = $1 AND action = $2 ORDER BY id DESC LIMIT 1`,
-		agent, permissionAction).Scan(&last)
+		agent, action).Scan(&last)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, err
 	}
 	if afterPermissionRead != nil {
 		afterPermissionRead()
 	}
-	e := permissionEntry(agent, last, cur)
+	e := decide(last)
 	if e == nil {
 		return nil, nil, nil
 	}
@@ -174,17 +182,21 @@ func (m *memAudit) ListAudit(_ context.Context, f auditFilter) ([]auditRecord, e
 }
 
 // RecordPermission: the same rule as the Postgres store, under the store's mutex.
-func (m *memAudit) RecordPermission(_ context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
+func (m *memAudit) RecordPermission(ctx context.Context, agent string, cur *agentPermission) (*auditEntry, []byte, error) {
+	return m.RecordChange(ctx, permissionAction, agent, func(last []byte) *auditEntry { return permissionEntry(agent, last, cur) })
+}
+
+func (m *memAudit) RecordChange(_ context.Context, action, agent string, decide func(last []byte) *auditEntry) (*auditEntry, []byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var last []byte
 	for i := len(m.rows) - 1; i >= 0; i-- {
-		if r := m.rows[i]; r.e.Agent == agent && r.e.Action == permissionAction {
+		if r := m.rows[i]; r.e.Agent == agent && r.e.Action == action {
 			last = r.rec.Entry
 			break
 		}
 	}
-	e := permissionEntry(agent, last, cur)
+	e := decide(last)
 	if e == nil {
 		return nil, nil, nil
 	}

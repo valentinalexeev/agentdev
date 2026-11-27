@@ -11,10 +11,11 @@
 # - Forge hosts (FORGE_EGRESS_HOSTS, GitHub by default) are for the forge sidecar only: Squid allows them only with the
 #   proxy credential of Secret egress-forge-proxy, which the operator puts in the forge container's proxy URL and never
 #   in the agent container. An agent request to them is refused (and reported), even if EGRESS_HOSTS also lists them.
-# - Setup hosts (SETUP_EGRESS_HOSTS, the download hosts of the toolchain presets, #499) are for the init container
+# - Setup hosts (SETUP_EGRESS_HOSTS, the download hosts of the toolchains, #499) are for the init container
 #   toolchain only, the same way: Squid allows them only with the credential of Secret egress-setup-proxy, which the
 #   operator copies into agent-<name>-setup-proxy and puts only in the init container's proxy URL. The presets' hosts
-#   are the same for every agent, so one ACL serves all; per-agent hosts come with free-form steps (ADR 0010 D4 step 3).
+#   are the same for every agent, so one ACL serves all. The administrator adds the hosts of custom toolchains (#598)
+#   to the same list. A setup host is refused for the agent container even if EGRESS_HOSTS lists it.
 # - The Claude API is not on the agents' list when the credential proxy (#66) is on: agents call claude-proxy directly
 #   (in-cluster name, NO_PROXY; allowed below) and only claude-proxy reaches api.anthropic.com (docs/security.md R64).
 # - On GKE the playbook also adds an FQDNNetworkPolicy for the proxy itself, so even a misconfigured proxy cannot
@@ -52,9 +53,10 @@ data:
     http_access deny !Safe_ports
     http_access deny CONNECT !SSL_ports
     http_access deny private_dst
+    # the setup client first (#598): a custom toolchain can download from a forge host such as github.com
+    http_access allow setup_hosts setup_client
     http_access allow forge_hosts forge_client
     http_access deny forge_hosts
-    http_access allow setup_hosts setup_client
     http_access deny setup_hosts
     http_access allow allowed
     http_access deny all
@@ -168,6 +170,9 @@ spec:
     ports: [{port: 8080}]
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: contextforge}}}]
     ports: [{port: 4444}]
+  # registry cache (#203): the gateway of the npm, PyPI and Go caches (role registry_cache); no pod without it
+  - to: [{podSelector: {matchLabels: {app: registry-cache}}}]
+    ports: [{port: 4873}, {port: 3141}, {port: 3000}]
   # approvals (#67): the forge sidecar asks the API's internal endpoint for decisions (per-request secret, R73)
   - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-api}}}]
     ports: [{port: 8081}]

@@ -241,6 +241,50 @@ after the retention removed the old entries, or after a restart of an API withou
 NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
 sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
 
+### Set the model and effort of an agent
+
+The model and the effort level decide how Claude Code does the work of an agent (#564, #570). The model also decides
+how fast the agent uses its budget: `claude-proxy` counts the units with the multiplier of the model (see "Cost
+units"). Each agent has its own values. Its chat sessions start with the same values.
+
+- Model: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full name of one of these families, for example
+  `claude-sonnet-5-5`, optionally with the suffix `[1m]`. At most 80 characters.
+- Effort: `low`, `medium`, `high`, `xhigh` or `max`.
+- Not set: the default of Claude Code, as before.
+
+1. On `kind`: set `kind_agents_model` and `kind_agents_effort` (all agents).
+   On GKE: set `claude_model` and `claude_effort` (all agents), or `agents[].model` and `agents[].effort` (one agent).
+   In Git mode: set `spec.model` and `spec.effort` in the `Agent` manifest.
+2. Deploy again.
+
+NOTE: The CRD and the operator refuse a model outside these families or an unknown effort. The agent then has the
+phase `invalid`. Thus a typing error or another vendor's model name cannot make the agent count at the highest
+multiplier, and no value can become a flag of `claude`. On `kind` and GKE, the Ansible run stops before it
+applies anything when a model or an effort breaks these rules.
+
+Each change of `spec.model` or `spec.effort` makes one entry in the audit log: action `model`, with the old and the
+new values in `before.claude` and `after.claude`. The console shows the values in the agent drawer, and the API
+returns them in `GET /api/agents` (`model`, `effort`).
+
+#### Model and effort of a chat session
+
+A chat session starts with the agent's values. A person with write access can choose other values on **Start
+session**, or in the **Model** menu of the session header while the session runs. The choices are the agent's own
+values and the instance allow-list:
+
+| Setting (`api.chat`) | API variable | Default | Meaning |
+|---|---|---|---|
+| `models` | `CHAT_MODELS` | `[]` | Extra models, same rules as `spec.model`, for example `[sonnet, haiku]`. |
+| `efforts` | `CHAT_EFFORTS` | `[]` | Extra effort levels, for example `[low, high]`. |
+
+With empty lists a person can only keep the agent's values. The API refuses every other value (HTTP 400), and
+refuses to start when a list entry breaks the rules. The menus show the `claude-proxy` multiplier of each model, for
+example `1.67× units`, so a person sees which model uses the budget faster. The session's usage counts for the
+agent's budget with the multiplier of the model in use.
+
+Each change is an audit entry `chat-settings` with the person. The transcript shows a note when Claude applies or
+refuses the change. API: `POST /api/sessions/{id}/settings` with `{"model": "...", "effort": "..."}`.
+
 ### Allow extra tools for an agent
 
 The allow-list of the worker has the tools that all agents can use without a question (#496). You can add tools to
@@ -274,6 +318,8 @@ installs it before the agent starts, and the agent can use it but not change it.
 
 - The presets and their versions are in the operator (`images/operator/toolchain.go`). Each download has a pinned
   SHA-256. A new version is an agentdev release.
+- A deployment can also define its own custom toolchains in the instance config, without an agentdev release
+  (#598). See "Give an agent a custom toolchain".
 - The init container `toolchain` installs the toolchain into `/state/toolchain` on the agent volume. The agent
   container mounts that directory read-only, and gets it on its search path.
 - A wake only checks the installed files. A change of the toolchain, of the worker image or of the refresh period
@@ -326,6 +372,107 @@ agent").
 NOTE: The download hosts are open only for the init container, with the credential `egress-setup-proxy` (generated
 by the playbook, or by Terraform with `external_secrets`). The agent container cannot use them. The toolchain comes
 from the `Agent` object only. The repository and the issue text cannot change it.
+
+### Give an agent a custom toolchain
+
+A custom toolchain gives an agent tools that no preset has, for example `bats`, `make` and `shellcheck` (#598). The
+deployment defines it in its instance config. A change needs a deploy, not an agentdev release.
+
+- A custom toolchain is a list of downloads. Each download has an `https` URL and a SHA-256 for each architecture
+  (`amd64`, `arm64`), or one URL for `all`.
+- The init container `toolchain` installs the downloads below `$TOOLCHAIN/custom/<name>`, with the same checks as
+  a preset: the read-only mount, the manifest hash and the `Reinstalled` security event.
+- There are no install commands. Each kind of download has fixed steps:
+
+| `kind` | Install | Example `path` entry |
+|--------|---------|----------------------|
+| `tar` | unpacks the archive (gzip, xz or bzip2) into `<file name>/`; `strip` removes leading directories (0 to 5) | `bats/bin` |
+| `file` | installs the file as `bin/<file name>`, executable | `bin` |
+| `deb` | unpacks the Debian package into `<file name>/` with `dpkg-deb -x`; no install scripts and no dependencies | `make/usr/bin` |
+
+The other fields of a custom toolchain:
+
+| Field | Meaning |
+|-------|---------|
+| `files` | the downloads: `name`, `kind`, `strip` (`tar` only) and `arch` with `url` and `sha256` (1 to 10 entries) |
+| `path` | entries below `$TOOLCHAIN/custom/<name>` that go on the search path of the agent |
+| `verify` | commands that must exit 0 after the install, for example `[shellcheck, --version]` |
+| `hosts` | more download hosts, for example the target of a redirect (`objects.githubusercontent.com`) |
+| `env` | variables for the agent container. A value that starts with `$TOOLCHAIN/` gets the toolchain directory |
+| `allow` | entries for the tool allow-list of the agent, for example `Bash(make:*)` |
+
+1. Get the URL and the SHA-256 of each download from the publisher of the tool.
+2. Add every download host to the setup egress list: Ansible `setup_egress_hosts`, on `kind` the play variable
+   `kind_setup_egress_hosts`.
+3. Add the toolchain to the instance config: Ansible `toolchains`, on `kind` `operator_toolchains` in
+   `kind.vars.yml`. In Git mode, render the manifests again (`render.yml`).
+4. Add the name to the agent: `agents[].toolchain.custom` (GKE), `kind_agents_toolchain` (`kind`) or
+   `spec.toolchain.custom` in the `Agent` manifest (Git mode).
+5. Deploy again.
+6. Do the command `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.toolchain}'` to see the result.
+   The `message` shows `custom <name>` when the toolchain is ready.
+
+This example gives the agent `headlamp` the tools `bats`, `make` and `shellcheck` on GKE. Replace each `<sha256>` with
+the value of the publisher:
+
+```yaml
+setup_egress_hosts: [dl.google.com, static.rust-lang.org, github.com, codeload.github.com,
+                     objects.githubusercontent.com, release-assets.githubusercontent.com, snapshot.debian.org]
+toolchains:
+  shell-tools:
+    files:
+      - name: bats
+        kind: tar
+        strip: 1
+        arch: {all: {url: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz", sha256: "<sha256>"}}
+      - name: shellcheck
+        kind: tar
+        strip: 1
+        arch:
+          amd64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz", sha256: "<sha256>"}
+          arm64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.aarch64.tar.xz", sha256: "<sha256>"}
+      - name: make
+        kind: deb
+        arch:
+          amd64: {url: "https://snapshot.debian.org/archive/debian/<date>/pool/main/m/make-dfsg/make_4.3-4.1_amd64.deb", sha256: "<sha256>"}
+          arm64: {url: "https://snapshot.debian.org/archive/debian/<date>/pool/main/m/make-dfsg/make_4.3-4.1_arm64.deb", sha256: "<sha256>"}
+    path: [bats/bin, shellcheck, make/usr/bin]
+    verify: [[bats, --version], [shellcheck, --version], [make, --version]]
+    allow: ["Bash(bats:*)", "Bash(make:*)", "Bash(shellcheck:*)"]
+agents:
+  - name: headlamp
+    toolchain: {custom: [shell-tools]}
+```
+
+NOTE: Use `snapshot.debian.org` for a `deb` download. `deb.debian.org` removes old package versions, and then the
+pinned URL does not operate after that.
+
+NOTE: A custom toolchain can also have presets in the same agent, for example
+`{presets: {go: "1.27.4"}, custom: [shell-tools]}`. The search path has the agent's `path` first, then the
+presets, then the custom toolchains.
+
+**Checks of the operator.** The operator reads the custom toolchains when it starts. It does not start when
+`toolchains` is not valid JSON or has an unknown field. A custom toolchain with an error is invalid, and each agent
+that names it gets phase `invalid` with reason `InvalidToolchain`. The message tells the error. The operator refuses:
+
+- a URL that is not `https`, or that has a user, a port or a query;
+- a SHA-256 that is not 64 lower-case hexadecimal characters;
+- a URL host or a `hosts` entry that is not in the setup egress list;
+- a `path` entry that goes out of the toolchain;
+- an `env` name that agentdev sets (for example `PATH`, `HTTPS_PROXY`, `CLAUDE_*`, `ANTHROPIC_*`, `GIT_*`). A
+  variable that agentdev or a preset already sets is never replaced;
+- the name of a preset (`go`, `rust`).
+
+**When the install fails.** A checksum mismatch, a failed download or a failed `verify` gives reason `StepFailed`.
+A symbolic link that goes out of the toolchain also gives `StepFailed`. The pod stays in `Init`.
+
+WARNING: The init container of each agent with a toolchain can use every setup egress host, and the agent container
+can use none of them. This is also true for a host that the agents' own allow-list has. For example, if you add
+`.githubusercontent.com`, the agents cannot get `raw.githubusercontent.com` anymore. Add exact host names, not
+domains.
+
+CAUTION: The SHA-256 makes sure that the download does not change. It does not make sure that the tool is safe. Get
+the value from the publisher, and check the publisher before you add a tool (threat model V6).
 
 ### Set the poll interval
 
@@ -720,6 +867,73 @@ Use the same script for `agentdev.dev_Executor` and `agentdev.dev_ProjectSecret`
 
 To show the state of all agents, do this command:
 `kubectl -n coding-agents get agents`. The column `READY` shows the `Ready` condition.
+
+## Registry cache
+
+The registry cache (`registry-cache`, #203) keeps copies of npm, PyPI and Go packages. The agents install packages
+through the cache. The agents do not get a registry credential. The cache is read-only: an agent cannot publish a
+package through it. Only an executor can publish.
+
+When the cache is on, the agents cannot connect to the npm, PyPI and Go registries directly. The playbook removes
+these hosts from the egress allow-list. The default is off: the agents connect to the public registries through the
+egress proxy, as before.
+
+| Mode | Where | Caches |
+|---|---|---|
+| `off` | all | none (default) |
+| `cluster` | `kind`; GKE without Artifact Registry (`create_artifact_registry = false`) | Verdaccio (npm), devpi (PyPI) and Athens (Go) in the cluster, each with one 5 GiB volume |
+| `artifact_registry` | GKE | Artifact Registry remote repositories `agentdev-npm`, `agentdev-pypi` and `agentdev-go` |
+
+### Configure the registry cache
+
+Do this task to make the agents install npm, PyPI and Go packages through the cache.
+
+1. Select the mode from the table above.
+2. On `kind`:
+   1. Set `registry_proxy: cluster` in `kind.vars.yml`.
+   2. Run `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags registry-cache,operator,agents`.
+3. On GKE with `artifact_registry`:
+   1. In `terraform/instance.tfvars` of the deployment repository, set `registry_proxy = true`.
+   2. Run `terraform plan`.
+      Make sure that the plan adds three repositories, one service account and four IAM members.
+   3. Run `terraform apply`.
+   4. Run `terraform output registry_proxy`.
+   5. In `ansible/instance.yml`, set `registry_proxy: artifact_registry`.
+   6. Copy the output of step 4 into `registry_proxy_artifact_registry` in `instance.yml`.
+   7. Run the playbook.
+4. On GKE with `cluster`: set `registry_proxy: cluster` in `instance.yml`, then run the playbook.
+5. Stop and start each agent.
+   The agents read the cache settings when their pod starts.
+6. Do a check:
+   `kubectl -n coding-agents exec agent-alice-0 -c agent -- npm view left-pad version`
+   The output shows a version number.
+
+To stop the cache, set the mode to `off` and do steps 2 to 5 again. The playbook removes the cache and its volumes.
+
+CAUTION: When the cache is on, a build that uses a different registry needs that host on the allow-list
+(`egress_extra_hosts`). crates.io stays on the list until the cache supports it.
+
+### Reference: registry cache
+
+| Setting | Default | Where |
+|---|---|---|
+| Mode | `off` | Ansible `registry_proxy` (`kind.vars.yml` on kind, `instance.yml` on GKE) |
+| Hosts removed from the agents' list when the cache is on | `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org` | Ansible `registry_proxy_upstream_hosts` |
+| Remote repositories (GKE) | off | Terraform `registry_proxy` (needs `create_artifact_registry`) |
+| Repository URLs and service account (GKE) | none | Ansible `registry_proxy_artifact_registry` = `terraform output registry_proxy` |
+| Volume of each cache (`cluster`) | `5Gi` | Ansible `registry_cache_storage`, `registry_cache_storage_class` |
+| Settings for the agents | `npm_config_registry`, `PIP_INDEX_URL`, `UV_DEFAULT_INDEX`, `GOPROXY`, `GOSUMDB` | ConfigMap `registry-proxy` (the operator adds it to the agent container) |
+
+NOTE: The gateway accepts only `GET` and `HEAD` requests. `npm audit` and `npm publish` do not operate through the
+cache. The ConfigMap sets `npm_config_audit` to `false`.
+
+NOTE: With `artifact_registry`, only the gateway pod gets a Google token, through Workload Identity. The token gives
+read access to the three repositories only.
+
+NOTE: Private registries for each project are not in this release (#248).
+
+NOTE: `render.yml` (GitOps render mode) does not render the registry cache yet. It stops when `registry_proxy` is
+not `off`.
 
 ## Labels
 
@@ -2475,7 +2689,7 @@ NOTE: The event shows only the method, the host and the port. The event does not
 | Allow-list | `api.anthropic.com`, `.github.com`, `.githubusercontent.com`, `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org`, `index.crates.io`, `static.crates.io` (a leading dot also allows the subdomains) | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
-| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`) | Ansible `setup_egress_hosts` |
+| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`); add the hosts of custom toolchains (#598) here | Ansible `setup_egress_hosts`; `kind`: `kind_setup_egress_hosts` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
 | Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |

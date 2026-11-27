@@ -94,6 +94,11 @@ api_chat_idle_seconds: "{{ (api.chat | default({})).idle_minutes | default(30) |
 api_chat_retention_days: "{{ (api.chat | default({})).retention_days | default(30) }}"
 api_chat_max_sessions: "{{ (api.chat | default({})).max_sessions | default(0) }}"
 api_chat_max_sessions_per_user: "{{ (api.chat | default({})).max_sessions_per_user | default(0) }}"
+# #570: models and efforts a person may choose for a chat session besides the agent's own spec.model, spec.effort
+api_chat_models: "{{ (api.chat | default({})).models | default([]) }}"
+api_chat_efforts: "{{ (api.chat | default({})).efforts | default([]) }}"
+# the rule of spec.model (images/operator/render.go modelChars): an alias or a claude-proxy price family, optional [1m]
+api_chat_model_re: '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$'
 # #424: a session pod is the agent's pod spec (copied from its StatefulSet); the admission policy pins both images
 api_chat_worker_image: "{{ worker_image | default(image_registry ~ '/agentdev-worker:' ~ image_tag) }}"
 api_chat_forge_image: "{{ forge_image | default(image_registry ~ '/agentdev-forge:' ~ image_tag) }}"

@@ -147,9 +147,18 @@
       changed_when: false
       failed_when: nogw.rc == 0 or 'gateway_api' not in nogw.stdout
 
+    # #570: a model outside the claude-proxy price families fails the pre-check, not the CRD apply
+    - name: A model outside the price families is refused
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/badmodel", -e, '{"claude_model": "gpt-4o"}']
+      register: badmodel
+      changed_when: false
+      failed_when: badmodel.rc == 0 or 'agents[].model' not in badmodel.stdout
+
     - name: No output for refused values
       ansible.builtin.stat: {path: "{{ out }}/{{ item }}"}
-      loop: [bad, nogw]
+      loop: [bad, nogw, badmodel]
       register: refused
       failed_when: refused.stat.exists
 

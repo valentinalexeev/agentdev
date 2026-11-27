@@ -32,6 +32,20 @@
       non-empty list of IPv4 addresses when claude_proxy is on. Copy them from `terraform output platform` (#384).
     quiet: true
 
+# #570: a bad effort fails here, not late at the CRD apply. The model rule is tasks/model_check.yml (tasks/checks.yml).
+- name: Check the effort of the agents
+  ansible.builtin.assert:
+    that:
+      - t_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
+    fail_msg: >-
+      claude_effort and agents[].effort: low, medium, high, xhigh, max (docs/admin.md). Found: {{ t_efforts
+      | difference(['low', 'medium', 'high', 'xhigh', 'max']) }}
+    quiet: true
+  vars:
+    t_efforts: >-
+      {{ ([claude_effort | default('', true)] + (agents | default([]) | map(attribute='effort', default='') | list))
+         | map('string') | select | list }}
+
 - name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
   ansible.builtin.set_fact:
     egress_fqdn_matches: >-
@@ -147,7 +161,7 @@
         EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
       replace: []
     agent_egress_hosts: >-
-      {{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}
+      {{ (egress_hosts + egress_extra_hosts) | reject('in', agent_egress_drop) | join(' ') }}
     vars_operator:
       src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
       values:
@@ -173,6 +187,11 @@
         EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
         # harness guide (#206): the same list as the agents' egress proxy, for the text only
         AGENT_EGRESS_HOSTS: "{{ agent_egress_hosts }}"
+        # custom toolchains (#598): the JSON as the content of a YAML double-quoted string (a JSON string without quotes);
+        # $ as \u0024, so a ${NAME} in a value is not replaced by templates/render.j2. Double-quoted: a folded scalar
+        # would keep both backslashes and the operator would read the text \u0024.
+        TOOLCHAINS: "{{ (toolchains | default({}) | to_json | replace('$', '\\u0024') | to_json)[1:-1] }}"
+        SETUP_EGRESS_HOSTS: "{{ setup_egress_hosts | join(' ') }}"
         SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
         SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
         SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
