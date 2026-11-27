@@ -105,6 +105,10 @@ This section replaces the sections of 1.3.0-rc.1 to rc.3. Upgrade from 1.2.0 dir
   and run the console chat NetworkPolicy and admission denial checks (`e2e-gke-security.sh --kind --only chat`),
   including the #549 token-policy cases. A manual run with `real_model` and `api` runs the API checks in the real-model
   pass. A failed API pass no longer skips the nightly real-model run. Per-PR compat runs are unchanged.
+- **spec.model is limited to the claude-proxy price families (#609).** `spec.model` (and `claude_model`, `agents[].model` in Ansible) accepts only `opus`, `sonnet`, `haiku`, `fable` or
+  `claude-<family>-...`, optionally with the suffix `[1m]`, at most 80 characters, so a typo is refused instead of being
+  counted at the highest `claude-proxy` multiplier. The CRD, the operator, the worker and the playbook checks apply the
+  same rule as 1.4 (back-port of the #570 rule).
 
 ### Removed
 - **BREAKING** **scripts/mcp-sync.sh is removed; the bootstrap applies an McpProject (#547).** `scripts/mcp-sync.sh` is removed (deprecated since 1.2.0, #383). `scripts/bootstrap-project.sh` now applies an
@@ -190,8 +194,8 @@ This section replaces the sections of 1.3.0-rc.1 to rc.3. Upgrade from 1.2.0 dir
   another file name is refused. Re-run: the playbook or `ansible-playbook infra/ansible/kind.yml --tags operator`.
 
 ### Upgrade
-From 1.2.0 to 1.3.0. Do the steps in this order. Step 2 is **BREAKING** for kind users of `run.sh`. GKE
-deployments with `deploy.yml` have no breaking change. Every new agent feature (tools, toolchain, permission mode) is
+From 1.2.0 to 1.3.0. Do the steps in this order. Steps 2 and 9 are **BREAKING**: step 2 for kind users of
+`run.sh`, step 9 for anyone who calls `scripts/mcp-sync.sh` or keeps hosts in `MCP_ALLOWED_HOSTS` (kind and GKE). Every new agent feature (tools, toolchain, permission mode) is
 off by default.
 
 1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.3.0` in
@@ -257,7 +261,7 @@ off by default.
    `kind_agents_tools`, `kind_agents_toolchain`). A toolchain needs the setup egress credential
    `egress-setup-proxy`: the playbook makes it, or Terraform with `external_secrets`. Size the agent volume as in
    docs/admin.md, "Give an agent a toolchain" (Rust: 20 GiB or more).
-9. **MCP projects instead of `mcp-sync.sh` (#547).** Replace each direct call of `scripts/mcp-sync.sh <spec>` in
+9. **MCP projects instead of `mcp-sync.sh`, BREAKING (#547, PR #585).** Replace each direct call of `scripts/mcp-sync.sh <spec>` in
    runbooks, cron jobs and CI with `scripts/bootstrap-project.sh <spec>`, the playbook (`mcp_projects`) or an
    `McpProject`. Copy the hosts from `MCP_ALLOWED_HOSTS` in `config.env` to `mcp_allowed_hosts` (kind:
    `kind.vars.yml`, GKE: `instance.yml`); without them the `McpProject` gets the reason `HostNotAllowed` and the
@@ -276,8 +280,11 @@ off by default.
 ### Upgrade from a 1.3.0 release candidate
 1. Pin `v1.3.0` / `1.3.0` in `terraform/main.tf` and `ansible/instance.yml` in one PR (step 1).
 2. From rc.1 or rc.2 only: do steps 9 and 10.
-3. Optional on any rc: step 11.
-4. Run `deploy.yml` (or the Flux render) and check as in step 12.
+3. From rc.2 or rc.3 only (#609): if `spec.model`, `claude_model` or `agents[].model` holds a free-form name (for
+   example `sonet` or `gpt-5`), change it to `opus`, `sonnet`, `haiku`, `fable` or `claude-<family>-...` before
+   upgrading, or the agent goes to phase Invalid.
+4. Optional on any rc: step 11.
+5. Run `deploy.yml` (or the Flux render) and check as in step 12.
 
 ## [1.2.0] - 2026-11-24
 
