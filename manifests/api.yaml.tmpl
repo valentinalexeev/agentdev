@@ -181,7 +181,9 @@ spec:
   policyTypes: [Ingress]
   ingress: []
 ---
-# internal listener (#67): the agents' forge sidecars read approval decisions here; no /api routes, no OIDC
+# internal listener (#67): the agents' forge sidecars read approval decisions here; no /api routes, no OIDC.
+# #571: the forge sidecar of a console chat pod asks here who allowed a label call (POST /internal/chat/{id}/label-asked).
+# Every internal route binds its caller (agent pod address, session pod address or a per-request secret).
 apiVersion: v1
 kind: Service
 metadata: {name: agentdev-api-internal, namespace: ${PLATFORM_NS}}
@@ -196,7 +198,9 @@ spec:
   podSelector: {matchLabels: {app: agentdev-api}}
   policyTypes: [Ingress]
   ingress:
-  - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: coding-agent}}}]
+  - from:
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: coding-agent}}}
+    - {namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}, podSelector: {matchLabels: {app: agent-chat, agentdev/console: "true"}}}
     ports: [{port: 8081}]
 ---
 # console chat sessions (#346): the session server in a chat pod accepts only the API. The pod also checks a

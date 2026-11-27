@@ -451,7 +451,7 @@ func (d *githubDriver) rules() []rule {
 		return mkRule(m, strings.ReplaceAll(p, "[0-9]+", "[1-9][0-9]{0,15}"), chk)
 	}
 	sign := func(ru rule) rule { ru.rewrite = signBody; return ru }
-	return []rule{
+	return append([]rule{
 		r("GET", repoRe, nil),
 		r("GET", repoRe+`/issues`, nil),
 		r("GET", repoRe+`/issues/[0-9]+`, nil),
@@ -467,14 +467,29 @@ func (d *githubDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+/comments`, nil),
 		sign(r("POST", repoRe+`/pulls/[0-9]+/comments/[0-9]+/replies`, nil)),
 		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequest),
-		// #227: its own label on its own PR; the PR is an issue for the labels endpoint
+		// #227: its own label on its own PR; the PR is an issue for the labels endpoint. #571: in a chat pod, the
+		// labels a person allowed in the console (checkLabelWrite)
 		func() rule {
 			ru := mkRule("POST", repoRe+`/issues/([1-9][0-9]{0,15})/labels`, nil) // m[2] = the PR number
-			ru.checkPath = checkOwnPRLabel
+			ru.checkPath = checkLabelWrite
 			return ru
 		}(),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/check-runs`, nil),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
+	}, releaseReadRules(r)...)
+}
+
+// releaseReadRules (#571): read-only release state (tags, releases, milestones), for the loop and the chat. The same
+// paths on GitHub and Gitea.
+func releaseReadRules(r func(m, p string, chk func(*server, []byte) error) rule) []rule {
+	return []rule{
+		r("GET", repoRe+`/tags`, nil),
+		r("GET", repoRe+`/releases`, nil),
+		r("GET", repoRe+`/releases/latest`, nil),
+		r("GET", repoRe+`/releases/[0-9]+`, nil),
+		r("GET", repoRe+`/releases/tags/[A-Za-z0-9][A-Za-z0-9._+-]{0,99}`, nil),
+		r("GET", repoRe+`/milestones`, nil),
+		r("GET", repoRe+`/milestones/[0-9]+`, nil),
 	}
 }
 
