@@ -169,7 +169,8 @@
         # harness guide (#206): the same list as the agents' egress proxy, for the text only
         AGENT_EGRESS_HOSTS: "{{ agent_egress_hosts }}"
         # custom toolchains (#598): the JSON as the content of a YAML double-quoted string (a JSON string without quotes);
-        # $ as \u0024 (a double-quoted scalar: a folded one would keep both backslashes and the operator would read the text \u0024), so a ${NAME} in a value is not replaced by templates/render.j2
+        # $ as \u0024, so a ${NAME} in a value is not replaced by templates/render.j2. Double-quoted: a folded scalar
+        # would keep both backslashes and the operator would read the text \u0024.
         TOOLCHAINS: "{{ (toolchains | default({}) | to_json | replace('$', '\\u0024') | to_json)[1:-1] }}"
         SETUP_EGRESS_HOSTS: "{{ setup_egress_hosts | join(' ') }}"
         SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
