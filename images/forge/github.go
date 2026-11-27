@@ -467,16 +467,11 @@ func (d *githubDriver) rules() []rule {
 		r("GET", repoRe+`/pulls/[0-9]+/comments`, nil),
 		sign(r("POST", repoRe+`/pulls/[0-9]+/comments/[0-9]+/replies`, nil)),
 		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequest),
-		// #227: its own label on its own PR; the PR is an issue for the labels endpoint. #571: in a chat pod, the
-		// labels a person allowed in the console (checkLabelWrite)
-		func() rule {
-			ru := mkRule("POST", repoRe+`/issues/([1-9][0-9]{0,15})/labels`, nil) // m[2] = the PR number
-			ru.checkPath = checkLabelWrite
-			return ru
-		}(),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/check-runs`, nil),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
-	}, releaseReadRules(r)...)
+		// #236: labels (agent:<name> only on its own PR, #227; in a chat pod the labels a person allowed, #571),
+		// ready for review, own comment edits (signed again, so an edit keeps the agent's signature line), PR files
+	}, append(releaseReadRules(r), signEdits(ifaceRules(`[1-9][0-9]{0,15}`))...)...)
 }
 
 // releaseReadRules (#571): read-only release state (tags, releases, milestones), for the loop and the chat. The same
@@ -491,6 +486,15 @@ func releaseReadRules(r func(m, p string, chk func(*server, []byte) error) rule)
 		r("GET", repoRe+`/milestones`, nil),
 		r("GET", repoRe+`/milestones/[0-9]+`, nil),
 	}
+}
+
+func signEdits(rs []rule) []rule {
+	for i := range rs {
+		if rs[i].method == "PATCH" {
+			rs[i].rewrite = signBody
+		}
+	}
+	return rs
 }
 
 // checkReviewRequest: the agent asks people for a review, never teams; at most 5 plain logins.
