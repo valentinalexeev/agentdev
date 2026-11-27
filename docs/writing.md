@@ -121,6 +121,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |
+| toolchain | the language or tool files that the init container `toolchain` installs read-only for an agent (#499) |
+| preset | a toolchain that the operator contains, for example `go` or `rust`; a new version is an agentdev release |
+| custom toolchain | a toolchain that a deployment defines in its instance config, with pinned downloads (#598) |
+| Debian package | a `.deb` file; a custom toolchain unpacks it without its install scripts |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
 | `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |

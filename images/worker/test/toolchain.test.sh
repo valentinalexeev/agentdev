@@ -4,7 +4,9 @@
 # /state/toolchain/<key> with a report in the termination message, a wake only verifies, a changed manifest is
 # reinstalled (reason Reinstalled), an unrecorded directory is not trusted, a wrong sha256 or a failing verify fails
 # closed, symlinks are refused, old keys are removed. Review of #537: a spec cannot choose the command that runs (verify,
-# kind, bin), an unknown preset or a non-official URL is refused, and verify runs without the setup proxy key.
+# kind, bin), an unknown preset or a non-official URL is refused, and verify runs without the setup proxy key. #598: a
+# custom toolchain installs its tar, file and deb downloads with the script's own steps, and fails closed on a checksum
+# mismatch, a failing verify, an http URL, or a path or a symlink out of the toolchain.
 #   bash images/worker/test/toolchain.test.sh
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -107,6 +109,51 @@ mkdir -p "${tmp}/agentcwd"; printf '[toolchain]\npath = "/evil"\n' > "${tmp}/age
 (cd "${tmp}/agentcwd" && RUSTUP_TOOLCHAIN=evil RUSTUP_DIST_SERVER=https://evil.test run "${rspec}"); rc=$?
 check "rustup-init runs in the private tmp dir with RUSTUP_TOOLCHAIN pinned, not in a planted cwd" \
   "[[ ${rc} == 0 ]] && grep -qx 'cwd=${tmp}/t/rust' '${tmp}/rustup-seen' && grep -qx 'tc=1.85.0' '${tmp}/rustup-seen' && grep -qx 'dist=' '${tmp}/rustup-seen'"
+# #598: a custom toolchain of the deployment: a tar archive, a single file and a Debian package, pinned by sha256. The
+# steps are the script's own; verify (the instance config's) runs keyless with the toolchain's path entries.
+mkdir -p "${tmp}/csrc/bats-1.0/bin" "${tmp}/deb/DEBIAN" "${tmp}/deb/usr/bin"
+printf '#!/bin/sh\nprintf %%s "${EGRESS_SETUP_KEY:-}${HTTPS_PROXY:-}" > "%s/cseen"\necho Bats 1.0\n' "${tmp}" > "${tmp}/csrc/bats-1.0/bin/bats"
+printf '#!/bin/sh\necho ShellCheck 0.1\n' > "${tmp}/shellcheck-bin"
+printf '#!/bin/sh\necho GNU Make 4.3\n' > "${tmp}/deb/usr/bin/make"
+printf 'Package: make\nVersion: 4.3\nArchitecture: all\nMaintainer: test <t@example.com>\nDescription: test\n' > "${tmp}/deb/DEBIAN/control"
+chmod +x "${tmp}/csrc/bats-1.0/bin/bats" "${tmp}/shellcheck-bin" "${tmp}/deb/usr/bin/make"
+tar -czf "${tmp}/bats.tar.gz" -C "${tmp}/csrc" bats-1.0
+dpkg-deb --build "${tmp}/deb" "${tmp}/make.deb" >/dev/null 2>&1
+cs() { sha256sum "${tmp}/$1" | cut -d' ' -f1; }
+cspec() {  # cspec [jq filter]: a spec with one custom toolchain shell-tools and no preset
+  jq -nc --arg b "$(cs bats.tar.gz)" --arg s "$(cs shellcheck-bin)" --arg m "$(cs make.deb)" '{v:1,image:"worker:test",epoch:20,path:[],presets:[],
+    custom:[{name:"shell-tools",files:[
+      {name:"bats",kind:"tar",strip:1,arch:{all:{url:"https://github.com/bats-core/bats-core/archive/bats.tar.gz",sha256:$b}}},
+      {name:"shellcheck",kind:"file",arch:{amd64:{url:"https://github.com/koalaman/x/shellcheck-bin",sha256:$s},
+                                           arm64:{url:"https://github.com/koalaman/x/shellcheck-bin",sha256:$s}}},
+      {name:"make",kind:"deb",arch:{all:{url:"https://deb.debian.org/debian/pool/make.deb",sha256:$m}}}],
+    path:["bats/bin","bin","make/usr/bin"],verify:[["bats","--version"],["shellcheck"],["make","--version"]]}]}' | jq -c "${1:-.}"
+}
+run "$(cspec)"; rc=$?
+ckey=$(rep key); cdir="${TOOLCHAIN_DIR}/${ckey}/custom/shell-tools"
+check "a custom toolchain installs tar, file and deb downloads (#598)" \
+  "[[ ${rc} == 0 && \$(rep reason) == Installed && \$(rep message) == *'custom shell-tools'* && -x '${cdir}/bats/bin/bats' && -x '${cdir}/bin/shellcheck' && -x '${cdir}/make/usr/bin/make' ]]"
+check "the custom verify ran keyless with the toolchain's path" "grep -q 'Bats 1.0' '${tmp}/err' && grep -q 'GNU Make 4.3' '${tmp}/err' && [[ -f '${tmp}/cseen' && ! -s '${tmp}/cseen' ]]"
+check "the custom tree is not writable" "[[ ! -w '${cdir}/bin/shellcheck' ]]"
+run "$(cspec)" "${ckey}:$(rep hash)"; rc=$?
+check "a wake of a custom toolchain only verifies" "[[ ${rc} == 0 && \$(rep reason) == Verified ]]"
+run "$(cspec '.epoch = 21 | .custom[0].files[1].arch.amd64.sha256 = ("0" * 64) | .custom[0].files[1].arch.arm64.sha256 = ("0" * 64)')"; rc=$?
+check "a custom checksum mismatch fails closed with StepFailed (#598 acceptance)" \
+  "[[ ${rc} != 0 && \$(rep reason) == StepFailed && \$(rep message) == *'shellcheck: sha256 mismatch'* ]]"
+run "$(cspec '.epoch = 22 | .custom[0].verify = [["false"]]')"; rc=$?
+check "a failing custom verify fails closed" "[[ ${rc} != 0 && \$(rep reason) == StepFailed && \$(rep message) == *verify* ]]"
+run "$(cspec '.epoch = 23 | .custom[0].files[0].arch.all.url = "http://github.com/bats.tar.gz"')"; rc=$?
+check "a custom download over http is refused" "[[ ${rc} != 0 && \$(rep message) == *'not a plain https URL'* ]]"
+run "$(cspec '.epoch = 24 | .custom[0].path = ["../../.."]')"; rc=$?
+check "a custom path outside the toolchain is refused" "[[ ${rc} != 0 && \$(rep message) == *'not below the toolchain'* ]]"
+for l in abs rel; do
+  rm -rf "${tmp}/lsrc"; mkdir -p "${tmp}/lsrc/x/bin"
+  if [[ ${l} == abs ]]; then ln -s /state/claude/evil "${tmp}/lsrc/x/bin/bats"; else ln -s ../../../../../../evil "${tmp}/lsrc/x/bin/bats"; fi
+  tar -czf "${tmp}/bats.tar.gz" -C "${tmp}/lsrc" x
+  run "$(cspec '.epoch = 25')"; rc=$?
+  check "a custom archive with a symlink out of the toolchain is refused (${l})" \
+    "[[ ${rc} != 0 && \$(rep reason) == StepFailed && ( \$(rep message) == *'absolute symlink'* || \$(rep message) == *'points outside'* ) ]]"
+done
 run 'not json'; rc=$?
 check "an invalid spec fails closed" "[[ ${rc} != 0 && \$(rep reason) == Invalid ]]"
 ln -s /etc "${TOOLCHAIN_DIR}/planted"

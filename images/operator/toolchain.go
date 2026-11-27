@@ -12,7 +12,8 @@ package main
 // Setup egress (R10): the download hosts are open only with the setup proxy credential, Secret
 // agent-<name>-setup-proxy, which only the init container gets (like egress-forge-proxy for the forge sidecar). The
 // operator copies it from the instance's egress-setup-proxy. With presets only, the hosts are the same for every
-// agent, so one Squid ACL serves all; per-agent hosts come with free-form steps (ADR 0010 D4 step 3).
+// agent, so one Squid ACL serves all. The download hosts of custom toolchains (#598, toolchain_custom.go) are in the
+// same instance-wide list (SETUP_EGRESS_HOSTS), set by the administrator.
 
 import (
 	"context"
@@ -145,8 +146,9 @@ func presetsOf(t *v1.AgentToolchain) ([]preset, string) {
 	return out, ""
 }
 
-// toolchainValid is the operator's check behind the CRD rules (#499): "" when spec.toolchain is unset or valid.
-func toolchainValid(a *v1.Agent) string {
+// toolchainValid is the operator's check behind the CRD rules (#499): "" when spec.toolchain is unset or valid. cat is
+// the deployment's custom toolchains (#598).
+func toolchainValid(a *v1.Agent, cat map[string]*customToolchain) string {
 	t := a.Spec.Toolchain
 	if t == nil {
 		return ""
@@ -155,8 +157,12 @@ func toolchainValid(a *v1.Agent) string {
 	if msg != "" {
 		return msg
 	}
-	if len(ps) == 0 {
-		return "spec.toolchain.presets needs at least one preset"
+	cs, msg := customsOf(t, cat)
+	if msg != "" {
+		return msg
+	}
+	if len(ps)+len(cs) == 0 {
+		return "spec.toolchain needs at least one preset or custom toolchain"
 	}
 	if len(t.Path) > 10 {
 		return "spec.toolchain.path: more than 10 entries"
@@ -198,6 +204,9 @@ type toolchainSpec struct {
 	Epoch   int64    `json:"epoch"`
 	Path    []string `json:"path"`
 	Presets []preset `json:"presets"`
+	// Custom (#598): the deployment's toolchains the Agent names. Omitted when none, so the key of an agent with
+	// presets only does not change.
+	Custom []customSpec `json:"custom,omitempty"`
 }
 
 func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset, digest string) string {
@@ -210,7 +219,12 @@ func (r *AgentReconciler) toolchainSpecJSON(a *v1.Agent, ps []preset, digest str
 	if path == nil {
 		path = []string{}
 	}
-	b, _ := json.Marshal(toolchainSpec{V: 1, Image: r.D.WorkerImage, Digest: digest, Epoch: epoch, Path: path, Presets: ps})
+	if ps == nil {
+		ps = []preset{}
+	}
+	cs, _ := customsOf(a.Spec.Toolchain, r.D.Toolchains)
+	b, _ := json.Marshal(toolchainSpec{V: 1, Image: r.D.WorkerImage, Digest: digest, Epoch: epoch, Path: path, Presets: ps,
+		Custom: customSpecs(cs, r.D.Toolchains)})
 	return string(b)
 }
 
@@ -358,8 +372,9 @@ func (r *AgentReconciler) toolchainNextRefresh(a *v1.Agent) time.Duration {
 	return time.Second
 }
 
-// toolchainAllow: the allow entries of the Agent's presets (#499), added to CLAUDE_TOOLS_EXTRA.
-func toolchainAllow(a *v1.Agent) []string {
+// toolchainAllow: the allow entries of the Agent's presets (#499) and custom toolchains (#598), added to
+// CLAUDE_TOOLS_EXTRA.
+func toolchainAllow(a *v1.Agent, cat map[string]*customToolchain) []string {
 	if a.Spec.Toolchain == nil {
 		return nil
 	}
@@ -368,14 +383,19 @@ func toolchainAllow(a *v1.Agent) []string {
 	for _, p := range ps {
 		out = append(out, p.allow...)
 	}
+	cs, _ := customsOf(a.Spec.Toolchain, cat)
+	for _, n := range cs {
+		out = append(out, cat[n].Allow...)
+	}
 	return out
 }
 
 // imagePath is the worker image's PATH (node:24-bookworm-slim); the toolchain entries go in front of it.
 const imagePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-// toolchainAgentEnv: TOOLCHAIN, PATH and the presets' variables for the agent container. Nothing without a toolchain.
-func toolchainAgentEnv(a *v1.Agent) []corev1.EnvVar {
+// toolchainAgentEnv: TOOLCHAIN, PATH (with the custom toolchains' entries, #598) and the presets' variables for the
+// agent container. Nothing without a toolchain. The custom toolchains' variables come last (withCustomEnv).
+func toolchainAgentEnv(a *v1.Agent, cat map[string]*customToolchain) []corev1.EnvVar {
 	if a.Spec.Toolchain == nil {
 		return nil
 	}
@@ -390,6 +410,12 @@ func toolchainAgentEnv(a *v1.Agent) []corev1.EnvVar {
 		path = append(path, cur+"/"+p.Bin)
 		for k, v := range p.env {
 			vars[k] = v
+		}
+	}
+	cs, _ := customsOf(a.Spec.Toolchain, cat)
+	for _, n := range cs {
+		for _, e := range cat[n].Path {
+			path = append(path, customDir(cur, n)+"/"+e)
 		}
 	}
 	out := []corev1.EnvVar{{Name: "TOOLCHAIN", Value: cur}, {Name: "PATH", Value: strings.Join(append(path, imagePath), ":")}}
