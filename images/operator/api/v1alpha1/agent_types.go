@@ -47,11 +47,13 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
-	// Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model
-	// name such as "claude-opus-5-5". Unset: the Claude Code CLI's own default for the credential, as before.
+	// Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #564, #570): an alias
+	// (opus, sonnet, haiku, fable) or a full name of one of these families such as "claude-opus-5-5", optionally with
+	// the context suffix "[1m]", so the claude-proxy price table always has a multiplier for it. Unset: the Claude
+	// Code CLI's own default for the credential, as before.
 	// +optional
-	// +kubebuilder:validation:MaxLength=100
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`
 	Model string `json:"model,omitempty"`
 	// Reasoning effort of the agent's runs (`claude --effort`, #564). Unset: the CLI's own default, as before.
 	// +optional

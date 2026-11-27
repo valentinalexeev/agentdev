@@ -55,6 +55,10 @@ check "a model that starts with a dash: no flag and a log line" \
   "[[ \$(count --model) == 0 && \$(count --dangerously-skip-permissions) == 0 ]] && grep -q 'AGENT_MODEL is not a model name' '${tmp}/log'"
 run 'AGENT_MODEL=opus --effort max'
 check "a model with a space: no flag" "[[ \$(count --model) == 0 && \$(count --effort) == 0 ]]"
+run AGENT_MODEL=sonet
+check "a model outside the price families (#570): no flag" "[[ \$(count --model) == 0 ]] && grep -q 'AGENT_MODEL is not a model name' '${tmp}/log'"
+run AGENT_MODEL=gpt-5
+check "another vendor's model (#570): no flag" "[[ \$(count --model) == 0 ]]"
 run AGENT_EFFORT=ultra
 check "an unknown effort: no flag and a log line" \
   "[[ \$(count --effort) == 0 ]] && grep -q 'AGENT_EFFORT is not low' '${tmp}/log'"

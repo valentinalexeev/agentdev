@@ -1,0 +1,13 @@
+# One case of tests/model_check.yml (#609): case.model in agents[].model, case.ok: whether the check passes.
+- name: "Model {{ case.model[:24] }}"
+  block:
+    - name: Run the check
+      ansible.builtin.include_tasks: ../../tasks/model_check.yml
+      vars:
+        claude_model: ""
+        agents: [{name: a, model: "{{ case.model }}"}, {name: b}]
+    - name: The check passed
+      ansible.builtin.assert: {that: case.ok, fail_msg: "{{ case.model }} must be refused"}
+  rescue:
+    - name: The check refused it
+      ansible.builtin.assert: {that: not case.ok, fail_msg: "{{ case.model }} must pass"}
