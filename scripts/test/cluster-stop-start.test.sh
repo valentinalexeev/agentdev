@@ -60,8 +60,18 @@ cp "$FAKE/w" "$work/w.before"
 echo "True 1 2" > "$FAKE/pool"; echo 1 > "$FAKE/nodes"; echo 2 > "$FAKE/resize_fail"
 export ZONE=z1 RETRY_SLEEP=0 RETRIES=5 STATE_FILE="$work/state.env"
 
-# stop
-"$root/scripts/cluster-stop.sh" > "$work/stop.out" 2>&1 || { cat "$work/stop.out"; fail "stop exit $?"; }
+# no confirmation: nothing changes
+rc=0; echo no | "$root/scripts/cluster-stop.sh" > "$work/abort.out" 2>&1 || rc=$?
+{ [[ $rc == 1 ]] && grep -q 'aborted: nothing changed' "$work/abort.out"; } || fail "abort exit $rc: $(cat "$work/abort.out")"
+grep -q 'scale\|resize\|create configmap\|no-enable-autoscaling' "$work/calls" && fail "changed state without confirmation"
+{ [[ ! -f "$FAKE/cm" ]] && diff -q "$work/w.before" "$FAKE/w" >/dev/null; } || fail "state changed after abort"
+rc=0; "$root/scripts/cluster-stop.sh" </dev/null >/dev/null 2>&1 || rc=$?
+[[ $rc == 1 && ! -f "$FAKE/cm" ]] || fail "no stdin must abort, exit $rc"
+echo "PASS stop without 'yes' (answer no, no stdin) changes nothing"
+
+# stop, confirmed by typing yes
+: > "$work/calls"
+echo yes | "$root/scripts/cluster-stop.sh" > "$work/stop.out" 2>&1 || { cat "$work/stop.out"; fail "stop exit $?"; }
 scales=$(grep -o 'scale [a-zA-Z]*/[a-z-]*' "$work/calls")
 [[ $(head -1 <<<"$scales") == "scale Deployment/agentdev-operator" ]] || fail "operator not first: $scales"
 [[ $(sed -n 2p <<<"$scales") == "scale Deployment/webhook-router" ]] || fail "router not second: $scales"
@@ -78,7 +88,7 @@ grep -qx 'coding-agents StatefulSet agent-bob 1' "$FAKE/cm" || fail "replicas no
 echo "PASS state recorded in the ConfigMap; all workloads at 0"
 
 # a second stop is refused (the state would be lost)
-rc=0; "$root/scripts/cluster-stop.sh" >/dev/null 2>&1 || rc=$?
+rc=0; "$root/scripts/cluster-stop.sh" --yes >/dev/null 2>&1 || rc=$?
 [[ $rc == 1 ]] || fail "second stop exit $rc, want 1"
 echo "PASS second stop refused"
 
@@ -100,6 +110,6 @@ echo "PASS start restores replicas, pool size and autoscaling exactly (operator 
 rc=0; "$root/scripts/cluster-start.sh" >/dev/null 2>&1 || rc=$?
 [[ $rc == 0 ]] || fail "start from STATE_FILE exit $rc"
 echo 1 > "$FAKE/nodes"; echo 99 > "$FAKE/resize_fail"; rm -f "$STATE_FILE"
-rc=0; RETRIES=2 "$root/scripts/cluster-stop.sh" > "$work/stop2.out" 2>&1 || rc=$?
+rc=0; ASSUME_YES=1 RETRIES=2 "$root/scripts/cluster-stop.sh" </dev/null > "$work/stop2.out" 2>&1 || rc=$?
 if ! { [[ $rc == 1 ]] && grep -q 'FAIL: pool system still has 1 nodes' "$work/stop2.out"; }; then fail "exhausted retries: exit $rc"; fi
-echo "PASS start from STATE_FILE; stop exits 1 when the pool does not reach 0"
+echo "PASS start from STATE_FILE; stop (ASSUME_YES=1, no prompt) exits 1 when the pool does not reach 0"

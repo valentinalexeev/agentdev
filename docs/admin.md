@@ -951,6 +951,8 @@ after the start.
    `gcloud container clusters get-credentials agentdev --zone <zone> --project <project>`
 2. Run the stop script from an agentdev checkout:
    `ZONE=<zone> PROJECT=<project> scripts/cluster-stop.sh`
+   The script shows the cluster, the zone and the project. Type `yes` to continue. Any other answer stops the
+   script, and nothing changes. For automation, add `--yes` or set `ASSUME_YES=1` to skip the question.
 3. Make sure that the last line is `stopped: pool system has 0 nodes, no running pods.`
 4. Keep the file `agentdev-stopped-state.env`. It is a copy of the ConfigMap `kube-system/agentdev-stopped-state`.
 5. In the deployment repository, set `system_pool_min_nodes = 0` in `terraform/instance.tfvars`.

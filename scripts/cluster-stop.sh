@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stop a GKE instance of agentdev without deleting it (#313). Start it again with scripts/cluster-start.sh.
 # Usage:
-#   ZONE=<zone> [PROJECT=<id>] [CLUSTER=agentdev] scripts/cluster-stop.sh
+#   ZONE=<zone> [PROJECT=<id>] [CLUSTER=agentdev] scripts/cluster-stop.sh [--yes]
+# The script asks for confirmation (type `yes`) before it changes anything. --yes or ASSUME_YES=1 skips the prompt.
 # Steps:
 #   1. Record the replicas of every Deployment and StatefulSet in NAMESPACES and the autoscaling of the system pool
 #      in the ConfigMap kube-system/agentdev-stopped-state (and a local copy in STATE_FILE).
@@ -14,6 +15,13 @@
 # Env: NAMESPACES (default "agentdev-platform coding-agents agentdev-executors"; a missing namespace is skipped),
 #      POOL (system), RETRIES (10), RETRY_SLEEP (30 s), STATE_FILE (./agentdev-stopped-state.env).
 set -euo pipefail
+ASSUME_YES="${ASSUME_YES:-0}"
+for a in "$@"; do
+  case "$a" in
+    --yes|-y) ASSUME_YES=1 ;;
+    *) echo "usage: ZONE=<zone> [PROJECT=<id>] [CLUSTER=agentdev] $0 [--yes]" >&2; exit 2 ;;
+  esac
+done
 : "${ZONE:?set ZONE, for example ZONE=europe-west4-a}"
 CLUSTER="${CLUSTER:-agentdev}" POOL="${POOL:-system}"
 NAMESPACES="${NAMESPACES:-agentdev-platform coding-agents agentdev-executors}"
@@ -25,6 +33,13 @@ loc=(--cluster "$CLUSTER" --zone "$ZONE")
 if kubectl -n "$STATE_NS" get configmap "$STATE_CM" >/dev/null 2>&1; then
   echo "ERROR: $STATE_NS/$STATE_CM exists: the instance is already stopped. Run scripts/cluster-start.sh first." >&2
   exit 1
+fi
+
+if [[ "$ASSUME_YES" != 1 ]]; then
+  echo "This stops agentdev: it scales all workloads in $NAMESPACES to 0 and resizes the pool $POOL to 0."
+  echo "  cluster: $CLUSTER  zone: $ZONE  project: ${PROJECT:-(gcloud default)}"
+  answer=""; read -r -p "Type yes to continue: " answer || true
+  [[ "$answer" == yes ]] || { echo "aborted: nothing changed" >&2; exit 1; }
 fi
 
 # 1. record
