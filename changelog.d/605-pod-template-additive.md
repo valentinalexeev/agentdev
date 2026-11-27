@@ -5,6 +5,7 @@ section: Added
 status: done
 title: Unit test that a newer operator only adds to the agent pod template
 components: [operator]
+pr: 612
 ---
 ## Summary
 
