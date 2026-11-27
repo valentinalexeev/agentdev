@@ -35,6 +35,12 @@ operator_executor_egress_hosts: [registry.terraform.io, releases.hashicorp.com]
 operator_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, registry.npmjs.org, pypi.org,
                         files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
 operator_egress_extra_hosts: []
+# custom toolchains of the deployment (#598): name -> {files, path, verify, hosts, env, allow}; docs/admin.md "Give an
+# agent a toolchain". Agents name them in the kind_agents role's toolchain value: {alice: {custom: [shell-tools]}}.
+operator_toolchains: {}
+# the setup egress allow-list the operator checks custom toolchain hosts against: the same list as the
+# egress-setup-proxy ACL (kind.yml sets both from kind_setup_egress_hosts)
+operator_setup_egress_hosts: [dl.google.com, static.rust-lang.org]
 operator_claude_proxy: true
 operator_usage: {five_hour: 80, weekly: 90}
 operator_rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174, formerly AGENT_GRACE_SECONDS and DRAIN_MAX_MINUTES

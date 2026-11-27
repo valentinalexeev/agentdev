@@ -318,6 +318,8 @@ installs it before the agent starts, and the agent can use it but not change it.
 
 - The presets and their versions are in the operator (`images/operator/toolchain.go`). Each download has a pinned
   SHA-256. A new version is an agentdev release.
+- A deployment can also define its own custom toolchains in the instance config, without an agentdev release
+  (#598). See "Give an agent a custom toolchain".
 - The init container `toolchain` installs the toolchain into `/state/toolchain` on the agent volume. The agent
   container mounts that directory read-only, and gets it on its search path.
 - A wake only checks the installed files. A change of the toolchain, of the worker image or of the refresh period
@@ -370,6 +372,107 @@ agent").
 NOTE: The download hosts are open only for the init container, with the credential `egress-setup-proxy` (generated
 by the playbook, or by Terraform with `external_secrets`). The agent container cannot use them. The toolchain comes
 from the `Agent` object only. The repository and the issue text cannot change it.
+
+### Give an agent a custom toolchain
+
+A custom toolchain gives an agent tools that no preset has, for example `bats`, `make` and `shellcheck` (#598). The
+deployment defines it in its instance config. A change needs a deploy, not an agentdev release.
+
+- A custom toolchain is a list of downloads. Each download has an `https` URL and a SHA-256 for each architecture
+  (`amd64`, `arm64`), or one URL for `all`.
+- The init container `toolchain` installs the downloads below `$TOOLCHAIN/custom/<name>`, with the same checks as
+  a preset: the read-only mount, the manifest hash and the `Reinstalled` security event.
+- There are no install commands. Each kind of download has fixed steps:
+
+| `kind` | Install | Example `path` entry |
+|--------|---------|----------------------|
+| `tar` | unpacks the archive (gzip, xz or bzip2) into `<file name>/`; `strip` removes leading directories (0 to 5) | `bats/bin` |
+| `file` | installs the file as `bin/<file name>`, executable | `bin` |
+| `deb` | unpacks the Debian package into `<file name>/` with `dpkg-deb -x`; no install scripts and no dependencies | `make/usr/bin` |
+
+The other fields of a custom toolchain:
+
+| Field | Meaning |
+|-------|---------|
+| `files` | the downloads: `name`, `kind`, `strip` (`tar` only) and `arch` with `url` and `sha256` (1 to 10 entries) |
+| `path` | entries below `$TOOLCHAIN/custom/<name>` that go on the search path of the agent |
+| `verify` | commands that must exit 0 after the install, for example `[shellcheck, --version]` |
+| `hosts` | more download hosts, for example the target of a redirect (`objects.githubusercontent.com`) |
+| `env` | variables for the agent container. A value that starts with `$TOOLCHAIN/` gets the toolchain directory |
+| `allow` | entries for the tool allow-list of the agent, for example `Bash(make:*)` |
+
+1. Get the URL and the SHA-256 of each download from the publisher of the tool.
+2. Add every download host to the setup egress list: Ansible `setup_egress_hosts`, on `kind` the play variable
+   `kind_setup_egress_hosts`.
+3. Add the toolchain to the instance config: Ansible `toolchains`, on `kind` `operator_toolchains` in
+   `kind.vars.yml`. In Git mode, render the manifests again (`render.yml`).
+4. Add the name to the agent: `agents[].toolchain.custom` (GKE), `kind_agents_toolchain` (`kind`) or
+   `spec.toolchain.custom` in the `Agent` manifest (Git mode).
+5. Deploy again.
+6. Do the command `kubectl -n coding-agents get agent <name> -o jsonpath='{.status.toolchain}'` to see the result.
+   The `message` shows `custom <name>` when the toolchain is ready.
+
+This example gives the agent `headlamp` the tools `bats`, `make` and `shellcheck` on GKE. Replace each `<sha256>` with
+the value of the publisher:
+
+```yaml
+setup_egress_hosts: [dl.google.com, static.rust-lang.org, github.com, codeload.github.com,
+                     objects.githubusercontent.com, release-assets.githubusercontent.com, snapshot.debian.org]
+toolchains:
+  shell-tools:
+    files:
+      - name: bats
+        kind: tar
+        strip: 1
+        arch: {all: {url: "https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz", sha256: "<sha256>"}}
+      - name: shellcheck
+        kind: tar
+        strip: 1
+        arch:
+          amd64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz", sha256: "<sha256>"}
+          arm64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.aarch64.tar.xz", sha256: "<sha256>"}
+      - name: make
+        kind: deb
+        arch:
+          amd64: {url: "https://snapshot.debian.org/archive/debian/<date>/pool/main/m/make-dfsg/make_4.3-4.1_amd64.deb", sha256: "<sha256>"}
+          arm64: {url: "https://snapshot.debian.org/archive/debian/<date>/pool/main/m/make-dfsg/make_4.3-4.1_arm64.deb", sha256: "<sha256>"}
+    path: [bats/bin, shellcheck, make/usr/bin]
+    verify: [[bats, --version], [shellcheck, --version], [make, --version]]
+    allow: ["Bash(bats:*)", "Bash(make:*)", "Bash(shellcheck:*)"]
+agents:
+  - name: headlamp
+    toolchain: {custom: [shell-tools]}
+```
+
+NOTE: Use `snapshot.debian.org` for a `deb` download. `deb.debian.org` removes old package versions, and then the
+pinned URL does not operate after that.
+
+NOTE: A custom toolchain can also have presets in the same agent, for example
+`{presets: {go: "1.27.4"}, custom: [shell-tools]}`. The search path has the agent's `path` first, then the
+presets, then the custom toolchains.
+
+**Checks of the operator.** The operator reads the custom toolchains when it starts. It does not start when
+`toolchains` is not valid JSON or has an unknown field. A custom toolchain with an error is invalid, and each agent
+that names it gets phase `invalid` with reason `InvalidToolchain`. The message tells the error. The operator refuses:
+
+- a URL that is not `https`, or that has a user, a port or a query;
+- a SHA-256 that is not 64 lower-case hexadecimal characters;
+- a URL host or a `hosts` entry that is not in the setup egress list;
+- a `path` entry that goes out of the toolchain;
+- an `env` name that agentdev sets (for example `PATH`, `HTTPS_PROXY`, `CLAUDE_*`, `ANTHROPIC_*`, `GIT_*`). A
+  variable that agentdev or a preset already sets is never replaced;
+- the name of a preset (`go`, `rust`).
+
+**When the install fails.** A checksum mismatch, a failed download or a failed `verify` gives reason `StepFailed`.
+A symbolic link that goes out of the toolchain also gives `StepFailed`. The pod stays in `Init`.
+
+WARNING: The init container of each agent with a toolchain can use every setup egress host, and the agent container
+can use none of them. This is also true for a host that the agents' own allow-list has. For example, if you add
+`.githubusercontent.com`, the agents cannot get `raw.githubusercontent.com` anymore. Add exact host names, not
+domains.
+
+CAUTION: The SHA-256 makes sure that the download does not change. It does not make sure that the tool is safe. Get
+the value from the publisher, and check the publisher before you add a tool (threat model V6).
 
 ### Set the poll interval
 
@@ -2519,7 +2622,7 @@ NOTE: The event shows only the method, the host and the port. The event does not
 | Allow-list | `api.anthropic.com`, `.github.com`, `.githubusercontent.com`, `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org`, `index.crates.io`, `static.crates.io` (a leading dot also allows the subdomains) | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
-| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`) | Ansible `setup_egress_hosts` |
+| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`); add the hosts of custom toolchains (#598) here | Ansible `setup_egress_hosts`; `kind`: `kind_setup_egress_hosts` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
 | Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
