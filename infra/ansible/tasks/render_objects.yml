@@ -1,0 +1,259 @@
+---
+# One renderer for the instance objects (#384). deploy.yml applies these objects; render.yml writes them to files for a
+# GitOps engine. No cluster access, no Secret Manager access, and no secret values in the result: Secrets are made by
+# deploy.yml only (render mode lists the names the instance needs, docs/admin.md "Render the manifests").
+#
+# What the playbook read from the cluster before is now an explicit instance value (`terraform output platform`):
+#   platform.egress.fqdn          gke | none     gke: FQDNNetworkPolicy for the egress proxies and the Claude proxy
+#   platform.ingress.gateway_api  true | false   the cluster serves the Gateway API (ingress.mode gateway needs it)
+#   platform.kube_api_ips         [ip, ...]      ClusterIP and endpoints of Service default/kubernetes (Claude proxy)
+# Input facts set by the caller: agent_own_claude (agent name -> true when agent-<name>-claude has a credential) and,
+# only in deploy.yml, kube_api_ips_read (the addresses read from the cluster when platform.kube_api_ips is not set).
+
+- name: "Platform capabilities are instance values (#384)"
+  ansible.builtin.set_fact:
+    platform_fqdn: >-
+      {{ (((platform | default({})).egress | default({})).fqdn | default('gke' if egress_fqdn_policy | bool else 'none'))
+         | string }}
+    platform_gateway_api: "{{ (((platform | default({})).ingress | default({})).gateway_api | default(true)) | bool }}"
+    platform_kube_api_ips: >-
+      {{ (platform | default({})).kube_api_ips | default(kube_api_ips_read | default([])) }}
+
+- name: Check the platform capabilities
+  ansible.builtin.assert:
+    that:
+      - platform is not defined or platform is mapping
+      - platform_fqdn in ['gke', 'none']
+      - platform_kube_api_ips is sequence and platform_kube_api_ips is not string
+      - platform_kube_api_ips | map('string') | reject('match', '^[0-9]{1,3}([.][0-9]{1,3}){3}$') | list | length == 0
+      - not (claude_proxy | bool) or platform_kube_api_ips | length > 0
+    fail_msg: >-
+      platform.egress.fqdn is gke or none, platform.ingress.gateway_api is true or false, and platform.kube_api_ips is a
+      non-empty list of IPv4 addresses when claude_proxy is on. Copy them from `terraform output platform` (#384).
+    quiet: true
+
+- name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
+  ansible.builtin.set_fact:
+    egress_fqdn_matches: >-
+      {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2',
+         template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts + setup_egress_hosts) | unique | list}) | from_yaml }}
+    exec_egress_fqdn_matches: >-
+      {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
+         'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
+  vars:
+    executor_egress_all_hosts: >-
+      {{ (executor_egress_hosts + (['github.com'] if forge_kind == 'github' else [])
+          + (executors | map(attribute='egress_hosts', default=[]) | flatten)) | unique | list }}
+
+- name: Render the instance objects (groups in apply order)
+  ansible.builtin.set_fact:
+    agentdev_objects:
+      namespaces:
+        - {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ agentdev_effective_labels }}"}}
+        - {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}", labels: "{{ agentdev_effective_labels }}"}}
+      router: "{{ router_docs | rejectattr('kind', 'equalto', 'Secret') | list }}"
+      egress: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_egress) | from_yaml_all | list }}"
+      egress_fqdn: >-
+        {{ [{'apiVersion': 'networking.gke.io/v1alpha1', 'kind': 'FQDNNetworkPolicy',
+             'metadata': {'name': 'egress-proxy', 'namespace': agents_ns},
+             'spec': {'podSelector': {'matchLabels': {'app': 'egress-proxy'}},
+                      'egress': [{'matches': egress_fqdn_matches,
+                                  'ports': [{'protocol': 'TCP', 'port': 443}, {'protocol': 'TCP', 'port': 80}]}]}}]
+           if platform_fqdn == 'gke' else [] }}
+      # without the FQDN policy the egress proxy may reach any address on 80/443 (Squid alone enforces the list)
+      egress_web: >-
+        {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/egress-proxy-web.yaml.tmpl',
+           'values': {'AGENTS_NS': agents_ns}, 'replace': []}) | from_yaml_all | list) if platform_fqdn == 'none' else [] }}
+      crds: >-
+        {{ query('ansible.builtin.file', *crd_paths) | map('from_yaml') | list }}
+      storage_class: >-
+        {{ [{'apiVersion': 'storage.k8s.io/v1', 'kind': 'StorageClass',
+             'metadata': {'name': agent_storage_class, 'labels': {'app.kubernetes.io/part-of': 'agentdev'}},
+             'provisioner': 'pd.csi.storage.gke.io', 'parameters': {'type': 'pd-standard'}, 'reclaimPolicy': 'Delete',
+             'volumeBindingMode': 'WaitForFirstConsumer', 'allowVolumeExpansion': true}]
+           if agent_storage_class | length > 0 else [] }}
+      operator: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_operator) | from_yaml_all | list }}"
+      # the operator manifest creates the namespace with agentdev/role; the labels of #184 are added (as a merge does)
+      exec_namespace:
+        - apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ exec_ns }}"
+            labels: "{{ {'agentdev/role': 'executors'} | combine(agentdev_effective_labels) }}"
+      exec_egress: >-
+        {{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/executor-egress.yaml.tmpl',
+           'values': {'EXEC_NS': exec_ns, 'FORGE_NS': 'forge', 'EGRESS_PROXY_IMAGE': egress_proxy_image}, 'replace': []})
+           | from_yaml_all | list }}
+      exec_egress_fqdn: >-
+        {{ [{'apiVersion': 'networking.gke.io/v1alpha1', 'kind': 'FQDNNetworkPolicy',
+             'metadata': {'name': 'executor-egress-proxy', 'namespace': exec_ns},
+             'spec': {'podSelector': {'matchLabels': {'app': 'executor-egress-proxy'}},
+                      'egress': [{'matches': exec_egress_fqdn_matches,
+                                  'ports': [{'protocol': 'TCP', 'port': 443}, {'protocol': 'TCP', 'port': 80}]}]}}]
+           if platform_fqdn == 'gke' else [] }}
+      exec_egress_web: >-
+        {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/executor-egress-web.yaml.tmpl',
+           'values': {'EXEC_NS': exec_ns}, 'replace': []}) | from_yaml_all | list) if platform_fqdn == 'none' else [] }}
+      exec_service_accounts: "{{ lookup('ansible.builtin.template', 'templates/executor-accounts.j2') | from_yaml }}"
+      executors: "{{ lookup('ansible.builtin.template', 'templates/executors.j2') | from_yaml }}"
+      claude_proxy: >-
+        {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_proxy) | from_yaml_all | list)
+           if claude_proxy | bool else [] }}
+      claude_proxy_fqdn: >-
+        {{ [{'apiVersion': 'networking.gke.io/v1alpha1', 'kind': 'FQDNNetworkPolicy',
+             'metadata': {'name': 'claude-proxy', 'namespace': agents_ns},
+             'spec': {'podSelector': {'matchLabels': {'app': 'claude-proxy'}},
+                      'egress': [{'matches': [{'name': claude_proxy_upstream_host}], 'ports': [{'protocol': 'TCP', 'port': 443}]}]}}]
+           if claude_proxy | bool and platform_fqdn == 'gke' else [] }}
+      agents: "{{ lookup('ansible.builtin.template', 'templates/agents.j2') | from_yaml }}"
+      # project secrets (#202 part 4): Secret Manager store with its reader KSA, the no-pods policy, the broker
+      project_secrets: >-
+        {{ ((lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_ps_store) | from_yaml_all | list)
+            if project_secrets_enabled | bool else [])
+           + ((lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_broker) | from_yaml_all | list)
+              if project_secrets_broker | bool else []) }}
+  vars:
+    vars_ps_store:
+      src: "{{ repo_root }}/manifests/secrets-store-gcp.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        SECRETS_GSA: "{{ project_secrets.reader_gsa | default('') }}"
+        GCP_PROJECT: "{{ gcp_project }}"
+        GKE_LOCATION: "{{ gcp_zone }}"
+        GKE_CLUSTER: "{{ cluster_name }}"
+      replace: []
+    vars_broker:
+      src: "{{ repo_root }}/manifests/credential-broker.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        CREDENTIAL_BROKER_URL: "http://credential-broker.{{ agents_ns }}.svc.cluster.local:8080"
+        KUBE_API_EGRESS: >-
+          {{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': platform_kube_api_ips})
+             | trim if project_secrets_broker | bool else '' }}
+      replace: []
+    crd_paths: "{{ crd_files | map('regex_replace', '^', repo_root ~ '/images/operator/config/crd/') | list }}"
+    crd_files: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml,
+                agentdev.dev_mcpprojects.yaml]
+    router_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
+    vars_router:
+      src: "{{ repo_root }}/manifests/router.yaml.tmpl"
+      # the Secret webhook-router of the template is dropped above; deploy.yml makes it with the values
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        FORGE_SECRETS: ""
+        REGISTER_TOKEN: ""
+        ROUTER_IMAGE: "{{ router_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        WAKE_POLL_SECONDS: "{{ wake_poll_seconds | int }}"
+        GITEA_URL: "{{ forge_url if forge_kind == 'gitea' else '' }}"
+        GITHUB_API_URL: "{{ forge_url if forge_kind == 'github' else 'https://api.github.com' }}"
+      replace: []
+    vars_egress:
+      src: "{{ repo_root }}/manifests/egress.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        PLATFORM_NS: "{{ platform_ns }}"
+        FORGE_NS: forge
+        BOTBOARD_NS: botboard
+        # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
+        EGRESS_HOSTS: "{{ agent_egress_hosts }}"
+        FORGE_EGRESS_HOSTS: "{{ (forge_egress_hosts + forge_gitea_egress_hosts) | unique | join(' ') }}"
+        # deploy.yml: a hash of the forge sidecar credential, so a new credential restarts the proxy. Render: empty.
+        FORGE_PROXY_AUTH_SHA: "{{ forge_proxy_auth_sha | default('') }}"
+        SETUP_EGRESS_HOSTS: "{{ setup_egress_hosts | join(' ') }}"
+        SETUP_PROXY_AUTH_SHA: "{{ setup_proxy_auth_sha | default('') }}"
+        EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
+      replace: []
+    agent_egress_hosts: >-
+      {{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}
+    vars_operator:
+      src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        AGENTS_NS: "{{ agents_ns }}"
+        COST_LABELS: "{{ agentdev_effective_labels.items() | map('join', '=') | join(',') }}"
+        OPERATOR_IMAGE: "{{ operator_image }}"
+        WORKER_IMAGE: "{{ worker_image }}"
+        FORGE_IMAGE: "{{ forge_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        FORGE_URL: "{{ forge_url }}"
+        FORGE_PUBLIC_URL: "{{ forge_public_url | default('') }}"
+        FORGE_ADMIN_USER: "{{ reviewer }}"
+        BOTBOARD_URL: "{{ botboard_url }}"
+        POLL_SECONDS: "{{ poll_seconds }}"
+        IDLE_SECONDS: "{{ idle_seconds }}"
+        AGENT_STORAGE_CLASS: "{{ agent_storage_class }}"
+        AGENT_STATE_STORAGE: "{{ agent_state_storage }}"
+        AGENT_EPHEMERAL_REQUEST: "{{ agent_ephemeral_request }}"   # #251
+        AGENT_EPHEMERAL_LIMIT: "{{ agent_ephemeral_limit }}"
+        FORGE_MIRROR_LIMIT: "{{ forge_mirror_limit }}"
+        FORGE_EPHEMERAL_LIMIT: "{{ forge_ephemeral_limit }}"
+        EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
+        # harness guide (#206): the same list as the agents' egress proxy, for the text only
+        AGENT_EGRESS_HOSTS: "{{ agent_egress_hosts }}"
+        SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
+        SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
+        SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
+        SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
+        SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
+        APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
+        APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
+        APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
+        AGENT_GRACE_SECONDS: "{{ rollout.grace_seconds | default(300) }}"
+        DRAIN_MAX_MINUTES: "{{ rollout.drain_max_minutes | default(60) }}"
+        EXEC_NS: "{{ exec_ns }}"
+        EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
+        EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
+        EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
+        EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
+        USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+        USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+        TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+        TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+        TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+        TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
+        # external forwarder watch (#213): on only with ingress.forwarder namespace and pod_selector
+        FORWARDER_NS: >-
+          {{ ((ingress | default({})).forwarder | default({})).namespace | default('')
+             if (((ingress | default({})).forwarder | default({})).pod_selector | default({})) | length > 0 else '' }}
+        FORWARDER_SELECTOR: >-
+          {{ (((ingress | default({})).forwarder | default({})).pod_selector | default({})).items()
+             | map('join', '=') | join(',') }}
+        FORWARDER_NOT_READY_MINUTES: "{{ (ingress | default({})).forwarder_not_ready_minutes | default(10) }}"
+        # project secrets (#202 part 4): ProjectSecrets apply with the Secret Manager store, the broker serves them
+        SECRETS_STORE: "{{ 'agentdev-secrets' if project_secrets_enabled | bool else '' }}"
+        SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
+        CREDENTIAL_BROKER_URL: >-
+          {{ ('http://credential-broker.' ~ agents_ns ~ '.svc.cluster.local:8080') if project_secrets_broker | bool else '' }}
+        # MCP per project (#383): McpProject controller, admin login from Secret contextforge
+        MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
+        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
+        CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
+      replace: []
+    vars_proxy:
+      src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        PLATFORM_NS: "{{ platform_ns }}"
+        CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        CLAUDE_BUDGET_UNITS: "{{ claude_budget_units_effective | int }}"
+        TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
+        TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
+        TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"
+        TELEMETRY_SCRAPER_SELECTOR: "{{ telemetry.scraper_selector | default({'app.kubernetes.io/name': 'collector'}) | to_json }}"
+        # values as strings; the proxy checks each key and value again (#196)
+        CLAUDE_PRICES_DATA: "{{ dict(claude_prices.keys() | zip(claude_prices.values() | map('string'))) | to_json }}"
+        CLAUDE_PROXY_AUTH: "{{ claude_proxy_auth }}"   # key | both | token (#352)
+        CLAUDE_JOB_BUDGET_UNITS: "{{ claude_job_budget_units | int }}"                 # #196: hard limit per job
+        CLAUDE_JOB_APPROVAL_UNITS: "{{ claude_job_approval_units | int }}"             # #310: soft limit per job
+        CLAUDE_JOB_APPROVAL_STEP_UNITS: "{{ claude_job_approval_step_units | int }}"   # #310: units per approval
+        KUBE_API_EGRESS: >-
+          {{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': platform_kube_api_ips})
+             | trim if claude_proxy | bool else '' }}
+        # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
+        CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
+      replace: []

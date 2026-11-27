@@ -1,0 +1,99 @@
+---
+# Render mode of the role (#447, render.yml): the API, the web UI, the NotificationChannel and the database Job as the
+# fact api_objects, with no cluster or Secret Manager access. The Secrets agentdev-api-* are not rendered (values);
+# their names are in SECRETS.md. The database step is the Job agentdev-db-init-<hash> of tasks/db_init_render.yml (#382),
+# the same objects as deploy.yml applies (roles, schema, grants, SCHEMA_VERSION). It reads the passwords from the
+# Secrets platform-db and agentdev-api-db by name.
+- name: Check the API settings (same checks as the role)
+  ansible.builtin.assert:
+    that:
+      - api_oidc_issuer is match('^https://')
+      - api_oidc_discovery_url is match('^https?://')
+      - api_db_retention_days | string is match('^[1-9][0-9]*$')
+      - api_max_agents | string is match('^[0-9]{1,6}$')
+      - api_max_agents_per_user | string is match('^[0-9]{1,6}$')
+      - api_chat_idle_seconds | string is match('^[1-9][0-9]{0,5}$')
+      - api_chat_retention_days | string is match('^[1-9][0-9]{0,4}$')
+      - api_chat_max_sessions | string is match('^[0-9]{1,6}$')
+      - api_chat_max_sessions_per_user | string is match('^[0-9]{1,6}$')
+      - api_notify_channels | difference(['webpush']) | length == 0
+    fail_msg: >-
+      api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents(_per_user) and
+      api.chat.* whole numbers, notifications.channels webpush only (example.vars.yml)
+    quiet: true
+
+- name: Render the Job agentdev-db-init (roles, database, schema, retention, grants)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init_render.yml"
+  vars:
+    db_init_name: agentdev-db-init
+    db_init_image: "{{ api_db_init_image }}"
+    db_init_command: [sh, /db-init/agentdev.sh]
+    db_init_files: "{{ api_db_init_files }}"
+    db_init_env: "{{ api_db_init_env }}"
+
+- name: Render the API objects
+  ansible.builtin.set_fact:
+    api_objects:
+      api_crds: "{{ [lookup('ansible.builtin.file', repo_root ~ '/images/operator/config/crd/agentdev.dev_notificationchannels.yaml') | from_yaml] }}"
+      api_db: "{{ [db_init_cm, db_init_job] }}"
+      api: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=api_render) | from_yaml_all | list }}"
+      api_ui: >-
+        {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars=ui_render) | from_yaml_all | list)
+           if api_ui | bool else [] }}
+      api_notify: >-
+        {{ [{'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'NotificationChannel',
+             'metadata': {'name': 'webpush', 'namespace': platform_ns},
+             'spec': {'type': 'webpush', 'subject': api_notify_subject, 'vapid': {'secretRef': {'name': 'agentdev-api-vapid'}},
+                      'allowedHosts': api_notify_push_hosts}}]
+           if 'webpush' in api_notify_channels else [] }}
+    api_secret_names: >-
+      {{ [platform_ns] | product(['agentdev-api-db', 'agentdev-api-forge']
+         + (['agentdev-api-github'] if api_github else []) + ['agentdev-api-siem']
+         + (['agentdev-api-chat'] if api_chat else []) + (['agentdev-api-vapid'] if 'webpush' in api_notify_channels else []))
+         | list }}
+  vars:
+    api_render:
+      src: "{{ repo_root }}/manifests/api.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        AGENTS_NS: "{{ agents_ns }}"
+        API_IMAGE: "{{ api_image }}"
+        OIDC_ISSUER: "{{ api_oidc_issuer }}"
+        OIDC_DISCOVERY_URL: "{{ api_oidc_discovery_url }}"
+        OIDC_AUDIENCE: "{{ api_oidc_audience }}"
+        FORGE_URL: "{{ api_forge_url }}"
+        GITHUB_URL: "{{ api_github_url }}"
+        APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
+        APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
+        USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
+        USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+        MAX_AGENTS: "{{ api_max_agents }}"
+        MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+        CHAT_SESSIONS: "{{ api_chat | string | lower }}"
+        CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"
+        CHAT_FORGE_IMAGE: "{{ api_chat_forge_image }}"
+        CHAT_IDLE_SECONDS: "{{ api_chat_idle_seconds }}"
+        CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
+        CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
+        CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+        NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
+        AGENTS_SOURCE: "{{ api_agents_source }}"
+        SECRETS_GCP_PROJECT: "{{ gcp_project if project_secrets_enabled | default(false) | bool else '' }}"
+        SECRETS_API_GSA: "{{ project_secrets.api_gsa | default('') if project_secrets_enabled | default(false) | bool else '' }}"
+        SECRETS_VALUES_NS: ""   # project secrets (#202): kind store only; GKE uses SECRETS_GCP_PROJECT
+      replace: []
+    ui_render:
+      src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        UI_IMAGE: "{{ api_ui_image }}"
+        OIDC_ISSUER: "{{ api_oidc_issuer }}"
+        OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+        OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
+      replace: []
+
+# secrets_mode external (#457): the ExternalSecret specs of tasks/main.yml, rendered by render.yml
+- name: API ExternalSecret specs (secrets_mode external)
+  ansible.builtin.set_fact:
+    api_es_specs: "{{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}"
+  when: not api_playbook_secrets

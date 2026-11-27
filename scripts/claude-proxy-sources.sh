@@ -5,7 +5,7 @@
 set -euo pipefail
 re='^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'
 src() {
-  printf '{"secret":{"name":"%s","optional":true,"items":[{"key":"CLAUDE_CODE_OAUTH_TOKEN","path":"%s/CLAUDE_CODE_OAUTH_TOKEN"},{"key":"ANTHROPIC_API_KEY","path":"%s/ANTHROPIC_API_KEY"}]}}' "$1" "$1" "$1"
+  printf '{"secret":{"name":"%s","optional":true,"items":[{"key":"CLAUDE_CODE_OAUTH_TOKEN","path":"%s/CLAUDE_CODE_OAUTH_TOKEN"},{"key":"ANTHROPIC_API_KEY","path":"%s/ANTHROPIC_API_KEY"},{"key":"CREDENTIAL_FORMAT","path":"%s/CREDENTIAL_FORMAT"}]}}' "$1" "$1" "$1" "$1"
 }
 out=$(src claude-shared)
 for a in "$@"; do

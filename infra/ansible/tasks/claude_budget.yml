@@ -1,0 +1,19 @@
+# #196 (owner decision on #196, option 2): claude_budget_units is the budget per agent per 24 h in cost units.
+# claude_budget_tokens is deprecated in 1.2.0 and removed in 2.0.0: alone, its value is used as units (1 token = 1 unit);
+# when both are set, claude_budget_units wins. Sets claude_budget_units_effective and claude_budget_deprecation
+# (the warning, empty when the old variable is not set) and prints the warning once. Tests: tests/claude_budget.yml.
+- name: Effective budget in cost units
+  ansible.builtin.set_fact:
+    claude_budget_units_effective: >-
+      {{ claude_budget_units if claude_budget_units is not none
+         else (claude_budget_tokens if claude_budget_tokens | default(none) is not none else 0) }}
+    claude_budget_deprecation: >-
+      {{ '' if claude_budget_tokens | default(none) is none else
+         'claude_budget_tokens is deprecated and will be removed in 2.0.0: use claude_budget_units '
+         ~ ('(claude_budget_tokens is ignored because claude_budget_units is set)' if claude_budget_units is not none
+            else '(its value is used as cost units, 1 token = 1 unit)') ~ '. See CHANGELOG 1.2.0.' }}
+
+- name: Warn about the deprecated claude_budget_tokens (#196)
+  ansible.builtin.debug:
+    msg: "[DEPRECATION WARNING] {{ claude_budget_deprecation }}"
+  when: claude_budget_deprecation | length > 0

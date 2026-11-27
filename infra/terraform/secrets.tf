@@ -1,53 +1,162 @@
-# Scoped secrets store (#202, ADR 0003 D1) on GKE: two Google service accounts, both limited by IAM conditions to the
-# Secret Manager secrets named agentdev-ps-* (the values of ProjectSecrets). Nothing else in the project is reachable.
+# Platform secrets for the External Secrets Operator (#381, phase 1 of #388).
 #
-#   agentdev-secrets-reader  External Secrets Operator's SecretStore (KSA <agents_ns>/agentdev-secrets-reader):
-#                            read the values (secretAccessor), to sync them into ps-<name> next to the broker.
-#   agentdev-api-secrets     the agentdev API (KSA <platform_ns>/agentdev-api): create a secret, add a version, delete.
-#                            A custom role without secretmanager.versions.access: the API can write but never read.
-#
-# Off with secrets_store = false. The Ansible playbook reads the e-mails from `terraform output secrets_store`.
-
-resource "google_service_account" "secrets_reader" {
-  count        = var.secrets_store ? 1 : 0
-  account_id   = "agentdev-secrets-reader"
-  display_name = "agentdev project secrets: External Secrets Operator (read agentdev-ps-*)"
-  depends_on   = [google_project_service.apis]
-}
-
-resource "google_service_account" "api_secrets" {
-  count        = var.secrets_store ? 1 : 0
-  account_id   = "agentdev-api-secrets"
-  display_name = "agentdev project secrets: API (write-only agentdev-ps-*)"
-  depends_on   = [google_project_service.apis]
-}
+# 1. Generated secrets: Terraform makes each value once (random_id, hex so it is safe in SQL, env and URLs) and stores
+#    it as a Secret Manager version. The value is then also in the Terraform state: protect the state bucket like the
+#    secrets (docs/security.md R119). Upgrade from 1.1.x: the playbook made these secrets already. Import the
+#    containers and list them in keep_existing_secret_values (examples/deployment/gcp-gke/terraform/imports.tf.example),
+#    so Terraform keeps the existing values and adds no version.
+# 2. Readers: one Google service account per namespace that consumes secrets, each bound by Workload Identity to the
+#    SecretStore's Kubernetes service account in that namespace, each with an IAM condition that names only its own
+#    secrets. The agents namespace can never read a platform-* secret (acceptance 3 of #381): its account has no
+#    grant on them, and manifests/secrets-policy.yaml.tmpl pins its ExternalSecrets.
+#    The project secrets store of #202 (agentdev-ps-*) has its own two accounts, at the end of this file.
+# Opt-in (var.external_secrets, default false): an instance in the default playbook mode, where the playbook made these
+# secrets, gets no resource from this file, so a module upgrade with no new inputs plans no change (no 409).
 
 locals {
-  # IAM condition on the secret's resource name; secrets are named projects/<number>/secrets/<id> (versions below it)
-  ps_condition = "resource.name.startsWith(\"projects/${data.google_project.this.number}/secrets/agentdev-ps-\")"
-  # secretmanager.secrets.create is checked on the parent, the project, before the secret exists, so the name
-  # condition alone would refuse every create (review of #274). This condition admits the project as the resource
-  # and nothing else: the create role holds only secrets.create, so on the project it can create a secret but not
-  # read, version or delete one. The secret id is always agentdev-ps-<name> (images/api/secrets_gcp.go); a secret
-  # created under another id is unusable to the API (every other permission is under ps_condition).
-  ps_create_condition = "resource.type == \"cloudresourcemanager.googleapis.com/Project\" || ${local.ps_condition}"
+  # name => random bytes (hex length = 2 x bytes); the same lengths as the playbook used (openssl rand -hex N)
+  generated_secrets = !var.external_secrets ? {} : merge(
+    { for k in ["pg-admin", "pg-contextforge", "pg-agentdev", "pg-authentik", "jwt", "enc", "cf-admin",
+    "cf-default-user", "cf-basic-auth", "authentik-secret-key", "authentik-admin"] : "platform-${k}" => 48 },
+    {
+      "platform-pg-agentdev-api"    = 24
+      "egress-forge-proxy"          = 32
+      "egress-setup-proxy"          = 32 # toolchain init containers (#499)
+      "claude-proxy-signing"        = 32
+      "agentdev-api-chat-token-key" = 32
+    },
+    { for a in var.agent_names : "agent-${a}-wake-token" => 32 },
+  )
+
+  sm_prefix = "projects/${data.google_project.this.number}/secrets/"
+
+  # who reads what (exact secret ids; a trailing * is a prefix). Keep in step with the ExternalSecrets of the Ansible
+  # role external_secrets (infra/ansible/roles/external_secrets/defaults/main.yml).
+  secret_readers = !var.external_secrets ? {} : merge({
+    platform = {
+      namespace = var.platform_namespace
+      ids = concat(["platform-*", "agentdev-api-forge-token", "agentdev-api-chat-token-key", "agentdev-chat-issue-token",
+        "security-siem", "github-app-private-key", "authentik-sso-*"],
+        # forge-init Job (#442, #459): the Gitea admin token and the router webhook secret, only with forge_init
+        var.forge_init ? ["gitea-admin-token", "github-app-webhook-secret"] : [],
+      var.platform_extra_secret_ids)
+    }
+    agents = {
+      namespace = var.agents_namespace
+      ids = ["claude-shared", "router-register-token", "github-app-webhook-secret", "github-app-private-key",
+      "router-poll-forge-token", "egress-forge-proxy", "egress-setup-proxy", "claude-proxy-signing", "agent-*"]
+    }
+    executors = {
+      namespace = var.executors_namespace
+      ids       = ["exec-*"]
+    }
+    }, var.forwarder_namespace == "" ? {} : {
+    # deployed forwarder (#316): only its pre-auth key, in its own namespace
+    forwarder = {
+      namespace = var.forwarder_namespace
+      ids       = [var.forwarder_authkey_secret]
+    }
+  })
+  # IAM condition per reader: the secret itself and its versions
+  secret_conditions = {
+    for r, v in local.secret_readers : r => join(" || ", [
+      for id in v.ids : endswith(id, "*")
+      ? "resource.name.startsWith(\"${local.sm_prefix}${trimsuffix(id, "*")}\")"
+      : "resource.name == \"${local.sm_prefix}${id}\" || resource.name.startsWith(\"${local.sm_prefix}${id}/\")"
+    ])
+  }
+}
+
+resource "random_id" "generated" {
+  for_each    = local.generated_secrets
+  byte_length = each.value
+}
+
+resource "google_secret_manager_secret" "generated" {
+  for_each  = local.generated_secrets
+  secret_id = each.key
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "generated" {
+  for_each    = { for k, v in local.generated_secrets : k => v if !contains(var.keep_existing_secret_values, k) }
+  secret      = google_secret_manager_secret.generated[each.key].id
+  secret_data = random_id.generated[each.key].hex
+}
+
+resource "google_service_account" "secrets_reader" {
+  for_each     = local.secret_readers
+  account_id   = "agentdev-sm-${each.key}"
+  display_name = "agentdev ${each.key} secrets (External Secrets Operator, #381)"
 }
 
 resource "google_project_iam_member" "secrets_reader" {
-  count   = var.secrets_store ? 1 : 0
+  for_each = local.secret_readers
+  project  = var.project_id
+  role     = "roles/secretmanager.secretAccessor"
+  member   = "serviceAccount:${google_service_account.secrets_reader[each.key].email}"
+  condition {
+    title      = "agentdev-${each.key}-secrets"
+    expression = local.secret_conditions[each.key]
+  }
+}
+
+# The SecretStore's Kubernetes service account agentdev-platform-secrets in each namespace (role external_secrets)
+resource "google_service_account_iam_member" "secrets_reader_wi" {
+  for_each           = local.secret_readers
+  service_account_id = google_service_account.secrets_reader[each.key].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/agentdev-platform-secrets]"
+  depends_on         = [google_container_cluster.this]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Project secrets (#202 part 4, ADR 0003 D1): the values of ProjectSecrets are Secret Manager secrets agentdev-ps-*.
+# Two accounts, both limited by IAM condition to agentdev-ps-*; nothing above can reach them, and they reach nothing
+# above (the agents reader's agent-* prefix does not match agentdev-ps-*).
+#   agentdev-sm-projsecrets  External Secrets Operator's SecretStore agentdev-secrets (KSA <agents_ns>/agentdev-secrets-
+#                            reader): read the values, to sync them into ps-<name> next to the broker.
+#   agentdev-api-secrets     the agentdev API (KSA <platform_ns>/agentdev-api): create, add a version, destroy old
+#                            versions, delete. Custom roles without secretmanager.versions.access: write, never read.
+# On with external_secrets (ESO is installed by the role external_secrets) and project_secrets (default true).
+locals {
+  project_secrets = var.external_secrets && var.project_secrets
+  # IAM condition on the secret's resource name; versions are below it
+  ps_condition = "resource.name.startsWith(\"${local.sm_prefix}agentdev-ps-\")"
+  # secretmanager.secrets.create is checked on the parent, the project, before the secret exists, so the name condition
+  # alone would refuse every create (review of #274). The create role holds only secrets.create, so on the project it
+  # can create a secret but not read, version or delete one; the API always names it agentdev-ps-<name>.
+  ps_create_condition = "resource.type == \"cloudresourcemanager.googleapis.com/Project\" || ${local.ps_condition}"
+}
+
+resource "google_service_account" "project_secrets_reader" {
+  count        = local.project_secrets ? 1 : 0
+  account_id   = "agentdev-sm-projsecrets"
+  display_name = "agentdev project secrets: External Secrets Operator (read agentdev-ps-*, #202)"
+}
+
+resource "google_service_account" "api_secrets" {
+  count        = local.project_secrets ? 1 : 0
+  account_id   = "agentdev-api-secrets"
+  display_name = "agentdev project secrets: API (write-only agentdev-ps-*, #202)"
+}
+
+resource "google_project_iam_member" "project_secrets_reader" {
+  count   = local.project_secrets ? 1 : 0
   project = var.project_id
   role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.secrets_reader[0].email}"
+  member  = "serviceAccount:${google_service_account.project_secrets_reader[0].email}"
   condition {
     title      = "agentdev-ps only"
     expression = local.ps_condition
   }
 }
 
-# write-only: add versions, destroy old ones, delete; no versions.access, no list of other secrets. Create is a
-# separate role because it needs another IAM condition (see ps_create_condition).
 resource "google_project_iam_custom_role" "api_secrets" {
-  count       = var.secrets_store ? 1 : 0
+  count       = local.project_secrets ? 1 : 0
   role_id     = "agentdevProjectSecretWriter"
   title       = "agentdev project secret writer"
   description = "Version, destroy old versions of and delete agentdev-ps-* secrets without reading them (#202)"
@@ -60,7 +169,7 @@ resource "google_project_iam_custom_role" "api_secrets" {
 }
 
 resource "google_project_iam_custom_role" "api_secrets_create" {
-  count       = var.secrets_store ? 1 : 0
+  count       = local.project_secrets ? 1 : 0
   role_id     = "agentdevProjectSecretCreator"
   title       = "agentdev project secret creator"
   description = "Create agentdev-ps-* secrets (checked on the project, #202)"
@@ -68,7 +177,7 @@ resource "google_project_iam_custom_role" "api_secrets_create" {
 }
 
 resource "google_project_iam_member" "api_secrets_create" {
-  count   = var.secrets_store ? 1 : 0
+  count   = local.project_secrets ? 1 : 0
   project = var.project_id
   role    = google_project_iam_custom_role.api_secrets_create[0].id
   member  = "serviceAccount:${google_service_account.api_secrets[0].email}"
@@ -79,7 +188,7 @@ resource "google_project_iam_member" "api_secrets_create" {
 }
 
 resource "google_project_iam_member" "api_secrets" {
-  count   = var.secrets_store ? 1 : 0
+  count   = local.project_secrets ? 1 : 0
   project = var.project_id
   role    = google_project_iam_custom_role.api_secrets[0].id
   member  = "serviceAccount:${google_service_account.api_secrets[0].email}"
@@ -89,17 +198,16 @@ resource "google_project_iam_member" "api_secrets" {
   }
 }
 
-# Workload Identity: the Kubernetes service accounts act as these Google accounts (the cluster's workload pool)
-resource "google_service_account_iam_member" "secrets_reader_wi" {
-  count              = var.secrets_store ? 1 : 0
-  service_account_id = google_service_account.secrets_reader[0].name
+resource "google_service_account_iam_member" "project_secrets_reader_wi" {
+  count              = local.project_secrets ? 1 : 0
+  service_account_id = google_service_account.project_secrets_reader[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.agents_namespace}/agentdev-secrets-reader]"
   depends_on         = [google_container_cluster.this]
 }
 
 resource "google_service_account_iam_member" "api_secrets_wi" {
-  count              = var.secrets_store ? 1 : 0
+  count              = local.project_secrets ? 1 : 0
   service_account_id = google_service_account.api_secrets[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.platform_namespace}/agentdev-api]"

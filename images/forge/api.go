@@ -23,7 +23,9 @@ type server struct {
 	appr   *approvals // nil: approvals off (approvals.go, #67)
 	drv    driver     // forge-specific API location, auth and allow-list (driver.go)
 
-	usageGate usageGate // POST /usage rate limit (usage.go)
+	usageGate usageGate    // POST /usage rate limit (usage.go)
+	runGate   runEventGate // POST /run-events rate limit (runevents.go, #425)
+	etags     etagCache    // conditional GETs (etag.go, #236)
 }
 
 type ctxJob struct{}
@@ -37,6 +39,8 @@ type rule struct {
 	checkPath func(s *server, ctx context.Context, m []string, body []byte) error
 	// optional body rewrite after the check (GitHub: the agent's signature line on what it writes)
 	rewrite func(s *server, body []byte) ([]byte, error)
+	// optional: the sidecar answers itself after the checks (an operation that is not one forge REST call, #236)
+	serve func(s *server, ctx context.Context, m []string, body []byte) (int, []byte, error)
 }
 
 const repoRe = `/repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)`
@@ -208,10 +212,13 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /push", s.push)
 	mux.HandleFunc("POST /idle", s.idle)
 	if s.appr != nil {
-		mux.HandleFunc("/mcp", s.appr.mcp)               // Claude's permission prompt tool (approvals.go)
-		mux.HandleFunc("POST /job-done", s.appr.jobDone) // the loop: a job ended, its open requests become void
+		mux.HandleFunc("/mcp", s.appr.mcp)                         // Claude's permission prompt tool (approvals.go)
+		mux.HandleFunc("POST /job-done", s.appr.jobDone)           // the loop: a job ended, its open requests become void
+		mux.HandleFunc("POST /cost-approval", s.appr.costApproval) // #310: the job hit the soft cost limit of claude-proxy
 	}
 	mux.HandleFunc("POST /usage", s.usage)
+	mux.HandleFunc("POST /run-events", s.runEvents) // #425: the run log of a job, forwarded to the API
+	mux.HandleFunc("POST /drained", s.drained)      // drain before replace (#174, drain.go)
 	mux.HandleFunc("GET /identity", s.identity)
 	return s.localOnly(mux)
 }
@@ -356,13 +363,27 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if match.serve != nil {
+		code, out, err := match.serve(s, r.Context(), groups, body)
+		if err != nil {
+			s.logf("refused %s %s: %v", r.Method, p, err)
+			s.policyEvent(r, err, r.Method+" "+p)
+			fail(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write(out)
+		return
+	}
 	auth, err := drv.authorization(r.Context())
 	if err != nil {
 		s.logf("forge credential: %v", err)
 		fail(w, errors.New("forge credential unavailable"))
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, drv.apiURL(p, r.URL.RawQuery), bytes.NewReader(body))
+	upstream := drv.apiURL(p, r.URL.RawQuery)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstream, bytes.NewReader(body))
 	if err != nil {
 		fail(w, err)
 		return
@@ -370,6 +391,12 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	var cached *etagEntry
+	if r.Method == http.MethodGet {
+		if cached = s.etags.get(upstream); cached != nil {
+			req.Header.Set("If-None-Match", cached.etag)
+		}
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		fail(w, errors.New("forge unreachable"))
@@ -387,6 +414,31 @@ func (s *server) proxy(w http.ResponseWriter, r *http.Request) {
 		if v := resp.Header.Get(h); v != "" {
 			w.Header().Set(h, v)
 		}
+	}
+	if r.Method == http.MethodGet {
+		if resp.StatusCode == http.StatusNotModified && cached != nil { // unchanged: the loop sees the earlier 200
+			if cached.ctype != "" {
+				w.Header().Set("Content-Type", cached.ctype)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(cached.body)
+			return
+		}
+		if et := resp.Header.Get("ETag"); resp.StatusCode == http.StatusOK && et != "" {
+			b, err := io.ReadAll(io.LimitReader(resp.Body, etagMaxBody+1))
+			if err == nil && len(b) <= etagMaxBody {
+				s.etags.put(upstream, &etagEntry{etag: et, ctype: resp.Header.Get("Content-Type"), body: b})
+			} else {
+				s.etags.drop(upstream)
+			}
+			w.WriteHeader(resp.StatusCode)
+			_, _ = w.Write(b)
+			if err == nil && len(b) > etagMaxBody {
+				_, _ = io.Copy(w, resp.Body)
+			}
+			return
+		}
+		s.etags.drop(upstream)
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)

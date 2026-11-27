@@ -280,7 +280,7 @@ func TestPgStore(t *testing.T) {
 	}
 }
 
-// TestPgRoleSeparation needs TEST_DATABASE_URL as a superuser: it sets up the roles like 10-api.sh and checks that the
+// TestPgRoleSeparation needs TEST_DATABASE_URL as a superuser: it sets up the roles like the Ansible role api and checks that the
 // API login cannot delete, truncate, drop the trigger or change the retention, but can insert, read and prune.
 func TestPgRoleSeparation(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")

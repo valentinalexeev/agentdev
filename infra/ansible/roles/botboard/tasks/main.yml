@@ -23,4 +23,4 @@
     msg: >-
       botboard up: http://botboard.{{ botboard_ns }}.svc.cluster.local/ . View: kubectl --context {{ botboard_context }}
       -n {{ botboard_ns }} port-forward svc/botboard 8090:80, then open http://localhost:8090. Agents get BOTBOARD_URL
-      from ./run.sh 06 when this namespace exists.
+      from kind.yml --tags agents when this namespace exists.

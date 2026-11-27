@@ -11,7 +11,11 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
 
 COPY agent-loop.sh /usr/local/bin/agent-loop
 COPY agent-chat-session.sh /usr/local/bin/agent-chat-session
-RUN chmod +x /usr/local/bin/agent-loop /usr/local/bin/agent-chat-session \
+COPY chat-session-server.js /usr/local/bin/chat-session-server
+COPY permission-host.js /usr/local/bin/permission-host
+COPY agentdev-forge.sh /usr/local/bin/agentdev-forge
+COPY toolchain-install.sh /usr/local/bin/toolchain-install
+RUN chmod +x /usr/local/bin/agent-loop /usr/local/bin/agent-chat-session /usr/local/bin/chat-session-server /usr/local/bin/permission-host /usr/local/bin/agentdev-forge /usr/local/bin/toolchain-install \
  && mkdir -p /state /home/node/.claude && chown -R 1000:1000 /state /home/node/.claude
 
 # The node image already has UID 1000 ("node"). /state and ~/.claude are PVC-backed.

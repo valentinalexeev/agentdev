@@ -5,7 +5,7 @@ import {
   listSecrets, createSecret, rotateSecret, deleteSecret, Unauthorized, repoError, nameError,
   secretNameError, upstreamError, envNameError, type ProjectSecret, type NewSecret,
 } from './api'
-import { Modal } from './App'
+import { Drawer as Modal, PageHead } from './ui'
 
 const EMPTY: NewSecret = { name: '', scope: 'project', project: '', mode: 'broker', broker: { upstream: '', scheme: 'bearer' }, value: '' }
 
@@ -27,33 +27,31 @@ export function Secrets({ token, onExpired }: { token: string; onExpired: () => 
 
   return (
     <>
-      <h1>Project secrets</h1>
-      <p className="muted">
+      <PageHead sub={<>
         Credentials that the agents of a project, or one agent, use. In mode <strong>broker</strong> the agent does
         not get the value: the credential broker adds it to requests for the upstream. You cannot read a value
         after you save it. You can only replace it or remove the secret.
-      </p>
-      <div className="buttons"><button onClick={() => setAdding(true)}>Add a secret</button></div>
-      {error && <p className="error">{error}</p>}
-      {!list && !error && <p>Loading…</p>}
+      </>} actions={<button className="agd-btn agd-btn-primary" type="button" onClick={() => setAdding(true)}>Add a secret</button>} />
+      {error && <p className="agd-error">{error}</p>}
+      {!list && !error && <p className="agd-muted">Loading…</p>}
       {list && list.length === 0 && <p>No project secrets that you manage.</p>}
       {list && list.length > 0 && (
-        <table>
+        <table className="agd-table">
           <thead><tr><th>Name</th><th>Scope</th><th>Mode</th><th>State</th><th></th></tr></thead>
           <tbody>
             {list.map((s) => (
               <tr key={s.name}>
-                <td><code>{s.name}</code>{s.description && <div className="muted">{s.description}</div>}</td>
+                <td><code>{s.name}</code>{s.description && <div className="agd-muted">{s.description}</div>}</td>
                 <td>{s.scope === 'project' ? `project ${s.project}` : `agent ${s.agent}`}</td>
                 <td>
                   {s.mode === 'broker'
                     ? <>broker: <code>{s.upstream}</code> ({s.header} {s.scheme})</>
-                    : <span className="warning">env: <code>{s.envName}</code>, the agent can read it</span>}
+                    : <span className="agd-error">env: <code>{s.envName}</code>, the agent can read it</span>}
                 </td>
                 <td title={s.message}>{s.phase}{s.syncedAt ? `, ${new Date(s.syncedAt).toLocaleString()}` : ''}</td>
-                <td className="actions">
-                  <button className="secondary" aria-label={`Replace the value of ${s.name}`} onClick={() => setRotating(s)}>Replace value</button>
-                  <button className="danger" aria-label={`Remove ${s.name}`} onClick={() => setRemoving(s)}>Remove</button>
+                <td className="agd-row-actions">
+                  <button className="agd-btn agd-btn-quiet" aria-label={`Replace the value of ${s.name}`} onClick={() => setRotating(s)}>Replace value</button>
+                  <button className="agd-btn agd-btn-danger" aria-label={`Remove ${s.name}`} onClick={() => setRemoving(s)}>Remove</button>
                 </td>
               </tr>
             ))}
@@ -100,7 +98,7 @@ function AddSecret({ token, onExpired, onClose, onDone }: { token: string; onExp
   }
   return (
     <Modal title="Add a project secret" onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); if (!errs.length) save() }}>
+      <form className="agd-form" onSubmit={(e) => { e.preventDefault(); if (!errs.length) save() }}>
         <label>Name <input value={s.name} onChange={(e) => set({ name: e.target.value })} autoComplete="off" /></label>
         <label>Scope{' '}
           <select value={s.scope} onChange={(e) => set({ scope: e.target.value as NewSecret['scope'] })}>
@@ -138,7 +136,7 @@ function AddSecret({ token, onExpired, onClose, onDone }: { token: string; onExp
             </>
           : <>
               <label>Variable <input value={s.env?.name ?? ''} placeholder="DB_PASSWORD" onChange={(e) => set({ env: { ...s.env!, name: e.target.value } })} /></label>
-              <p className="warning">
+              <p className="agd-error">
                 In mode env the model can read the value. It can write the value into a comment, a commit or a request.
                 Use env only if the value has no other path, for example the password of a test database.
               </p>
@@ -146,12 +144,12 @@ function AddSecret({ token, onExpired, onClose, onDone }: { token: string; onExp
             </>}
         <label>Description <input value={s.description ?? ''} maxLength={200} onChange={(e) => set({ description: e.target.value })} /></label>
         <label>Value <input type="password" value={s.value} autoComplete="new-password" onChange={(e) => set({ value: e.target.value })} /></label>
-        {errs.length > 0 && <p className="muted">{errs[0]}</p>}
-        <div className="buttons">
-          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" disabled={busy || errs.length > 0}>Save</button>
+        {errs.length > 0 && <p className="agd-muted">{errs[0]}</p>}
+        <div className="agd-row">
+          <button type="button" className="agd-btn agd-btn-quiet" onClick={onClose}>Cancel</button>
+          <button className="agd-btn agd-btn-primary" type="submit" disabled={busy || errs.length > 0}>Save</button>
         </div>
-        {notice && <p className="error" role="alert">{notice}</p>}
+        {notice && <p className="agd-error" role="alert">{notice}</p>}
       </form>
     </Modal>
   )
@@ -162,14 +160,14 @@ function Rotate({ token, s, onExpired, onClose, onDone }: { token: string; s: Pr
   const { busy, notice, run } = useAction(onExpired, onDone)
   return (
     <Modal title={`Replace the value of ${s.name}`} onClose={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); if (value.trim()) run(() => rotateSecret(token, s.name, value)) }}>
+      <form className="agd-form" onSubmit={(e) => { e.preventDefault(); if (value.trim()) run(() => rotateSecret(token, s.name, value)) }}>
         <p>The agents use the new value within one minute. The old value is gone.</p>
         <label>New value <input type="password" value={value} autoComplete="new-password" onChange={(e) => setValue(e.target.value)} /></label>
-        <div className="buttons">
-          <button type="button" className="secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" disabled={busy || !value.trim()}>Replace</button>
+        <div className="agd-row">
+          <button type="button" className="agd-btn agd-btn-quiet" onClick={onClose}>Cancel</button>
+          <button className="agd-btn agd-btn-primary" type="submit" disabled={busy || !value.trim()}>Replace</button>
         </div>
-        {notice && <p className="error" role="alert">{notice}</p>}
+        {notice && <p className="agd-error" role="alert">{notice}</p>}
       </form>
     </Modal>
   )
@@ -180,11 +178,11 @@ function Remove({ token, s, onExpired, onClose, onDone }: { token: string; s: Pr
   return (
     <Modal title={`Remove ${s.name}?`} onClose={onClose}>
       <p>The agents can no longer use this secret. The value is deleted. You cannot undo this.</p>
-      <div className="buttons">
-        <button className="secondary" onClick={onClose}>Cancel</button>
-        <button className="danger" disabled={busy} onClick={() => run(() => deleteSecret(token, s.name))}>Remove</button>
+      <div className="agd-row">
+        <button className="agd-btn agd-btn-quiet" onClick={onClose}>Cancel</button>
+        <button className="agd-btn agd-btn-danger" disabled={busy} onClick={() => run(() => deleteSecret(token, s.name))}>Remove</button>
       </div>
-      {notice && <p className="error" role="alert">{notice}</p>}
+      {notice && <p className="agd-error" role="alert">{notice}</p>}
     </Modal>
   )
 }

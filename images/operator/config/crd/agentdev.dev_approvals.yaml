@@ -126,12 +126,14 @@ spec:
                 type: string
               source:
                 description: |-
-                  What asks: claude (a tool permission prompt), push (a push touching a protected path) or executor (an apply
-                  gate of a deterministic executor, #69; created by the operator itself, agent is then the Executor name).
+                  What asks: claude (a tool permission prompt), push (a push touching a protected path), executor (an apply
+                  gate of a deterministic executor, #69; created by the operator itself, agent is then the Executor name) or cost
+                  (a job at the soft cost limit of claude-proxy, #310; tool is step-<n>, claude-proxy reads the allowed ones).
                 enum:
                 - claude
                 - push
                 - executor
+                - cost
                 type: string
               tool:
                 description: Tool name (claude) or "push" (push).

@@ -573,7 +573,7 @@ func (d *decider) decide(ctx context.Context, u *unstructured.Unstructured, agen
 		st := map[string]any{"state": "allowed", "scope": "once"}
 		switch verb {
 		case "approve-job":
-			if a.Source != "executor" { // an executor apply is single-use (#69): approve-job counts as once
+			if a.Source != "executor" && a.Source != "cost" { // single-use: an executor apply (#69), one cost step (#310)
 				st["scope"] = "job"
 			}
 		case "deny":
@@ -739,6 +739,19 @@ func (ar *approvalReader) list(rw http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(ctxIdentity{}).(*identity)
 	q := r.URL.Query()
 	state, agent, repo := q.Get("state"), q.Get("agent"), q.Get("project")
+	if repo == "" {
+		repo = q.Get("repo") // #345: the same filter name as the other lists
+	}
+	pg, err := parsePage(q, 1<<20) // no limit given: every item, as before
+	if err != nil {
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sc, err := ar.w.scopeOf(r.Context(), id, url.Values{"scope": {q.Get("scope")}})
+	if err != nil {
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	switch state {
 	case "", "all", "pending", "allowed", "denied", "void", "decided":
 	default:
@@ -761,13 +774,23 @@ func (ar *approvalReader) list(rw http.ResponseWriter, r *http.Request) {
 		if state != "" && state != "all" && state != a.State && !(state == "decided" && a.State != "pending") {
 			continue
 		}
-		if !can(a.Repo, a.Forge) {
+		if !can(a.Repo, a.Forge) || !sc.repo(a.Forge, a.Repo) {
 			continue
 		}
 		out = append(out, a)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
-	writeJSON(rw, http.StatusOK, map[string]any{"approvals": out})
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Created.Equal(out[j].Created) {
+			return out[i].Created.After(out[j].Created)
+		}
+		return out[i].Name < out[j].Name
+	})
+	span, next := pg.slice(len(out))
+	resp := map[string]any{"approvals": out[span[0]:span[1]]}
+	if next != "" {
+		resp["next_cursor"] = next
+	}
+	writeJSON(rw, http.StatusOK, resp)
 }
 
 func (ar *approvalReader) get(rw http.ResponseWriter, r *http.Request) {
@@ -814,21 +837,28 @@ type decideBody struct {
 // is idempotent (200, nothing changes); a different one after the first is 409. Every outcome is audited (Postgres).
 func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 	id := r.Context().Value(ctxIdentity{}).(*identity)
-	name := r.PathValue("name")
-	e := auditEntry{Who: ar.w.who(id), Action: "approval-decision"}
-	fail := func(code int, result, msg string) {
-		e.Result, e.Reason = result, msg
-		audit(e)
-		writeJSON(rw, code, map[string]string{"error": msg})
-	}
-	if len(name) > 100 || !agentNameRe.MatchString(name) {
-		fail(http.StatusBadRequest, "invalid", "bad name")
-		return
-	}
 	var body decideBody
 	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
-		fail(http.StatusBadRequest, "invalid", "body: {\"decision\": \"approve|approve-job|deny\", \"contentHash\": \"...\"}")
+		e := auditEntry{Who: ar.w.who(id), Action: "approval-decision", Result: "invalid", Reason: "bad body"}
+		audit(e)
+		writeJSON(rw, http.StatusBadRequest, map[string]string{"error": "body: {\"decision\": \"approve|approve-job|deny\", \"contentHash\": \"...\"}"})
 		return
+	}
+	code, out := ar.decideAs(r.Context(), id, r.PathValue("name"), body, "ui")
+	writeJSON(rw, code, out)
+}
+
+// decideAs applies one decision for the person id (the web UI, or a notification action with via "push", #347).
+// Every rule of decide applies; the result is audited. It returns the HTTP status and the response body.
+func (ar *approvalReader) decideAs(ctx context.Context, id *identity, name string, body decideBody, via string) (int, any) {
+	e := auditEntry{Who: ar.w.who(id), Action: "approval-decision"}
+	fail := func(code int, result, msg string) (int, any) {
+		e.Result, e.Reason = result, msg
+		audit(e)
+		return code, map[string]string{"error": msg}
+	}
+	if len(name) > 100 || !agentNameRe.MatchString(name) {
+		return fail(http.StatusBadRequest, "invalid", "bad name")
 	}
 	st := map[string]any{"state": "allowed", "scope": "once"}
 	switch body.Decision {
@@ -838,46 +868,39 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 	case "deny":
 		st = map[string]any{"state": "denied"}
 	default:
-		fail(http.StatusBadRequest, "invalid", "decision: approve, approve-job or deny")
-		return
+		return fail(http.StatusBadRequest, "invalid", "decision: approve, approve-job or deny")
 	}
-	u, err := ar.store.GetApproval(r.Context(), name)
+	u, err := ar.store.GetApproval(ctx, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			fail(http.StatusNotFound, "invalid", "not found")
-		} else {
-			fail(http.StatusBadGateway, "error", "cannot read approval")
+			return fail(http.StatusNotFound, "invalid", "not found")
 		}
-		return
+		return fail(http.StatusBadGateway, "error", "cannot read approval")
 	}
 	a := fromApprovalObject(u)
 	e.Agent, e.Request = a.Agent, map[string]any{"approval": a.ID, "repo": a.Repo, "job": a.Job, "tool": a.Tool,
-		"contentHash": a.ContentHash, "decision": body.Decision, "via": "ui"}
+		"contentHash": a.ContentHash, "decision": body.Decision, "via": via}
 	// agents first: refused whatever their forge access (an agent account has write access to its repository)
-	if who, ok := ar.agentIdentity(r.Context(), id, a); ok {
-		fail(http.StatusForbidden, "denied", "agents and platform accounts never decide ("+who+")")
-		return
+	if who, ok := ar.agentIdentity(ctx, id, a); ok {
+		return fail(http.StatusForbidden, "denied", "agents and platform accounts never decide ("+who+")")
 	}
-	if !ar.visible(r.Context(), id)(a.Repo, a.Forge) {
-		fail(http.StatusNotFound, "denied", "not found") // do not reveal other projects
-		return
+	if !ar.visible(ctx, id)(a.Repo, a.Forge) {
+		return fail(http.StatusNotFound, "denied", "not found") // do not reveal other projects
 	}
-	if a.Source == "executor" && body.Decision == "approve-job" {
-		st["scope"] = "once" // an executor apply is single-use (#69)
+	if (a.Source == "executor" || a.Source == "cost") && body.Decision == "approve-job" {
+		st["scope"] = "once" // single-use: an executor apply (#69), one step of cost units (#310)
 	}
-	grant, err := ar.w.authorize(r.Context(), id, a.Forge, a.Repo, permWrite, true)
+	grant, err := ar.w.authorize(ctx, id, a.Forge, a.Repo, permWrite, true)
 	if err != nil {
 		he, _ := err.(*httpErr)
 		if he == nil {
 			he = &httpErr{http.StatusServiceUnavailable, "error", err.Error()}
 		}
-		fail(he.code, he.result, he.msg)
-		return
+		return fail(he.code, he.result, he.msg)
 	}
 	e.Grant = grant
 	if body.ContentHash != a.ContentHash {
-		fail(http.StatusConflict, "denied", "the request changed since you opened it; reload and check it again")
-		return
+		return fail(http.StatusConflict, "denied", "the request changed since you opened it; reload and check it again")
 	}
 	decider := forgeUserOf(id, a.Forge)
 	if decider == "" {
@@ -888,44 +911,38 @@ func (ar *approvalReader) decide(rw http.ResponseWriter, r *http.Request) {
 			if a.State == st["state"] && (a.State != "allowed" || a.Scope == st["scope"]) {
 				e.Result, e.Reason = "ok", "already decided the same way: nothing changed"
 				audit(e)
-				writeJSON(rw, http.StatusOK, a)
-				return
+				return http.StatusOK, a
 			}
-			fail(http.StatusConflict, "denied", "request is already "+a.State+": a later decision has no effect")
-			return
+			return fail(http.StatusConflict, "denied", "request is already "+a.State+": a later decision has no effect")
 		}
 		obj := u.DeepCopy()
 		ns := map[string]any{"contentHash": a.ContentHash, "decidedAt": now().Format(time.RFC3339),
-			"decidedBy": decider, "decidedVia": "ui"}
+			"decidedBy": decider, "decidedVia": via}
 		for k, v := range st {
 			ns[k] = v
 		}
 		obj.Object["status"] = ns
-		err := ar.store.UpdateApprovalStatus(r.Context(), obj)
+		err := ar.store.UpdateApprovalStatus(ctx, obj)
 		if err == nil {
 			e.Action, e.Result = "approval-"+st["state"].(string), "ok"
 			audit(e)
-			u2, gerr := ar.store.GetApproval(r.Context(), name)
+			u2, gerr := ar.store.GetApproval(ctx, name)
 			if gerr != nil {
 				u2 = obj
 			}
-			writeJSON(rw, http.StatusOK, fromApprovalObject(u2))
-			return
+			return http.StatusOK, fromApprovalObject(u2)
 		}
 		if !apierrors.IsConflict(err) {
-			fail(http.StatusBadGateway, "error", "cannot write the decision")
-			return
+			return fail(http.StatusBadGateway, "error", "cannot write the decision")
 		}
 		// someone else wrote first: read again and apply the idempotency rule
-		if u, err = ar.store.GetApproval(r.Context(), name); err != nil {
-			fail(http.StatusBadGateway, "error", "cannot read approval")
-			return
+		if u, err = ar.store.GetApproval(ctx, name); err != nil {
+			return fail(http.StatusBadGateway, "error", "cannot read approval")
 		}
 		a = fromApprovalObject(u)
 		if attempt > 0 && a.State == "pending" {
 			// still pending after a second conflict: nothing was written, the caller retries
-			fail(http.StatusConflict, "denied", "the request changed meanwhile; reload and decide again")
-			return
+			return fail(http.StatusConflict, "denied", "the request changed meanwhile; reload and decide again")
 		}
 	}
 }

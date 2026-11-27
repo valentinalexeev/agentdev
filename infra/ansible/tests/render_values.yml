@@ -15,7 +15,8 @@
     platform_sm_prefix: platform-
     approvals: {enabled: true}
     usage: {five_hour: 70, weekly: 85}
-    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b]}
+    agents_source: git
+    api: {oidc_issuer: "https://auth.example.com/application/o/agentdev/", approval_deny_accounts: [bot-a, bot-b], max_agents: 2, chat: {enabled: true}}
   tasks:
     - name: Load the role defaults
       ansible.builtin.include_vars: ../roles/api/defaults/main.yml
@@ -39,8 +40,20 @@
             APPROVAL_DENY_ACCOUNTS: "{{ api_approval_deny_accounts | join(',') }}"
             USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
-            SECRETS_VALUES_NS: ""
+            MAX_AGENTS: "{{ api_max_agents }}"
+            MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
             SECRETS_GCP_PROJECT: ""
+            SECRETS_API_GSA: ""
+            SECRETS_VALUES_NS: ""
+            AGENTS_SOURCE: "{{ api_agents_source }}"
+            CHAT_SESSIONS: "{{ api_chat | string | lower }}"
+            CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"
+            CHAT_FORGE_IMAGE: "{{ api_chat_forge_image }}"
+            CHAT_IDLE_SECONDS: "{{ api_chat_idle_seconds }}"
+            CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
+            CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
+            CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+            NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
           replace: []
 
     - name: The API container gets the values
@@ -53,6 +66,31 @@
           - env.APPROVAL_DENY_ACCOUNTS == 'bot-a,bot-b'
           - env.USAGE_FIVE_HOUR == '70'
           - env.USAGE_WEEKLY == '85'
+          - env.MAX_AGENTS == '2'   # #27
+          - env.MAX_AGENTS_PER_USER == '0'
+          - env.AGENTS_SOURCE == 'git'   # #58
+          - env.CHAT_SESSIONS == 'true'   # #346
+          - env.CHAT_IDLE_SECONDS == '1800'
+          - env.CHAT_RETENTION_DAYS == '30'
+          - env.CHAT_WORKER_IMAGE == 'ghcr.io/example/agentdev-worker:v0.0.0'
+          - >-
+            (api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
+            | to_json is search('ghcr.io/example/agentdev-worker:v0.0.0')
+          - >-
+            (api_docs | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | first).spec.validations
+            | to_json is search('ghcr.io/example/agentdev-forge:v0.0.0')
+          - (api_docs | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'chat-session-server') | list | length) == 1
+          - env.PLATFORM_NS == platform_ns   # GET /api/platform (#344)
+          - env.API_IMAGE == api_image
+          # #344: by-name reads of the guide ConfigMap and the platform Deployments; Secrets only agentdev-api-vapid by
+          # name (#347, the VAPID key pair of the NotificationChannel), get only
+          - (api_docs | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.name', 'equalto', 'agentdev-api-platform')
+             | first).rules[0].resourceNames == ['agentdev-operator', 'authentik-server']
+          - >-
+            (api_docs | selectattr('kind', 'in', ['Role', 'ClusterRole']) | map(attribute='rules') | flatten
+             | selectattr('resources', 'contains', 'secrets') | list)
+            == [{'apiGroups': [''], 'resources': ['secrets'], 'resourceNames': ['agentdev-api-vapid'], 'verbs': ['get']}]
+          - env.NOTIFY_CHANNELS == ''   # #347: off by default
           - (api_docs | to_json) is not search('\$\{')
 
     - name: A missing value fails the render and names the placeholder
@@ -73,3 +111,44 @@
             that:
               - ansible_failed_result.msg is search('no value for \$\{OIDC_ISSUER\}')
               - ansible_failed_result.msg is not search('render.j2 accepted')
+
+    # UI OIDC client and scopes (#323): defaults keep authentik as it is; an override reaches the UI and the API audience
+    - name: Render the UI with the role defaults
+      ansible.builtin.set_fact:
+        ui_default_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                             | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                             | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+      vars:
+        ui_render: &ui_render
+          src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+          values:
+            PLATFORM_NS: "{{ platform_ns }}"
+            UI_IMAGE: img
+            OIDC_ISSUER: "{{ api_oidc_issuer }}"
+            OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+            OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
+          replace: []
+
+    - name: The defaults are the authentik values
+      ansible.builtin.assert:
+        that:
+          - ui_default_env.OIDC_CLIENT_ID == 'agentdev'
+          - ui_default_env.OIDC_SCOPES == 'openid profile email forge'
+          - api_oidc_audience == 'agentdev'
+
+    - name: Render the UI with an override (Pocket ID shape)
+      ansible.builtin.set_fact:
+        ui_override_env: "{{ (lookup('ansible.builtin.template', '../templates/render.j2', template_vars=ui_render)
+                              | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+                              | selectattr('value', 'defined') | items2dict(key_name='name', value_name='value') }}"
+        override_audience: "{{ api_oidc_audience }}"
+      vars:
+        api: {oidc_issuer: "https://id.example.com", oidc_client_id: my-client, ui_oidc_scopes: "openid profile email groups forge"}
+        ui_render: *ui_render
+
+    - name: The override reaches the UI, and the API audience follows the client id
+      ansible.builtin.assert:
+        that:
+          - ui_override_env.OIDC_CLIENT_ID == 'my-client'
+          - ui_override_env.OIDC_SCOPES == 'openid profile email groups forge'
+          - override_audience == 'my-client'

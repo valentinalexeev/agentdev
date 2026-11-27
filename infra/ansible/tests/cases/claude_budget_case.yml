@@ -1,0 +1,14 @@
+- name: Effective budget (case {{ case }})
+  ansible.builtin.include_tasks: ../../tasks/claude_budget.yml
+  vars:
+    claude_budget_units: "{{ case.units }}"
+    claude_budget_tokens: "{{ case.tokens }}"
+
+- name: Check (case {{ case }})
+  ansible.builtin.assert:
+    that:
+      - claude_budget_units_effective | int == case.want
+      - (case.warn == '') == (claude_budget_deprecation | length == 0)
+      - case.warn == '' or (case.warn in claude_budget_deprecation and '2.0.0' in claude_budget_deprecation
+        and 'claude_budget_units' in claude_budget_deprecation)
+    quiet: true

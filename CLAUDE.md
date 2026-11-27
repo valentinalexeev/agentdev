@@ -4,7 +4,12 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 `valentinalexeev/portfolio-dynamics-lab` (its CLAUDE.md, sections 5a and 5b, and its document 31,
 `docs/technical/31-process-raboty-ii-agenta-s-github.md`) to this project. Where this file is silent, that document applies.
 
-## 0. Starting a session
+**Sandboxed agents** (#591). An agent that runs under the agentdev harness (no `gh` login, no push, the harness
+opens the PR) follows the definition of done at the top of [`AGENTS.md`](AGENTS.md) first. In this file, each
+section heading carries a marker: **[sandbox: skip]** does not apply to it, **[sandbox: partial]** applies only in
+the part the heading names, no marker applies in full.
+
+## 0. Starting a session [sandbox: skip]
 
 1. Read this file.
 2. Load the bot identity: `source ~/.config/github-bot/env.sh`, then check `gh api user -q .login` prints `valentinalexeev-bot`.
@@ -14,18 +19,20 @@ Any AI agent working in this repository reads this file first. It adapts the pro
 4. Open GitHub Issues of `valentinalexeev/agentdev`, **only those assigned to `valentinalexeev-bot`**, in this order:
    open `incident` issues, then `in-progress`, then the rest by priority (lowest number first).
 5. Work the issue, check it against its acceptance criterion, update the issue.
+6. On every monitor check (default each 5 minutes), also do the milestone and release follow-up of §7a.
 
 ## 1. What this project is
 
 A Kubernetes setup that runs a team of Claude Code CLI agents. Each agent has its own forge account
 (and optionally its own Claude account) and loops over issues assigned to it and feedback on its PRs.
-The MVP runs on kind with gVisor and an in-cluster Gitea (`README.md`). Steps `02`–`04` are the earlier
-spike (agent-sandbox, Coder) and are kept for reference only.
+The MVP runs on kind with gVisor and an in-cluster Gitea (`README.md`). The tags `sandbox` and `sandbox-test`
+are the earlier spike (agent-sandbox) and are kept for reference only.
 
-Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shared helpers),
+Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in `kind.vars.yml`, a copy of
+`infra/ansible/kind.example.vars.yml`), `config.env` (knobs of the helper scripts in `scripts/`), `lib.sh` (shared helpers),
 `images/worker/` (the agent loop), `manifests/` (cluster objects), `seed/` (playground repo content).
 
-## 2. Status lives in GitHub Issues only
+## 2. Status lives in GitHub Issues only [sandbox: partial, only STE for text you write and `#NN` in commits]
 
 - Every piece of unfinished work is an issue: a step of the roadmap, a leftover found in a session, an incident.
   "To do later" in code comments, docs or commit messages without an issue link is not allowed.
@@ -45,7 +52,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   it is also asked in chat. The owner must see all open decisions in `label:needs-decision` and the next steps in the
   status comment of the umbrella issue (the open issue labelled `roadmap`), without reading the chat.
 
-## 3. Bot and owner
+## 3. Bot and owner [sandbox: skip, the harness sets the identity]
 
 | Action | Bot `valentinalexeev-bot` | Owner `valentinalexeev` |
 |---|---|---|
@@ -84,7 +91,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - **If the bot token fails** (401): tell the owner and stop the affected work; do not fall back to the owner
   account, do not merge anything.
 
-## 4. Pull requests
+## 4. Pull requests [sandbox: partial, only commit messages, docs and changelog rules]
 
 - **Branch names follow gitflow prefixes**, lower-case, with the issue number:
 
@@ -96,6 +103,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   | `docs/` | documentation only | `docs/60-owner-credentials` |
   | `chore/`, `ci/` | tooling, dependencies, workflows; `chore/release-X.Y.Z` cuts a release | `ci/64-api-image` |
   | `merge/` | a forward merge between release lines (`scripts/release-lines.sh forward`) | `merge/release-1.0-into-main` |
+  | `agent/<name>/release-`, `agent/<name>/merge-` | the same as `chore/release-` and `merge/`, for a sandboxed agent that can push only to `agent/<name>/*` (#510) | `agent/agentdev/release-1.2.0` |
+
+  Wherever this file says `chore/release-X.Y.Z` or `merge/`, the `agent/<name>/` form counts the same: the
+  `Release lines` and `Changelog` checks classify both (`scripts/release-lines.sh kind`).
 
   Work branches start from, and PRs target, the **line of the issue's milestone**
   ([ADR 0004](docs/adr/0004-branching-and-release-lines.md)): `main` for the next minor, `release/X.Y` for a frozen
@@ -110,7 +121,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
     pending hop and fails a release PR whose lower lines are not merged in.
   - A forward-merge PR with no conflict resolution and green CI may be merged by the bot **without** a fresh owner
     approval (owner, ADR 0004). This is the only exception to the approval rule below. A hop with a resolved
-    conflict needs the normal approval.
+    conflict needs the normal approval. The `Release lines` check classifies each `merge/` PR in its job summary:
+    **mechanical** (the bot may merge) or **resolved** (owner approval and review needed). Both pass, because the
+    check is required and must not block an approved resolved hop. The bot merges without approval only when the
+    summary says mechanical for the current head.
   - Support window: the latest minor and the one before it. Older lines get security fixes only, on request.
 - **Commit messages follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):**
   `<type>[(scope)][!]: <description>`, imperative, lower-case, no trailing period, then an optional body and footers.
@@ -120,7 +134,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   also carry `Refs #NN` / `Closes #NN` and `Co-authored-by:`. The PR title follows the same format, because the
   squash commit takes it.
 - Commit and push as you go.
-- Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `./run.sh` steps, e2e
+- Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `kind.yml` tags, e2e
   observations), what remains open, files shared with other open PRs.
 - **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
   `gh api -X POST repos/valentinalexeev/agentdev/pulls/NN/requested_reviewers -f "reviewers[]=valentinalexeev"`
@@ -148,7 +162,7 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
   examples and docs in sync, in the same PR; if not, the PR links a follow-up issue.
 - **Documentation is part of the change** ([owner](https://github.com/valentinalexeev/agentdev/pull/41)): a PR that
   adds or changes behaviour updates `docs/` (concepts, user guide, admin, troubleshooting as relevant), `README.md`
-  and `CHANGELOG.md` in the same PR. `docs/` is published to the wiki on merge.
+  and adds a changelog fragment `changelog.d/<issue>-<slug>.md` (#448) in the same PR. `docs/` is published to the wiki on merge.
 - **Merge permission is a GitHub review with state `APPROVED` by `valentinalexeev`**, and only for the commit it was
   given on: a push after the approval needs a new approval. Comments, `COMMENTED` reviews, chat messages, emoji and
   approvals by anyone else are not permission. The bot checks `gh api repos/valentinalexeev/agentdev/pulls/NN/reviews`
@@ -164,10 +178,10 @@ Map: `NN-*.sh` steps (run by `run.sh`), `config.env` (all knobs), `lib.sh` (shar
 - After a merge: check other open PRs for conflicts with `main`; merge `main` into them if the conflict is two
   independent additions; ask the owner if it is a semantic conflict.
 
-## 5. Incidents
+## 5. Incidents [sandbox: skip, report a problem in your summary]
 
 An incident is something that already went wrong: red CI on `main`, a leaked or expired secret, an agent that
-damaged work, a broken `./run.sh` on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
+damaged work, a broken `infra/ansible/kind.yml` run on a clean machine. The bot opens it immediately (labels `incident`, `AI`):
 what happened, when and how found, impact, immediate actions. Never paste secrets, even partially. Fix in
 `hotfix/NN-…` with `Closes #NN`; the closing comment states the root cause, the fix, and what prevents a repeat
 (test, CI check, rule change). A leaked secret: tell the owner at once; revoking it and rewriting history are owner actions.
@@ -175,12 +189,14 @@ what happened, when and how found, impact, immediate actions. Never paste secret
 ## 6. Engineering rules for this repo
 
 - **Secrets never enter git, issues or logs.** Claude credentials and forge tokens live in `.env` and `.secrets/`
-  (gitignored). `config.env` holds only local demo defaults.
-- **Every step script is re-runnable** (idempotent) and records its result with `record`. A change to a step is
-  checked by re-running that step on a live cluster; a change to the agent loop by an e2e pass (issue → PR → review → reply).
+  (gitignored). `config.env`, `infra/ansible/kind.example.vars.yml` and `kind.vars.yml` hold only local demo
+  defaults, never secrets.
+- **Every `kind.yml` tag is re-runnable** (idempotent): a second run reports `changed=0`. A change to a role or tag
+  is checked by re-running that tag (`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags <tag>`) on a
+  live cluster; a change to the agent loop by an e2e pass (issue → PR → review → reply).
 - **Ready-made before custom.** Prefer a maintained component over writing one; a PR that adds custom
   infrastructure says why the ready one does not fit.
-- **Pinned versions** in `config.env` / Dockerfiles; bump them in their own commit.
+- **Pinned versions** in the Ansible role defaults / `config.env` / Dockerfiles; bump them in their own commit.
 - Shell: `bash`, `set -euo pipefail` via `lib.sh`, passes `shellcheck -S warning` (CI enforces it).
 - No em dashes in prose written by agents.
 - **Manuals use ASD-STE100 Simplified Technical English** (`user-guide.md`, `install.md`, `admin.md`,
@@ -190,11 +206,12 @@ what happened, when and how found, impact, immediate actions. Never paste secret
   in the same PR. Design pages (`concepts.md`, `security*.md`, `adr/`) use normal technical English. The independent
   reviewer checks STE on every PR that changes a manual.
 
-- **Each BREAKING entry names every step or role to re-run** (#110): a **BREAKING** line in `CHANGELOG.md` lists
-  every `./run.sh` step and every Ansible role or Terraform module the operator must apply again, not only the main
-  one. The author checks that list by applying exactly those steps on a live cluster and says so in the PR.
+- **Each BREAKING entry names every tag or role to re-run** (#110): a **BREAKING** entry (a fragment with
+  `breaking: true`, its `## Upgrade` section) lists
+  every `kind.yml` tag and every Ansible role or Terraform module the operator must apply again, not only the main
+  one. The author checks that list by applying exactly those tags on a live cluster and says so in the PR.
 
-## Reviewer checklist
+## Reviewer checklist [sandbox: partial, only when you review]
 
 The independent reviewer checks these items on every PR, and lists the result per item in the review:
 
@@ -205,12 +222,12 @@ The independent reviewer checks these items on every PR, and lists the result pe
    decision (limits, pause, reset, credentials). Telemetry comes through a channel the model cannot write.
 5. **Numbers:** every value from outside the script is checked against `^[0-9]+$` (or a stricter pattern) before
    shell arithmetic, `[[ -lt ]]` comparisons or `sleep`. Bash arithmetic evaluates expressions and can run commands.
-6. **Docs:** `docs/`, `README.md` and `CHANGELOG.md` change with the behaviour; manuals follow STE (`docs/writing.md`).
+6. **Docs:** `docs/`, `README.md` and a `changelog.d/` fragment change with the behaviour; manuals follow STE (`docs/writing.md`).
 7. **Internal interfaces:** a change to an internal interface (worker and forge images against router, operator,
    Claude proxy and API) says how the previous MINOR keeps working (ADR 0006). The `compat` CI job
    (`scripts/e2e-compat.sh`) runs the previous release's worker and forge against the PR head.
 
-## Coordination and resource limits
+## Coordination and resource limits [sandbox: skip]
 
 Applies when one coordinator session runs several worker agents (#110).
 
@@ -226,7 +243,7 @@ Applies when one coordinator session runs several worker agents (#110).
 - **Questions from workers:** when a worker raises a question for the owner, the coordinator puts it on the issue
   in the §3 *Questions* form and adds `needs-decision`. The worker does not wait silently in chat.
 
-## Bootstrapping on GCP
+## Bootstrapping on GCP [sandbox: partial, only for a bootstrap task]
 
 This repository is the **product**. An instance is deployed from a **separate deployment repository**
 (owner decision, #11), never from here. To set one up, copy `examples/deployment/gcp-gke/` into a new
@@ -234,7 +251,7 @@ repository and follow its README and this repo's `AGENTS.md`. Do not hand-roll d
 instance values (project ids, regions, people, agent lists) into this repository: modules take them as
 required inputs.
 
-## 7. Versioning and releases (strict SemVer)
+## 7. Versioning and releases (strict SemVer) [sandbox: partial, only SemVer and changelog fragments]
 
 - Releases are git tags `vMAJOR.MINOR.PATCH` on the line branch `release/MAJOR.MINOR`, never on `main` or `next/*`
   (ADR 0004). Images are published with the same version (#28). Deployments pin a tag; nothing deploys from a branch.
@@ -245,15 +262,77 @@ required inputs.
   patches take backwards-compatible fixes only.
 - **What counts as the public interface:** Terraform module variables and outputs, Ansible instance vars,
   manifest template variables, image entrypoints and environment variables, the router and listener HTTP API.
+- **Internal interface** (calls between the components of one instance: agent pod to router, Claude proxy,
+  egress proxies and API; the rendered pod template; CRD fields; the state volume; the Postgres schema) is not public,
+  but follows [ADR 0006](docs/adr/0006-mixed-version-compatibility.md): accept the previous MINOR, change additively,
+  and break only over two releases, so agents of the previous version keep working during a rollout.
 - **MAJOR:** a breaking change to that interface (removed or renamed input, changed meaning or default that
   alters behaviour). While the version is `0.x`, breaking changes bump **MINOR** instead.
 - **MINOR:** backwards-compatible features. **PATCH:** backwards-compatible fixes only.
-- Every PR that changes behaviour adds a line under `## [Unreleased]` in `CHANGELOG.md`
-  (Keep a Changelog sections: Added, Changed, Deprecated, Removed, Fixed, Security); breaking ones are marked
-  **BREAKING** with the migration step.
+- Every PR that changes behaviour adds **one fragment file** `changelog.d/<issue>-<slug>.md` (#448; format in
+  [`changelog.d/README.md`](changelog.d/README.md)), never a direct edit of `## [Unreleased]` in `CHANGELOG.md`
+  (CI fails it). The fragment names its Keep a Changelog section (Added, Changed, Deprecated, Removed, Fixed,
+  Security); a breaking one has `breaking: true` and a `## Upgrade` section with the migration steps. A PR with no
+  user-visible change gets the label `no-changelog`. The lines already under `## [Unreleased]` before #448 stay.
 - Cutting a line: `release/X.Y` is branched from `main` when the X.Y scope freezes; `main` then becomes the next minor.
-- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that moves
-  `Unreleased` to the new version with the date and bumps any pinned examples. After the owner merges it, the owner
-  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward.
-- `CHANGELOG.md`: a fix is written in the lowest line's `## [Unreleased]`. A forward merge keeps the released sections
+- Cutting a release: a PR from `chore/release-X.Y.Z` into `release/X.Y` (commit `chore(release): vX.Y.Z`) that assembles
+  the fragments and `Unreleased` into the new version with the date (`scripts/release-lines.sh release X.Y.Z`, which
+  runs `scripts/changelog.sh release`) and bumps any pinned examples. After the owner merges it, the owner
+  (or the bot on explicit permission) pushes the tag on that merge commit. Then the line is merged forward. An owner
+  approval of the release PR on its current head is that permission for its one tag (§7a step 5).
+- `CHANGELOG.md`: a fix's fragment goes to the lowest line's `changelog.d/`. A forward merge keeps the released sections
   of lower lines in version order.
+
+### 7a. Milestone and release follow-up (regular, on every monitor check) [sandbox: skip]
+
+The agent does this on each check of §0 (every `WATCH_POLL_SECONDS`, default 5 minutes), after the owner events.
+Owner request: #354.
+
+1. **Track the open milestones.** For each supported line (§4 support window), the **patch** milestone is its rolling
+   `X.Y.x`. The **feature** milestone is the lowest open `X.Y.0` whose line is `main`. The **major** milestone is the
+   open `X.0.0` of `next/X.0`. Keep them in **one** status comment on the `roadmap` issue: edit that comment when
+   the set changes, do not add a new comment on each check.
+2. **Set the milestone of approved PRs.** For each open PR with an owner `APPROVED` review on its current head (§4)
+   and **no milestone**, set it by these rules, in this order:
+   1. `merge/` (or `agent/<name>/merge-`) forward merges and `chore(release)` PRs: no milestone.
+   2. A stacked PR (base is not a line branch) takes the milestone of the PR at the bottom of its stack. This rule
+      wins over the type of its title.
+   3. A PR that closes or refers to an issue with a milestone takes that milestone.
+   4. `fix`, `perf`: the milestone of the line the PR targets. That is the patch milestone `X.Y.x` for
+      `release/X.Y` (the lowest supported line with the defect, §4), the feature milestone for `main` (`bugfix/`,
+      code not released yet), the major milestone for `next/X.0`.
+   5. `feat`, `refactor` into `main`: the feature milestone.
+   6. Any type with `!` or a `BREAKING CHANGE` footer: the major milestone. If there is no open major milestone or no
+      `next/X.0` line, comment and ask.
+   7. `docs`, `test`, `ci`, `build`, `chore`, `style`, `revert`: the milestone of the line the PR targets.
+   A PR that has a milestone keeps it: on a mismatch with these rules, comment and ask, do not change it. Any case
+   the rules do not cover (for example a `feat` into `release/X.Y`) gets a comment, not a guess.
+3. **Merge** approved PRs by §4 (head pinned, green CI, review line), then go on.
+4. **Open the release PR** when all of these are true for a milestone:
+   - it has at least one closed issue or merged PR, and no open issue or PR except its tracking issue;
+   - the `## [Unreleased]` section of its line is not empty;
+   - its line branch exists. For a new minor `X.Y.0`, the scope freeze and the cut of `release/X.Y` are owner
+     decisions: ask on the tracking issue, do not cut the line alone.
+   Then do `docs/release.md` §6 steps 1 to 4: branch `chore/release-X.Y.Z` (a sandboxed agent:
+   `agent/<name>/release-X.Y.Z`), CHANGELOG, pinned examples,
+   `chore(release): vX.Y.Z`, PR into `release/X.Y` with the checklist, owner review requested, an independent review
+   (§4). For a patch, the version is the next free `X.Y.Z` on the line. Never open a second release PR for one
+   milestone.
+5. **Run the full release after the owner approves the release PR.** Owner decision (#354, PR #355): an owner
+   `APPROVED` review on the current head of a `chore/release-X.Y.Z` (or `agent/<name>/release-X.Y.Z`) PR is the explicit permission (§3) for the tag
+   `vX.Y.Z` and the other steps of that one release. It is not permission for any other tag. Before the merge, CI
+   must be green (`Release lines` included) and the independent review line must name the head. Then, without a new
+   question, follow `docs/release.md` §6 steps 5 to 9:
+   1. merge the PR (§4, head pinned);
+   2. tag the merge commit and push the tag;
+   3. for a patch, rename the milestone `X.Y.x` to `X.Y.Z` and open a new `X.Y.x`; close the released milestone;
+   4. wait for `images.yml` to publish every image at `X.Y.Z`, at most 6 checks (30 minutes); then create the GitHub
+      release from the CHANGELOG section. If the images are not there after 6 checks, comment and stop;
+   5. open the upgrade PR in the reference deployment repository (pin `ref=` and `image_tag`) and request review. If
+      the bot has no write access there, post the diff on the tracking issue and ask (§3);
+   6. merge the line forward, one `merge/` (or `agent/<name>/merge-`) PR per hop (`scripts/release-lines.sh forward release/X.Y`); a hop
+      without conflict resolution and with green CI merges without a new approval (§4);
+   7. report on the tracking issue: tag, images, release URL, deployment PR, forward-merge PRs, what is left.
+   A failed step stops the procedure. Open an `incident` issue if the tag or images are already public; else
+   comment on the release PR and ask the owner.
+6. Never move or delete a tag, and never release from a PR that is not approved on its current head.

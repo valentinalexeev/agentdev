@@ -1,5 +1,5 @@
 # botboard (#26): live dashboard of what agents are working on (github.com/valentinalexeev/botboard).
-# Rendered by 07-botboard.sh (envsubst). Agents publish cards to http://botboard.${BOTBOARD_NS}.svc.cluster.local/.
+# Rendered by kind.yml (tag botboard). Agents publish cards to http://botboard.${BOTBOARD_NS}.svc.cluster.local/.
 # Local mode: plain HTTP inside the cluster, viewed with kubectl port-forward. Anything in the cluster can post cards
 # (botboard has no auth of its own; its intended access control is a tailnet, see docs/admin.md).
 apiVersion: v1

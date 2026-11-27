@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 )
 
 type brokerFixture struct {
@@ -47,7 +48,10 @@ func newBrokerFixture(t *testing.T) *brokerFixture {
 	            "empty":{"upstream":"` + f.up.URL + `","agents":["alice"]}}`
 	os.WriteFile(filepath.Join(f.dir, "routes.json"), []byte(routes), 0o600)
 	os.WriteFile(filepath.Join(f.dir, "values", "raw"), []byte("rawvalue-123"), 0o600)
-	f.srv = httptest.NewServer(newBroker(testSigning, filepath.Join(f.dir, "routes.json"), filepath.Join(f.dir, "values"), "http://credential-broker.test:8080", f.up.Client().Transport))
+	api := fakeAPIServer(t, brokerReviews, new(int32))
+	rv := newTokenReviewer(api.URL, "coding-agents", api.Client(), func() (string, error) { return "proxy-sa", nil })
+	rv.audience = brokerAudience
+	f.srv = httptest.NewServer(newBroker(rv, filepath.Join(f.dir, "routes.json"), filepath.Join(f.dir, "values"), "http://credential-broker.test:8080", f.up.Client().Transport))
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -72,7 +76,7 @@ func (f *brokerFixture) get(t *testing.T, path, auth string, hdr map[string]stri
 
 func TestBrokerAddsCredentialAndRewrites(t *testing.T) {
 	f := newBrokerFixture(t)
-	key := agentKey(testSigning, "alice")
+	key := brokerTok("alice")
 	resp, body := f.get(t, "/s/npm/pkg?x=1", "Bearer "+key, map[string]string{"Cookie": "c=1", "X-Api-Key": "smuggled"})
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d %s", resp.StatusCode, body)
@@ -101,7 +105,7 @@ func TestBrokerAddsCredentialAndRewrites(t *testing.T) {
 
 func TestBrokerBasicAuthAndRawHeader(t *testing.T) {
 	f := newBrokerFixture(t)
-	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("any:"+agentKey(testSigning, "alice")))
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("any:"+brokerTok("alice")))
 	resp, body := f.get(t, "/s/raw/v2/", basic, map[string]string{"X-Token": "agent-chosen"})
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d %s", resp.StatusCode, body)
@@ -113,14 +117,18 @@ func TestBrokerBasicAuthAndRawHeader(t *testing.T) {
 
 func TestBrokerRefusals(t *testing.T) {
 	f := newBrokerFixture(t)
-	alice := "Bearer " + agentKey(testSigning, "alice")
-	bob := "Bearer " + agentKey(testSigning, "bob")
+	alice := "Bearer " + brokerTok("alice")
+	bob := "Bearer " + brokerTok("bob")
 	cases := []struct {
 		path, auth, rule string
 		status           int
 	}{
-		{"/s/npm/x", "", "broker-key-invalid", 401},
-		{"/s/npm/x", "Bearer alice.00", "broker-key-invalid", 401},
+		{"/s/npm/x", "", "broker-token-invalid", 401},
+		{"/s/npm/x", "Bearer alice.00", "broker-token-invalid", 401},
+		{"/s/npm/x", "Bearer " + agentKey(testSigning, "alice"), "broker-token-invalid", 401}, // the old HMAC key: refused
+		{"/s/npm/x", "Bearer " + brokerTok("proxyaud"), "broker-token-invalid", 401},          // a claude-proxy token
+		{"/s/npm/x", "Bearer " + brokerTok("otherns"), "broker-token-invalid", 401},
+		{"/s/npm/x", "Bearer " + brokerTok("unauth"), "broker-token-invalid", 401},
 		{"/s/npm/x", bob, "broker-secret-denied", 403},
 		{"/s/nope/x", alice, "broker-unknown-secret", 404},
 		{"/s/npm/../x", alice, "", 0}, // the client cleans it; checked below with a raw path
@@ -164,7 +172,7 @@ func TestBrokerRefusals(t *testing.T) {
 func TestBrokerRotation(t *testing.T) {
 	f := newBrokerFixture(t)
 	os.WriteFile(filepath.Join(f.dir, "values", "npm"), []byte("rotated-token-2"), 0o600)
-	f.get(t, "/s/npm/pkg", "Bearer "+agentKey(testSigning, "alice"), nil)
+	f.get(t, "/s/npm/pkg", "Bearer "+brokerTok("alice"), nil)
 	if f.got.Header.Get("Authorization") != "Bearer rotated-token-2" {
 		t.Errorf("rotated value not used: %v", f.got.Header)
 	}
@@ -188,7 +196,7 @@ func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }
 // ask for, never returns the value to the agent.
 func TestBrokerRedactsBinaryAndRefusesEncoded(t *testing.T) {
 	f := newBrokerFixture(t)
-	alice := "Bearer " + agentKey(testSigning, "alice")
+	alice := "Bearer " + brokerTok("alice")
 	f.resp = func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write(bytes.Repeat([]byte("x"), 40000)) // the value straddles the redactor's read boundary
@@ -239,3 +247,14 @@ func TestPublicOnly(t *testing.T) {
 		}
 	}
 }
+
+// brokerReviews: what the fake API server says about each token (by its sub claim) for the broker (#202, R128)
+var brokerReviews = map[string]reviewAnswer{
+	"alice":    {true, []string{"credential-broker"}, "system:serviceaccount:coding-agents:agent-alice"},
+	"bob":      {true, []string{"credential-broker"}, "system:serviceaccount:coding-agents:agent-bob"},
+	"proxyaud": {true, []string{"claude-proxy"}, "system:serviceaccount:coding-agents:agent-alice"},
+	"otherns":  {true, []string{"credential-broker"}, "system:serviceaccount:default:agent-alice"},
+	"unauth":   {false, nil, ""},
+}
+
+func brokerTok(name string) string { return fakeJWT(name, time.Now().Add(10*time.Minute)) }

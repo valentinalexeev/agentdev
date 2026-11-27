@@ -1,33 +1,105 @@
 ---
-# Local evaluation on kind (#106): the Ansible rollout that replaces the numbered shell steps, one step at a time.
+# Local evaluation on kind (#106): the Ansible rollout that replaced run.sh and the numbered shell steps (removed, #417).
 # GKE uses deploy.yml (cluster from infra/terraform); kind uses this playbook (cluster from kind). Both use the same
-# roles and manifests for the steps that are ported.
+# roles and manifests.
 #
-#   cd infra/ansible
-#   ansible-playbook kind.yml --tags cluster           # was ./run.sh 01
-#   ansible-playbook kind.yml --tags sandbox           # was ./run.sh 02
-#   ansible-playbook kind.yml --tags sandbox-test      # was ./run.sh 03
-#   ansible-playbook kind.yml --tags forge             # was ./run.sh 05
-#   ansible-playbook kind.yml --tags botboard          # was ./run.sh 07 (optional)
-#   ansible-playbook kind.yml --tags mcp               # was ./run.sh 08
+# From the repository root, with the secrets in the environment (set -a; source .env; set +a) and, optionally, your
+# settings in kind.vars.yml (a copy of kind.example.vars.yml, the former config.env values):
+#   ansible-playbook infra/ansible/kind.yml [-e @kind.vars.yml]   # was ./run.sh: prereqs, cluster, forge, operator, agents
+#   ansible-playbook infra/ansible/kind.yml --tags prereqs           # was ./run.sh 00 (read-only host checks)
+#   ansible-playbook infra/ansible/kind.yml --tags cluster           # was ./run.sh 01
+#   ansible-playbook infra/ansible/kind.yml --tags sandbox           # was ./run.sh 02 (spike, not in a plain run)
+#   ansible-playbook infra/ansible/kind.yml --tags sandbox-test      # was ./run.sh 03 (spike, not in a plain run)
+#   ansible-playbook infra/ansible/kind.yml --tags forge             # was ./run.sh 05
+#   ansible-playbook infra/ansible/kind.yml --tags agents            # was ./run.sh 06 (needs the operator)
+#   ansible-playbook infra/ansible/kind.yml --tags botboard          # was ./run.sh 07 (optional)
+#   ansible-playbook infra/ansible/kind.yml --tags mcp               # was ./run.sh 08
+#   ansible-playbook infra/ansible/kind.yml --tags authentik         # was ./run.sh 09 (after mcp)
+#   ansible-playbook infra/ansible/kind.yml --tags api               # was ./run.sh 10 (after authentik)
+#   ansible-playbook infra/ansible/kind.yml --tags ui                # was ./run.sh 11 (after api)
+#   ansible-playbook infra/ansible/kind.yml --tags operator          # was ./run.sh 12
+#   ansible-playbook infra/ansible/kind.yml --tags secrets           # was ./run.sh 13 (then the operator again)
+#   ansible-playbook infra/ansible/kind.yml --tags teardown          # was ./99-teardown.sh (deletes the cluster)
 #
-# Ported steps (tag: old run.sh step): cluster: 01, sandbox: 02, sandbox-test: 03, forge: 05, botboard: 07, mcp: 08.
-# The other run.sh steps are still shell scripts. ./run.sh calls this playbook for the ported steps.
+# A plain run (no --tags) does what ./run.sh did without arguments. Every other step is tagged never as well, so it
+# runs only when its tag is named. The Coder spike (04-coder.sh) is not ported.
 - name: Deploy agentdev to kind
   hosts: localhost
   gather_facts: false
   vars:
     kind_cluster_name: agentdev
-    # shared with deploy.yml's roles (group_vars/all.yml is GKE-only); config.env values come in with -e (08-mcp.sh)
+    # shared with deploy.yml's roles (group_vars/all.yml is GKE-only); override them with -e @kind.vars.yml
     repo_root: "{{ playbook_dir }}/../.."
     kube_context: kind-{{ kind_cluster_name }}
     agents_ns: coding-agents
     platform_ns: agentdev-platform
     operator_image: agentdev-operator:dev
+    # Settings that more than one role reads (#417): one name each, as in config.env before. kind.example.vars.yml
+    # lists them with their former config.env names. A role variable set with -e still wins over these.
+    kind_engine: docker                         # CONTAINER_ENGINE
+    kind_forge_ns: forge                        # FORGE_NS
+    kind_forge_url: http://localhost:3000       # FORGE_HOST_URL
+    kind_forge_admin_user: owner                # FORGE_ADMIN_USER (password: FORGE_ADMIN_PASSWORD in the environment)
+    kind_repo: owner/playground                 # REPO
+    kind_agent_names: [alice, bob]              # AGENTS
+    kind_worker_image: agentdev/worker:mvp      # WORKER_IMAGE
+    kind_forge_image: agentdev/forge:mvp        # FORGE_IMAGE
+    kind_egress_proxy_image: >-
+      ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    kind_service_cidr: 10.96.0.0/16             # SERVICE_CIDR
+    kind_botboard_ns: botboard                  # BOTBOARD_NS
+    kind_cluster_engine: "{{ kind_engine }}"
+    agent_sandbox_engine: "{{ kind_engine }}"
+    gitea_forge_ns: "{{ kind_forge_ns }}"
+    gitea_forge_url: "{{ kind_forge_url }}"
+    gitea_forge_admin_user: "{{ kind_forge_admin_user }}"
+    gitea_forge_repo: "{{ kind_repo }}"
+    gitea_forge_agents: "{{ kind_agent_names }}"
+    gitea_forge_agents_ns: "{{ agents_ns }}"
+    gitea_forge_service_cidr: "{{ kind_service_cidr }}"
+    kind_agents_container_engine: "{{ kind_engine }}"
+    kind_agents_ns: "{{ agents_ns }}"
+    kind_agents_platform_ns: "{{ platform_ns }}"
+    kind_agents_forge_ns: "{{ kind_forge_ns }}"
+    kind_agents_botboard_ns: "{{ kind_botboard_ns }}"
+    kind_agents_forge_url: "{{ kind_forge_url }}"
+    kind_agents_forge_admin_user: "{{ kind_forge_admin_user }}"
+    kind_agents_repo: "{{ kind_repo }}"
+    kind_agents_agents: "{{ kind_agent_names }}"
+    kind_agents_worker_image: "{{ kind_worker_image }}"
+    kind_agents_forge_image: "{{ kind_forge_image }}"
+    kind_agents_egress_proxy_image: "{{ kind_egress_proxy_image }}"
+    botboard_ns: "{{ kind_botboard_ns }}"
+    platform_container_engine: "{{ kind_engine }}"
+    api_container_engine: "{{ kind_engine }}"
+    api_forge_ns: "{{ kind_forge_ns }}"
+    api_forge_host_url: "{{ kind_forge_url }}"
+    api_forge_admin_user: "{{ kind_forge_admin_user }}"
+    api_forge_repo: "{{ kind_repo }}"
+    api_chat_worker_image: "{{ kind_worker_image }}"
+    api_chat_forge_image: "{{ kind_forge_image }}"
+    operator_container_engine: "{{ kind_engine }}"
+    operator_forge_ns: "{{ kind_forge_ns }}"
+    operator_botboard_ns: "{{ kind_botboard_ns }}"
+    operator_forge_public_url: "{{ kind_forge_url }}"
+    operator_forge_admin_user: "{{ kind_forge_admin_user }}"
+    operator_worker_image: "{{ kind_worker_image }}"
+    operator_forge_image: "{{ kind_forge_image }}"
+    operator_egress_proxy_image: "{{ kind_egress_proxy_image }}"
     mcp_projects: []
     mcp_allowed_hosts: []
     obs_mcp: {enabled: false}
+    authentik: {version: 2026.8.5, admin_email: admin@agentdev.dev}   # config.env AUTHENTIK_VERSION, AUTHENTIK_ADMIN_EMAIL
+    approvals: {enabled: false}   # APPROVALS in config.env; the API and the operator read the same switch (#67)
   tasks:
+    # Read-only. The tag cluster runs the same checks first (inside the role).
+    - name: Host prerequisites, tools, engine, kind version (was 00-prereqs.sh)
+      ansible.builtin.include_role:
+        name: kind_cluster
+        tasks_from: prereqs
+        apply: {tags: [prereqs]}
+      tags: [prereqs]
+
     - name: Kind cluster with gVisor (was 01-cluster.sh)
       ansible.builtin.include_role:
         name: kind_cluster
@@ -41,7 +113,7 @@
       vars:
         agent_sandbox_context: kind-{{ kind_cluster_name }}
         agent_sandbox_cluster_name: "{{ kind_cluster_name }}"
-      tags: [sandbox]
+      tags: [sandbox, never]
 
     - name: Checks of the warm pool, suspend and resume (was 03-test-sandbox.sh)
       ansible.builtin.include_role:
@@ -49,7 +121,7 @@
         apply: {tags: [sandbox-test]}
       vars:
         sandbox_test_context: kind-{{ kind_cluster_name }}
-      tags: [sandbox-test]
+      tags: [sandbox-test, never]
 
     - name: Gitea forge, owner and agent accounts, seeded repo, branch protection (was 05-forge.sh)
       ansible.builtin.include_role:
@@ -59,7 +131,44 @@
         gitea_forge_context: kind-{{ kind_cluster_name }}
       tags: [forge]
 
-    # optional (#26): not in the default run. Agents get BOTBOARD_URL from ./run.sh 06 when the namespace exists.
+    # Scoped secrets store (#202): ESO, the CEL policies and the kind SecretStore. Before the operator, so the tag secrets
+    # re-runs the operator with the store on (as 13-secrets.sh ran 12-operator.sh). Not in a plain run.
+    - name: External Secrets Operator, policies and store (was 13-secrets.sh)
+      ansible.builtin.include_role:
+        name: secrets_store
+        apply: {tags: [secrets]}
+      vars:
+        secrets_store_context: kind-{{ kind_cluster_name }}
+        secrets_store_agents_ns: "{{ agents_ns }}"
+        secrets_store_platform_ns: "{{ platform_ns }}"
+        secrets_store_broker_image: "{{ kind_agents_credproxy_image | default('agentdev/credproxy:mvp') }}"
+      when: secrets_store_enabled | default(true) | bool
+      tags: [secrets, never]
+
+    # Agent CRD and controller (#47). Before the agents: the tag agents needs it (the plain run installs both).
+    - name: Operator, CRDs and executor egress (was 12-operator.sh)
+      ansible.builtin.include_role:
+        name: operator
+        apply: {tags: [operator, secrets]}
+      vars:
+        operator_context: kind-{{ kind_cluster_name }}
+        operator_kind_cluster: "{{ kind_cluster_name }}"
+        operator_platform_ns: "{{ platform_ns }}"
+        operator_agents_ns: "{{ agents_ns }}"
+      tags: [operator, secrets]
+
+    # Router, Claude proxy, egress allow-list and one Agent object per agent. Same manifests as deploy.yml on GKE;
+    # secrets are files in .secrets (generated once). Settings come from kind.vars.yml (-e @kind.vars.yml).
+    - name: Local images, router, Claude proxy, egress proxy, Agent objects, forge webhook (was 06-agents.sh)
+      ansible.builtin.include_role:
+        name: kind_agents
+        apply: {tags: [agents]}
+      vars:
+        kind_agents_context: kind-{{ kind_cluster_name }}
+        kind_agents_cluster_name: "{{ kind_cluster_name }}"
+      tags: [agents]
+
+    # optional (#26): not in the default run. Agents get BOTBOARD_URL from the tag agents when the namespace exists.
     - name: Botboard dashboard (was 07-botboard.sh)
       ansible.builtin.include_role:
         name: botboard
@@ -68,14 +177,75 @@
         botboard_context: kind-{{ kind_cluster_name }}
       tags: [botboard, never]
 
-    # Postgres always; ContextForge and mcp-sync only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
+    # Postgres always; ContextForge and the McpProjects (#383) only with mcp_projects (#172); obs-mcp with obs_mcp.enabled (#205).
     # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager.
-    - name: Postgres, ContextForge MCP gateway, obs-mcp, mcp-sync (was 08-mcp.sh)
+    - name: Postgres, ContextForge MCP gateway, obs-mcp, McpProjects (was 08-mcp.sh)
       ansible.builtin.include_role:
         name: platform
         apply: {tags: [mcp]}
       vars:
-        platform_service_cidr: 10.96.0.0/16
+        platform_service_cidr: "{{ kind_service_cidr }}"
         platform_secret_source: files
         platform_kind_cluster: "{{ kind_cluster_name }}"
-      tags: [mcp]
+      tags: [mcp, never]
+
+    # authentik on the platform Postgres: the GKE role (secrets in .secrets/platform), then the kind-only checks and the
+    # company SSO stand-in (#122). Not in the default run.
+    - name: The platform Postgres is deployed (run --tags mcp first)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        tasks_from: precheck
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
+
+    - name: Identity provider authentik (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik
+        apply: {tags: [authentik]}
+      vars:
+        authentik_secret_source: files
+      tags: [authentik, never]
+
+    - name: Membership check of agentdev-admins, company SSO stand-in (was 09-authentik.sh)
+      ansible.builtin.include_role:
+        name: authentik_kind
+        apply: {tags: [authentik]}
+      tags: [authentik, never]
+
+    # The same role as deploy.yml on GKE, with secrets in .secrets/platform instead of Secret Manager and the Gitea
+    # account agentdev-api (#100). The web UI is step 11 (tag ui). Needs authentik (09) and Postgres (08).
+    - name: Management API (was 10-api.sh)
+      ansible.builtin.include_role:
+        name: api
+        apply: {tags: [api]}
+      vars:
+        api_secret_source: files
+        api_kind_cluster: "{{ kind_cluster_name }}"
+        api_image: agentdev-api:dev
+        api_ui: false
+        api_ns_labels: {service: agentdev, environment: dev}   # = operator_cost_labels (#357)
+        api_oidc_issuer: https://localhost:9443/application/o/agentdev/
+        api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
+        api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
+        api_secrets_values_ns: agentdev-secret-values   # project secrets (#202): on once --tags secrets made it
+      tags: [api, never]
+
+    # Only the web UI tasks of the role api (tasks/ui.yml); GKE runs them in the same role after the API. After 10.
+    - name: Web UI (was 11-ui.sh)
+      ansible.builtin.include_role:
+        name: api
+        tasks_from: ui
+        apply: {tags: [ui]}
+      vars:
+        api_kind_cluster: "{{ kind_cluster_name }}"
+        api_ui_image: agentdev-ui:dev
+        api_oidc_issuer: https://localhost:9443/application/o/agentdev/
+      tags: [ui, never]
+
+    # Destructive: tagged never, so a plain run or any other tag never deletes. Only --tags teardown runs it.
+    - name: Delete the kind cluster (was 99-teardown.sh)
+      ansible.builtin.include_role:
+        name: kind_cluster
+        tasks_from: teardown
+        apply: {tags: [teardown]}
+      tags: [teardown, never]

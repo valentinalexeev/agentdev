@@ -21,10 +21,13 @@ output "automation_service_account" {
 }
 
 output "github_actions_auth" {
-  description = "Values for google-github-actions/auth in a workflow."
+  description = "Values for google-github-actions/auth in a workflow: the apply identity (main) and the read-only plan identity (pull_request, #291)."
   value = {
     workload_identity_provider = google_iam_workload_identity_pool_provider.github.name
     service_account            = google_service_account.automation.email
+    # read-only plan identity for pull_request runs (#291); null when create_plan_identity is false
+    plan_workload_identity_provider = one(google_iam_workload_identity_pool_provider.github_pr[*].name)
+    plan_service_account            = one(google_service_account.plan[*].email)
   }
 }
 
@@ -43,10 +46,36 @@ output "budget" {
   value       = one(google_billing_budget.monthly[*].name)
 }
 
-output "secrets_store" {
-  description = "Google service accounts of the scoped secrets store (#202) for instance.yml `secrets_store`; null when secrets_store is false."
-  value = var.secrets_store ? {
-    reader_gsa = google_service_account.secrets_reader[0].email
+output "secrets_readers" {
+  description = "Google service accounts of the SecretStores agentdev-platform-secrets (#381): copy into instance.yml `external_secrets.gsa`."
+  value       = { for k, v in google_service_account.secrets_reader : k => v.email }
+}
+
+output "generated_secrets" {
+  description = "Secret Manager ids that Terraform generates (values only in Secret Manager and the state, never here)."
+  value       = sort(keys(local.generated_secrets))
+}
+
+# #384: what the playbook read from the cluster before, as instance values. Copy into ansible/instance.yml `platform`,
+# so the render mode (infra/ansible/render.yml) needs no cluster access. The preflight compares them with the cluster.
+output "platform" {
+  description = "Cluster facts for instance.yml `platform` (Ansible render mode, #384): copy them as they are."
+  value = {
+    egress       = { fqdn = "gke" }                                                                 # enable_fqdn_network_policy is always on in this module
+    kube_version = join(".", slice(split(".", google_container_cluster.this.master_version), 0, 2)) # helm template (#451)
+    ingress      = { gateway_api = local.gateway, certificate_domains = sort(var.public_hosts) }
+    # Service default/kubernetes: the first address of the services range, and the control plane private endpoint
+    kube_api_ips = compact([
+      cidrhost(one([for r in google_compute_subnetwork.nodes.secondary_ip_range : r.ip_cidr_range if r.range_name == "services"]), 1),
+      google_container_cluster.this.private_cluster_config[0].private_endpoint,
+    ])
+  }
+}
+
+output "project_secrets" {
+  description = "Google service accounts of the project secrets store (#202): copy into instance.yml `project_secrets`; null when off."
+  value = local.project_secrets ? {
+    reader_gsa = google_service_account.project_secrets_reader[0].email
     api_gsa    = google_service_account.api_secrets[0].email
   } : null
 }

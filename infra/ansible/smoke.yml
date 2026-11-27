@@ -1,0 +1,17 @@
+---
+# Post-deploy smoke test only (#385): the checks of roles/ingress/tasks/smoke.yml (#213), without a deploy. The verify
+# job of a GitOps deployment runs it after the engine reports Ready:
+#   ansible-playbook smoke.yml -e @instance.yml
+# Reads the cluster only for the forwarder pods (ingress.forwarder with a namespace and pod_selector). Skipped without
+# ingress.host or with ingress.smoke: false, as in deploy.yml.
+- name: Post-deploy smoke test of the public hosts
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Smoke test (roles/ingress/tasks/smoke.yml)
+      ansible.builtin.include_role: {name: ingress, tasks_from: smoke.yml}
+      when:
+        - (ingress | default({})).host | default('') | length > 0
+        - (ingress | default({})).smoke | default(true) | bool

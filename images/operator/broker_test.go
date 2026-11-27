@@ -109,8 +109,26 @@ func TestSecretEnvAndBrokerEnv(t *testing.T) {
 	if strings.Join(got, " ") != "DB_PASSWORD=ps-db" {
 		t.Errorf("env secrets %v", got)
 	}
-	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || !hasEnv(ag, "AGENTDEV_BROKER_KEY") {
+	if envOf(s, "AGENTDEV_BROKER_URL") != r.D.BrokerURL || envOfC(ag, "AGENTDEV_BROKER_TOKEN_FILE") != BrokerTokenDir+"/token" || hasEnv(ag, "AGENTDEV_BROKER_KEY") {
 		t.Error("broker env missing")
+	}
+	// R128: the broker identity is a projected token (audience credential-broker, 600 s), mounted only in the agent
+	found := false
+	for _, v := range s.Spec.Template.Spec.Volumes {
+		if v.Name == brokerTokenVolume {
+			st := v.Projected.Sources[0].ServiceAccountToken
+			found = len(v.Projected.Sources) == 1 && st != nil && st.Audience == "credential-broker" && *st.ExpirationSeconds == 600 && st.Path == "token"
+		}
+	}
+	if !found {
+		t.Error("broker-token volume missing or wrong")
+	}
+	for _, c := range s.Spec.Template.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == brokerTokenVolume && (c.Name != "agent" || m.MountPath != BrokerTokenDir || !m.ReadOnly) {
+				t.Errorf("broker token mounted in %s at %s", c.Name, m.MountPath)
+			}
+		}
 	}
 	fc := container(s, "forge")
 	if hasEnv(fc, "DB_PASSWORD") {

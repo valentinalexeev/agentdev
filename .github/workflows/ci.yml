@@ -50,7 +50,7 @@ jobs:
           fi
           printf '%s\n' "$files"
           has() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
-          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^infra/ansible/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
+          echo "shell=$(has '(\.sh$|^manifests/|^config\.env$|^infra/ansible/|^scripts/|^examples/deployment/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           echo "image=$(has '(^images/worker/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
           # per component: its sources, or a workflow change (which can change how anything is checked)
           echo "router=$(has '(^images/router/|^\.github/workflows/)')" >> "$GITHUB_OUTPUT"
@@ -65,6 +65,16 @@ jobs:
   lint:
     needs: scope
     runs-on: ubuntu-latest
+    # Postgres for the API store tests (TestPg*), which skip without TEST_DATABASE_URL (#531). The service starts
+    # with the job; only the API step uses it.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,6 +90,11 @@ jobs:
         run: |
           shellcheck -S warning ./*.sh images/worker/agent-loop.sh
           for f in ./*.sh images/worker/agent-loop.sh; do bash -n "$f"; done
+      - name: shell script tests (scripts/test; #315 #317 #313)
+        if: needs.scope.outputs.shell == 'true'
+        run: |
+          shopt -s nullglob
+          for t in scripts/test/*.test.sh scripts/test/*-test.sh; do echo "::group::$t"; bash "$t"; echo "::endgroup::"; done
       - name: kubeconform (plain manifests and the rendered agent template)
         if: needs.scope.outputs.shell == 'true'
         run: |
@@ -90,6 +105,14 @@ jobs:
           for _ in 1 2 3; do docker pull -q "$img" && break; sleep 10; done
           printf '#!/bin/sh\nexec docker run --rm -i -v "$PWD:/w:ro" -w /w %s "$@"\n' "$img" > kubeconform
           chmod +x kubeconform
+          # Defaults of every template variable come from config.env, so a new variable in a PR renders without a CI
+          # change. Only values that config.env does not set, or that need a CI value, are given on each line below.
+          set -a; . ./config.env; set +a
+          # variables that open PRs add to templates without a config.env default (render only; empty is valid)
+          export CREDENTIAL_BROKER_URL="${CREDENTIAL_BROKER_URL:-}" FORWARDER_NS="${FORWARDER_NS:-}"
+          export FORWARDER_NOT_READY_MINUTES="${FORWARDER_NOT_READY_MINUTES:-10}" SECRETS_STORE="${SECRETS_STORE:-}"
+          export SECRETS_REMOTE_PROPERTY="${SECRETS_REMOTE_PROPERTY:-}" SECRETS_GCP_PROJECT="${SECRETS_GCP_PROJECT:-}"
+          [ -n "${FORWARDER_SELECTOR:-}" ] || export FORWARDER_SELECTOR='{}'
           ./kubeconform -strict -summary manifests/gitea.yaml manifests/postgres.yaml
           BOTBOARD_NS=botboard BOTBOARD_IMAGE=img envsubst < manifests/botboard.yaml.tmpl | ./kubeconform -strict -summary -
           PLATFORM_NS=agentdev-platform CONTEXTFORGE_IMAGE=img POSTGRES_IMAGE=img CF_ADMIN_EMAIL=a@b.c SERVICE_CIDR=10.96.0.0/12 \
@@ -158,10 +181,18 @@ jobs:
       - uses: actions/setup-go@v5
         if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true' || needs.scope.outputs.tools == 'true'
         with: {go-version-file: images/api/go.mod, cache-dependency-path: images/api/go.sum}
-      - name: API vet and tests (#46)
+      - name: API vet and tests (#46), with the Postgres store tests (#531)
         if: needs.scope.outputs.api == 'true'
         working-directory: images/api
-        run: go vet ./... && go test ./...
+        env:
+          TEST_DATABASE_URL: postgres://postgres:ci@127.0.0.1:5432/postgres?sslmode=disable
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test -race ./...
+          # the TestPg* tests must run here, not skip
+          go test -count=1 -run '^TestPg' -v ./... | tee pg.log
+          ! grep -q -- '--- SKIP: TestPg' pg.log
       - name: operator vet, tests and generated files up to date (#47)
         if: needs.scope.outputs.operator == 'true'
         working-directory: images/operator
@@ -186,17 +217,18 @@ jobs:
       - name: Go dead code (staticcheck U1000, #132)
         if: needs.scope.outputs.api == 'true' || needs.scope.outputs.operator == 'true' || needs.scope.outputs.forge == 'true' || needs.scope.outputs.credproxy == 'true'
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          # setup-go installs the go.mod `go` line; build staticcheck with the `toolchain` line (#431)
+          GOTOOLCHAIN="$(cd images/api && go env GOVERSION)" go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           for m in api operator forge credproxy; do
             (cd images/$m && "$(go env GOPATH)/bin/staticcheck" -checks U1000 ./...) || exit 1
           done
       - uses: actions/setup-node@v4
         if: needs.scope.outputs.ui == 'true'
         with: {node-version-file: images/ui/package.json, cache: npm, cache-dependency-path: images/ui/package-lock.json}
-      - name: UI lint, type check and build (#48)
+      - name: UI lint, type check, tests and build (#48, #492)
         if: needs.scope.outputs.ui == 'true'
         working-directory: images/ui
-        run: npm ci && npm run lint && npm run build
+        run: npm ci && npm run lint && npm test && npm run build
       - name: UI unused exports, files and dependencies (knip, #132)
         if: needs.scope.outputs.ui == 'true'
         working-directory: images/ui
@@ -213,19 +245,11 @@ jobs:
         run: |
           docker build -t agentdev/worker:ci images/worker
           docker run --rm --entrypoint claude agentdev/worker:ci --version
-          # Claude guardrails (#59): no tokens in Claude's env, tool allow-list, untrusted text fenced
-          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/guard.test.sh
-          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/jobs.test.sh
-          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/usage.test.sh
-          # feedback runs get the issue, PR description and earlier rounds as background (#223)
-          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/feedback.test.sh
-          # run contract: STATUS line, no push on needs-decision/blocked, resume after an answer (#234)
-          docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci test/contract.test.sh
-          # tests of open PRs; each runs once its file is on the branch (#175 resume, #174 drain, #196 run guards)
-          for t in resume drain guards; do
-            if [ -f "images/worker/test/$t.test.sh" ]; then
-              docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci "test/$t.test.sh"
-            fi
+          # every worker test file (#531): new tests run without a workflow change
+          for t in images/worker/test/*.test.sh; do
+            echo "::group::${t}"
+            docker run --rm -v "$PWD/images/worker:/w" -w /w --entrypoint bash agentdev/worker:ci "test/$(basename "${t}")"
+            echo "::endgroup::"
           done
           if docker run --rm agentdev/worker:ci 2>err.txt; then echo "loop started without config"; exit 1; fi
           grep -q FORGE_URL err.txt

@@ -1,4 +1,4 @@
-# Render and parity checks (#114): the role authentik writes the same Secret keys as 09-authentik.sh, mounts only the
+# Render and parity checks (#114): the role authentik writes the same Secret keys as 09-authentik.sh did (#106), mounts only the
 # manifests/authentik-blueprint-*.yaml files, no blueprint sets group members, the API and the UI default to the
 # authentik issuer, and the Gateway routes the login host only when authentik is deployed.
 # Run: ansible-playbook infra/ansible/tests/authentik_render.yml
@@ -16,7 +16,8 @@
     platform_sm_prefix: platform-
     ingress: {host: agentdev.example.com, auth_host: auth.example.com, certificate: c1}
     authentik_secret: {pg-authentik: aa, authentik-secret-key: bb, authentik-admin: cc}
-    kind_script: "{{ lookup('ansible.builtin.file', repo_root + '/09-authentik.sh') }}"
+    # kind (#106) renders the same template through kind.yml; the keys must stay those of the old 09-authentik.sh
+    kind_script: "{{ lookup('ansible.builtin.file', '../roles/authentik/templates/config.env.j2') }}"
     blueprints: "{{ query('ansible.builtin.fileglob', repo_root + '/manifests/authentik-blueprint-*.yaml') }}"
   tasks:
     - name: Load the defaults (group_vars, roles authentik, api and ingress)
@@ -45,7 +46,9 @@
       ansible.builtin.assert:
         that: item in ak_env
         quiet: true
-      loop: "{{ kind_script | regex_findall(\"printf '(AUTHENTIK_[A-Z_]+)=\") | unique }}"
+      loop: [AUTHENTIK_SECRET_KEY, AUTHENTIK_POSTGRESQL__HOST, AUTHENTIK_POSTGRESQL__NAME, AUTHENTIK_POSTGRESQL__USER,
+             AUTHENTIK_POSTGRESQL__PASSWORD, AUTHENTIK_BOOTSTRAP_PASSWORD, AUTHENTIK_BOOTSTRAP_EMAIL,
+             AUTHENTIK_ERROR_REPORTING__ENABLED, AUTHENTIK_DISABLE_UPDATE_CHECK]
 
     - name: Blueprints are the top-level files only, none sets group members (R53)
       ansible.builtin.assert:
