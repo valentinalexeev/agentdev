@@ -45,6 +45,15 @@
         fail_msg: "external_secrets.mode must be playbook or external (example.vars.yml)"
         quiet: true
 
+    # #203: the registry cache role applies its objects directly (and generates the devpi password), so render mode
+    # cannot produce them yet. A rendered instance with the cache on would drop the registries from the egress list
+    # without a cache, so refuse it.
+    - name: The registry cache is off (not in render mode yet)
+      ansible.builtin.assert:
+        that: registry_proxy | default('off') == 'off'
+        fail_msg: "registry_proxy {{ registry_proxy }} is not supported by render.yml yet (#203): use deploy.yml, or set registry_proxy: off"
+        quiet: true
+
     - name: Render the objects (tasks/render_objects.yml, the same as deploy.yml)
       ansible.builtin.include_tasks: tasks/render_objects.yml
       vars:

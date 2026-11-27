@@ -165,18 +165,18 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(a, false)...),
+		Env: withCustomEnv(append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(a, false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...)...),
+		), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), mergeEnv(a)...)...), a, r.D.Toolchains),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
-		EnvFrom: r.claudeEnvFrom(a),
+		EnvFrom: append(r.claudeEnvFrom(a), registryProxyEnvFrom),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),
 				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralRequest, defAgentEphemeralRequest)},
@@ -199,7 +199,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
 			env("CLAUDE_PROXY_URL", r.D.ClaudeProxyURL), // #310: cost approvals read the job state from GET /status
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
-		), forgeCreds...),
+		), append(forgeCreds, mergeEnv(a)...)...),
 		// the router's wake calls land here; the agent container has no listener any more
 		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
 		VolumeMounts: forgeMounts,
@@ -289,17 +289,18 @@ func toolsValid(a *v1.Agent) string {
 	return ""
 }
 
-// modelChars: spec.model, as the CRD pattern (#564): an alias or a full model name; never starts with a dash, so the
-// value cannot become a flag of claude.
-var modelChars = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`)
+// modelChars: spec.model, as the CRD pattern (#564, #570): an alias (opus, sonnet, haiku, fable) or a full name of one
+// of these claude-proxy price families (images/credproxy/prices.go), optionally with the context suffix [1m]. A typo
+// is refused instead of counted at the highest multiplier, and the value never starts with a dash (never a flag).
+var modelChars = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`)
 
 // effortLevels: the levels of `claude --effort` in the pinned Claude Code CLI (#564), as the CRD enum.
 var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 // modelValid is the operator's check behind the CRD rules (#564): "" when spec.model and spec.effort are unset or valid.
 func modelValid(a *v1.Agent) string {
-	if m := a.Spec.Model; m != "" && (len(m) > 100 || !modelChars.MatchString(m)) {
-		return "spec.model: longer than 100, or not a model name (letters, digits and ._:@[]-, not starting with -)"
+	if m := a.Spec.Model; m != "" && (len(m) > 80 || !modelChars.MatchString(m)) {
+		return "spec.model: longer than 80, or not opus, sonnet, haiku, fable or a claude-<family>-... name (optional [1m])"
 	}
 	if e := a.Spec.Effort; e != "" && !effortLevels[e] {
 		return "spec.effort: not one of low, medium, high, xhigh, max"
@@ -319,6 +320,44 @@ func modelEnv(a *v1.Agent) []corev1.EnvVar {
 		e = append(e, corev1.EnvVar{Name: "AGENT_EFFORT", Value: a.Spec.Effort})
 	}
 	return e
+}
+
+// mergeLoginRe: a GitHub login (the sidecar checks it again).
+var mergeLoginRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
+// mergeValid is the operator's check behind the CRD enums (#578): "" when spec.merge is unset or valid.
+func mergeValid(a *v1.Agent) string {
+	m := a.Spec.Merge
+	if m == nil {
+		return ""
+	}
+	if m.Mode != "" && m.Mode != "off" && m.Mode != "gated" {
+		return "spec.merge.mode: not one of off, gated"
+	}
+	if m.Mode == "gated" && len(m.Approvers) == 0 {
+		return "spec.merge.approvers: mode gated needs the owner logins whose approval allows a merge"
+	}
+	if len(m.Approvers) > 20 {
+		return "spec.merge.approvers: at most 20"
+	}
+	for _, l := range m.Approvers {
+		if !mergeLoginRe.MatchString(l) {
+			return "spec.merge.approvers: not a forge login"
+		}
+	}
+	return ""
+}
+
+// mergeEnv passes spec.merge (#578) to the forge sidecar and the worker as MERGE_MODE=gated and
+// MERGE_APPROVERS; the sidecar always merges with a merge commit (the loop asks the sidecar only after an owner approved, so other
+// reviews are no security event; the sidecar decides). Nothing with mode
+// off or unset, so the pod template of an agent without the field is unchanged (no restart on upgrade).
+func mergeEnv(a *v1.Agent) []corev1.EnvVar {
+	m := a.Spec.Merge
+	if m == nil || m.Mode != "gated" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "MERGE_MODE", Value: "gated"}, {Name: "MERGE_APPROVERS", Value: strings.Join(m.Approvers, ",")}}
 }
 
 // diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
@@ -350,8 +389,8 @@ func retriesEnv(a *v1.Agent) []corev1.EnvVar {
 // appends it to CLAUDE_TOOLS. Nothing without entries, so the pod template of an agent without the field is unchanged
 // (no restart on upgrade).
 // The allow entries of the toolchain presets (#499) come first.
-func toolsEnv(a *v1.Agent) []corev1.EnvVar {
-	extra := toolchainAllow(a)
+func (r *AgentReconciler) toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	extra := toolchainAllow(a, r.D.Toolchains)
 	if a.Spec.Tools != nil {
 		extra = append(extra, a.Spec.Tools.Allow...)
 	}
@@ -478,6 +517,13 @@ func (r *AgentReconciler) reloadSecrets(a *v1.Agent, forgeSecret string) string 
 
 // forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
 const forgeProxySecret = "egress-forge-proxy"
+
+// registryProxyEnvFrom: the package manager settings of the registry cache (#203): npm_config_registry,
+// PIP_INDEX_URL, GOPROXY and so on, from the optional ConfigMap registry-proxy (Ansible role registry_cache). They are
+// URLs of the in-cluster gateway, never a credential. Without the ConfigMap the package managers use the public
+// registries through the egress proxy, as before. A changed ConfigMap reaches an agent at its next pod start.
+var registryProxyEnvFrom = corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{
+	LocalObjectReference: corev1.LocalObjectReference{Name: "registry-proxy"}, Optional: ptr.To(true)}}
 
 // claudeEnvFrom: with the credential proxy (#66) the agent container gets no Claude Secret, only the optional MCP
 // token (#14). Without it, exactly one Claude credential per agent (#5), as before.

@@ -47,11 +47,13 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
-	// Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model
-	// name such as "claude-opus-5-5". Unset: the Claude Code CLI's own default for the credential, as before.
+	// Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #564, #570): an alias
+	// (opus, sonnet, haiku, fable) or a full name of one of these families such as "claude-opus-5-5", optionally with
+	// the context suffix "[1m]", so the claude-proxy price table always has a multiplier for it. Unset: the Claude
+	// Code CLI's own default for the credential, as before.
 	// +optional
-	// +kubebuilder:validation:MaxLength=100
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`
+	// +kubebuilder:validation:MaxLength=80
+	// +kubebuilder:validation:Pattern=`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`
 	Model string `json:"model,omitempty"`
 	// Reasoning effort of the agent's runs (`claude --effort`, #564). Unset: the CLI's own default, as before.
 	// +optional
@@ -84,6 +86,9 @@ type AgentSpec struct {
 	// Retries of a job that the infrastructure stopped (#593). Unset: the defaults, and the pod is as before.
 	// +optional
 	Retries *AgentRetries `json:"retries,omitempty"`
+	// Whether the agent may merge its own pull requests (#578). Unset or mode off: never, as before (a person merges).
+	// +optional
+	Merge *AgentMerge `json:"merge,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -123,11 +128,20 @@ type AgentRetries struct {
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).
 // The init container toolchain installs it into /state/toolchain/<key> on the agent's volume; the agent container mounts
-// /state/toolchain read-only. Free-form steps come later (ADR 0010 D4 step 3).
+// /state/toolchain read-only. Custom toolchains of the deployment (#598) are defined in the operator's configuration.
+// +kubebuilder:validation:XValidation:rule="(has(self.presets) && (has(self.presets.go) || has(self.presets.rust))) || (has(self.custom) && size(self.custom) > 0)",message="spec.toolchain needs at least one preset or custom toolchain"
 type AgentToolchain struct {
 	// Preset versions. The operator accepts only the versions of its catalogue (a changed catalogue is an agentdev
 	// release); another version makes the Agent invalid.
-	Presets ToolchainPresets `json:"presets"`
+	// +optional
+	Presets ToolchainPresets `json:"presets,omitempty"`
+	// Custom toolchains by name (#598), for example "shell-tools". The deployment defines them in the operator's
+	// configuration (instance config toolchains, operator environment TOOLCHAINS), never the repository or issue text.
+	// A name the operator does not know makes the Agent invalid.
+	// +optional
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`
+	Custom []string `json:"custom,omitempty"`
 	// PATH entries for the agent container, below $TOOLCHAIN, for example "$TOOLCHAIN/bin"; no segment starts with a
 	// dot. The presets add their own.
 	// +optional
@@ -142,7 +156,6 @@ type AgentToolchain struct {
 }
 
 // ToolchainPresets: one version per preset (#499). An empty version: the preset is not installed.
-// +kubebuilder:validation:XValidation:rule="has(self.go) || has(self.rust)",message="spec.toolchain.presets needs at least one preset"
 type ToolchainPresets struct {
 	// Go, for example "1.27.4" (go.dev archive, sha256 pinned in the operator).
 	// +optional
@@ -183,6 +196,24 @@ type AgentTools struct {
 	// +kubebuilder:validation:items:MaxLength=200
 	// +kubebuilder:validation:items:Pattern=`^[^\x00-\x1f\x7f,]+$`
 	Allow []string `json:"allow,omitempty"`
+}
+
+// AgentMerge lets the agent merge its own pull request once a person approved its exact head commit (#578). Only the
+// administrator sets it (the Agent object), never the repository or issue text. The forge sidecar checks the approval,
+// the checks and the protected paths itself, from the forge, at the moment of the merge (images/forge/merge.go).
+type AgentMerge struct {
+	// off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when an owner of
+	// approvers approved the head commit, every check passed and no change is requested. Always a merge commit (never
+	// squash or rebase: the merge method is not configurable). GitHub only.
+	// +kubebuilder:validation:Enum=off;gated
+	// +kubebuilder:default=off
+	Mode string `json:"mode"`
+	// Forge logins of the owners whose approval of the exact head commit allows the merge. Required with mode gated:
+	// an approval by anyone else (another collaborator with write access, an agent, a bot) never merges.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`
+	// +optional
+	Approvers []string `json:"approvers,omitempty"`
 }
 
 // AgentPermission is the Claude Code permission mode of the agent (#500). Only the administrator sets it (the Agent

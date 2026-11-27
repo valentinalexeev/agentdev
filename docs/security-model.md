@@ -85,6 +85,7 @@ AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medi
 | forge | `api-not-allowed` | medium | REST call outside the allow-list (merge, edit, hooks, ...) |
 | forge | `api-non-loopback` | high | a caller from outside the pod reached the localhost API |
 | forge | `chat-label-not-asked` | high for `agent:*`, else medium | a console chat pod sent a label write that no person allowed in the console (#571, ADR 0011) |
+| forge | `chat-not-allowed` | medium | a console chat pod tried a write that a chat never makes: label removal, comment edit, ready for review (#236) or the gated merge (#578) |
 | forge | `webhook-bad-token` | medium | wake call with a wrong token |
 | loop | `git-worktree-redirected` | high | a worktree `.git` or `commondir` pointed elsewhere (re-pinned) |
 | loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |
@@ -178,10 +179,13 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   port or Squid syntax; CRD pattern, operator, playbook checks), and no agent name ends in `-egress` (its key Secret
   name would be another agent's Claude proxy key). The proxy copies a changed `acl.conf` and runs `squid -k reconfigure` within 15
   seconds, without a restart. On GKE the proxy's FQDN policy holds the union of every agent's hosts; Squid keeps
-  them apart. An agent without the field has no key, no rule and the pod it had before (R126).
-- Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project
-  extra hosts in the project spec (an instance-wide list plus per-agent hosts for now), and an approval request for
-  a refused host (phase 4).
+  them apart. An agent without the field has no key, no rule and the pod it had before (R136).
+- Registry cache (#203, optional, `registry_proxy`): npm, PyPI and Go through the in-cluster gateway
+  `registry-cache` (Artifact Registry remote repositories on GKE, Verdaccio, devpi and Athens on kind). With it on, the
+  public registry hosts leave the agents' list; the gateway is read-only (GET and HEAD) and holds the only Google token
+  (Workload Identity, reader on the three repositories). Private registries per project: #248 (R130).
+- Not yet: per-project extra hosts in the project spec (an instance-wide list plus per-agent hosts for now), and an
+  approval request for a refused host (phase 4).
 
 Original design:
 

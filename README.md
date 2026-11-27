@@ -124,7 +124,8 @@ Needs ~6 GiB RAM and 4 CPUs in the Docker/OrbStack/Colima VM. Takes ~10–15 min
 - **Node autoscaling is not exercised** — kind nodes are fixed containers. Scale-to-zero here is at the
   pod level (suspend / stop / warm pool 0). Node scale-to-zero needs Cluster Autoscaler on a real cloud.
 - **Egress goes through an allow-list proxy** (#65), but the API key still sits in a Secret inside the pod
-  (credential proxy: security-model.md phase 3).
+  (credential proxy: security-model.md phase 3). Optional registry cache for npm, PyPI and Go (#203, `registry_proxy`,
+  docs/admin.md "Configure the registry cache").
 - **local-path storage** is node-local; real clusters need a CSI driver with snapshots (Longhorn, JuiceFS, cloud PD).
 - gVisor on Apple Silicon inside Docker Desktop/OrbStack generally works; if the `cluster` smoke test fails, run the
   spike on a Linux VM instead (any 4 vCPU / 8 GB box).

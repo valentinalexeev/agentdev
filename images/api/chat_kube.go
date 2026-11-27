@@ -54,8 +54,10 @@ func intOrStr(n int) intstr.IntOrString { return intstr.FromInt32(int32(n)) }
 // errNoAgentPod: the agent has no StatefulSet yet (the operator has not rendered it), so there is no pod to copy.
 var errNoAgentPod = &httpErr{409, "error", "the agent has no pod spec yet (the operator has not rendered it); try again in a minute"}
 
-// chat env vars the sidecar of a chat pod drops: router registration and wakes are the autonomous agent's
-var chatSidecarDrop = map[string]bool{"WAKE_TOKEN": true, "REGISTER_TOKEN": true, "SELF_URL": true}
+// chat env vars the sidecar of a chat pod drops: router registration and wakes are the autonomous agent's, and so is
+// the gated merge (#578): without MERGE_MODE the sidecar of a chat pod has no POST /merge at all
+var chatSidecarDrop = map[string]bool{"WAKE_TOKEN": true, "REGISTER_TOKEN": true, "SELF_URL": true,
+	"MERGE_MODE": true, "MERGE_APPROVERS": true, "MERGE_METHOD": true}
 
 // chatPod turns the agent's pod template into the interactive session pod. Everything not named here is the agent's.
 func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, idle int) (corev1.PodSpec, error) {
@@ -110,6 +112,14 @@ func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, id
 			c.Env = set(c.Env, env("CHAT_MODE", "console"), env("SESSION_NAME", s.ID), env("CHAT_AGENT", s.Agent),
 				env("IDLE_SECONDS", fmt.Sprint(idle)), env("CHAT_CONTROL_SHA256", tokenSHA256), env("CHAT_PORT", fmt.Sprint(chatPort)),
 				env("CLAUDE_CONFIG_DIR", "/home/node/.claude"))
+			// #570: the model and effort chosen at the start (the API checked them against the allow-list); else the
+			// agent's own AGENT_MODEL and AGENT_EFFORT stay as the operator rendered them
+			if s.Model != "" {
+				c.Env = set(c.Env, env("AGENT_MODEL", s.Model))
+			}
+			if s.Effort != "" {
+				c.Env = set(c.Env, env("AGENT_EFFORT", s.Effort))
+			}
 			c.Ports = []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort, Protocol: corev1.ProtocolTCP}}
 			c.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3}
 		case "forge":

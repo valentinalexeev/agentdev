@@ -268,6 +268,15 @@ func TestChatJobAdmission(t *testing.T) {
 			c := containerNamed(*p, "chat")
 			c.Env = append(c.Env, secretEnv("X", "agentdev-api-forge"))
 		}},
+		// #203: the chat container may read the registry cache URLs (ConfigMap registry-proxy), no other ConfigMap
+		{"another ConfigMap as envFrom", func(p *corev1.PodSpec, _ *batchv1.Job) {
+			c := containerNamed(*p, "chat")
+			c.EnvFrom = append(c.EnvFrom, corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-api"}}})
+		}},
+		{"the registry-proxy ConfigMap in the forge sidecar", func(p *corev1.PodSpec, _ *batchv1.Job) {
+			c := containerNamed(*p, "forge")
+			c.EnvFrom = append(c.EnvFrom, corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "registry-proxy"}}})
+		}},
 		{"an extra container", func(p *corev1.PodSpec, _ *batchv1.Job) {
 			p.Containers = append(p.Containers, corev1.Container{Name: "x", Image: testWorkerImage})
 		}},
@@ -531,5 +540,31 @@ func TestChatStateSizedByAgentEphemeralLimit(t *testing.T) {
 	}
 	if p.Volumes[0].Name != "state" || p.Volumes[0].EmptyDir.SizeLimit != nil {
 		t.Errorf("state %+v", p.Volumes[0])
+	}
+}
+
+// #578: the chat pod of a gated agent gets no merge config, so its sidecar has no POST /merge (the sidecar also
+// refuses a merge with CHAT_SESSION set)
+func TestChatPodOfGatedAgentHasNoMerge(t *testing.T) {
+	for _, forge := range []string{"github", "gitea"} {
+		agent := agentFixture(t, forge)
+		for i := range agent.Spec.Containers {
+			if agent.Spec.Containers[i].Name == "forge" {
+				agent.Spec.Containers[i].Env = append(agent.Spec.Containers[i].Env,
+					corev1.EnvVar{Name: "MERGE_MODE", Value: "gated"}, corev1.EnvVar{Name: "MERGE_APPROVERS", Value: "owner"},
+					corev1.EnvVar{Name: "MERGE_METHOD", Value: "merge"})
+			}
+		}
+		p, err := chatPod(agent, chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/repo", StartedBy: "wendy"}, strings.Repeat("a", 64), 1800)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range p.Containers {
+			for _, e := range c.Env {
+				if strings.HasPrefix(e.Name, "MERGE_") {
+					t.Errorf("%s: chat pod container %s keeps %s", forge, c.Name, e.Name)
+				}
+			}
+		}
 	}
 }

@@ -10,7 +10,7 @@ terraform {
 }
 
 module "agentdev" {
-  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.3.0-rc.3"
+  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.3.0"
 
   project_id         = var.project_id
   region             = var.region
@@ -46,6 +46,8 @@ module "agentdev" {
   # enable_managed_prometheus = var.enable_managed_prometheus
   # enable_filestore_csi      = var.enable_filestore_csi
   # monitoring_components     = var.monitoring_components
+  # registry cache for npm, PyPI and Go (agentdev #203): uncomment with a ref= that contains #203
+  # registry_proxy = var.registry_proxy
   # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
   # create_budget = var.create_budget
   # read-only plan identity for PR plans (agentdev #291, opt-in since #421): first the owner grants of docs/admin.md
@@ -210,3 +212,8 @@ variable "forge_init" {
 #   role     = "roles/viewer"
 #   member   = "serviceAccount:${google_service_account.exec["${each.key}-plan"].email}"
 # }
+
+variable "registry_proxy" {
+  type    = bool
+  default = false
+}

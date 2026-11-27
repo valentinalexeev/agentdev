@@ -59,6 +59,9 @@ approvals: {enabled: false}                   # APPROVALS
 #                                             # TELEMETRY_* (also operator_telemetry)
 
 # ---- operator (tags operator, secrets) ----
+# operator_toolchains: {}                     # TOOLCHAINS: custom toolchains (#598, docs/admin.md "Give an agent a
+#                                             # custom toolchain"); agents name them in kind_agents_toolchain
+# kind_setup_egress_hosts: [dl.google.com, static.rust-lang.org]   # SETUP_EGRESS_HOSTS: also the custom download hosts
 # operator_exec_ns: agentdev-executors        # EXEC_NS
 # operator_botboard_url: ""                   # BOTBOARD_URL
 # operator_poll_seconds: 20                   # POLL_SECONDS

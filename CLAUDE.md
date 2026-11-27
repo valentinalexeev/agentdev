@@ -133,7 +133,15 @@ Map: `infra/ansible/kind.yml` (the local install, one tag per part; settings in 
   change (§7) uses `!` after the type/scope **and** a `BREAKING CHANGE: <what and how to migrate>` footer. Footers
   also carry `Refs #NN` / `Closes #NN` and `Co-authored-by:`. The PR title follows the same format, because the
   squash commit takes it.
-- Commit and push as you go.
+- **Semantically significant commits.** Each commit is one complete, self-contained logical change that a
+  reviewer can read, revert or cherry-pick alone: it builds, passes the checks, and its Conventional Commits
+  message says what changed and why. Split unrelated changes (a refactor, a fix, a docs update) into separate
+  commits, and keep a pure move or rename apart from edits to the moved code. No `wip`, `fix typo`, `address
+  review` or `more changes` commits on a branch that goes to review: fold such fixups into the commit they
+  belong to (`git commit --fixup` and `git rebase --autosquash` on your own unmerged branch) before you request
+  review. Never rewrite a branch after review started or one that someone else pushed to; add a new meaningful
+  commit instead.
+- Commit and push as you go, in such commits.
 - Description: `🤖 AI agent:`, issue link, what was done, **checks run with results** (CI, `kind.yml` tags, e2e
   observations), what remains open, files shared with other open PRs.
 - **Request the owner's review** when opening a PR, and again whenever a push makes the last approval stale:
@@ -237,7 +245,8 @@ Applies when one coordinator session runs several worker agents (#110).
 - **The coordinator watches the disk.** Below 20 GB free it prunes the build cache (`docker builder prune -f`,
   old kind images) before it starts new work.
 - **Commit and push work in progress often**, at least after each meaningful step, so a vanished worker loses
-  little. A WIP commit uses a normal Conventional Commits message.
+  little. A WIP commit uses a normal Conventional Commits message, and the worker folds it into a semantically
+  significant commit (§4) before the PR goes to review.
 - **At each check the coordinator** resumes workers that vanished (from their clone and branch), and stops workers
   that finished and reported.
 - **Questions from workers:** when a worker raises a question for the owner, the coordinator puts it on the issue

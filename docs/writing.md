@@ -113,6 +113,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |
+| toolchain | the language or tool files that the init container `toolchain` installs read-only for an agent (#499) |
+| preset | a toolchain that the operator contains, for example `go` or `rust`; a new version is an agentdev release |
+| custom toolchain | a toolchain that a deployment defines in its instance config, with pinned downloads (#598) |
+| Debian package | a `.deb` file; a custom toolchain unpacks it without its install scripts |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
 | `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |
@@ -141,6 +145,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
 | thread | a comment on a line of a pull request, with its replies |
 | commit | one saved change of a git repository, identified by its sha |
+| draft pull request | a pull request that is not ready for review or merge (on Gitea: a title that starts with `WIP:`) |
 | commit status | the result (success, failure, error, pending) that a CI system records for one commit |
 | security event | a record of an action that a guardrail stopped |
 | SecurityEvent object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SecurityEvent`) that the operator makes for each security event |
@@ -174,6 +179,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | subscription | one Claude login (a Claude credential Secret). Agents that use the same Secret use the same subscription |
 | usage window | a period in which Claude counts the use of a subscription: 5 hours or 7 days |
 | usage limit | a percent of a usage window. When the use is more, agents start no new runs |
+| package manager | the program that installs the libraries of a build: `npm`, `pip`, `uv` or `go` |
+| registry cache | the agentdev service `registry-cache` that keeps copies of npm, PyPI and Go packages for the agents (#203) |
+| remote repository | an Artifact Registry repository that keeps copies of the packages of a public registry |
+| upstream | the public registry from which a registry cache gets the packages, for example `registry.npmjs.org` |
 | credential broker | the service that adds the value of a project secret to the requests of an agent; the agent does not get the value (#202) |
 | External Secrets Operator | the program that copies a value from the secret store into a Kubernetes Secret |
 | project secret | a credential that the agents of one project, or one agent, can use (`ProjectSecret` object, #202) |

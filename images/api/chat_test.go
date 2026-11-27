@@ -27,6 +27,7 @@ type fakeSessionServer struct {
 	viewers  []string
 	ended    bool
 	messages []string
+	settings []map[string]any
 }
 
 func newFakeSessionServer(t *testing.T) *fakeSessionServer {
@@ -83,6 +84,14 @@ func (f *fakeSessionServer) serve(w http.ResponseWriter, r *http.Request) {
 		f.viewers = nil
 		for _, v := range body["viewers"].([]any) {
 			f.viewers = append(f.viewers, v.(string))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	case r.URL.Path == "/settings": // #570: the real server answers when Claude confirms; the fake at once
+		f.settings = append(f.settings, body)
+		for _, k := range []string{"model", "effort"} {
+			if v, ok := body[k].(string); ok {
+				f.add("settings", body["author"].(string), map[string]any{"kind": k, "value": v, "status": "applied"})
+			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{})
 	case r.URL.Path == "/end":

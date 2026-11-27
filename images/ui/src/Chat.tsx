@@ -14,8 +14,8 @@
 // - A person with read access sees the transcript and the live session, but has no composer and no decision buttons.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  answerPermission, createDraftIssue, endSession, listSessions, sendMessage, startSession, Unauthorized,
-  type ChatEvent, type ChatSession,
+  answerPermission, changeSessionSettings, createDraftIssue, endSession, listSessions, multiplierOf, sendMessage, startSession, Unauthorized,
+  type ChatEvent, type ChatOptions, type ChatSession,
 } from './api'
 import { ago, kTokens, short } from './format'
 import { Markdown } from './Markdown.tsx'
@@ -47,11 +47,14 @@ export function ChatPage({ token, onExpired, sid, agent: wantAgent = '', context
   const [listOpen, setListOpen] = useState(!sid)
   const [creating, setCreating] = useState(!!wantAgent)
   const [reload, setReload] = useState(0)
+  const [options, setOptions] = useState<ChatOptions>({ models: [], efforts: [] })
   const fail = useCallback((e: Error) => (e instanceof Unauthorized ? onExpired() : setError(e.message)), [onExpired])
 
   useEffect(() => {
     let alive = true
-    const load = () => listSessions(token).then((l) => { if (alive) { setList(l); setError('') } }).catch(fail)
+    const load = () => listSessions(token).then((r) => {
+      if (alive) { setList(r.sessions); if (r.options) setOptions(r.options); setError('') }
+    }).catch(fail)
     load()
     const t = setInterval(load, LIST_MS)
     return () => { alive = false; clearInterval(t) }
@@ -84,10 +87,10 @@ export function ChatPage({ token, onExpired, sid, agent: wantAgent = '', context
         </ul>
       </div>
       {creating
-        ? <NewSession token={token} onExpired={onExpired} agent={wantAgent} context={wantContext} onList={() => setListOpen(true)}
+        ? <NewSession token={token} onExpired={onExpired} options={options} agent={wantAgent} context={wantContext} onList={() => setListOpen(true)}
           onStarted={(s) => { setList((l) => [s, ...(l ?? [])]); open(s.id) }} onCancel={() => { setCreating(false); if (!sid) setListOpen(true) }} />
         : sel
-          ? <Thread key={sel.id} token={token} onExpired={onExpired} initial={sel} onList={() => setListOpen(true)} onEnded={() => setReload((n) => n + 1)} />
+          ? <Thread key={sel.id} token={token} onExpired={onExpired} options={options} initial={sel} onList={() => setListOpen(true)} onEnded={() => setReload((n) => n + 1)} />
           : <section className="agd-thread" aria-label="No session selected">
             <div className="agd-thread-body">
               <Empty title={sid ? 'No such session' : 'No session selected'}>
@@ -99,8 +102,8 @@ export function ChatPage({ token, onExpired, sid, agent: wantAgent = '', context
   )
 }
 
-function NewSession({ token, onExpired, agent, context, onStarted, onCancel, onList }: {
-  token: string; onExpired: () => void; agent: string; context: string
+function NewSession({ token, onExpired, options, agent, context, onStarted, onCancel, onList }: {
+  token: string; onExpired: () => void; options: ChatOptions; agent: string; context: string
   onStarted: (s: ChatSession) => void; onCancel: () => void; onList: () => void
 }) {
   const d = useData()
@@ -110,11 +113,14 @@ function NewSession({ token, onExpired, agent, context, onStarted, onCancel, onL
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const pick = agents.find((a) => a.name === name)
+  // #570: '' = the agent's own value (no field sent); else one of the instance allow-list
+  const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
   const start = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name) return
     setBusy(true); setNotice('')
-    try { onStarted(await startSession(token, name, ctx.trim())) } catch (err) {
+    try { onStarted(await startSession(token, name, ctx.trim(), model || undefined, effort || undefined)) } catch (err) {
       if (err instanceof Unauthorized) onExpired()
       else setNotice((err as Error).message)
     } finally { setBusy(false) }
@@ -137,6 +143,8 @@ function NewSession({ token, onExpired, agent, context, onStarted, onCancel, onL
             The session gets a new clone of <span className="agd-code">{(pick.repos ?? [])[0]}</span> and uses the Claude budget of {pick.name}.
             It can read and run code in a sandbox. It cannot push or merge. You need write access to the repository.
           </p>}
+          {pick && <SettingsPicker own={{ model: pick.model ?? '', effort: pick.effort ?? '' }} options={options}
+            model={model} effort={effort} onModel={setModel} onEffort={setEffort} ownLabel />}
           <label className="agd-field"><span className="agd-label">Context (optional)</span>
             <textarea className="agd-input" rows={4} value={ctx} maxLength={8192} onChange={(e) => setCtx(e.target.value)}
               placeholder="An issue, a PR or a question to start with. It goes into the session as fenced, untrusted text." />
@@ -154,8 +162,8 @@ function NewSession({ token, onExpired, agent, context, onStarted, onCancel, onL
 
 type StreamState = 'connecting' | 'live' | 'retry'
 
-function Thread({ token, onExpired, initial, onList, onEnded }: {
-  token: string; onExpired: () => void; initial: ChatSession; onList: () => void; onEnded: () => void
+function Thread({ token, onExpired, options, initial, onList, onEnded }: {
+  token: string; onExpired: () => void; options: ChatOptions; initial: ChatSession; onList: () => void; onEnded: () => void
 }) {
   const d = useData()
   const [s, setS] = useState(initial)
@@ -207,6 +215,9 @@ function Thread({ token, onExpired, initial, onList, onEnded }: {
   const view = useMemo(() => buildView(events), [events])
   const writer = canWrite(s) && live(s)
   const tokens = s.state?.tokens
+  const cur = { model: s.state?.settings?.model ?? '', effort: s.state?.settings?.effort ?? '' }
+  const own = d.agents.find((a) => a.name === s.agent)
+  const change = (k: 'model' | 'effort') => (v: string) => { if (v && v !== cur[k]) act(() => changeSessionSettings(token, s.id, { [k]: v })) }
 
   return (
     <section className="agd-thread" aria-labelledby="thread-title">
@@ -217,10 +228,18 @@ function Thread({ token, onExpired, initial, onList, onEnded }: {
           <SessLamp s={s} now={d.now} />
           <span className="agd-code">{s.repo}</span>
           <span>Claude usage counts for <AgentTag name={s.agent} />{tokens ? ` · ${kTokens(tokens.input + tokens.output)} tokens` : ''}</span>
+          <span>{cur.model || 'default model'} · {cur.effort ? `${cur.effort} effort` : 'default effort'}{costHint(cur.model, options)}</span>
           {live(s) && <span className="agd-chat-here" aria-live="polite">Here: {s.viewers.length ? s.viewers.map((v) => <PersonTag key={v} name={v} />) : 'nobody'}</span>}
           {stream === 'retry' && live(s) && <span className="agd-conn agd-conn-stale" role="status"><span className="agd-conn-dot" />Reconnecting{retryAt > d.now ? ` in ${Math.ceil((retryAt - d.now) / 1000)} s` : ''}</span>}
         </div>
         <div className="agd-thread-actions">
+          {writer && <details className="agd-tool">
+            <summary><Icon name="down" /><span>Model</span></summary>
+            <div style={{ margin: '0 12px 12px' }}>
+              <SettingsPicker own={{ model: own?.model ?? '', effort: own?.effort ?? '' }} options={options} model={cur.model}
+                effort={cur.effort} onModel={change('model')} onEffort={change('effort')} disabled={busy} />
+            </div>
+          </details>}
           <details className="agd-tool">
             <summary><Icon name="down" /><span>Terminal</span></summary>
             <p style={{ margin: '0 12px 12px', fontSize: 13 }}>The same session as a terminal (needs <span className="agd-code">kubectl</span>):</p>
@@ -327,6 +346,10 @@ function buildView(events: ChatEvent[]): { items: ViewItem[]; waitingForClaude: 
         break
       }
       case 'end': items.push({ key: k, kind: 'note', time: e.time, text: `The session ended: ${str(dt.reason) || 'ended'}` }); waiting = false; break
+      case 'settings': // #570: requested by a person, then applied or refused by Claude
+        if (dt.status === 'applied') items.push({ key: k, kind: 'note', time: e.time, text: `${e.author ?? 'someone'} set the ${str(dt.kind)} to ${str(dt.value)}` })
+        else if (dt.status === 'refused') items.push({ key: k, kind: 'note', time: e.time, text: `Claude refused the ${str(dt.kind)} ${str(dt.value)}: ${str(dt.error)}` })
+        break
       default:
     }
   }
@@ -441,5 +464,41 @@ function Draft({ it, s, token, canCreate, act, busy }: {
             : <span className="agd-muted" style={{ fontSize: 13 }}>A person with write access to {s.repo} can create this issue.</span>}
       </div>
     </section>
+  )
+}
+
+// ---- model and effort (#570) ----
+
+// costHint: the claude-proxy multiplier of a model, so a person sees that one model spends the budget faster.
+function costHint(model: string, o: ChatOptions): string {
+  const m = multiplierOf(model, o.multipliers)
+  return m === undefined ? '' : ` · ${m >= 10 ? m.toFixed(0) : m.toFixed(2).replace(/\.?0+$/, '')}× units`
+}
+
+// SettingsPicker: the agent's own value and the instance allow-list (CHAT_MODELS, CHAT_EFFORTS); the API refuses
+// anything else. ownLabel: the start form, where '' means "the agent's own value".
+function SettingsPicker({ own, options, model, effort, onModel, onEffort, ownLabel, disabled }: {
+  own: { model: string; effort: string }; options: ChatOptions; model: string; effort: string
+  onModel: (v: string) => void; onEffort: (v: string) => void; ownLabel?: boolean; disabled?: boolean
+}) {
+  const list = (ownV: string, extra: string[], cur: string) => [...new Set([ownV, ...extra, cur].filter((v) => v))]
+  const models = list(own.model, options.models, ownLabel ? '' : model)
+  const efforts = list(own.effort, options.efforts, ownLabel ? '' : effort)
+  const ownText = (v: string, what: string) => `Agent's own (${v || `default ${what}`})`
+  return (
+    <div className="agd-row-actions" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+      <label className="agd-field"><span className="agd-label">Model</span>
+        <select className="agd-select" value={model} disabled={disabled} onChange={(e) => onModel(e.target.value)}>
+          {(ownLabel || !model) && <option value="">{ownLabel ? ownText(own.model, 'model') : 'Default model'}</option>}
+          {models.filter((v) => !(ownLabel && v === own.model)).map((v) => <option key={v} value={v}>{v}{costHint(v, options)}</option>)}
+        </select>
+      </label>
+      <label className="agd-field"><span className="agd-label">Effort</span>
+        <select className="agd-select" value={effort} disabled={disabled} onChange={(e) => onEffort(e.target.value)}>
+          {(ownLabel || !effort) && <option value="">{ownLabel ? ownText(own.effort, 'effort') : 'Default effort'}</option>}
+          {efforts.filter((v) => !(ownLabel && v === own.effort)).map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </label>
+    </div>
   )
 }

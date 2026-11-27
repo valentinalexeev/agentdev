@@ -135,12 +135,40 @@ spec:
                 maximum: 500
                 minimum: 1
                 type: integer
+              merge:
+                description: 'Whether the agent may merge its own pull requests (#578).
+                  Unset or mode off: never, as before (a person merges).'
+                properties:
+                  approvers:
+                    description: |-
+                      Forge logins of the owners whose approval of the exact head commit allows the merge. Required with mode gated:
+                      an approval by anyone else (another collaborator with write access, an agent, a bot) never merges.
+                    items:
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$
+                      type: string
+                    maxItems: 20
+                    type: array
+                  mode:
+                    default: "off"
+                    description: |-
+                      off: the agent never merges (default). gated: it merges its own PR (head agent/<name>/*) when an owner of
+                      approvers approved the head commit, every check passed and no change is requested. Always a merge commit (never
+                      squash or rebase: the merge method is not configurable). GitHub only.
+                    enum:
+                    - "off"
+                    - gated
+                    type: string
+                required:
+                - mode
+                type: object
               model:
                 description: |-
-                  Claude model of the agent's runs (`claude --model`, #564): an alias such as "opus" or "sonnet", or a full model
-                  name such as "claude-opus-5-5". Unset: the Claude Code CLI's own default for the credential, as before.
-                maxLength: 100
-                pattern: ^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$
+                  Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #564, #570): an alias
+                  (opus, sonnet, haiku, fable) or a full name of one of these families such as "claude-opus-5-5", optionally with
+                  the context suffix "[1m]", so the claude-proxy price table always has a multiplier for it. Unset: the Claude
+                  Code CLI's own default for the credential, as before.
+                maxLength: 80
+                pattern: ^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$
                 type: string
               paused:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
@@ -226,6 +254,16 @@ spec:
                   Toolchains installed before the agent starts (#499, ADR 0010 D2/D3): presets of agentdev with pinned checksums,
                   read-only to the agent. Unset: none, and the pod is as before.
                 properties:
+                  custom:
+                    description: |-
+                      Custom toolchains by name (#598), for example "shell-tools". The deployment defines them in the operator's
+                      configuration (instance config toolchains, operator environment TOOLCHAINS), never the repository or issue text.
+                      A name the operator does not know makes the Agent invalid.
+                    items:
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$
+                      type: string
+                    maxItems: 10
+                    type: array
                   path:
                     description: |-
                       PATH entries for the agent container, below $TOOLCHAIN, for example "$TOOLCHAIN/bin"; no segment starts with a
@@ -252,17 +290,16 @@ spec:
                         pattern: ^[0-9]+\.[0-9]+\.[0-9]+$
                         type: string
                     type: object
-                    x-kubernetes-validations:
-                    - message: spec.toolchain.presets needs at least one preset
-                      rule: has(self.go) || has(self.rust)
                   refresh:
                     description: |-
                       Install again after this time, for example 168h (at least 1h). Each agent has its own offset, and the new install
                       waits until the agent is idle (drain). Unset: only when the spec, the worker image or the catalogue changes.
                     type: string
-                required:
-                - presets
                 type: object
+                x-kubernetes-validations:
+                - message: spec.toolchain needs at least one preset or custom toolchain
+                  rule: (has(self.presets) && (has(self.presets.go) || has(self.presets.rust)))
+                    || (has(self.custom) && size(self.custom) > 0)
               tools:
                 description: 'Tools added to the worker''s default allow-list for
                   this agent (#496, ADR 0010 D1). Unset: the default only.'

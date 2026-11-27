@@ -439,12 +439,13 @@ permission_mode() {
 }
 # Model and effort (#564): the operator sets AGENT_MODEL and AGENT_EFFORT from the Agent's spec.model and spec.effort,
 # never from the repository or issue text. Unset: no flag, the CLI's own default. A value that does not pass the same
-# check as the operator gets no flag and a log line (a model name never starts with a dash, so it is never a flag).
+# check as the operator gets no flag and a log line (#570: only a claude-proxy price family, so a typo never counts at
+# the highest multiplier, and a model name never starts with a dash, so it is never a flag).
 # model_args: prints one argument per line: --model <m> and --effort <e>, each only when set and valid.
 model_args() {
-  local re='^[A-Za-z0-9][]A-Za-z0-9._:@[-]*$'   # the operator's modelChars; "]" first and "-" last in the class
+  local re='^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$'   # the operator's modelChars
   if [[ -n "${AGENT_MODEL:-}" ]]; then
-    if [[ ${#AGENT_MODEL} -le 100 && "${AGENT_MODEL}" =~ ${re} ]]; then
+    if [[ ${#AGENT_MODEL} -le 80 && "${AGENT_MODEL}" =~ ${re} ]]; then
       printf '%s\n' --model "${AGENT_MODEL}"
     else log "AGENT_MODEL is not a model name: running with the CLI's default model" >&2; fi
   fi
@@ -1211,6 +1212,15 @@ $(untrusted "${disc}")"
 ${RUN_CONTRACT}"
 }
 
+# clear_needs_decision <n> <issue json>: the question was answered; GitHub removes a label by name, Gitea by id
+clear_needs_decision() {
+  local id
+  id=$(jq -r '[.labels[]? | select(.name == "needs-decision") | .id] | first // ""' <<<"$2" 2>/dev/null)
+  [[ "${id}" =~ ^[1-9][0-9]{0,15}$ ]] || return 0
+  if [[ "${FORGE_KIND}" == github ]]; then id=needs-decision; fi
+  api DELETE "/repos/${REPO}/issues/$1/labels/${id}" >/dev/null 2>&1 || log "issue #$1: could not remove the label needs-decision"
+}
+
 # one issue -> one PR, in its own worktree (runs as a background job)
 issue_job() {
   local n=$1 base=$2 issue title body branch dir result claude_rc=0 stopped="" exitf
@@ -1251,6 +1261,9 @@ issue_job() {
 
 ${summary}"
       date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/issue-${n}.asked"   # resumed on the next comment by someone else
+      # #236: the owner's needs-decision filter shows the question (best effort: the label may not exist)
+      api POST "/repos/${REPO}/issues/${n}/labels" '{"labels":["needs-decision"]}' >/dev/null 2>&1 \
+        || log "issue #${n}: could not add the label needs-decision"
       board_card "issue-${n}" "#${n} ${title}" blocked "waits for a decision on the issue" "$(web_url "issues/${n}")"
     else
       comment "${n}" "🤖 I am blocked on this.
@@ -1262,15 +1275,21 @@ ${summary}"
     return 0
   fi
   rm -f "${STATE}/seen/issue-${n}.asked"
+  clear_needs_decision "${n}" "${issue}"
   if push_step "${dir}" "${branch}" "fix: ${title} (#${n})" "${base}"; then
-    local pr opened_at
+    local pr opened_at draft=false prtitle=${title}
+    # #236: a partial result opens a draft PR, so it does not look mergeable. GitHub: draft=true; Gitea: the WIP:
+    # title prefix (Gitea's draft marker). The sidecar's ready_for_review clears either one, on the agent's own PR.
+    if [[ "${status}" == partial ]]; then
+      draft=true; [[ "${FORGE_KIND}" == github ]] || prtitle="WIP: ${title}"
+    fi
     # #394: the feedback cursor starts when the PR is opened, not after the follow-up calls (review request, label,
     # board): a comment in those seconds was older than the cursor and never answered. A second earlier is safe, the
     # agent's own comments are filtered out by login.
     opened_at=$(date -u -d '-1 second' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1S +%Y-%m-%dT%H:%M:%SZ)
     # #175: a restart after the PR was created must not open a second one (the forge refuses it anyway)
     pr=$(open_pr_for "${branch}")
-    [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${title}" --arg h "${branch}" --arg b "${base}" \
+    [[ "${pr}" =~ ^[0-9]+$ ]] || pr=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "${prtitle}" --arg h "${branch}" --arg b "${base}" --argjson dr "${draft}" --arg k "${FORGE_KIND}" \
           --arg d "Closes #${n}
 
 ${stopped:+> ${stopped}
@@ -1279,7 +1298,7 @@ ${stopped:+> ${stopped}
 $([[ "${status}" == partial ]] && printf '\n**Partial:** the agent reports that part of the issue is still open (see above).\n')
 ---
 _Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" \
-          '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+          '{title:$t, head:$h, base:$b, body:$d} + (if $dr and $k == "github" then {draft:true} else {} end)')" | jq -r .number)
     [[ "${pr}" =~ ^[0-9]+$ ]] || { log "creating the PR for issue #${n} failed"; board_card "issue-${n}" "#${n} ${title}" blocked "could not open the PR, will retry" "$(web_url "issues/${n}")"; return 1; }  # backoff, retry later
     request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer" "${STATE}/seen/issue-${n}.done"
     label_own_pr "${pr}"
@@ -1533,6 +1552,37 @@ failed_checks() {
      | "- check \(.context // "status"): \($st)\(if (.description // "") != "" then " (\(.description))" else "" end)"' 2>/dev/null
 }
 
+# merge_own_pr <pr> (#578): with MERGE_MODE=gated (the operator sets it from the Agent's spec.merge, never from the
+# repository or issue text) the loop asks the sidecar to merge its own PR. It asks only when the forge shows an
+# approval of the current head commit by an owner (MERGE_APPROVERS) and no request for changes, so a PR that waits for review is not a
+# security event; the sidecar checks everything again from the forge (images/forge/merge.go) and decides. 0: merged.
+# A PR that is not ready (HTTP 409: a check is pending, an approval request is open) gets seen/pr-N.merge-retry and is
+# asked again on each pass, also when nothing on the PR changed.
+merge_own_pr() {
+  [[ "${MERGE_MODE:-off}" == gated && "${FORGE_KIND}" == github && "$1" =~ ^[1-9][0-9]{0,15}$ ]] || return 1
+  local pr=$1 retry="${STATE}/seen/pr-$1.merge-retry" sha n code out
+  sha=$(api GET "/repos/${REPO}/pulls/${pr}" | jq -r '.head.sha // ""' 2>/dev/null)
+  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  n=$(api GET "/repos/${REPO}/pulls/${pr}/reviews?per_page=100" | jq --arg sha "${sha}" --arg me "${MY_LOGIN}" \
+      --arg owners "${MERGE_APPROVERS:-}" '
+      [.[]? | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")]
+      | group_by(.user.login | ascii_downcase) | map(last)
+      | if any(.[]; .state == "CHANGES_REQUESTED") then 0
+        else [.[] | select(.state == "APPROVED" and .commit_id == $sha and .user.type == "User" and .user.login != $me
+          and ((.user.login | ascii_downcase) as $l | $owners | ascii_downcase | split(",") | index($l)))] | length end' 2>/dev/null)
+  if ! [[ "${n}" =~ ^[1-9][0-9]*$ ]]; then rm -f "${retry}"; return 1; fi
+  out=$(mktemp) || return 1
+  code=$(curl -sS -m 180 -o "${out}" -w '%{http_code}' -X POST -H "X-Agentdev-Job: pr-${pr}" "${FORGE_API}/merge?pr=${pr}" 2>/dev/null)
+  local why; why=$(head -c 300 "${out}" | tr -d '\r\n'); rm -f "${out}"
+  case "${code}" in
+    200) log "PR #${pr}: merged at ${sha:0:12} (a person approved this head, checks passed)"; rm -f "${retry}"; return 0 ;;
+    409) log "PR #${pr}: approved, the merge waits: ${why}"; touch "${retry}" ;;
+    404) log "PR #${pr}: approved, but the sidecar has no merge endpoint (merge mode off there)"; rm -f "${retry}" ;;
+    *)   log "PR #${pr}: merge refused (HTTP ${code}): ${why}"; rm -f "${retry}" ;;
+  esac
+  return 1
+}
+
 handle_feedback() {
   local prs; prs=$(api GET "/repos/${REPO}/pulls?state=open&$(per_page 50)") || return
   # Skip PRs that did not change since we last handled them: one list call instead of ~3 calls per PR (#3).
@@ -1542,14 +1592,20 @@ handle_feedback() {
   while IFS=$'\t' read -r pr branch upd created title; do
     local since fb last=""
     [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
-    [[ "${last}" == "${upd}" ]] && continue
+    if [[ "${last}" == "${upd}" ]]; then
+      # #578: an approved PR whose merge waited (a check was pending) is asked again, though nothing on it changed
+      [[ -e "${STATE}/seen/pr-${pr}.merge-retry" ]] && ! is_running "pr-${pr}" && merge_own_pr "${pr}"
+      continue
+    fi
     # PRs opened before reviewer requests existed: request once (marker in state)
     [[ -e "${STATE}/seen/pr-${pr}.reviewer" ]] || { request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer"; }
     since="${created}"; [[ -r "${STATE}/seen/pr-${pr}" ]] && read -r since < "${STATE}/seen/pr-${pr}"
     is_running "pr-${pr}" && continue   # its job will see this feedback on the next pass
     backing_off "pr-${pr}" && continue   # failed recently; retried after its backoff
     fb=$(new_feedback "${pr}" "${since}")
-    if [[ -z "${fb}" ]]; then echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue; fi
+    if [[ -z "${fb}" ]]; then echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; merge_own_pr "${pr}"; continue; fi
+    # #578: feedback first; the merge is asked after the job (a push in the job makes the approval stale)
+    [[ "${MERGE_MODE:-off}" == gated ]] && touch "${STATE}/seen/pr-${pr}.merge-retry"
     if start_job "pr-${pr}" feedback_job "${pr}" "${branch}" "${title}" "${since}"; then
       log "PR #${pr}: new feedback (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
     else

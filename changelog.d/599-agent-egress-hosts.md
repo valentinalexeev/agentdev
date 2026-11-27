@@ -33,4 +33,4 @@ the agent's own key in the `chat` container only.
 With the credential proxy on, an own host that covers the Claude API (`api.anthropic.com`, `.anthropic.com`, `.com`) is
 dropped by the operator and refused by the playbook, so the path around `claude-proxy` stays closed (R64). The CRD and
 the playbook refuse agent names that end in `-egress` (the key Secret would share a name with another agent's Claude
-proxy key) and every host that is not a Squid `dstdomain` name. Security notes: `docs/security.md` R126.
+proxy key) and every host that is not a Squid `dstdomain` name. Security notes: `docs/security.md` R136.

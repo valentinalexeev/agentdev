@@ -52,6 +52,8 @@ type Defaults struct {
 	// drain before replace (#174): grace period of an agent pod in seconds (default 300) and the longest wait for
 	// running jobs before an outdated pod is replaced anyway, in minutes (default 60)
 	GraceSeconds, DrainMaxMinutes string
+	// custom toolchains of the deployment (#598): TOOLCHAINS, checked against SETUP_EGRESS_HOSTS (toolchain_custom.go)
+	Toolchains map[string]*customToolchain
 }
 
 type AgentReconciler struct {
@@ -108,7 +110,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
 	// same for the toolchain (#499): only catalogue versions, $TOOLCHAIN paths, refresh of at least 1h (fail closed)
-	if msg := toolchainValid(&a); msg != "" {
+	if msg := toolchainValid(&a, r.D.Toolchains); msg != "" {
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "InvalidToolchain", Message: msg, ObservedGeneration: a.Generation})
@@ -122,6 +124,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "InvalidPermission", Message: msg, ObservedGeneration: a.Generation})
 		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidPermission", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for spec.merge (#578): mode off or gated, gated needs approvers (fail closed)
+	if msg := mergeValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidMerge", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidMerge", msg, a.Generation))
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
