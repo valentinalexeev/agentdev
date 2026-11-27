@@ -1,17 +1,39 @@
 # Deployment repository CI (copied from agentdev examples/deployment/gcp-gke).
 # PRs: checks without cloud credentials (terraform fmt + validate, ansible --syntax-check at the pinned release).
-# main: terraform plan + apply, then the playbook. A PR does not get a plan (read-only plan identity: agentdev #291).
+# PRs with the read-only plan identity (agentdev #291): terraform plan with -lock=false, posted as a PR comment.
+#   Needs repository variables GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT; without them the plan job is skipped.
+#   The plan account can read resources and the state, it cannot change them. No ansible --check on PRs.
+# main: terraform plan + apply, then the playbook (repository variable DEPLOY_ENGINE unset or `ansible`), or with
+#   DEPLOY_ENGINE=flux (agentdev #385): render, push the branch `gitops`, and verify (engine Ready, then smoke test).
 # Auth: Workload Identity Federation (no keys); values from `terraform output github_actions_auth`,
-# stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT.
+# stored as repository variables GCP_WIF_PROVIDER and GCP_SERVICE_ACCOUNT (apply, main only) and
+# GCP_PLAN_WIF_PROVIDER and GCP_PLAN_SERVICE_ACCOUNT (plan, PRs only).
 # Protect main (required review + this check), so nothing is applied without the owner's approval.
 name: deploy
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:   # run the deploy of main again (for example after the Flux install, agentdev #385); main only
 concurrency: {group: deploy, cancel-in-progress: false}   # never two applies at once
 permissions: {contents: read}
 jobs:
+  template-drift:   # agentdev #317: warn when this copy of the template is behind the pinned release; no credentials
+    if: github.event_name == 'pull_request'
+    permissions: {contents: read}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: compare with examples/deployment/gcp-gke of the pinned release (warning in the job summary)
+        run: |
+          ref=$(grep -oE 'agentdev//infra/terraform\?ref=[^"]+' terraform/main.tf | sed 's/.*ref=//')
+          git clone --quiet --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev-drift
+          git -C ../agentdev-drift fetch --quiet --depth 1 origin "refs/tags/$ref:refs/tags/$ref"
+          if [ -x ../agentdev-drift/scripts/template-drift.sh ]; then
+            AGENTDEV_REPO=../agentdev-drift ../agentdev-drift/scripts/template-drift.sh .
+          else
+            echo "::warning title=template drift::agentdev $ref has no scripts/template-drift.sh (added in 1.1.0)"
+          fi
   validate:   # PRs: no GCP auth, so PR code never holds the apply identity
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -27,13 +49,152 @@ jobs:
       - name: ansible syntax-check at the pinned release
         working-directory: ansible
         run: |
-          tag=$(awk '/^image_tag:/{print $2}' instance.yml)
-          git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml --syntax-check
+  plan:   # PRs: read-only identity; a fork PR gets no OIDC token, so this job runs only for same-repository PRs
+    if: >-
+      github.event_name == 'pull_request' && vars.GCP_PLAN_WIF_PROVIDER != '' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    concurrency: {group: "plan-${{ github.event.pull_request.number }}", cancel-in-progress: true}
+    permissions: {contents: read, id-token: write, pull-requests: write}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: terraform}}
+    env:
+      GOOGLE_BILLING_PROJECT: ${{ vars.GCP_PROJECT }}
+      USER_PROJECT_OVERRIDE: "true"
+      GOOGLE_CLOUD_QUOTA_PROJECT: ${{ vars.GCP_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_PLAN_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_PLAN_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+        with: {terraform_wrapper: false}
+      - run: terraform init -input=false -backend-config="bucket=${{ vars.GCP_PROJECT }}-tfstate"
+      - name: terraform plan (read only, no state lock)
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -lock=false -no-color -var-file=instance.tfvars -out=plan.bin > plan.txt 2>&1
+          rc=$?
+          cat plan.txt
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: post the plan as a PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RC: ${{ steps.plan.outputs.rc }}
+        run: |
+          marker='<!-- agentdev-plan -->'
+          { echo "$marker"
+            echo "### terraform plan (read-only identity, exit $RC)"
+            echo; echo '```'
+            grep -E '^(Plan:|No changes|Error|  # )' plan.txt | head -200 || true
+            echo '```'
+            echo; echo "<details><summary>full plan (last 60000 characters)</summary>"; echo; echo '```'
+            tail -c 60000 plan.txt
+            echo '```'; echo "</details>"; } > comment.md
+          id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
+            -q ".[] | select(.body | startswith(\"$marker\")) | .id" | tail -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$id" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi
+      - if: steps.plan.outputs.rc != '0'
+        run: |
+          echo "terraform plan failed (exit ${{ steps.plan.outputs.rc }})"
+          exit 1
+  # agentdev #314, #471: read-only checks before anything changes. Only on main for now: on PRs it needs a read-only
+  # identity (#291). The checks are in two parts, so that a first install or a resume after a deleted cluster works:
+  #   preflight (before infra): the checks that need no cluster (Claude secret formats, same release for playbook
+  #     and images, image_tag on ghcr.io, plan identity grants). infra needs only this job.
+  #   preflight-cluster (after infra): the checks that need the cluster (required CRDs). When
+  #     `gcloud container clusters describe` finds no cluster, it skips them with a notice.
+  preflight:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    permissions: {contents: read, id-token: write}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ansible}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: gke-gcloud-auth-plugin}
+      - name: agentdev checkout at the pinned release
+        run: |
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+      - name: preflight, checks that need no cluster (read-only)
+        run: |
+          if [ ! -f ../agentdev/scripts/upgrade-check.sh ]; then
+            echo "::notice::the pinned agentdev release has no preflight, skipped"; exit 0
+          fi
+          if grep -q -- '--phase' ../agentdev/scripts/upgrade-check.sh; then
+            bash ../agentdev/scripts/upgrade-check.sh --phase no-cluster instance.yml
+          else
+            # a release before agentdev #471: all checks in one run, the cluster must exist
+            gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+            bash ../agentdev/scripts/upgrade-check.sh instance.yml
+          fi
+  preflight-cluster:
+    needs: infra
+    permissions: {contents: read, id-token: write}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: ansible}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: gke-gcloud-auth-plugin}
+      - name: does the cluster exist?
+        id: cluster
+        run: |
+          if out=$(gcloud container clusters describe agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" \
+              --project "${{ vars.GCP_PROJECT }}" --format='value(name)' 2>&1); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif ! printf '%s' "$out" | grep -qiE 'code=404|not ?found'; then
+            echo "$out"; echo "::error::cannot read the GKE cluster (not a 'not found' answer)"; exit 1
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=no cluster::the GKE cluster agentdev does not exist, the cluster checks (CRDs) are skipped"
+          fi
+      - name: agentdev checkout at the pinned release
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+          gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: preflight, checks that need the cluster (read-only)
+        if: steps.cluster.outputs.exists == 'true'
+        run: |
+          if grep -q -- '--phase' ../agentdev/scripts/upgrade-check.sh 2>/dev/null; then
+            bash ../agentdev/scripts/upgrade-check.sh --phase cluster instance.yml
+          else
+            echo "::notice::the pinned agentdev release checks the cluster in the job preflight, skipped"
+          fi
   infra:
-    if: github.event_name == 'push'
+    needs: preflight
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: terraform}}
@@ -54,7 +215,8 @@ jobs:
       - run: terraform plan -input=false -var-file=instance.tfvars -out=plan.bin
       - run: terraform apply -input=false plan.bin
   deploy:
-    needs: infra
+    needs: [infra, preflight-cluster]
+    if: vars.DEPLOY_ENGINE == '' || vars.DEPLOY_ENGINE == 'ansible'
     permissions: {contents: read, id-token: write}
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: ansible}}
@@ -68,10 +230,85 @@ jobs:
         with: {install_components: gke-gcloud-auth-plugin}
       - name: agentdev playbook at the pinned release
         run: |
-          tag=$(awk '/^image_tag:/{print $2}' instance.yml)
-          git clone --depth 1 --branch "$tag" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          # agentdev_ref is the git tag (v1.0.0); image_tag (1.0.0) is for images only (agentdev #332)
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
           pip install --quiet ansible kubernetes
           ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
           gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' instance.yml)" --project "${{ vars.GCP_PROJECT }}"
       - name: ansible
         run: ansible-playbook ../agentdev/infra/ansible/deploy.yml -e @instance.yml
+  # GitOps (agentdev #385, DEPLOY_ENGINE=flux): render the manifests (no secret values) and push them to the branch
+  # `gitops`, which the engine reads. The commit is the deploy: the job never calls the engine API.
+  render:
+    needs: [infra, preflight-cluster]
+    if: vars.DEPLOY_ENGINE == 'flux'
+    permissions: {contents: write}
+    runs-on: ubuntu-latest
+    outputs: {revision: "${{ steps.push.outputs.revision }}"}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: agentdev checkout at the pinned release
+        run: |
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' ansible/instance.yml)
+          [ -n "$ref" ] || { echo "::error::instance.yml has no agentdev_ref (the agentdev git tag, e.g. v1.0.0)"; exit 1; }
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible pyyaml
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+      - name: render and split into the layers (agentdev scripts/gitops-layout.py)
+        run: |
+          ansible-playbook ../agentdev/infra/ansible/render.yml -e @ansible/instance.yml -e render_dir="$RUNNER_TEMP/render"
+          python3 ../agentdev/scripts/gitops-layout.py "$RUNNER_TEMP/render" "$RUNNER_TEMP/rendered"
+      - name: push the branch gitops (the tree of main plus rendered/)
+        id: push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B gitops
+          git rm -r -q --ignore-unmatch rendered
+          cp -R "$RUNNER_TEMP/rendered" rendered
+          git add -A rendered
+          git commit -q --allow-empty -m "chore(gitops): render ${GITHUB_SHA::12}"
+          git push -f origin gitops
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  verify:
+    needs: render
+    permissions: {contents: read, id-token: write}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {install_components: "gke-gcloud-auth-plugin kubectl"}
+      - name: agentdev checkout at the pinned release
+        run: |
+          ref=$(awk '/^agentdev_ref:/{gsub(/"/, "", $2); print $2}' ansible/instance.yml)
+          git clone --depth 1 --branch "$ref" https://github.com/valentinalexeev/agentdev.git ../agentdev
+          pip install --quiet ansible kubernetes
+          ansible-galaxy collection install -r ../agentdev/infra/ansible/requirements.yml
+          gcloud container clusters get-credentials agentdev --zone "$(awk '/^gcp_zone:/{print $2}' ansible/instance.yml)" --project "${{ vars.GCP_PROJECT }}"
+      - name: is the engine installed? (the first run is before the Flux install, docs/admin.md)
+        id: engine
+        run: |
+          if kubectl get crd kustomizations.kustomize.toolkit.fluxcd.io >/dev/null 2>&1; then
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Flux not installed::the branch gitops is pushed; install Flux, then run this workflow again (Actions, deploy, Run workflow)"
+          fi
+      - name: wait until the engine applied this revision and reports Ready (agentdev scripts/gitops-status.sh)
+        if: steps.engine.outputs.installed == 'true'
+        env: {REVISION: "${{ needs.render.outputs.revision }}", ENGINE: "${{ vars.DEPLOY_ENGINE }}"}
+        run: |
+          bash ../agentdev/scripts/gitops-status.sh --engine "$ENGINE" --revision "$REVISION" --timeout 1800 \
+            kustomization/agentdev-infrastructure kustomization/agentdev-platform kustomization/agentdev-agents \
+            kustomization/agentdev-reloader
+      - name: smoke test of the public hosts (roles/ingress/tasks/smoke.yml)
+        if: steps.engine.outputs.installed == 'true'
+        working-directory: ansible
+        run: ansible-playbook ../../agentdev/infra/ansible/smoke.yml -e @instance.yml

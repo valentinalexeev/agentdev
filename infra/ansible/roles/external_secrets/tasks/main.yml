@@ -1,0 +1,120 @@
+---
+# GKE, secrets_mode external (#381): External Secrets Operator, Stakater Reloader v2 and one SecretStore per namespace.
+# The ExternalSecrets themselves are applied by their owners (deploy.yml, roles platform, authentik, authentik_sso,
+# api, ingress) through tasks/external_secrets.yml. No task here reads or holds a secret value.
+- name: External Secrets Operator {{ external_secrets_eso_chart_version }}
+  # same settings as the kind role secrets_store: controller and CRDs only, no cluster stores or push secrets
+  kubernetes.core.helm:
+    kube_context: "{{ kube_context }}"
+    name: external-secrets
+    chart_ref: external-secrets
+    chart_repo_url: https://charts.external-secrets.io
+    chart_version: "{{ external_secrets_eso_chart_version }}"
+    release_namespace: "{{ external_secrets_eso_ns }}"
+    create_namespace: true
+    wait: true
+    timeout: 5m0s
+    values:
+      installCRDs: true
+      serviceAccount: {name: "{{ external_secrets_eso_sa }}"}
+      webhook: {create: false}
+      certController: {create: false}
+      processClusterStore: false
+      processClusterExternalSecret: false
+      processPushSecret: false
+      processClusterPushSecret: false
+      resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+
+- name: ESO CRDs are established
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: "{{ item }}"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
+  loop: [externalsecrets.external-secrets.io, secretstores.external-secrets.io]
+  when: not ansible_check_mode
+
+# Reloader v2 (owner decision on #381): scoped mode, so the chart makes a Role per watched namespace and no ClusterRole.
+# Only workloads with the annotation secret.reloader.stakater.com/reload restart, and only for the Secrets they name.
+# Strategy annotations: Reloader writes one pod template annotation (no env var, no GitOps diff on env).
+- name: Stakater Reloader {{ external_secrets_reloader_chart_version }}
+  kubernetes.core.helm:
+    kube_context: "{{ kube_context }}"
+    name: reloader
+    chart_ref: reloader
+    chart_repo_url: https://stakater.github.io/stakater-charts
+    chart_version: "{{ external_secrets_reloader_chart_version }}"
+    release_namespace: "{{ external_secrets_reloader_ns }}"
+    create_namespace: true
+    wait: true
+    timeout: 5m0s
+    values:
+      reloader:
+        watchGlobally: false
+        namespaces: "{{ external_secrets_namespaces | map(attribute='ns') | list }}"
+        autoReloadAll: false
+        reloadStrategy: annotations
+        ignoreConfigMaps: true
+        readOnlyRootFileSystem: true
+        deployment:
+          resources: {requests: {cpu: 10m, memory: 64Mi}, limits: {memory: 256Mi}}
+
+# the same CEL policies as kind (#202 and #381 rules 4 and 5): name and store rules for ExternalSecrets in the agents
+# namespace, and the operator writes only agent-<name>-proxy Secrets there
+- name: Secrets policies (CEL)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_policy) | from_yaml_all | list }}"
+  vars:
+    es_policy:
+      src: "{{ repo_root }}/manifests/secrets-policy.yaml.tmpl"
+      values: {AGENTS_NS: "{{ agents_ns }}", PLATFORM_NS: "{{ platform_ns }}", ESO_NS: "{{ external_secrets_eso_ns }}",
+               ESO_SA: "{{ external_secrets_eso_sa }}"}
+      replace: []
+
+- name: Namespaces of the stores
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ item.ns }}"}}
+  loop: "{{ external_secrets_namespaces }}"
+  loop_control: {label: "{{ item.ns }}"}
+
+- name: SecretStore per namespace (Workload Identity, own Google account) {{ external_secrets_store }}
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/templates/render.j2', template_vars=es_store) | from_yaml_all | list }}"
+  vars:
+    es_store:
+      src: "{{ repo_root }}/manifests/secrets-store-platform-gcp.yaml.tmpl"
+      values:
+        NS: "{{ item.ns }}"
+        STORE: "{{ external_secrets_store }}"
+        GSA: "{{ external_secrets_gsa[item.reader] }}"
+        GCP_PROJECT: "{{ gcp_project }}"
+        GKE_LOCATION: "{{ gcp_zone }}"
+        GKE_CLUSTER: "{{ cluster_name }}"
+      replace: []
+  loop: "{{ external_secrets_namespaces }}"
+  loop_control: {label: "{{ item.ns }}"}
+  when: not ansible_check_mode
+
+- name: SecretStores are ready
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: external-secrets.io/v1
+    kind: SecretStore
+    namespace: "{{ item.ns }}"
+    name: "{{ external_secrets_store }}"
+  register: external_secrets_state
+  until: >-
+    external_secrets_state.resources | length > 0 and
+    (external_secrets_state.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Ready')
+     | selectattr('status', 'equalto', 'True') | list | length > 0)
+  retries: 30
+  delay: 4
+  loop: "{{ external_secrets_namespaces }}"
+  loop_control: {label: "{{ item.ns }}"}
+  when: not ansible_check_mode

@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type Config struct {
 	WakeFile                 string
 	RouterURL, SelfURL       string
 	WakeToken, RegisterToken string
+	APIURL                   string // agentdev-api internal listener (#425 run log); empty: run events are dropped
 	AgentName, ForgeKind     string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
@@ -79,6 +81,8 @@ func loadConfig() (*Config, error) {
 		Git: getenv("GIT", "git"), NoUsage: os.Getenv("USAGE_REPORTS") == "off",
 		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
 		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
+		// #425: the API's internal listener (the operator sets APPROVALS_URL on every agent pod)
+		APIURL: getenv("API_INTERNAL_URL", os.Getenv("APPROVALS_URL")),
 	}
 	// preferred: the key as a file (a Secret volume mounted only into this container), so it is never in any
 	// process environment; /proc/<pid>/environ keeps the original environment even after os.Unsetenv
@@ -135,6 +139,8 @@ func main() {
 	s.drv, s.rules, s.git.drv = drv, drv.rules(), drv
 	if on, apiURL, timeout := approvalsConfig(getenv); on { // #67
 		s.enableApprovals(apiURL, timeout)
+		// #310: cost approvals read the job state from claude-proxy (CLAUDE_PROXY_URL, set by the operator)
+		s.appr.proxyURL = strings.TrimRight(os.Getenv("CLAUDE_PROXY_URL"), "/")
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
 	}
 	if err := s.git.init(); err != nil {
@@ -143,5 +149,49 @@ func main() {
 	startWebhook(c, s.logf)
 	s.logf("forge API on %s, repos=%s, protected=%s", c.Listen, strings.Join(c.Repos, ","), strings.Join(c.Protected, ","))
 	srv := &http.Server{Addr: c.Listen, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
+	// #593: on SIGTERM the sidecar keeps serving while the loop pushes the work in progress of its jobs, until the
+	// loop says it is done (a loop-exit line in the wake file) or FORGE_TERM_HOLD_SECONDS pass
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	go func() {
+		<-term
+		hold := termHold(getenv("FORGE_TERM_HOLD_SECONDS", "25"))
+		s.logf("SIGTERM: serving the loop's last pushes for at most %s", hold)
+		waitLoopExit(c.WakeFile, hold, 200*time.Millisecond)
+		os.Exit(0)
+	}()
 	log.Fatal(srv.ListenAndServe())
+}
+
+// termHold: FORGE_TERM_HOLD_SECONDS, 0..300, default 25 (a Spot VM gets 30 s in all)
+func termHold(v string) time.Duration {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 300 {
+		n = 25
+	}
+	return time.Duration(n) * time.Second
+}
+
+// waitLoopExit returns once the wake file grows by a line with "loop-exit" (the loop's SIGTERM handler is done), or
+// after max. Only the end of the file written after the call is read.
+func waitLoopExit(wakeFile string, max, poll time.Duration) bool {
+	var off int64
+	if fi, err := os.Stat(wakeFile); err == nil {
+		off = fi.Size()
+	}
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		if f, err := os.Open(wakeFile); err == nil {
+			if fi, err := f.Stat(); err == nil && fi.Size() > off {
+				buf := make([]byte, min(fi.Size()-off, 1<<16))
+				if n, _ := f.ReadAt(buf, off); n > 0 && strings.Contains(string(buf[:n]), " loop-exit") {
+					f.Close()
+					return true
+				}
+			}
+			f.Close()
+		}
+		time.Sleep(poll)
+	}
+	return false
 }

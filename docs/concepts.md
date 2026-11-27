@@ -24,6 +24,17 @@ parts, both fenced as untrusted data (#223):
   (GitHub check runs, and commit statuses on both forges, so Gitea Actions results count too, #237). The reply to
   the reviewers covers these items only.
 
+**Upgrades while agents work** (#174). An upgrade changes the pod template of every agent (new image, new
+operator). The agent StatefulSets use `updateStrategy: OnDelete`, so Kubernetes does not replace a pod by itself. The
+operator replaces each outdated pod: it sets the pod annotation `agentdev/drain`, which the loop reads from a downward
+API file, and the loop starts no new job. When no job runs, the loop tells its forge sidecar, which prints
+`AGENTDEV_DRAINED`; the operator takes this line only from the forge container and then deletes the pod, and the new
+pod starts from the new template. A pod that does not run is replaced at once; a pod whose jobs run longer than
+`DRAIN_MAX_MINUTES` (default 60) is replaced anyway. On SIGTERM (a replaced pod, a node drain, a Spot preemption) the
+loop stops its jobs and saves their work in progress as a local commit on the job branch within
+`AGENT_GRACE_SECONDS` (default 300); nothing is pushed then, and the job continues on the next pod as below. The
+Agent's condition `Updated` shows the state: `Current`, `Draining`, `Drained`, `Forced`, `NotRunning` or `Replacing`.
+
 **An interrupted job continues** (#175). A job whose pod stops (an upgrade, a node that goes away, a crash) is not
 started again from zero. The job keeps a marker and its Claude session id on the agent's state volume
 (`/state/jobs/<job>.*`). When the pod starts again, the job:
@@ -45,6 +56,15 @@ start the loop finds the person who added `agent:<name>` last (GitHub issue even
 repository (on Gitea: that the person is in the repository's assignee list, which has only users with write access). Anything else (no such event, a reader, an unknown answer) skips the issue and records a
 `label-not-writer` or `label-unverified` security event.
 
+**Pull requests given to an agent** (#573). The same rule applies to a pull request that the agent did not open: the
+label `agent:<name>` (GitHub) or an assignment (Gitea), set by a person with write access, whoever opened the PR and
+from whichever branch. The first run after the assignment needs no comment; later runs start on new feedback, as for
+the agent's own PRs. The agent never pushes to the branch of another author: it copies the head to
+`agent/<name>/pr-<n>`, pushes there and opens a stacked PR into the head branch. When the head is the default branch,
+it posts its change as a patch in a comment. A PR from a fork, a label by a person without write access, or a branch
+name that is not plain gets one comment that says why, and no run. A wake that starts no job writes
+`wake: no job started` in the log, after the `ignored:` lines for each item.
+
 The background is rebuilt from the forge on each run and has a fixed size: at most `FEEDBACK_CONTEXT_ITEMS` thread
 items (default 20) and `FEEDBACK_CONTEXT_CHARS` characters in total (default 12000; `0` turns the background off).
 The issue and the PR description get at most a quarter of that each; when the thread is cut, the oldest items go
@@ -54,7 +74,8 @@ carries untrusted text from all earlier rounds.
 ### Run contract (#234)
 
 Issue runs and feedback runs share one set of rules, added after the forge text: read the repository's own
-instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`), stay in the scope of the task, leave CI workflow files to
+instructions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`), stay in the scope of the task (the docs and changelog
+entry those instructions require count as part of it, #591), leave CI workflow files to
 a person (the sidecar refuses them anyway), report only tests that really ran, and ask instead of guessing when a
 wrong guess is costly. An issue run also gets the issue's comments (fenced, at most `ISSUE_CONTEXT_CHARS`
 characters, default 8000, newest kept), because maintainer decisions often live there.
@@ -98,6 +119,13 @@ flowchart LR
   a1 -- poll, push, PR, reply --> forge
   a2 -- poll, push, PR, reply --> forge
 ```
+
+## Job
+
+A **job** is one issue handed to an agent (assigned on Gitea, label `agent:<name>` on GitHub) and the PR the agent
+opens for it on its branch `agent/<name>/issue-<n>`. The console shows its phase: `queued` (no PR yet), `build` (the
+agent waits on an approval), `review` (PR open) and `done` (PR merged or closed). The phase comes from the forge and
+from the Approval objects, the records people and the operator write. It never comes from what the agent says (#345).
 
 ## Project
 
@@ -210,13 +238,16 @@ runner can start any program. So the security boundary is the pod, not the list 
   reported as an `AGENTDEV_SECURITY_EVENT` line in the pod log, so attempts are visible, not only blocked.
 - **No Claude credential next to Claude:** the `claude-proxy` service (`images/credproxy`, #66) is the only holder of
   the Claude login. The agent container calls it as `ANTHROPIC_BASE_URL` with a per-agent key that is useless outside
-  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a token budget per agent
+  the cluster; the proxy adds the real credential, forwards only `/v1/messages`, enforces a budget per agent in cost units (tokens weighted by type and model, #196)
   for 24 h (shown in the UI), and reads the subscription's rate-limit headers itself, so usage reports no longer
   come from inside the agent pod.
 - **Isolation:** gVisor, no Kubernetes service account token, a separate volume per agent, resource limits.
 - **Review gate:** the agent pushes only to its own branch. Only the owner merges, after reviewing the head commit.
 - **Defence in depth:** Claude runs with `--permission-mode dontAsk` and an allow-list (file tools, git without
-  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). Issue and review text is passed
+  push/remote/config, common build and test runners; `CLAUDE_TOOLS` replaces it). An agent with
+  `spec.permission.mode: auto` (#500) runs with `--permission-mode auto` instead: Claude Code's classifier decides a
+  call outside the allow-list, with rules from the Agent object only. The classifier is a model's judgment, not a
+  boundary; the deny-list stays. Issue and review text is passed
   fenced as untrusted data with a fixed system rule. Neither is a guarantee against a determined prompt injection.
 - **Egress allow-list (#65):** agent pods reach the outside only through the `egress-proxy` (Squid), and it only
   the hosts in `EGRESS_HOSTS` (forge, package registries; the model API only through `claude-proxy`). A NetworkPolicy denies every other connection

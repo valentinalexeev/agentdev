@@ -28,7 +28,7 @@
   changed_when: "'already present on all nodes' not in (operator_load.stdout ~ operator_load.stderr)"
   when: operator_kind_cluster | length > 0
 
-- name: "CRDs agents, securityevents, approvals, executors, executorruns, projectsecrets (agentdev.dev)"
+- name: "CRDs agents, securityevents, approvals, executors, executorruns, projectsecrets, mcpprojects (agentdev.dev)"
   kubernetes.core.k8s:
     context: "{{ operator_context }}"
     src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
@@ -37,7 +37,7 @@
     wait_timeout: 60
   loop: "{{ operator_crds }}"
 
-- name: External Secrets Operator CRD (step 13)
+- name: External Secrets Operator CRD (tag secrets)
   kubernetes.core.k8s_info:
     context: "{{ operator_context }}"
     api_version: apiextensions.k8s.io/v1
@@ -45,7 +45,7 @@
     name: externalsecrets.external-secrets.io
   register: operator_eso_crd
 
-- name: Credential broker Deployment (#202, step 13)
+- name: Credential broker Deployment (#202, role secrets_store)
   kubernetes.core.k8s_info:
     context: "{{ operator_context }}"
     kind: Deployment
@@ -53,7 +53,7 @@
     name: credential-broker
   register: operator_broker
 
-- name: Botboard Service (step 07)
+- name: Botboard Service (tag botboard)
   kubernetes.core.k8s_info:
     context: "{{ operator_context }}"
     kind: Service
@@ -90,8 +90,12 @@
         IDLE_SECONDS: "{{ operator_idle_seconds }}"
         AGENT_STORAGE_CLASS: "{{ operator_agent_storage_class }}"
         AGENT_STATE_STORAGE: "{{ operator_agent_state_storage }}"
+        AGENT_EPHEMERAL_REQUEST: "{{ operator_agent_ephemeral_request }}"   # #251
+        AGENT_EPHEMERAL_LIMIT: "{{ operator_agent_ephemeral_limit }}"
+        FORGE_MIRROR_LIMIT: "{{ operator_forge_mirror_limit }}"
+        FORGE_EPHEMERAL_LIMIT: "{{ operator_forge_ephemeral_limit }}"
         EGRESS_PROXY: http://egress-proxy.{{ operator_agents_ns }}.svc.cluster.local:3128
-        # harness guide (#206): the agents' egress list as step 06 builds it, for the text only
+        # harness guide (#206): the agents' egress list as the tag agents builds it, for the text only
         AGENT_EGRESS_HOSTS: >-
           {{ (operator_egress_hosts + operator_egress_extra_hosts)
              | reject('in', ['api.anthropic.com'] if operator_claude_proxy | bool else []) | join(' ') }}
@@ -103,6 +107,8 @@
         APPROVAL_RETENTION_DAYS: "{{ operator_approvals.retention_days }}"
         APPROVALS: "{{ operator_approvals.enabled | string | lower }}"
         APPROVAL_TIMEOUT_MINUTES: "{{ operator_approvals.timeout_minutes }}"
+        AGENT_GRACE_SECONDS: "{{ operator_rollout.grace_seconds }}"
+        DRAIN_MAX_MINUTES: "{{ operator_rollout.drain_max_minutes }}"
         EXEC_NS: "{{ operator_exec_ns }}"
         EXECUTOR_POLL_SECONDS: "{{ operator_executor.poll_seconds }}"
         EXECUTOR_RETENTION_DAYS: "{{ operator_executor.retention_days }}"
@@ -110,6 +116,11 @@
         EXECUTOR_EGRESS_HOSTS: "{{ operator_executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ operator_usage.five_hour }}"
         USAGE_WEEKLY: "{{ operator_usage.weekly }}"
+        # telemetry (#196 D4): /metrics on 9464, NetworkPolicy from the scraper pods only
+        TELEMETRY_OTLP_URL: "{{ operator_telemetry.otlp_url }}"
+        TELEMETRY_INSTANCE: "{{ operator_telemetry.instance }}"
+        TELEMETRY_SCRAPER_NS: "{{ operator_telemetry.scraper_ns }}"
+        TELEMETRY_SCRAPER_SELECTOR: "{{ operator_telemetry.scraper_selector | to_json }}"
         # external forwarder watch (#213, PR #286): off on kind. Extra values are harmless before #286 merges.
         FORWARDER_NS: ""
         FORWARDER_SELECTOR: ""
@@ -117,10 +128,13 @@
         SECRETS_STORE: "{{ operator_store }}"
         # the kind store's value Secrets have one key, value
         SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
-        # #202: the broker URL once step 13 deployed it, and only with the store; empty = no broker
+        # #202: the broker URL once the role secrets_store deployed it, and only with the store; empty = no broker
         CREDENTIAL_BROKER_URL: >-
           {{ ('http://credential-broker.' ~ operator_agents_ns ~ '.svc.cluster.local:8080')
              if operator_store | length > 0 and operator_broker.resources | default([]) | length > 0 else '' }}
+        # MCP per project (#383): allow-list mcp_allowed_hosts (kind.vars.yml, formerly MCP_ALLOWED_HOSTS)
+        MCP_ADMIN_EMAIL: "{{ operator_mcp_admin_email }}"
+        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | default([]) | join(' ') }}"
         CLAUDE_PROXY_URL: >-
           {{ ('http://claude-proxy.' ~ operator_agents_ns ~ '.svc.cluster.local:8080') if operator_claude_proxy | bool else '' }}
       replace: []

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with ./run.sh 13 done (and 12).
+# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with kind.yml --tags secrets done
+# (it also runs the operator).
 #   CLUSTER_NAME=t14 scripts/e2e-secrets.sh
 # Checks: ProjectSecret -> ExternalSecret -> ps-<n> sync, rotation, CRD CEL, admission policies, deletion.
 # The test value is random and never printed.
@@ -95,7 +96,7 @@ spec: {provider: {kubernetes: {remoteNamespace: kube-system, server: {url: "http
 EOF
 ) && { no "operator wrote a SecretStore"; k -n "$ns" delete secretstore evil >/dev/null; } || ok "agentdev service accounts cannot write a SecretStore"
 
-# credential broker (#202 part 2): needs ./run.sh 13 with the credential proxy on
+# credential broker (#202 part 2): needs kind.yml --tags secrets with the Claude proxy on
 if k -n "$ns" get deploy credential-broker >/dev/null 2>&1; then
   k -n "$ns" apply -f - >/dev/null <<EOF
 apiVersion: agentdev.dev/v1alpha1
@@ -136,7 +137,7 @@ EOF
     && ok "broker use and refusal recorded as SecurityEvents" || no "broker events missing: $evs"
   k -n "$ns" logs deploy/credential-broker 2>/dev/null | grep -qF "$val1" && no "value in the broker log" || ok "value not in the broker log"
   # acceptance of #202: a broker secret is not in any agent container (env, /proc/*/environ, files); needs running
-  # agents (./run.sh 06), skipped otherwise. The value is passed on stdin, so it is not in the exec's own argv/env.
+  # agents (kind.yml --tags agents), skipped otherwise. The value is passed on stdin, so it is not in the exec's own argv/env.
   agent_pods=$(k -n "$ns" get pods -l app=coding-agent --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}')
   if [[ -n "$agent_pods" ]]; then
     for p in $agent_pods; do
@@ -160,6 +161,33 @@ api="system:serviceaccount:${PLATFORM_NS}:agentdev-api"
 [[ "$(k -n "$vns" auth can-i get secrets --as="$api")" == no && "$(k -n "$vns" auth can-i list secrets --as="$api")" == no ]] \
   && ok "API cannot read values" || no "API can read values"
 [[ "$(k -n "$ns" auth can-i get secrets --as="$api")" == no ]] && ok "API cannot read ps-* Secrets" || no "API reads agent-namespace Secrets"
+
+# #381 acceptance 3: the agents namespace never reads a platform-* secret, and the operator reads no Secret but the
+# signing key. --dry-run=server runs the admission policies without creating anything (no platform store on kind).
+op="system:serviceaccount:${PLATFORM_NS}:agentdev-operator"
+[[ "$(k -n "$ns" auth can-i get secret/claude-shared --as="$op")" == no ]] \
+  && ok "operator cannot read claude-shared" || no "operator can read claude-shared"
+[[ "$(k -n "$ns" auth can-i get secret/claude-proxy-signing --as="$op")" == yes ]] \
+  && ok "operator reads claude-proxy-signing" || no "operator cannot read claude-proxy-signing"
+[[ "$(k -n "$ns" auth can-i list secrets --as="$op")" == no ]] && ok "operator cannot list Secrets" || no "operator lists Secrets"
+out=$(k -n "$ns" create secret generic claude-evil --from-literal=k=v --as="$op" --dry-run=server 2>&1) \
+  && no "operator wrote a Secret other than agent-*-proxy" || ok "policy limits operator writes to agent-*-proxy"
+readers=0
+for sa in $(k -n "$ns" get sa -o name | sed 's|serviceaccount/||'); do
+  [[ "$(k -n "$ns" auth can-i get secrets --as="system:serviceaccount:$ns:$sa")" == no ]] \
+    || { no "service account $sa in $ns can read Secrets"; readers=$((readers + 1)); }
+done
+[[ $readers -eq 0 ]] && ok "no service account of $ns reads Secrets (auth can-i)"
+out=$(k -n "$ns" apply --dry-run=server -f - 2>&1 <<EOF
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: {name: e2e-platform}
+spec:
+  secretStoreRef: {name: agentdev-platform-secrets, kind: SecretStore}
+  target: {name: e2e-platform}
+  data: [{secretKey: v, remoteRef: {key: platform-pg-admin}}]
+EOF
+) && no "ExternalSecret naming platform-* accepted in $ns" || ok "policy refuses a platform-* ExternalSecret in $ns"
 
 # deletion
 k -n "$ns" delete projectsecret "$name" >/dev/null

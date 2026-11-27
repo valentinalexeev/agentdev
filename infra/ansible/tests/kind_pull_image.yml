@@ -1,0 +1,76 @@
+# Check (#558, #378): a published image for kind is pulled for the engine's platform and re-tagged through a one-line
+# build, so `kind load` gets a single-manifest image. Runs the shared task files with a stub engine on a test PATH and
+# compares the calls. An unknown architecture fails. No engine, no cluster.
+# Run: ansible-playbook infra/ansible/tests/kind_pull_image.yml
+- name: One-platform pull for kind (#558)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kind_pull_engine: docker
+  tasks:
+    - name: Stub directory
+      ansible.builtin.tempfile: {state: directory}
+      register: pull_tmp
+
+    - name: Cases
+      environment:
+        PATH: "{{ playbook_dir }}/files/pull-stubs:/usr/bin:/bin"
+        STUB_LOG: "{{ pull_tmp.path }}/log"
+      block:
+        - name: Platform of an x86_64 engine
+          ansible.builtin.include_tasks: ../tasks/kind_pull_platform.yml
+
+        - name: The platform is linux/amd64
+          ansible.builtin.assert:
+            that: kind_pull_platform == 'linux/amd64'
+            quiet: true
+
+        - name: Pull postgres
+          ansible.builtin.include_tasks: ../tasks/kind_pull_image.yml
+          vars: {kind_pull_ref: "postgres:17.11"}
+
+        - name: Read the stub log
+          ansible.builtin.slurp: {src: "{{ pull_tmp.path }}/log"}
+          register: pull_log
+
+        - name: Pull for one platform, then the one-line re-tag build
+          ansible.builtin.assert:
+            that:
+              - (pull_log.content | b64decode).splitlines() == [
+                  'pull -q --platform linux/amd64 postgres:17.11 |',
+                  'build -q --platform linux/amd64 -t postgres:17.11 - | FROM postgres:17.11']
+            fail_msg: "{{ pull_log.content | b64decode }}"
+            quiet: true
+
+        - name: An aarch64 engine is linux/arm64
+          environment: {STUB_ARCH: aarch64}
+          block:
+            - name: Platform of an aarch64 engine
+              ansible.builtin.include_tasks: ../tasks/kind_pull_platform.yml
+
+        - name: The platform is linux/arm64
+          ansible.builtin.assert:
+            that: kind_pull_platform == 'linux/arm64'
+            quiet: true
+
+        - name: An unknown architecture fails
+          environment: {STUB_ARCH: s390x}
+          block:
+            - name: Platform of an s390x engine
+              ansible.builtin.include_tasks: ../tasks/kind_pull_platform.yml
+
+            - name: Not reached
+              ansible.builtin.set_fact: {pull_unknown_ok: true}
+          rescue:
+            - name: The failure names the architecture
+              ansible.builtin.assert:
+                that: "'unknown container engine architecture: s390x' in ansible_failed_result.msg"
+                quiet: true
+
+        - name: The unknown architecture did not pass
+          ansible.builtin.assert:
+            that: pull_unknown_ok is not defined
+            quiet: true
+      always:
+        - name: Remove the stub directory
+          ansible.builtin.file: {path: "{{ pull_tmp.path }}", state: absent}

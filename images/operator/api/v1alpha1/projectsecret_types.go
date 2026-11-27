@@ -42,7 +42,7 @@ type ProjectSecretEnv struct {
 	// also drops any name it already renders, whatever this list says (secretEnv).
 	// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]{0,63}$`
 	// +kubebuilder:validation:MaxLength=64
-	// +kubebuilder:validation:XValidation:rule="!self.matches('^((AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES|OTEL|EGRESS|LD|DYLD|NPM_CONFIG|PIP|SSL|CURL|REQUESTS|JAVA|JDK|NODE|PYTHON|PERL|RUBY|BUNDLE|GEM)_[A-Z0-9_]*|PATH|HOME|SHELL|USER|TMPDIR|ENV|BASH_ENV|PROMPT_COMMAND|PS[0-4]|IFS|CDPATH|EDITOR|VISUAL|PAGER|GNUPGHOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|AGENT_NAME|REPO|REVIEWER|READY_ISSUE|POLL_SECONDS|IDLE_SECONDS|MAX_CONCURRENT|SCALE_TO_ZERO|ROUTER_URL|BOTBOARD_URL|APPROVALS|APPROVALS_URL|APPROVAL_TIMEOUT_MINUTES|WAKE_FILE|SELF_URL|MIRROR_DIR|USAGE_REPORTS|WAKE_TOKEN|REGISTER_TOKEN|REDACT_DIR|JOB_TIMEOUT|MAX_BUDGET_USD|MAX_TURNS)$')",message="reserved variable name"
+	// +kubebuilder:validation:XValidation:rule="!self.matches('^((AGENTDEV|ANTHROPIC|CLAUDE|FORGE|GIT|GH|GITHUB|SSH|KUBE|KUBERNETES|OTEL|EGRESS|AGENT|DIAG|INFRA|LD|DYLD|NPM_CONFIG|PIP|SSL|CURL|REQUESTS|JAVA|JDK|NODE|PYTHON|PERL|RUBY|BUNDLE|GEM)_[A-Z0-9_]*|PATH|HOME|SHELL|USER|TMPDIR|ENV|BASH_ENV|PROMPT_COMMAND|PS[0-4]|IFS|CDPATH|EDITOR|VISUAL|PAGER|GNUPGHOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|PYTHONSTARTUP|PYTHONPATH|PYTHONHOME|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|REPO|REVIEWER|READY_ISSUE|POLL_SECONDS|IDLE_SECONDS|MAX_CONCURRENT|SCALE_TO_ZERO|ROUTER_URL|BOTBOARD_URL|APPROVALS|APPROVALS_URL|APPROVAL_TIMEOUT_MINUTES|WAKE_FILE|SELF_URL|MIRROR_DIR|USAGE_REPORTS|WAKE_TOKEN|REGISTER_TOKEN|REDACT_DIR|JOB_TIMEOUT|MAX_BUDGET_USD|MAX_TURNS)$')",message="reserved variable name"
 	Name string `json:"name"`
 	// Must be true: the person who sets it accepts that the model can read the value.
 	// +kubebuilder:validation:XValidation:rule="self == true",message="mode env needs riskAccepted: true"
@@ -107,6 +107,9 @@ type ProjectSecretStatus struct {
 	SyncedAt *metav1.Time `json:"syncedAt,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Ready (#386): True when synced, False when pending or error. Flux and Argo CD health checks read it.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

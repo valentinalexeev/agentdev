@@ -1,7 +1,9 @@
 ---
-# Owner/API split (docs/security.md, #70): agentdev_owner (NOLOGIN) owns the database and the objects, the login
-# agentdev_api may only insert, read and call the prune functions (images/api/grants.sql). SQL goes through stdin of
-# psql in the Postgres pod, so the password is never in argv or in the log.
+# Database agentdev (#382): the Job agentdev-db-init-<hash> runs in the cluster, with no kubectl exec. It makes the
+# roles (owner/API split, docs/security.md, #70: agentdev_owner NOLOGIN owns the objects, the login agentdev_api may
+# only insert, read and call the prune functions), the database, schema.sql as agentdev_owner, the retention, grants.sql
+# and last the schema version that the API waits for (images/api, waitSchema). The SQL is in a ConfigMap
+# (manifests/db-init/); the passwords come from the Secrets platform-db and agentdev-api-db by name, never from here.
 - name: Check the database password
   ansible.builtin.assert:
     that: api_db_password is match('^[0-9a-f]{32,}$')
@@ -10,35 +12,17 @@
       {{ ('Secret Manager ' ~ api_sm_db_password) if api_secret_source == 'gcp' else (api_secrets_dir ~ '/pg-agentdev-api') }}
       must hold a hex password (openssl rand -hex 24)
     quiet: true
-  when: not ansible_check_mode
+  when: not ansible_check_mode and api_playbook_secrets
   no_log: true
 
-- name: Database roles and the database agentdev
-  ansible.builtin.command:
-    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ api_db_pod }}", --,
-           psql, -U, postgres, -v, ON_ERROR_STOP=1, -q]
-    stdin: |
-      SELECT 'CREATE ROLE agentdev_owner NOLOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_owner')\gexec
-      SELECT 'CREATE ROLE agentdev_api LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='agentdev_api')\gexec
-      ALTER ROLE agentdev_api PASSWORD '{{ api_db_password }}';
-      SELECT 'CREATE DATABASE agentdev OWNER agentdev_owner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='agentdev')\gexec
-      ALTER DATABASE agentdev OWNER TO agentdev_owner;
-  changed_when: false   # idempotent SQL; psql -q gives no reliable change signal
-  when: not ansible_check_mode
-  no_log: true
-
-- name: Schema (as agentdev_owner), retention and grants
-  ansible.builtin.command:
-    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ api_db_pod }}", --,
-           psql, -U, postgres, -d, agentdev, -v, ON_ERROR_STOP=1, -q]
-    stdin: |
-      REASSIGN OWNED BY agentdev_api TO agentdev_owner;
-      SET ROLE agentdev_owner;
-      {{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql') }}
-      UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};
-      RESET ROLE;
-      {{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql') }}
-  changed_when: false
-  when: not ansible_check_mode
-  # no secret here, but -v would print the whole schema and grants
-  no_log: true
+- name: Job agentdev-db-init (roles, database, schema, retention, grants)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init.yml"
+  vars:
+    db_init_name: agentdev-db-init
+    db_init_image: "{{ api_db_init_image }}"
+    db_init_command: [sh, /db-init/agentdev.sh]
+    db_init_files: "{{ api_db_init_files }}"
+    db_init_env: "{{ api_db_init_env }}"
+    # a new API password (agentdev-api-db changed) must reach the role: run the same Job again
+    # secrets_mode external: no playbook Secret write here (api_secret_db not set); ESO keeps the name and key
+    db_init_rerun: "{{ api_secret_db | default({}) is changed }}"

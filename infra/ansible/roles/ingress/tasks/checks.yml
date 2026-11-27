@@ -16,7 +16,7 @@
   ansible.builtin.assert:
     that:
       - ingress_forwarder is mapping
-      - ingress_forwarder.keys() | difference(['namespace', 'pod_selector', 'cidrs']) | length == 0
+      - ingress_forwarder.keys() | difference(['namespace', 'pod_selector', 'cidrs', 'deploy']) | length == 0
       - (ingress_forwarder.namespace | default('')) | length == 0 or ingress_forwarder.namespace is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
       - ingress_forwarder.pod_selector | default({}) is mapping
       - (ingress_forwarder.pod_selector | default({})) | length == 0 or (ingress_forwarder.namespace | default('')) | length > 0
@@ -24,7 +24,7 @@
       - (ingress_forwarder.cidrs | default([])) | map('string') | reject('match', ingress_cidr_re) | list | length == 0
       - ingress_forwarder_allow_wide_cidrs | bool or (ingress_forwarder.cidrs | default([])) | map('string') | select('match', '.*/[0-7]$') | list | length == 0
     fail_msg: >-
-      ingress.forwarder: keys namespace, pod_selector (needs namespace) and cidrs (a list of IPv4 CIDRs, a.b.c.d/n,
+      ingress.forwarder: keys namespace, pod_selector (needs namespace), deploy (#316) and cidrs (a list of IPv4 CIDRs, a.b.c.d/n,
       n 8 or more unless ingress.forwarder_allow_wide_cidrs: true)
     quiet: true
 

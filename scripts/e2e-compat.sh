@@ -8,6 +8,9 @@
 #   PREV_TAG=1.0.0-rc.6 scripts/e2e-compat.sh   image tag of the previous release (without the v)
 #   KEEP_CLUSTER=1 ...                          keep the cluster for debugging
 #   COMPAT_API=1 ...                            also deploy the PR-head API (needs helm: Postgres, authentik)
+#   COMPAT_SSO=0 ...                            with COMPAT_API=1: skip the company SSO stand-in and its sign-in check
+#                                               (default 1; #566: PRs that touch no authentik/SSO path)
+#   IDLE_SECONDS=45 ...                         idle timeout of alice (default 15 with the stub, 45 with the real model)
 #   CLAUDE_REAL=1 ANTHROPIC_API_KEY=... ...     real model instead of the stub (nightly/manual only, never on PRs)
 # Needs: docker, kind, kubectl, ansible-playbook (with kubernetes.core), envsubst, jq, curl, openssl.
 set -euo pipefail
@@ -20,7 +23,7 @@ export CLUSTER_NAME="${CLUSTER_NAME:-agentdev-compat}"
 export KUBECTL="kubectl --context kind-${CLUSTER_NAME}"
 export FORGE_HOST_URL="http://localhost:${COMPAT_FORGE_PORT:-13000}"
 export AGENTS=alice REPO=owner/playground FORGE_KIND=gitea
-export SCALE_TO_ZERO=true IDLE_SECONDS="${IDLE_SECONDS:-45}" POLL_SECONDS=10 WAKE_POLL_SECONDS=30 MAX_CONCURRENT=1
+export SCALE_TO_ZERO=true IDLE_SECONDS="${IDLE_SECONDS:-$([[ "${CLAUDE_REAL:-0}" == 1 ]] && echo 45 || echo 15)}" POLL_SECONDS=10 WAKE_POLL_SECONDS=30 MAX_CONCURRENT=1
 export WORKER_IMAGE="ghcr.io/valentinalexeev/agentdev-worker:${PREV_TAG}"
 export FORGE_IMAGE="ghcr.io/valentinalexeev/agentdev-forge:${PREV_TAG}"
 export ROUTER_IMAGE=agentdev/router:compat CLAUDE_PROXY_IMAGE=agentdev/credproxy:compat
@@ -52,19 +55,34 @@ cleanup() {
   local rc=$?
   (( rc == 0 && fail == 0 )) || dump
   [[ "${KEEP_CLUSTER:-0}" == 1 ]] || kind delete cluster --name "${CLUSTER_NAME}" >/dev/null 2>&1 || true
+  [[ -z "${platform_pid:-}" ]] || kill "${platform_pid}" 2>/dev/null || true
+  rm -f "${vars_file:-}" "${platform_log:-}"
 }
 trap cleanup EXIT
 
 log "Compatibility e2e: worker+forge ${PREV_TAG} against this checkout ($(git rev-parse --short HEAD))"
 export ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg"
-ansible-playbook infra/ansible/kind.yml --tags cluster -e "kind_cluster_name=${CLUSTER_NAME}" \
-  -e "kind_cluster_engine=${CONTAINER_ENGINE}" -e "kind_cluster_gvisor_version=${GVISOR_VERSION}" \
-  -e "kind_cluster_config=${root}/tools/claude-stub/kind-config.yaml"
-export FORGE_ADMIN_PASSWORD
-ansible-playbook infra/ansible/kind.yml --tags forge -e "kind_cluster_name=${CLUSTER_NAME}" \
-  -e "gitea_forge_ns=${FORGE_NS}" -e "gitea_forge_url=${FORGE_HOST_URL}" -e "gitea_forge_admin_user=${FORGE_ADMIN_USER}" \
-  -e "gitea_forge_repo=${REPO}" -e '{"gitea_forge_agents": ["alice"]}' -e "gitea_forge_agents_ns=${AGENTS_NS}" \
-  -e "gitea_forge_service_cidr=${SERVICE_CIDR}" -e "gitea_forge_secrets_dir=${root}/.secrets"
+# the settings of kind.yml for this run (#417: was config.env through the step scripts); JSON is valid YAML
+vars_file=$(mktemp "${TMPDIR:-/tmp}/e2e-compat-vars.XXXXXX")
+jq -n --arg cn "${CLUSTER_NAME}" --arg en "${CONTAINER_ENGINE}" --arg gv "${GVISOR_VERSION}" \
+  --arg cc "${root}/tools/claude-stub/kind-config.yaml" --arg an "${AGENTS_NS}" --arg pn "${PLATFORM_NS}" \
+  --arg fn "${FORGE_NS}" --arg fu "${FORGE_HOST_URL}" --arg fa "${FORGE_ADMIN_USER}" --arg repo "${REPO}" \
+  --arg wi "${WORKER_IMAGE}" --arg fimg "${FORGE_IMAGE}" --arg sc "${SERVICE_CIDR}" --arg oi "${OPERATOR_IMAGE}" \
+  --arg ri "${ROUTER_IMAGE}" --arg ci "${CLAUDE_PROXY_IMAGE}" --arg ai "${API_IMAGE}" \
+  --argjson idle "${IDLE_SECONDS}" --argjson poll "${POLL_SECONDS}" --argjson wake "${WAKE_POLL_SECONDS}" \
+  --argjson mc "${MAX_CONCURRENT}" \
+  '{kind_cluster_name: $cn, kind_engine: $en, kind_cluster_gvisor_version: $gv, kind_cluster_config: $cc,
+    agents_ns: $an, platform_ns: $pn, kind_forge_ns: $fn, kind_forge_url: $fu, kind_forge_admin_user: $fa,
+    kind_repo: $repo, kind_agent_names: ["alice"], kind_worker_image: $wi, kind_forge_image: $fimg,
+    kind_service_cidr: $sc, operator_image: $oi, kind_agents_router_image: $ri, kind_agents_credproxy_image: $ci,
+    kind_agents_forge_kind: "gitea", forge_kind: "gitea", kind_agents_scale_to_zero: true, kind_agents_wake_poll_seconds: $wake,
+    kind_agents_max_concurrent: $mc, operator_idle_seconds: $idle, operator_poll_seconds: $poll, api_image: $ai}' \
+  > "${vars_file}" || die "IDLE_SECONDS, POLL_SECONDS, WAKE_POLL_SECONDS and MAX_CONCURRENT must be numbers"
+kind_play() { ansible-playbook infra/ansible/kind.yml -e "@${vars_file}" "$@"; }
+kind_play --tags cluster
+# secrets stay in the environment: the roles read them with lookup('env'), never from a vars file
+export FORGE_ADMIN_PASSWORD ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+kind_play --tags forge
 
 if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
   log "Claude stub"
@@ -76,16 +94,24 @@ if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
   k -n "${AGENTS_NS}" rollout status deploy/claude-stub --timeout=120s >/dev/null
 fi
 
-"${root}/12-operator.sh"
-"${root}/06-agents.sh"
+kind_play --tags operator
+# #566: mcp and authentik (about 6 min) run in the background while the agents are deployed and checked; the join
+# before --tags api (after the agent checks) waits for them. The API comes after the agent checks, so the idle timer
+# cannot stop alice before the router check (#556); the chat admission checks need agent-alice's StatefulSet only.
+platform_pid=""
+if [[ "${COMPAT_API:-0}" == 1 ]]; then
+  sso_args=(); [[ "${COMPAT_SSO:-1}" == 1 ]] || sso_args=(-e authentik_kind_sso_standin=false)
+  platform_log=$(mktemp "${TMPDIR:-/tmp}/e2e-compat-platform.XXXXXX")
+  log "mcp and authentik in the background (log at the join)"
+  ( kind_play --tags mcp && kind_play --tags authentik ${sso_args[@]+"${sso_args[@]}"} ) >"${platform_log}" 2>&1 &
+  platform_pid=$!
+fi
+kind_play --tags agents
 if [[ "${CLAUDE_REAL:-0}" != 1 ]]; then
-  # 06 renders the production proxy; point it at the stub (plain http allowed only by this flag)
+  # the tag agents renders the production proxy; point it at the stub (plain http allowed only by this flag)
   k -n "${AGENTS_NS}" set env deploy/claude-proxy UPSTREAM="http://claude-stub.${AGENTS_NS}.svc.cluster.local:8080" \
     ALLOW_HTTP_UPSTREAM=true >/dev/null
   k -n "${AGENTS_NS}" rollout status deploy/claude-proxy --timeout=120s >/dev/null
-fi
-if [[ "${COMPAT_API:-0}" == 1 ]]; then
-  "${root}/08-mcp.sh"; "${root}/09-authentik.sh"; "${root}/10-api.sh"
 fi
 
 ga() { curl -fsS -u "${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}" -X "$1" -H 'Content-Type: application/json' \
@@ -116,6 +142,14 @@ if [[ "${pr}" =~ ^[0-9]+$ ]]; then
   desc="push: the PR branch has the file of the fake model"
   if [[ "${CLAUDE_REAL:-0}" == 1 ]]; then check true
   else check bash -c "curl -fsS -u '${FORGE_ADMIN_USER}:${FORGE_ADMIN_PASSWORD}' '${FORGE_HOST_URL}/api/v1/repos/${REPO}/contents/STUB_CHANGE.md?ref=${head}' >/dev/null"; fi
+  # #394: a worker before 1.1 (the previous release in this test) sets its feedback cursor only after the review
+  # request and the board update that follow the PR; a comment in those seconds is never answered. Wait until the
+  # review request is on the PR, then a few seconds more, before commenting.
+  for _ in $(seq 30); do
+    ga GET "/repos/${REPO}/pulls/${pr}" | jq -e '(.requested_reviewers // []) | length > 0' >/dev/null && break
+    sleep 2
+  done
+  sleep 10
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   ga POST "/repos/${REPO}/issues/${pr}/comments" '{"body":"Please change the file again."}' >/dev/null
   desc="reply: alice answers the PR comment"
@@ -127,8 +161,16 @@ fi
 desc="usage: claude-proxy printed an AGENTDEV_USAGE line for alice"
 check bash -c "${KUBECTL} -n ${AGENTS_NS} logs deploy/claude-proxy | grep 'AGENTDEV_USAGE' | grep -q '\"alice\"'"
 if [[ "${COMPAT_API:-0}" == 1 ]]; then
+  log "Join: mcp and authentik"
+  platform_rc=0; wait "${platform_pid}" || platform_rc=$?; platform_pid=""
+  cat "${platform_log}"
+  (( platform_rc == 0 )) || die "mcp or authentik failed (exit ${platform_rc}), log above"
+  kind_play --tags api
   desc="API: agentdev-api is ready"
   check k -n "${PLATFORM_NS}" rollout status deploy/agentdev-api --timeout=60s
+  # console chat boundaries (#346, R101): NetworkPolicy shape and the admission policy (server dry run as the API)
+  desc="security: console chat NetworkPolicy and admission (e2e-gke-security.sh --kind --only chat)"
+  check "${root}/scripts/e2e-gke-security.sh" --kind --context "kind-${CLUSTER_NAME}" --agent alice --only chat
 fi
 
 log "Result: ${pass} PASS, ${fail} FAIL"

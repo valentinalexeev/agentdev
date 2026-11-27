@@ -1,0 +1,26 @@
+---
+# Render mode of the role (#447): authentik-sso holds the IdP certificate or client secret, so it is a Secret only.
+# The render lists its name; the authentik pods read it with envFrom (optional).
+- name: Company SSO Secret name
+  ansible.builtin.set_fact:
+    authentik_sso_secret_names: "{{ [[platform_ns, authentik_sso_secret]] }}"
+
+# secrets_mode external (#457): the ExternalSecret authentik-sso of tasks/main.yml, with an ESO reference in place of
+# the secret value
+- name: SSO ExternalSecret spec (secrets_mode external)
+  when: secrets_mode | default('playbook') == 'external'
+  block:
+    - name: Build the SSO settings with an ESO reference
+      ansible.builtin.include_tasks: env.yml
+      vars:
+        authentik_sso_idp_cert: "{{ authentik_sso_es_ref if authentik_sso_kind == 'saml' else '' }}"
+        authentik_sso_oidc_client_secret: "{{ authentik_sso_es_ref if authentik_sso_kind == 'oidc' else '' }}"
+        authentik_sso_check_values: false
+
+    - name: Keep the spec
+      ansible.builtin.set_fact:
+        authentik_sso_es_specs:
+          - name: "{{ authentik_sso_secret }}"
+            ns: "{{ platform_ns }}"
+            data: {sso: "{{ authentik_sso_sm_idp_cert if authentik_sso_kind == 'saml' else authentik_sso_sm_oidc_client_secret }}"}
+            template: "{{ authentik_sso_env }}"

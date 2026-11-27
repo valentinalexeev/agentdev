@@ -1,14 +1,16 @@
 ---
-# agentdev API on GKE (#104): the same manifests/api.yaml.tmpl, schema.sql and grants.sql as ./run.sh 10.
+# agentdev API on GKE (#104): the same manifests/api.yaml.tmpl, schema.sql and grants.sql as kind.yml --tags api.
 # Instance values go into instance.yml under `api` (example.vars.yml). The role is skipped without api.oidc_issuer.
 api_image: "{{ image_registry }}/agentdev-api:{{ image_tag }}"
 # OIDC: issuer = the URL users log in through (it is in the tokens); discovery = where the API fetches the keys.
 # With authentik on GKE (#114, group_vars authentik_enabled) both default to authentik: the public issuer on
-# ingress.auth_host and the in-cluster discovery URL (same as 10-api.sh). An explicit api.oidc_issuer wins.
+# ingress.auth_host and the in-cluster discovery URL (same as on kind). An explicit api.oidc_issuer wins.
 api_oidc_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer | default('')) }}"
 api_oidc_discovery_url: >-
   {{ api.oidc_discovery_url | default(api.oidc_issuer if api.oidc_issuer is defined
      else (authentik_default_discovery_url | default('') or api_oidc_issuer)) }}
+# how long the playbook waits for an external issuer's discovery document before the API rollout (#334)
+api_oidc_wait_seconds: "{{ api.oidc_wait_seconds | default(300) }}"
 # public OIDC client of the UI (#323); the API audience follows it unless api.oidc_audience is set
 api_oidc_client_id: "{{ api.oidc_client_id | default('agentdev') }}"
 api_oidc_audience: "{{ api.oidc_audience | default(api_oidc_client_id) }}"
@@ -24,6 +26,18 @@ api_approval_deny_accounts: "{{ api.approval_deny_accounts | default([]) }}"
 # agent caps (#27) for POST /api/agents (MAX_AGENTS, MAX_AGENTS_PER_USER on kind); 0 = no cap. Checked in tasks/main.yml.
 api_max_agents: "{{ api.max_agents | default(0) }}"
 api_max_agents_per_user: "{{ api.max_agents_per_user | default(0) }}"
+# agents from Git (#58): instance setting agents_source (api | git, default api); AGENTS_SOURCE on kind
+api_agents_source: "{{ agents_source | default('api') }}"
+# notifications (#347): channels on for the instance (webpush; Bark: #402), the VAPID contact and the push services the
+# API may send to (subscription endpoints on other hosts are refused). VAPID key pair: Secret Manager api_sm_vapid
+# (GKE) or .secrets/platform/notify-vapid (kind), generated once by tasks/notify.yml.
+api_notify: "{{ notifications | default({}) }}"
+api_notify_channels: "{{ api_notify.channels | default([]) }}"
+api_notify_subject: "{{ api_notify.subject | default('') }}"
+api_notify_push_hosts: >-
+  {{ api_notify.push_hosts | default(['fcm.googleapis.com', 'updates.push.services.mozilla.com', '*.push.apple.com',
+     '*.notify.windows.com']) }}
+api_sm_vapid: "{{ platform_sm_prefix }}notify-vapid"
 api_db_retention_days: "{{ api.db_retention_days | default(365) }}"
 # Where secrets come from: gcp (Secret Manager, deploy.yml) or files (kind.yml, #106: api_secrets_dir).
 api_secret_source: gcp
@@ -31,7 +45,7 @@ api_secret_source: gcp
 # GitHub App files (forge_kind github), and the in-cluster Gitea for the agentdev-api account (tasks/forge_gitea.yml)
 api_kind_cluster: ""
 api_container_engine: docker
-# project secrets (#202): namespace of the kind store's value Secrets (config.env SECRETS_VALUES_NS); empty = off (GKE: part 4)
+# project secrets (#202): namespace of the kind store's value Secrets (kind.yml sets it); empty = off (GKE: part 4)
 api_secrets_values_ns: ""
 api_secrets_dir: "{{ repo_root }}/.secrets/platform"
 api_github_app_dir: "{{ repo_root }}/.secrets/github-app"
@@ -48,8 +62,50 @@ api_sm_forge_token: agentdev-api-forge-token     # optional, filled by the owner
 api_github: "{{ (forge_kind | default('gitea')) == 'github' }}"
 api_github_url: "{{ github_url | default('https://github.com') }}"
 api_sm_siem: "{{ sm_security_siem }}"            # optional, KEY=VALUE lines (#71)
-# The Postgres pod of the platform role and its superuser
-api_db_pod: platform-db-0
+# db-init Job (#382): the image of the platform Postgres (psql), and schema.sql/grants.sql of the API image. The schema
+# version is the one the API computes from its embedded files (images/api/events.go, schemaVersion).
+api_db_init_image: postgres:17.11   # the Postgres image of the role platform (tests/db_init.yml checks it)
+api_schema_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/schema.sql', rstrip=false) }}"
+api_grants_sql: "{{ lookup('ansible.builtin.file', repo_root + '/images/api/grants.sql', rstrip=false) }}"
+api_schema_version: "{{ (api_schema_sql ~ api_grants_sql) | hash('sha256') | truncate(16, true, '') }}"
+# the ConfigMap of the Job (manifests/db-init/) and its env: secret values only by Secret name (#381 may make these
+# Secrets ExternalSecrets with the same names)
+api_db_init_files:
+  agentdev.sh: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev.sh', rstrip=false) }}"
+  agentdev-roles.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev-roles.sql', rstrip=false) }}"
+  agentdev-schema.sql: "{{ lookup('ansible.builtin.file', repo_root + '/manifests/db-init/agentdev-schema.sql', rstrip=false) }}"
+  schema.sql: "{{ api_schema_sql }}"
+  grants.sql: "{{ api_grants_sql }}"
+  settings.sql: |
+    UPDATE security_settings SET retention_days = {{ api_db_retention_days | int }};
+    UPDATE chat_settings SET retention_days = {{ api_chat_retention_days | int }};
+api_db_init_env:
+  - {name: SCHEMA_VERSION, value: "{{ api_schema_version }}"}
+  - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: platform-db, key: POSTGRES_PASSWORD}}}
+  - {name: DATABASE_URL, valueFrom: {secretKeyRef: {name: agentdev-api-db, key: DATABASE_URL}}}
 # web UI (#48) next to the API; the role ingress makes it public on https://<ingress.host>/ (#120)
 api_ui: "{{ api.ui | default(true) }}"
 api_ui_image: "{{ image_registry }}/agentdev-ui:{{ image_tag }}"
+# console chat sessions (#346, images/api/chat.go): API-started session Jobs in agents_ns. api.chat.enabled turns them
+# on. CHAT_TOKEN_KEY is generated once (Secret Manager api_sm_chat_key on GKE, .secrets/platform/chat-token-key on
+# kind). Session pods are the agent's pod (#424): the repository and every forge action go through the agent's forge
+# sidecar, so there is no clone token. The issue token (Gitea site admin, write:issue, used with Sudo) is the optional
+# secret api_sm_chat_issue_token on GKE.
+api_chat: "{{ (api.chat | default({})).enabled | default(false) | bool }}"
+api_chat_idle_seconds: "{{ (api.chat | default({})).idle_minutes | default(30) | int * 60 }}"
+api_chat_retention_days: "{{ (api.chat | default({})).retention_days | default(30) }}"
+api_chat_max_sessions: "{{ (api.chat | default({})).max_sessions | default(0) }}"
+api_chat_max_sessions_per_user: "{{ (api.chat | default({})).max_sessions_per_user | default(0) }}"
+# #424: a session pod is the agent's pod spec (copied from its StatefulSet); the admission policy pins both images
+api_chat_worker_image: "{{ worker_image | default(image_registry ~ '/agentdev-worker:' ~ image_tag) }}"
+api_chat_forge_image: "{{ forge_image | default(image_registry ~ '/agentdev-forge:' ~ image_tag) }}"
+api_sm_chat_key: agentdev-api-chat-token-key        # generated once
+api_sm_chat_issue_token: agentdev-chat-issue-token  # optional, Gitea only
+# The agents namespace (#357): the API manifest has objects in it. The tags agents and operator (GKE: deploy.yml) create it, the
+# role makes it too so that `kind.yml --tags api` works alone. Labels as deploy.yml (#184); kind.yml sets the same
+# cost labels as the operator role.
+api_ns_labels: "{{ agentdev_effective_labels }}"
+api_agents_ns_definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ api_ns_labels }}"}}
+# #381: secrets_mode external reads no secret value (ExternalSecrets, templates/externalsecrets.j2). The role password
+# of agentdev_api is then set by the db-init Job (#382), and the VAPID pair must exist in Secret Manager (docs/admin.md).
+api_playbook_secrets: "{{ secrets_mode | default('playbook') == 'playbook' or api_secret_source == 'files' }}"
