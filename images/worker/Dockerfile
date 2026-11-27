@@ -1,8 +1,9 @@
 # Coding-agent worker: Claude Code CLI + a polling loop over a forge (Gitea for the MVP).
 FROM node:24-bookworm-slim
 
+# xz-utils: custom toolchains (#598) unpack .tar.xz archives (for example shellcheck) in the init container toolchain
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl jq procps python3 tmux \
+ && apt-get install -y --no-install-recommends ca-certificates git ripgrep curl jq procps python3 tmux xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 ARG CLAUDE_CODE_VERSION=2.1.312

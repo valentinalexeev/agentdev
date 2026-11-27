@@ -60,8 +60,13 @@ egress_extra_hosts: []
 # api.anthropic.com in egress_hosts is dropped for agents while claude_proxy is true (docs/security.md R64).
 forge_egress_hosts: [api.github.com, github.com]
 # toolchain preset downloads (#499): only the init container toolchain, with the egress-setup-proxy credential. The
-# hosts of the operator's preset catalogue (images/operator/toolchain.go ToolchainHosts).
+# hosts of the operator's preset catalogue (images/operator/toolchain.go ToolchainHosts). Add the download hosts of
+# your custom toolchains (#598) here: the operator refuses a custom toolchain with a host that is not in this list.
 setup_egress_hosts: [dl.google.com, static.rust-lang.org]
+# Custom toolchains of this deployment (#598, docs/admin.md "Give an agent a toolchain"): name -> {files: [{name,
+# kind: tar|file|deb, strip, arch: {amd64|arm64|all: {url, sha256}}}], path, verify, hosts, env, allow}. Agents name
+# them in agents[].toolchain.custom. Empty: none.
+toolchains: {}
 egress_fqdn_policy: true
 # Read-only plan identity (#291, #421): set true together with Terraform create_plan_identity = true. The preflight
 # then checks that the apply account may create it. plan_identity_billing_account: Terraform billing_account_id, or
@@ -80,8 +85,9 @@ max_turns: 40                       # turn limit of one Claude run (#336, 1-500)
 # high, xhigh, max. Per-agent override: agents[].model, agents[].effort.
 claude_model: ""
 claude_effort: ""
-# Toolchain per agent only (#499): agents[].toolchain = {presets: {go: "1.27.4", rust: "1.100.0"}, path: [...],
-# refresh: 168h}. Versions from the operator's catalogue; installed read-only before the agent starts.
+# Toolchain per agent only (#499): agents[].toolchain = {presets: {go: "1.27.4", rust: "1.100.0"}, custom: [...],
+# path: [...], refresh: 168h}. Versions from the operator's catalogue, custom names from toolchains (#598); installed
+# read-only before the agent starts.
 # Tools added to the default allow-list per agent only (#496): agents[].tools = {allow: ["Bash(npm ci:*)"]}.
 # Claude Code permission mode per agent only (#500): agents[].permission = {mode: auto, autoMode: {allow: [...],
 # softDeny: [...], environment: [...]}}. Unset: dontAsk. In mode auto a classifier decides calls outside the allow-list.

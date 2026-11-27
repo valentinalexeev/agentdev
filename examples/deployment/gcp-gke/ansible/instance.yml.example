@@ -14,6 +14,20 @@ reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
   # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
+  # an agent with a custom toolchain (agentdev #598): - {name: carol, user: carol, repos: my-org/my-repo,
+  #   toolchain: {custom: [shell-tools]}}
+# Custom toolchains of this deployment (agentdev #598, docs/admin.md "Give an agent a custom toolchain"). Add every
+# download host to setup_egress_hosts too:
+# setup_egress_hosts: [dl.google.com, static.rust-lang.org, github.com, objects.githubusercontent.com]
+# toolchains:
+#   shell-tools:
+#     files:
+#       - {name: shellcheck, kind: tar, strip: 1, arch: {
+#           amd64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz", sha256: "<sha256>"},
+#           arm64: {url: "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.aarch64.tar.xz", sha256: "<sha256>"}}}
+#     path: [shellcheck]
+#     verify: [[shellcheck, --version]]
+#     allow: ["Bash(shellcheck:*)"]
 # Scale to zero is on by default (#181): an idle agent stops after idle_seconds, and the router starts it on a webhook
 # or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
 # scale_to_zero: false

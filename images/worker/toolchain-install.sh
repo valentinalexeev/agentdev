@@ -4,7 +4,9 @@
 #
 # Input, from the operator only (the Agent object, never the repository or issue text):
 #   TOOLCHAIN_SPEC    canonical JSON: {"v":1,"image":..,"epoch":N,"path":[..],"presets":[{name,version,arch:{amd64:
-#                     {url,sha256},arm64:{..}},..}]}; kind, bin and verify are this script's own (preset_rules)
+#                     {url,sha256},arm64:{..}},..}],"custom":[..]}; kind, bin and verify of a preset are this script's own
+#                     (preset_rules). custom (#598): the deployment's toolchains, from the instance config through the
+#                     operator: {name,files:[{name,kind:tar|file|deb,strip,arch:{amd64|arm64|all:{url,sha256}}}],path,verify}
 #   TOOLCHAIN_EXPECT  "<key>:<manifest hash>" from Agent.status.toolchain of the last start; empty on the first one
 #   TOOLCHAIN_DIR     default /state/toolchain
 # Output: one JSON object in the termination message (/dev/termination-log), read by the operator into
@@ -119,9 +121,69 @@ install_preset() {
   echo "${name}: ${out}" >&2
 }
 
+# install_custom <json> <dir>: a custom toolchain of the deployment (#598) into <dir>/custom/<name>. Only the downloads
+# come from the spec (https, sha256 pinned; the setup proxy allows only the instance's setup hosts). The steps are this
+# script's own: tar unpacks into <file>/, file installs bin/<file>, deb unpacks into <file>/ with dpkg-deb -x (no
+# maintainer scripts). Unpacking and verify run without the setup proxy key, the same as for the presets (review of #537).
+install_custom() {
+  local c=$1 dir=$2 name base f fname kind strip url sum file out p v
+  local -a verify path
+  name=$(jq -r .name <<<"${c}")
+  [[ "${name}" =~ ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$ ]] || { echo "custom: ${name} is not a toolchain name"; return 1; }
+  base="${dir}/custom/${name}"
+  local work="${TMPDIR:-/tmp}/custom-${name}"
+  mkdir -p "${base}" "${work}" || { echo "${name}: no directory"; return 1; }
+  while IFS= read -r f; do
+    fname=$(jq -r .name <<<"${f}"); kind=$(jq -r .kind <<<"${f}"); strip=$(jq -r '.strip // 0' <<<"${f}")
+    [[ "${fname}" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$ && "${fname}" != bin ]] || { echo "${name}: ${fname} is not a file name"; return 1; }
+    [[ "${strip}" =~ ^[0-5]$ ]] || { echo "${name}/${fname}: strip ${strip} is not 0 to 5"; return 1; }
+    url=$(jq -r --arg a "${ARCH}" '(.arch[$a] // .arch.all).url // empty' <<<"${f}")
+    sum=$(jq -r --arg a "${ARCH}" '(.arch[$a] // .arch.all).sha256 // empty' <<<"${f}")
+    [[ -n "${url}" && "${sum}" =~ ^[0-9a-f]{64}$ ]] || { echo "${name}/${fname}: no download for ${ARCH}"; return 1; }
+    [[ "${url}" =~ ^https://[a-z0-9.-]+/[^[:space:][:cntrl:]]*$ ]] || { echo "${name}/${fname}: ${url} is not a plain https URL"; return 1; }
+    file="${work}/${fname}.download"
+    curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 -o "${file}" "${url}" || { echo "${name}/${fname}: download failed: ${url}"; return 1; }
+    echo "${sum}  ${file}" | sha256sum -c --status - || { echo "${name}/${fname}: sha256 mismatch for ${url}"; return 1; }
+    case "${kind}" in
+      tar)  mkdir -p "${base}/${fname}" && keyless tar -xf "${file}" -C "${base}/${fname}" --strip-components="${strip}" \
+              --no-same-owner --no-same-permissions || { echo "${name}/${fname}: unpack failed"; return 1; };;
+      file) mkdir -p "${base}/bin" && cp "${file}" "${base}/bin/${fname}" && chmod 0755 "${base}/bin/${fname}" \
+              || { echo "${name}/${fname}: install failed"; return 1; };;
+      deb)  mkdir -p "${base}/${fname}" && keyless dpkg-deb -x "${file}" "${base}/${fname}" || { echo "${name}/${fname}: unpack failed"; return 1; };;
+      *)    echo "${name}/${fname}: kind ${kind} is not tar, file or deb"; return 1;;
+    esac
+    rm -f "${file}"
+  done < <(jq -c '.files[]' <<<"${c}")
+  # nothing in the tree may point outside it: an absolute link, or a relative one that leaves it, could lead the agent's
+  # read-only PATH to a file the agent can write
+  local l t rbase
+  rbase=$(realpath -m -- "${base}")
+  while IFS= read -r -d '' l; do
+    t=$(readlink "${l}")
+    [[ "${t}" != /* ]] || { echo "${name}: ${l#"${base}"/} is an absolute symlink to ${t}"; return 1; }
+    t=$(realpath -m -- "$(dirname "${l}")/${t}")
+    [[ "${t}" == "${rbase}"/* ]] || { echo "${name}: ${l#"${base}"/} points outside the toolchain"; return 1; }
+  done < <(find "${base}" -type l -print0)
+  path=()
+  while IFS= read -r p; do
+    [[ "${p}" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]] || { echo "${name}: path ${p} is not below the toolchain"; return 1; }
+    path+=("${base}/${p}")
+  done < <(jq -r '.path // [] | .[]' <<<"${c}")
+  local vpath
+  vpath=$(IFS=:; echo "${path[*]}")
+  while IFS= read -r v; do
+    mapfile -t verify < <(jq -r '.[]' <<<"${v}")
+    [[ ${#verify[@]} -gt 0 && -n "${verify[0]}" ]] || { echo "${name}: an empty verify command"; return 1; }
+    out=$(cd "${work}" && keyless PATH="${vpath:+${vpath}:}${PATH}" TOOLCHAIN="${dir}" "${verify[@]}" 2>&1) \
+      || { echo "${name}: verify '${verify[*]}' failed: ${out: -500}"; return 1; }
+    echo "${name}: ${out:0:200}" >&2
+  done < <(jq -c '.verify // [] | .[]' <<<"${c}")
+}
+
 main() {
   [[ -n "${spec}" ]] || fail Invalid "TOOLCHAIN_SPEC is empty"
-  jq -e '.v == 1 and (.presets | type == "array")' <<<"${spec}" >/dev/null 2>&1 || fail Invalid "TOOLCHAIN_SPEC is not a v1 spec"
+  jq -e '.v == 1 and (.presets | type == "array") and ((.custom // []) | type == "array")' <<<"${spec}" >/dev/null 2>&1 \
+    || fail Invalid "TOOLCHAIN_SPEC is not a v1 spec"
   ARCH=$(arch) || fail Invalid "unsupported architecture $(uname -m)"
   key=$(printf '%s\n%s' "$(jq -cS . <<<"${spec}")" "${ARCH}" | sha256sum | cut -d' ' -f1)
   # a planted symlink must not redirect the install (or the read-only mount) somewhere else
@@ -158,6 +220,9 @@ main() {
   while IFS= read -r p; do
     msg=$(install_preset "${p}" "${tmp}") || fail StepFailed "${msg}"
   done < <(jq -c '.presets[]' <<<"${spec}")
+  while IFS= read -r p; do
+    msg=$(install_custom "${p}" "${tmp}") || fail StepFailed "${msg}"
+  done < <(jq -c '.custom // [] | .[]' <<<"${spec}")
   : > "${tmp}/.complete"
   chmod -R a-w,a+rX "${tmp}" 2>/dev/null
   chmod u+w "${tmp}"
@@ -173,7 +238,7 @@ main() {
     case "$(basename "${old}")" in "${key}"|current) continue;; esac
     chmod -R u+w "${old}" 2>/dev/null; rm -rf "${old}"
   done
-  report "${reason}" "toolchain ${key:0:12} installed: $(jq -r '[.presets[] | .name + " " + .version] | join(", ")' <<<"${spec}")"
+  report "${reason}" "toolchain ${key:0:12} installed: $(jq -r '[.presets[] | .name + " " + .version] + [.custom // [] | .[] | "custom " + .name] | join(", ")' <<<"${spec}")"
 }
 
 [[ "${BASH_SOURCE[0]}" != "$0" ]] || main "$@"
