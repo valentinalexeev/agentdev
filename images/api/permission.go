@@ -184,18 +184,20 @@ func (p *permissionAudit) forget(name string) {
 
 // watchPermissions follows the Agent objects in ns (an informer, like watchSecurityEvents).
 func watchPermissions(ctx context.Context, d dynamic.Interface, ns string) {
-	pa := &permissionAudit{}
+	pa, ma := &permissionAudit{}, &modelAudit{} // #570: spec.model and spec.effort, the same way
 	f := dynamicinformer.NewFilteredDynamicSharedInformerFactory(d, 10*time.Minute, ns, nil)
 	inf := f.ForResource(agentsGVR).Informer()
 	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			if u, ok := obj.(*unstructured.Unstructured); ok {
 				pa.observe(ctx, u)
+				ma.observe(ctx, u)
 			}
 		},
 		UpdateFunc: func(_, obj any) {
 			if u, ok := obj.(*unstructured.Unstructured); ok {
 				pa.observe(ctx, u)
+				ma.observe(ctx, u)
 			}
 		},
 		DeleteFunc: func(obj any) {
@@ -204,6 +206,7 @@ func watchPermissions(ctx context.Context, d dynamic.Interface, ns string) {
 			}
 			if u, ok := obj.(*unstructured.Unstructured); ok {
 				pa.forget(u.GetName())
+				ma.forget(u.GetName())
 			}
 		},
 	})

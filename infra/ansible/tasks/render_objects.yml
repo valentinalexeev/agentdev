@@ -32,6 +32,20 @@
       non-empty list of IPv4 addresses when claude_proxy is on. Copy them from `terraform output platform` (#384).
     quiet: true
 
+# #570: a bad effort fails here, not late at the CRD apply. The model rule is tasks/model_check.yml (tasks/checks.yml).
+- name: Check the effort of the agents
+  ansible.builtin.assert:
+    that:
+      - t_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
+    fail_msg: >-
+      claude_effort and agents[].effort: low, medium, high, xhigh, max (docs/admin.md). Found: {{ t_efforts
+      | difference(['low', 'medium', 'high', 'xhigh', 'max']) }}
+    quiet: true
+  vars:
+    t_efforts: >-
+      {{ ([claude_effort | default('', true)] + (agents | default([]) | map(attribute='effort', default='') | list))
+         | map('string') | select | list }}
+
 - name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
   ansible.builtin.set_fact:
     egress_fqdn_matches: >-

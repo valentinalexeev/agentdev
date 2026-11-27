@@ -17,9 +17,14 @@
       - api_chat_max_sessions | string is match('^[0-9]{1,6}$')
       - api_chat_max_sessions_per_user | string is match('^[0-9]{1,6}$')
       - api_notify_channels | difference(['webpush']) | length == 0
+      - api_chat_models is sequence and api_chat_models is not string
+      - api_chat_models | reject('match', api_chat_model_re) | list | length == 0
+      - api_chat_efforts is sequence and api_chat_efforts is not string
+      - api_chat_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
     fail_msg: >-
       api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents(_per_user) and
-      api.chat.* whole numbers, notifications.channels webpush only (example.vars.yml)
+      api.chat.* whole numbers, api.chat.models opus, sonnet, haiku, fable or claude-<family>-...,
+      api.chat.efforts low..max, notifications.channels webpush only (example.vars.yml)
     quiet: true
 
 - name: Render the Job agentdev-db-init (roles, database, schema, retention, grants)
@@ -76,6 +81,8 @@
         CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
         CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
         CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+        CHAT_MODELS: "{{ api_chat_models | join(',') }}"
+        CHAT_EFFORTS: "{{ api_chat_efforts | join(',') }}"
         NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
         AGENTS_SOURCE: "{{ api_agents_source }}"
       replace: []

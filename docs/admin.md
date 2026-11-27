@@ -241,6 +241,50 @@ after the retention removed the old entries, or after a restart of an API withou
 NOTE: The `AGENTDEV_AUDIT` line in the container log has only the mode, the number of rules of each list and a
 sha256 of the rules, not the rule text. The full rules are only in the audit log of the API (`agentdev-admins`).
 
+### Set the model and effort of an agent
+
+The model and the effort level decide how Claude Code does the work of an agent (#564, #570). The model also decides
+how fast the agent uses its budget: `claude-proxy` counts the units with the multiplier of the model (see "Cost
+units"). Each agent has its own values. Its chat sessions start with the same values.
+
+- Model: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full name of one of these families, for example
+  `claude-sonnet-5-5`, optionally with the suffix `[1m]`. At most 80 characters.
+- Effort: `low`, `medium`, `high`, `xhigh` or `max`.
+- Not set: the default of Claude Code, as before.
+
+1. On `kind`: set `kind_agents_model` and `kind_agents_effort` (all agents).
+   On GKE: set `claude_model` and `claude_effort` (all agents), or `agents[].model` and `agents[].effort` (one agent).
+   In Git mode: set `spec.model` and `spec.effort` in the `Agent` manifest.
+2. Deploy again.
+
+NOTE: The CRD and the operator refuse a model outside these families or an unknown effort. The agent then has the
+phase `invalid`. Thus a typing error or another vendor's model name cannot make the agent count at the highest
+multiplier, and no value can become a flag of `claude`. On `kind` and GKE, the Ansible run stops before it
+applies anything when a model or an effort breaks these rules.
+
+Each change of `spec.model` or `spec.effort` makes one entry in the audit log: action `model`, with the old and the
+new values in `before.claude` and `after.claude`. The console shows the values in the agent drawer, and the API
+returns them in `GET /api/agents` (`model`, `effort`).
+
+#### Model and effort of a chat session
+
+A chat session starts with the agent's values. A person with write access can choose other values on **Start
+session**, or in the **Model** menu of the session header while the session runs. The choices are the agent's own
+values and the instance allow-list:
+
+| Setting (`api.chat`) | API variable | Default | Meaning |
+|---|---|---|---|
+| `models` | `CHAT_MODELS` | `[]` | Extra models, same rules as `spec.model`, for example `[sonnet, haiku]`. |
+| `efforts` | `CHAT_EFFORTS` | `[]` | Extra effort levels, for example `[low, high]`. |
+
+With empty lists a person can only keep the agent's values. The API refuses every other value (HTTP 400), and
+refuses to start when a list entry breaks the rules. The menus show the `claude-proxy` multiplier of each model, for
+example `1.67× units`, so a person sees which model uses the budget faster. The session's usage counts for the
+agent's budget with the multiplier of the model in use.
+
+Each change is an audit entry `chat-settings` with the person. The transcript shows a note when Claude applies or
+refuses the change. API: `POST /api/sessions/{id}/settings` with `{"model": "...", "effort": "..."}`.
+
 ### Allow extra tools for an agent
 
 The allow-list of the worker has the tools that all agents can use without a question (#496). You can add tools to
