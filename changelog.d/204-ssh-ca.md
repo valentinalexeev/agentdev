@@ -28,3 +28,15 @@ probe, no sudo), principals files, `TrustedUserCAKeys`, an empty KRL and sshd se
 
 Apply the `operator` tag (kind) or the playbook (GKE) again: it adds the `SSHTarget` CRD and the step-ca
 Deployment, which stays idle until an admin runs `scripts/ssh-ca-init.sh`.
+
+Test installs from an earlier build of this feature have step-ca in `EXEC_NS`. Move the CA to `agentdev-ssh-ca`:
+
+1. Apply the `operator` tag (kind) or the playbook (GKE) again. This creates the namespace `agentdev-ssh-ca` and
+   the new step-ca Deployment.
+2. Run `scripts/ssh-ca-init.sh`. This creates a new CA in `agentdev-ssh-ca`.
+3. Delete the old step-ca objects and the old CA keys from `EXEC_NS`:
+   ```bash
+   kubectl -n agentdev-executors delete deployment/step-ca service/step-ca networkpolicy/step-ca \
+     secret/step-ca secret/step-ca-provisioner --ignore-not-found
+   ```
+4. The new CA has new keys. Run `scripts/ssh-enrol.sh <target>` again for each server and apply the snippet.
