@@ -5,7 +5,8 @@
     allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, path, refresh}, the
     Agent's spec.toolchain; unset: no toolchain. agents[].model, agents[].effort (#564), else the instance's
     claude_model and claude_effort: the Agent's spec.model and spec.effort; unset or empty: no field, the CLI's own
-    default. -#}
+    default. agents[].egress_hosts (#599): [host, ...] in Squid dstdomain form, the Agent's spec.egressHosts: hosts
+    only this agent may reach, on top of egress_hosts; unset or empty: no field, the instance-wide list only. -#}
 {%- set out = [] -%}
 {%- for a in agents -%}
 {%-   set spec = {'repo': a.repos, 'forge': forge_kind,
@@ -27,6 +28,9 @@
 {%-   endif -%}
 {%-   if a.toolchain | default({}) -%}
 {%-     set _ = spec.update({'toolchain': a.toolchain}) -%}
+{%-   endif -%}
+{%-   if a.egress_hosts | default([]) -%}
+{%-     set _ = spec.update({'egressHosts': a.egress_hosts | list}) -%}
 {%-   endif -%}
 {%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
         'metadata': {'name': a.name, 'namespace': agents_ns}, 'spec': spec}) -%}

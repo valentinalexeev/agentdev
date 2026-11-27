@@ -53,6 +53,7 @@ approvals: {enabled: false}                   # APPROVALS
 #                                             # EGRESS_HOSTS (also operator_egress_hosts)
 # kind_agents_egress_extra_hosts: []          # EGRESS_EXTRA_HOSTS (also operator_egress_extra_hosts)
 # kind_agents_forge_egress_hosts: [api.github.com, github.com]   # FORGE_EGRESS_HOSTS
+# kind_agents_agent_hosts: {}                 # own hosts per agent (#599): {alice: [objects.githubusercontent.com]}
 # kind_agents_telemetry: {otlp_url: "", instance: agentdev, scraper_ns: monitoring,
 #   scraper_selector: {app.kubernetes.io/name: prometheus, app.kubernetes.io/component: server}}
 #                                             # TELEMETRY_* (also operator_telemetry)

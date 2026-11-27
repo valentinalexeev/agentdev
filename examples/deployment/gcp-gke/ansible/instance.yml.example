@@ -14,6 +14,8 @@ reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
   # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
+  # hosts only this agent may reach (agentdev #599), besides egress_hosts and egress_extra_hosts:
+  # - {name: carol, user: carol, repos: my-org/my-repo, egress_hosts: [objects.githubusercontent.com]}
 # Scale to zero is on by default (#181): an idle agent stops after idle_seconds, and the router starts it on a webhook
 # or when its wake poll finds new work on the forge (every wake_poll_seconds). Uncomment to change:
 # scale_to_zero: false

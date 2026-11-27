@@ -171,6 +171,11 @@ func (in *AgentSpec) DeepCopyInto(out *AgentSpec) {
 		*out = new(AgentToolchain)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.EgressHosts != nil {
+		in, out := &in.EgressHosts, &out.EgressHosts
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Diagnostics != nil {
 		in, out := &in.Diagnostics, &out.Diagnostics
 		*out = new(AgentDiagnostics)

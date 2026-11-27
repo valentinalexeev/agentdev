@@ -68,6 +68,15 @@ type AgentSpec struct {
 	// read-only to the agent. Unset: none, and the pod is as before.
 	// +optional
 	Toolchain *AgentToolchain `json:"toolchain,omitempty"`
+	// EgressHosts: hosts this agent's own container may reach through the agents' egress proxy (#599), in addition
+	// to the instance-wide list (EGRESS_HOSTS). No other agent gets them. Squid dstdomain form: "example.com" is that
+	// name only, ".example.com" the domain and every subdomain. The forge and setup hosts stay closed to the agent
+	// container even when listed. Unset: the instance-wide list only, and the pod is as before.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:Pattern=`^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:items:MaxLength=253
+	EgressHosts []string `json:"egressHosts,omitempty"`
 	// Diagnostics of the agent's jobs (#588). Unset: none, and the pod is as before.
 	// +optional
 	Diagnostics *AgentDiagnostics `json:"diagnostics,omitempty"`

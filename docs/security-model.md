@@ -161,9 +161,17 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   flood of them gives a `medium` rate-limited event, not `high`; this holds until approvals (phase 4) let a person
   allow the host. A line from an unknown IP is logged by the operator and dropped.
 - The proxy is one replica (new pod first on a change); a change of the list breaks agent egress for a few seconds.
+- Hosts for one agent (#599): `spec.egressHosts` of an `Agent` (Ansible `agents[].egress_hosts`, kind
+  `kind_agents_agent_hosts`) adds hosts for that agent only. The operator gives each such agent a random proxy key
+  and writes a Squid include (Secret `egress-agent-proxy`, `acl.conf`) that binds the credential `agent-<name>:<key>`
+  to the agent's own hosts. The agent container's proxy URL carries the key from `agent-<name>-egress-proxy`; the
+  forge sidecar and the init container keep their own credentials. The include sits after the forge and setup denies,
+  so it never opens those hosts. The proxy copies a changed `acl.conf` and runs `squid -k reconfigure` within 15
+  seconds, without a restart. On GKE the proxy's FQDN policy holds the union of every agent's hosts; Squid keeps
+  them apart. An agent without the field has no key, no rule and the pod it had before (R126).
 - Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project
-  extra hosts in the project spec (one instance-wide list for now), and an approval request for a refused host
-  (phase 4).
+  extra hosts in the project spec (an instance-wide list plus per-agent hosts for now), and an approval request for
+  a refused host (phase 4).
 
 Original design:
 

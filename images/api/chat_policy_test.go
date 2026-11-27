@@ -303,6 +303,47 @@ func TestChatJobAdmission(t *testing.T) {
 	}
 }
 
+// #599: an agent with own egress hosts has its egress key agent-<agent>-egress-proxy in the chat container. Another
+// agent's key, or the key in the forge sidecar, is refused.
+func TestChatJobAdmissionEgress(t *testing.T) {
+	pol := chatPolicy(t)
+	j := chatJobFor(t, "egress")
+	if c := containerNamed(j.Spec.Template.Spec, "chat"); envMap(c)["AGENT_EGRESS_KEY"].ValueFrom == nil {
+		t.Fatal("the fixture has no AGENT_EGRESS_KEY in chat")
+	}
+	if f := admit(t, pol, j); len(f) != 0 {
+		t.Fatalf("the chat Job of an agent with own egress hosts is refused: %v", f)
+	}
+	key := func(sec string) corev1.EnvVar {
+		return corev1.EnvVar{Name: "K", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: sec}, Key: "password"}}}
+	}
+	for name, mut := range map[string]func(*corev1.PodSpec){
+		"another agent's egress key": func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			for i := range c.Env {
+				if r := c.Env[i].ValueFrom; r != nil && r.SecretKeyRef != nil && r.SecretKeyRef.Name == "agent-alice-egress-proxy" {
+					r.SecretKeyRef.Name = "agent-bob-egress-proxy"
+				}
+			}
+		},
+		"the egress key in the forge sidecar": func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "forge")
+			c.Env = append(c.Env, key("agent-alice-egress-proxy"))
+		},
+		"the instance's egress rules": func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "chat")
+			c.Env = append(c.Env, key("egress-agent-proxy"))
+		},
+	} {
+		j := chatJobFor(t, "egress")
+		mut(&j.Spec.Template.Spec)
+		if f := admit(t, pol, j); len(f) == 0 {
+			t.Errorf("admitted: %s", name)
+		}
+	}
+}
+
 // #499: an agent with a toolchain has the init container toolchain with its own setup proxy key, and chat and forge
 // mount /state/toolchain read-only. Anything that weakens that is refused.
 func TestChatJobAdmissionToolchain(t *testing.T) {

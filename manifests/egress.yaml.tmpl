@@ -15,6 +15,10 @@
 #   toolchain only, the same way: Squid allows them only with the credential of Secret egress-setup-proxy, which the
 #   operator copies into agent-<name>-setup-proxy and puts only in the init container's proxy URL. The presets' hosts
 #   are the same for every agent, so one ACL serves all; per-agent hosts come with free-form steps (ADR 0010 D4 step 3).
+# - Agent hosts (#599): an Agent's spec.egressHosts are for that agent's container only. The operator writes one
+#   credential and host list per such agent to Secret egress-agent-proxy (acl.conf, images/operator/agent_egress.go)
+#   and puts the credential of agent-<name>-egress-proxy in that agent container's proxy URL. The proxy reloads within
+#   15 seconds when acl.conf changes. The rules come after the forge and setup denies, so they never open those hosts.
 # - The Claude API is not on the agents' list when the credential proxy (#66) is on: agents call claude-proxy directly
 #   (in-cluster name, NO_PROXY; allowed below) and only claude-proxy reaches api.anthropic.com (docs/security.md R64).
 # - On GKE the playbook also adds an FQDNNetworkPolicy for the proxy itself, so even a misconfigured proxy cannot
@@ -26,7 +30,8 @@ metadata: {name: egress-proxy, namespace: ${AGENTS_NS}}
 data:
   squid.conf: |
     http_port 3128
-    pid_filename none
+    # Squid -k reconfigure (agent hosts, #599) needs the pid file
+    pid_filename /tmp/squid.pid
     pinger_enable off
     cache deny all
     cache_mem 8 MB
@@ -56,6 +61,8 @@ data:
     http_access deny forge_hosts
     http_access allow setup_hosts setup_client
     http_access deny setup_hosts
+    # agent hosts: each agent's own spec.egressHosts with its own credential (#599, Secret egress-agent-proxy)
+    include /tmp/agent-acl.conf
     http_access allow allowed
     http_access deny all
     # one line per refused request: method and destination host:port only, never the path, query or userinfo (they
@@ -84,8 +91,21 @@ spec:
       - name: squid
         image: ${EGRESS_PROXY_IMAGE}
         imagePullPolicy: IfNotPresent
-        # logs to files (Squid cannot write to a pipe as a non-root user), followed to stdout for the collector
-        command: [sh, -c, 'tail -qF /var/log/squid/access.log /var/log/squid/cache.log 2>/dev/null & exec squid -f /etc/squid/squid.conf -NYC']
+        # logs to files (Squid cannot write to a pipe as a non-root user), followed to stdout for the collector.
+        # acl.conf (agent hosts, #599) comes from the operator's Secret (empty until the first agent with
+        # spec.egressHosts). A changed file is copied and Squid reconfigured, without a restart.
+        command:
+        - sh
+        - -c
+        - |
+          cp /etc/squid/agents/acl.conf /tmp/agent-acl.conf 2>/dev/null || : > /tmp/agent-acl.conf
+          tail -qF /var/log/squid/access.log /var/log/squid/cache.log 2>/dev/null &
+          (while sleep 15; do
+            if [ -f /etc/squid/agents/acl.conf ] && ! cmp -s /etc/squid/agents/acl.conf /tmp/agent-acl.conf; then
+              cp /etc/squid/agents/acl.conf /tmp/agent-acl.conf && squid -f /etc/squid/squid.conf -k reconfigure
+            fi
+          done) &
+          exec squid -f /etc/squid/squid.conf -NYC
         ports: [{name: proxy, containerPort: 3128}]
         readinessProbe: {tcpSocket: {port: proxy}, periodSeconds: 10}
         livenessProbe: {tcpSocket: {port: proxy}, periodSeconds: 20}
@@ -94,6 +114,7 @@ spec:
         - {name: conf, mountPath: /etc/squid/squid.conf, subPath: squid.conf, readOnly: true}
         - {name: forge, mountPath: /etc/squid/forge, readOnly: true}
         - {name: setup, mountPath: /etc/squid/setup, readOnly: true}
+        - {name: agents, mountPath: /etc/squid/agents, readOnly: true}
         - {name: logs, mountPath: /var/log/squid}
         - {name: tmp, mountPath: /tmp}
         resources:
@@ -103,6 +124,8 @@ spec:
       - {name: conf, configMap: {name: egress-proxy}}
       - {name: forge, secret: {secretName: egress-forge-proxy, items: [{key: auth, path: auth}], defaultMode: 0444}}
       - {name: setup, secret: {secretName: egress-setup-proxy, items: [{key: auth, path: auth}], defaultMode: 0444}}
+      # written by the operator (#599); optional, so the proxy starts before the first agent with spec.egressHosts
+      - {name: agents, secret: {secretName: egress-agent-proxy, optional: true, items: [{key: acl.conf, path: acl.conf}], defaultMode: 0444}}
       - {name: logs, emptyDir: {sizeLimit: 256Mi}}
       - {name: tmp, emptyDir: {}}
 ---

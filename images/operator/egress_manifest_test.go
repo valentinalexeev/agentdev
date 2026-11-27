@@ -93,6 +93,16 @@ func TestEgressManifest(t *testing.T) {
 			}
 		}
 	}
+	// #599: the agents' own rules come after the forge and setup denies (they never open those hosts) and before the
+	// general allow; the proxy reads the operator's include from /tmp and has a pid file for -k reconfigure
+	inc := strings.Index(conf, "include /tmp/agent-acl.conf\n")
+	if inc < strings.Index(conf, "http_access deny forge_hosts") || inc < strings.Index(conf, "http_access deny setup_hosts") ||
+		inc > strings.Index(conf, "http_access allow allowed") {
+		t.Errorf("squid.conf: the agent include is not between the forge and setup denies and the general allow")
+	}
+	if !strings.Contains(conf, "pid_filename /tmp/squid.pid\n") {
+		t.Error("squid.conf has no pid file (-k reconfigure)")
+	}
 	// deny rules come before the allow rule (Squid uses the first match)
 	if strings.Index(conf, "http_access allow allowed") < strings.Index(conf, "http_access deny private_dst") {
 		t.Error("allow before deny private_dst")

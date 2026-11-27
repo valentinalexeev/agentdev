@@ -81,7 +81,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	l := log.FromContext(ctx)
 	var a v1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
-		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206)
+		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206) and its own egress rule (#599)
+			if err := r.syncAgentEgress(ctx, req.Namespace, nil); err != nil {
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, r.writeGuide(ctx, req.Namespace, req.Name, "")
 		}
 		return ctrl.Result{}, err
@@ -162,6 +165,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// setup proxy credential (#499): agent-<name>-setup-proxy, before the pod whose init container reads it
 	if err := r.ensureSetupProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// own egress hosts (#599): the agent's key and Squid rule in egress-agent-proxy, and agent-<name>-egress-proxy,
+	// before the pod whose agent container reads it
+	if err := r.syncAgentEgress(ctx, a.Namespace, &a); err != nil {
 		return ctrl.Result{}, err
 	}
 

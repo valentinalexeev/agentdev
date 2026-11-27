@@ -165,7 +165,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(a, false)...),
 			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
 			env("ROUTER_URL", routerURL(ns)),
 			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
@@ -192,7 +192,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		ImagePullPolicy:          corev1.PullPolicy(r.D.PullPolicy),
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(true)...),
+		Env: append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(a, true)...),
 			env("ROUTER_URL", routerURL(ns)),
 			env("SELF_URL", fmt.Sprintf("http://agent-%s.%s.svc.cluster.local:8080/", n, ns)),
 			env("FORGE_KIND", forge), env("MIRROR_DIR", "/forge/repo.git"), env("USAGE_REPORTS", r.usageReports()),
@@ -429,7 +429,9 @@ func sameLayout(have, want []corev1.PersistentVolumeClaim) bool {
 //
 // forge: the forge sidecar's proxy URL carries the credential of Secret egress-forge-proxy (expanded by the kubelet,
 // never in the agent container); the proxy allows the forge hosts (GitHub) only with it, so they are the sidecar's.
-func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
+// An agent with spec.egressHosts (#599): the agent container's proxy URL carries the agent's own credential (Secret
+// agent-<name>-egress-proxy, agent_egress.go), which opens its own hosts only. Without the field: no credential.
+func (r *AgentReconciler) proxyEnv(a *v1.Agent, forge bool) []corev1.EnvVar {
 	if r.D.EgressProxy == "" {
 		return nil
 	}
@@ -440,6 +442,10 @@ func (r *AgentReconciler) proxyEnv(forge bool) []corev1.EnvVar {
 		out = append(out, corev1.EnvVar{Name: "EGRESS_FORGE_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: forgeProxySecret}, Key: "password"}}})
 		proxy = strings.Replace(proxy, "://", "://forge:$(EGRESS_FORGE_KEY)@", 1)
+	} else if r.hasOwnEgress(a) {
+		out = append(out, corev1.EnvVar{Name: "AGENT_EGRESS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: agentEgressSecretName(a.Name)}, Key: "password"}}})
+		proxy = strings.Replace(proxy, "://", "://agent-"+a.Name+":$(AGENT_EGRESS_KEY)@", 1)
 	}
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
 		out = append(out, corev1.EnvVar{Name: k, Value: proxy})
@@ -458,6 +464,9 @@ func (r *AgentReconciler) reloadSecrets(a *v1.Agent, forgeSecret string) string 
 	names := []string{forgeSecret, "agent-" + a.Name + "-mcp"}
 	if r.D.EgressProxy != "" {
 		names = append(names, forgeProxySecret)
+	}
+	if r.hasOwnEgress(a) {
+		names = append(names, agentEgressSecretName(a.Name))
 	}
 	if r.D.ClaudeProxyURL != "" {
 		names = append(names, "agent-"+a.Name+"-proxy")
