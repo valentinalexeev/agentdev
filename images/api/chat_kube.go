@@ -110,6 +110,14 @@ func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, id
 			c.Env = set(c.Env, env("CHAT_MODE", "console"), env("SESSION_NAME", s.ID), env("CHAT_AGENT", s.Agent),
 				env("IDLE_SECONDS", fmt.Sprint(idle)), env("CHAT_CONTROL_SHA256", tokenSHA256), env("CHAT_PORT", fmt.Sprint(chatPort)),
 				env("CLAUDE_CONFIG_DIR", "/home/node/.claude"))
+			// #570: the model and effort chosen at the start (the API checked them against the allow-list); else the
+			// agent's own AGENT_MODEL and AGENT_EFFORT stay as the operator rendered them
+			if s.Model != "" {
+				c.Env = set(c.Env, env("AGENT_MODEL", s.Model))
+			}
+			if s.Effort != "" {
+				c.Env = set(c.Env, env("AGENT_EFFORT", s.Effort))
+			}
 			c.Ports = []corev1.ContainerPort{{Name: "session", ContainerPort: chatPort, Protocol: corev1.ProtocolTCP}}
 			c.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intOrStr(chatPort)}}, PeriodSeconds: 3}
 		case "forge":

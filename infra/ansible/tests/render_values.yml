@@ -51,6 +51,8 @@
             CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
             CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
             CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+            CHAT_MODELS: "{{ api_chat_models | join(',') }}"
+            CHAT_EFFORTS: "{{ api_chat_efforts | join(',') }}"
             NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
           replace: []
 

@@ -58,6 +58,8 @@ type agentState struct {
 	Paused        bool   `json:"paused"`
 	// Permission is set only in entries of action "permission" (#505, permission.go)
 	Permission *agentPermission `json:"permission,omitempty"`
+	// Claude is set only in entries of action "model" (#570, model.go)
+	Claude *agentClaude `json:"claude,omitempty"`
 }
 
 // agentStore reads and writes Agent objects.
@@ -111,7 +113,7 @@ func stateOf(u *unstructured.Unstructured) *agentState {
 type auditEntry struct {
 	Time      string      `json:"time"`
 	Who       auditWho    `json:"who"`
-	Action    string      `json:"action"` // patch | create | delete | permission (#505) | ...
+	Action    string      `json:"action"` // patch | create | delete | permission (#505) | model (#570) | ...
 	Agent     string      `json:"agent"`
 	Result    string      `json:"result"` // ok | denied | invalid | error | unauthenticated
 	Reason    string      `json:"reason,omitempty"`

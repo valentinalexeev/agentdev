@@ -167,7 +167,8 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 		env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 		corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-	), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), append(r.brokerEnv(n), r.npmrcEnv()...)...)...)
+	), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), append(r.brokerEnv(n), r.npmrcEnv()...)...)...)
+	agentEnv = withCustomEnv(agentEnv, a, r.D.Toolchains)
 	// project secrets last, and never under a name rendered above: with duplicate names the kubelet uses the last
 	// entry, so a secret named like a platform variable (JOB_TIMEOUT, NO_PROXY) would override it (review of #272)
 	agentEnv = append(agentEnv, secretEnv(a, psecs, envNames(agentEnv))...)
@@ -362,8 +363,8 @@ func retriesEnv(a *v1.Agent) []corev1.EnvVar {
 // appends it to CLAUDE_TOOLS. Nothing without entries, so the pod template of an agent without the field is unchanged
 // (no restart on upgrade).
 // The allow entries of the toolchain presets (#499) come first.
-func toolsEnv(a *v1.Agent) []corev1.EnvVar {
-	extra := toolchainAllow(a)
+func (r *AgentReconciler) toolsEnv(a *v1.Agent) []corev1.EnvVar {
+	extra := toolchainAllow(a, r.D.Toolchains)
 	if a.Spec.Tools != nil {
 		extra = append(extra, a.Spec.Tools.Allow...)
 	}

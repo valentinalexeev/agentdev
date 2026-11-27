@@ -14,6 +14,8 @@ export interface Agent {
   securityEvents?: number // last 7 days (#70)
   budgetUsed?: number // Claude cost units in the last 24 h, counted by the credential proxy (#66, #196)
   budgetLimit?: number // units per 24 h; 0 = no limit
+  model?: string // #570: spec.model; empty: Claude Code's default
+  effort?: string // #570: spec.effort; empty: Claude Code's default
 }
 
 // "12.3k / 100k" or "12.3k" when there is no limit; "" when the proxy reports nothing (#66)
@@ -333,7 +335,24 @@ export interface ChatSession {
   lastSeq: number
   access: 'read' | 'write' | 'admin' | 'none'
   viewers: string[]
-  state?: { tokens?: { input: number; output: number }; idleEndsAt?: string | null; pendingPermissions?: string[] }
+  state?: {
+    tokens?: { input: number; output: number }; idleEndsAt?: string | null; pendingPermissions?: string[]
+    settings?: { model?: string; effort?: string } // #570: the model and effort in use; '' = Claude Code's default
+  }
+}
+
+// #570: what a person may choose besides the agent's own model and effort, and the claude-proxy multipliers by model
+// name prefix (cost hint; absent when the proxy does not answer).
+export interface ChatOptions { models: string[]; efforts: string[]; multipliers?: Record<string, number> }
+
+// multiplierOf: the proxy's rule (images/credproxy/prices.go): the longest matching prefix. An alias counts as its
+// family (opus -> claude-opus). undefined: unknown (no hint).
+export function multiplierOf(model: string, m?: Record<string, number>): number | undefined {
+  if (!m || !model) return undefined
+  const full = /^(opus|sonnet|haiku|fable)/.test(model) ? `claude-${model.replace(/\[1m\]$/, '')}` : model
+  let best: number | undefined, len = -1
+  for (const [p, v] of Object.entries(m)) if (full.startsWith(p) && p.length > len) { best = v; len = p.length }
+  return best
 }
 
 // One transcript event as stored by the API. seq 0: written by the API itself (start, issue-created).
@@ -347,12 +366,21 @@ export interface ChatEvent {
   data: Record<string, unknown>
 }
 
-export async function listSessions(token: string): Promise<ChatSession[]> {
-  return (await (await call(token, 'GET', '/api/sessions')).json()).sessions
+export async function listSessions(token: string): Promise<{ sessions: ChatSession[]; options?: ChatOptions }> {
+  return (await call(token, 'GET', '/api/sessions')).json()
 }
 
-export async function startSession(token: string, agent: string, context: string): Promise<ChatSession> {
-  return (await call(token, 'POST', '/api/sessions', context ? { agent, context } : { agent })).json()
+// model and effort (#570): undefined = the agent's own value
+export async function startSession(token: string, agent: string, context: string, model?: string, effort?: string): Promise<ChatSession> {
+  const b: Record<string, string> = { agent }
+  if (context) b.context = context
+  if (model !== undefined) b.model = model
+  if (effort !== undefined) b.effort = effort
+  return (await call(token, 'POST', '/api/sessions', b)).json()
+}
+
+export async function changeSessionSettings(token: string, id: string, s: { model?: string; effort?: string }): Promise<void> {
+  await call(token, 'POST', `/api/sessions/${encodeURIComponent(id)}/settings`, s)
 }
 
 export async function endSession(token: string, id: string): Promise<void> {

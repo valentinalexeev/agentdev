@@ -108,6 +108,19 @@ func main() {
 		log.Error(err, "configuration")
 		os.Exit(1)
 	}
+	// #598: the deployment's custom toolchains. A malformed TOOLCHAINS stops the operator; an invalid entry only makes
+	// the Agents that name it InvalidToolchain.
+	tcs, err := parseToolchains(os.Getenv("TOOLCHAINS"), os.Getenv("SETUP_EGRESS_HOSTS"))
+	if err != nil {
+		log.Error(err, "configuration")
+		os.Exit(1)
+	}
+	for name, c := range tcs {
+		if c.err != "" {
+			log.Info("custom toolchain is invalid", "toolchain", name, "reason", c.err)
+		}
+	}
+	r.D.Toolchains = tcs
 	if err := r.SetupWithManager(mgr); err != nil {
 		log.Error(err, "controller")
 		os.Exit(1)

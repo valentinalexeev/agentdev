@@ -71,7 +71,9 @@ func TestEgressManifest(t *testing.T) {
 		"http_access deny all\n",
 		// #499: setup hosts only with the toolchain init container's credential
 		"acl setup_hosts dstdomain -n dl.google.com static.rust-lang.org\n",
-		"http_access allow setup_hosts setup_client\nhttp_access deny setup_hosts\n",
+		// #598: the setup client first, so a custom toolchain can download from a forge host (github.com); the agent
+		// container, without either credential, is still refused both
+		"http_access allow setup_hosts setup_client\nhttp_access allow forge_hosts forge_client\nhttp_access deny forge_hosts\nhttp_access deny setup_hosts\n",
 	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("squid.conf lacks %q", want)
@@ -82,7 +84,8 @@ func TestEgressManifest(t *testing.T) {
 	if strings.Index(conf, "http_access deny setup_hosts") > strings.Index(conf, "http_access allow allowed") {
 		t.Error("setup hosts are not denied before the general allow")
 	}
-	for _, f := range []string{"../../config.env", "../../infra/ansible/group_vars/all.yml", "../../infra/ansible/roles/kind_agents/defaults/main.yml"} {
+	for _, f := range []string{"../../config.env", "../../infra/ansible/group_vars/all.yml", "../../infra/ansible/roles/kind_agents/defaults/main.yml",
+		"../../infra/ansible/kind.yml", "../../infra/ansible/roles/operator/defaults/main.yml"} { // #598: the operator checks custom hosts against it
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

@@ -56,6 +56,8 @@ type Defaults struct {
 	// agents call (AGENTDEV_BROKER_URL), empty = no broker
 	Secrets   bool
 	BrokerURL string
+	// custom toolchains of the deployment (#598): TOOLCHAINS, checked against SETUP_EGRESS_HOSTS (toolchain_custom.go)
+	Toolchains map[string]*customToolchain
 }
 
 type AgentReconciler struct {
@@ -112,7 +114,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
 	// same for the toolchain (#499): only catalogue versions, $TOOLCHAIN paths, refresh of at least 1h (fail closed)
-	if msg := toolchainValid(&a); msg != "" {
+	if msg := toolchainValid(&a, r.D.Toolchains); msg != "" {
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "InvalidToolchain", Message: msg, ObservedGeneration: a.Generation})
