@@ -122,7 +122,9 @@ func chatPod(agent corev1.PodTemplateSpec, s chatSession, tokenSHA256 string, id
 			}
 			// no approval requests from a chat pod: the operator reads them only from agent pods, so a push to a
 			// protected path is refused at once instead of waiting for a decision nobody can see
-			c.Env = set(kept, env("APPROVALS", "false"))
+			// #571: CHAT_SESSION selects the sidecar's chat label policy (a person allows each label call in the
+			// console); the agent pod never has it
+			c.Env = set(kept, env("APPROVALS", "false"), env("CHAT_SESSION", s.ID))
 			c.Ports = nil // no webhook listener without the wake token
 		default:
 			return p, fmt.Errorf("agent pod has an unexpected container %q", c.Name)

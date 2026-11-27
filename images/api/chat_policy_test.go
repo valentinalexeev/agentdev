@@ -107,6 +107,10 @@ func TestChatPodIsAgentPod(t *testing.T) {
 				}
 			}
 		}
+		// #571: the session id selects the sidecar's chat label policy; the agent pod never has it
+		if _, ok := want["CHAT_SESSION"]; ok || !chatIDRe.MatchString(got["CHAT_SESSION"].Value) || got["CHAT_SESSION"].ValueFrom != nil {
+			t.Errorf("%s: CHAT_SESSION agent %v, chat sidecar %v", forge, want["CHAT_SESSION"], got["CHAT_SESSION"])
+		}
 		if len(cf.Ports) != 0 {
 			t.Errorf("%s: chat sidecar listens for wakes: %v", forge, cf.Ports)
 		}

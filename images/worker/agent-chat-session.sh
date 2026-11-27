@@ -64,6 +64,9 @@ The repository is in ${WORK}, synced through the agent's forge sidecar. You hold
   agentdev-forge sync                          fetch the latest state of the forge
   agentdev-forge push agent/${me}/<name>       push HEAD of the current directory (only agent/${me}/* is accepted)
   agentdev-forge api METHOD /repos/${REPO}/... a forge REST call the agent may make (comments, pull requests)
+To add labels when a person asks for it, run one call per request, and name the path and every label in the command
+(the console shows it, and the sidecar checks that a person allowed exactly this):
+  agentdev-forge api POST /repos/${REPO}/issues/<number>/labels '{"labels":["<label>"]}'
 To turn a result into a task, propose an issue draft. Write exactly one fenced block per draft, in this form:
 ${fence}agentdev-draft
 {"title": "...", "what": "...", "acceptance": "...", "decisions": "..."}
