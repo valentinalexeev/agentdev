@@ -234,7 +234,7 @@ func TestChatNoLoopWrites(t *testing.T) {
 		for _, w := range writes {
 			t.Errorf("%s: a write reached the forge: %s", name, w)
 		}
-		if !strings.Contains(events.String(), `"rule":"chat-label-not-asked"`) {
+		if !strings.Contains(events.String(), `"rule":"chat-not-allowed"`) {
 			t.Errorf("%s: no chat refusal event: %s", name, events.String())
 		}
 	}

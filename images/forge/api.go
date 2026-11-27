@@ -220,6 +220,9 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /run-events", s.runEvents) // #425: the run log of a job, forwarded to the API
 	mux.HandleFunc("POST /drained", s.drained)      // drain before replace (#174, drain.go)
 	mux.HandleFunc("GET /identity", s.identity)
+	if s.mergeOn() {
+		mux.HandleFunc("POST /merge", s.merge) // #578: off by default; then the path does not exist
+	}
 	return s.localOnly(mux)
 }
 

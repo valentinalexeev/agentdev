@@ -172,7 +172,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...)...), a, r.D.Toolchains),
+		), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), mergeEnv(a)...)...), a, r.D.Toolchains),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
@@ -199,7 +199,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("APPROVALS", r.D.approvals()), env("APPROVALS_URL", r.D.ApprovalsURL), env("APPROVAL_TIMEOUT_MINUTES", r.D.ApprovalTimeout),
 			env("CLAUDE_PROXY_URL", r.D.ClaudeProxyURL), // #310: cost approvals read the job state from GET /status
 			secretKey("WAKE_TOKEN", forgeSecret, true), secretKey("REGISTER_TOKEN", forgeSecret, true),
-		), forgeCreds...),
+		), append(forgeCreds, mergeEnv(a)...)...),
 		// the router's wake calls land here; the agent container has no listener any more
 		Ports:        []corev1.ContainerPort{{Name: "webhook", ContainerPort: 8080, Protocol: corev1.ProtocolTCP}},
 		VolumeMounts: forgeMounts,
@@ -320,6 +320,44 @@ func modelEnv(a *v1.Agent) []corev1.EnvVar {
 		e = append(e, corev1.EnvVar{Name: "AGENT_EFFORT", Value: a.Spec.Effort})
 	}
 	return e
+}
+
+// mergeLoginRe: a GitHub login (the sidecar checks it again).
+var mergeLoginRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
+// mergeValid is the operator's check behind the CRD enums (#578): "" when spec.merge is unset or valid.
+func mergeValid(a *v1.Agent) string {
+	m := a.Spec.Merge
+	if m == nil {
+		return ""
+	}
+	if m.Mode != "" && m.Mode != "off" && m.Mode != "gated" {
+		return "spec.merge.mode: not one of off, gated"
+	}
+	if m.Mode == "gated" && len(m.Approvers) == 0 {
+		return "spec.merge.approvers: mode gated needs the owner logins whose approval allows a merge"
+	}
+	if len(m.Approvers) > 20 {
+		return "spec.merge.approvers: at most 20"
+	}
+	for _, l := range m.Approvers {
+		if !mergeLoginRe.MatchString(l) {
+			return "spec.merge.approvers: not a forge login"
+		}
+	}
+	return ""
+}
+
+// mergeEnv passes spec.merge (#578) to the forge sidecar and the worker as MERGE_MODE=gated and
+// MERGE_APPROVERS; the sidecar always merges with a merge commit (the loop asks the sidecar only after an owner approved, so other
+// reviews are no security event; the sidecar decides). Nothing with mode
+// off or unset, so the pod template of an agent without the field is unchanged (no restart on upgrade).
+func mergeEnv(a *v1.Agent) []corev1.EnvVar {
+	m := a.Spec.Merge
+	if m == nil || m.Mode != "gated" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "MERGE_MODE", Value: "gated"}, {Name: "MERGE_APPROVERS", Value: strings.Join(m.Approvers, ",")}}
 }
 
 // diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
