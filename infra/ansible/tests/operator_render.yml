@@ -83,7 +83,8 @@
     - name: Render custom toolchains
       ansible.builtin.set_fact:
         t_tc_env: >-
-          {{ t_tc_env | default([]) + [(lookup('ansible.builtin.template', '../templates/render.j2', template_vars={'src': repo_root ~ '/manifests/operator.yaml.tmpl',
+          {{ t_tc_env | default([]) + [(lookup('ansible.builtin.template', '../templates/render.j2',
+             template_vars={'src': repo_root ~ '/manifests/operator.yaml.tmpl',
              'values': t_values | combine({'TOOLCHAINS': t_role_tc}), 'replace': []})
              | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
              | selectattr('name', 'equalto', 'TOOLCHAINS') | map(attribute='value') | first] }}
