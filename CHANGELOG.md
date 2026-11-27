@@ -6,9 +6,18 @@ While the version is `0.x`, breaking changes bump MINOR.
 
 ## [Unreleased]
 
-## [1.3.0-rc.3] - 2026-11-26
+## [1.3.0] - 2026-11-27
+
+This section replaces the sections of 1.3.0-rc.1 to rc.3. Upgrade from 1.2.0 directly to 1.3.0. An instance on a
+1.3.0 rc follows "Upgrade from a 1.3.0 release candidate" below.
 
 ### Added
+- **Deployment example: optional log-based metrics and alerts for killed agent jobs (#588).** `examples/deployment/gcp-gke/terraform/monitoring.tf` adds, behind `enable_diagnostic_alerts` (default `false`), log-based
+  metrics for security auto-pauses, Spot preemptions, autoscaler scale-downs and Pending agent pods, and e-mail alerts for the
+  first two. `monitoring_components` with `POD` and `STATEFULSET` adds kube-state-metrics (last terminated reason, exit code).
+- **docs/admin.md: the task \"Get an e-mail for each preemption\" is back (#603).** docs/admin.md, "Spot VMs (GKE)": the task "Get an e-mail for each preemption" is back. It uses
+  `examples/deployment/gcp-gke/terraform/monitoring.tf` (#589): `enable_diagnostic_alerts = true` and
+  `budget_alert_emails` give at most one e-mail per hour for Spot preemptions and security auto-pauses.
 - **Per-agent Claude Code permission mode (auto) with administrator rules (#500).** `Agent` has `spec.permission`: `mode: dontAsk` (default, as before) or `mode: auto`, with optional classifier rules in
   `autoMode` (`allow`, `softDeny`, `environment`). In mode `auto` Claude Code's classifier decides a tool call outside the
   allow-list; with approvals on, a call it blocks still goes to a person. Set it with `agents[].permission` (GKE) or
@@ -19,84 +28,10 @@ While the version is `0.x`, breaking changes bump MINOR.
   and disk use of each run. A security pause names its jobs and events (counts, first action; never run event text) in
   the `SecurityPaused` condition and Event. The operator's Role gains `events` `create`/`patch`
   (`manifests/operator.yaml.tmpl` already grants it).
-
-### Changed
-- **Definition of done for sandboxed agents, and required docs and changelog count as part of the task (#591).** `AGENTS.md` starts with a short definition of done for sandboxed agents (changelog fragment, docs, Conventional
-  Commits, STE, no scratch files), and `CLAUDE.md` marks the sections that do not apply to them. The run contract of
-  the worker now says that the docs and changelog entry the repository's instructions require are part of the task.
-- **Admin guide section on Spot VMs, preemptions and exit code 137 (#595).** `docs/admin.md` has a section "Spot VMs (GKE)". It tells the effect of a preemption on the system pool and on the agent pool, the other causes of exit code 137, how to find the cause, and what agentdev does to limit the effect.
-
-### Removed
-- **BREAKING** **scripts/mcp-sync.sh is removed; the bootstrap applies an McpProject (#547).** `scripts/mcp-sync.sh` is removed (deprecated since 1.2.0, #383). `scripts/bootstrap-project.sh` now applies an
-  `McpProject` for a specification with `mcp:` and waits until the operator reports it `Ready` before it deploys the
-  agents. A specification without `mcp:` removes the `McpProject` that an earlier bootstrap made. The allow-list is the
-  operator's `mcp_allowed_hosts`. Docs: `docs/admin.md`, "Add MCP servers to a project"; `docs/troubleshooting.md`, MCP tools.
-  Breaking for operators who call the script directly or keep MCP hosts in `MCP_ALLOWED_HOSTS` of `config.env`,
-  which is no longer read: follow the upgrade steps.
-
-### Fixed
-- **e2e-compat.sh no longer fails on an empty SSO argument list under bash 3.2 (#569).** `scripts/e2e-compat.sh` expands an empty `sso_args` array safely under `set -u`, so the compat run works with the
-  bash 3.2 of macOS when no SSO arguments are set.
-- **Security pause follow-ups, interrupted jobs marked and no toolchain reinstall on every pod (#581).** A job that the drain time of a security pause cuts off is marked "interrupted by security pause": the saved commit
-  names the reason, and after resume the job comments on its issue or PR (operator annotation `agentdev/drain-reason`).
-  An unchanged toolchain is no longer reinstalled on each new pod, because the kubelet's fsGroup mode change no longer
-  changes the manifest hash. `docs/admin.md` lists the default egress hosts and explains why a high-severity stop keeps
-  the normal grace period.
-- **A job stopped by a Spot preemption, drain, scale-down or upgrade pushes its work and is retried, bounded by spec.retries.infrastructure (#593).** A job whose pod is stopped by the infrastructure (pod deleted, Spot preemption, drain, scale-down, upgrade) is retried
-  on the next pod from its pushed work, at most `spec.retries.infrastructure` times (new Agent field, default 2; 0: never).
-  A security pause, a deadline and the job's own errors never retry. The comment says, for example, "Interrupted by node
-  preemption, retried (attempt 2 of 3)". On SIGTERM the loop records the reason, then pushes work in progress to
-  `agent/<agent>/wip/<job>` within 20 s. The operator detects the cause from pod conditions and node taints.
-
-### Upgrade
-**#547:**
-1. Find each direct call of `scripts/mcp-sync.sh <spec>` in your runbooks, cron jobs and CI.
-2. Replace each call with `scripts/bootstrap-project.sh <spec>`, the playbook (`mcp_projects`), or an `McpProject` that you apply.
-3. Copy the hosts from `MCP_ALLOWED_HOSTS` in `config.env` to `mcp_allowed_hosts`. On kind, use `kind.vars.yml`. On GKE, use `instance.yml`.
-4. On kind, apply the tags `mcp,operator` again: `ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags mcp,operator`. On GKE, run the platform playbook again.
-5. Do not rotate the tokens. The operator adopts the `agent-<name>-mcp` Secrets that the script made, because they have the same labels.
-
-If you do not do step 3, the `McpProject` gets the reason `HostNotAllowed`. Then the bootstrap stops after 300 seconds.
-
-**#588:**
-1. Run the deploy playbook as usual: it applies the updated `agents` CRD, which `spec.diagnostics` needs. Without the
-   field nothing changes and agent pods are not restarted.
-
-**#593:**
-1. Run the deploy playbook as usual. It applies the updated `agents` CRD, which `spec.retries` needs, and the new
-   ClusterRole `agentdev-operator-nodes` (`get` on `nodes` only) in `manifests/operator.yaml.tmpl`. Without it the
-   operator cannot read the node and records drains and preemptions only from the pod's conditions.
-2. Nothing else: an Agent without `spec.retries` keeps its pod template (no restart on upgrade) and gets 2 retries.
-   To turn retries off for an agent, set `spec.retries.infrastructure: 0`.
-
-## [1.3.0-rc.2] - 2026-11-25
-
-### Added
 - **Per-agent Claude model and reasoning effort (#564).** `Agent` has `spec.model` (an alias such as `opus`, or a full model name) and `spec.effort` (`low`, `medium`, `high`,
   `xhigh`, `max`). The worker passes them to Claude Code as `--model` and `--effort`. Set them with `claude_model`,
   `claude_effort`, `agents[].model`, `agents[].effort` (GKE) or `kind_agents_model`, `kind_agents_effort` (kind).
   Unset: the Claude Code CLI's own default, as before. Docs: `docs/admin.md`, "Set the concurrency".
-
-### Changed
-- **Shorter compat e2e (authentik in the background, 15 s idle timeout with the stub) (#566).** `scripts/e2e-compat.sh` with `COMPAT_API=1` deploys Postgres and authentik in the background while the agents are
-  deployed and checked, and joins them before `--tags api`. The stubbed run uses a 15 s idle timeout (45 s with
-  `CLAUDE_REAL=1`, `IDLE_SECONDS` overrides). `COMPAT_SSO=0` skips the SSO stand-in and its sign-in check.
-
-### Fixed
-- **An agent works on any pull request assigned to it, whatever its author or branch (#573).** The agent now also works on a pull request that it did not open: the label `agent:<name>` (GitHub) or an assignment
-  (Gitea), set by a person with write access. It never pushes to another author's branch: it pushes to
-  `agent/<name>/pr-<n>` and opens a stacked PR into the head, or posts a patch when the head is the default branch.
-  A fork, or a label by a person without write access, gets one comment that says why. A wake that starts no job
-  writes `wake: no job started` in the log. Docs: `docs/concepts.md`, "Who may give work".
-- **A security pause for many low or medium events lets the running jobs finish (#577).** A `TooManyEvents` security pause now drains the agent first: the loop starts no new job, the running jobs finish
-  (at most `DRAIN_MAX_MINUTES`), then the pod stops. A high-severity event still stops the pod at once. Repeats of
-  one `run-events-invalid` refusal count once per job toward `SECURITY_PAUSE_AFTER`. The event names the refused repo,
-  the number of events and a hash of the first event. The `Resumed` condition and the operator log name who resumed
-  the agent. Docs: `docs/admin.md`, "Resume an agent that the operator paused"; `docs/security-model.md`.
-
-## [1.3.0-rc.1] - 2026-11-25
-
-### Added
 - **Ephemeral-storage limits for agent pods, the toolchain init container and chat sessions (#251).** Agent pods have `ephemeral-storage` limits (#251 part 3): agent container 8Gi (request 1Gi), forge sidecar 5Gi with
   its git mirror `emptyDir` capped at 4Gi, `state-init` 64Mi, the `toolchain` init container 3Gi with its `/tmp` at 2Gi.
   A chat session's `/state` `emptyDir` is capped at the agent container's limit. The Go preset sets
@@ -129,6 +64,13 @@ If you do not do step 3, the `McpProject` gets the reason `HostNotAllowed`. Then
   prompt tool. Docs: `docs/admin.md`, "Turn on approvals".
 
 ### Changed
+- **Definition of done for sandboxed agents, and required docs and changelog count as part of the task (#591).** `AGENTS.md` starts with a short definition of done for sandboxed agents (changelog fragment, docs, Conventional
+  Commits, STE, no scratch files), and `CLAUDE.md` marks the sections that do not apply to them. The run contract of
+  the worker now says that the docs and changelog entry the repository's instructions require are part of the task.
+- **Admin guide section on Spot VMs, preemptions and exit code 137 (#595).** `docs/admin.md` has a section "Spot VMs (GKE)". It tells the effect of a preemption on the system pool and on the agent pool, the other causes of exit code 137, how to find the cause, and what agentdev does to limit the effect.
+- **Shorter compat e2e (authentik in the background, 15 s idle timeout with the stub) (#566).** `scripts/e2e-compat.sh` with `COMPAT_API=1` deploys Postgres and authentik in the background while the agents are
+  deployed and checked, and joins them before `--tags api`. The stubbed run uses a 15 s idle timeout (45 s with
+  `CLAUDE_REAL=1`, `IDLE_SECONDS` overrides). `COMPAT_SSO=0` skips the SSO stand-in and its sign-in check.
 - **Clear the last staticcheck finding in the API image (#250).** `images/api/chat_kube.go` reads the one pod of a chat Job without a loop that always ends after the first item
   (staticcheck SA4004). No behaviour change. A full staticcheck run on `images/api` is now clean.
 - **The operator writes its proxy key Secrets with the supported server-side apply API (#250).** The operator writes `agent-<name>-proxy` and the setup proxy key Secret with `client.Client.Apply` and an apply
@@ -165,12 +107,40 @@ If you do not do step 3, the `McpProject` gets the reason `HostNotAllowed`. Then
   pass. A failed API pass no longer skips the nightly real-model run. Per-PR compat runs are unchanged.
 
 ### Removed
+- **BREAKING** **scripts/mcp-sync.sh is removed; the bootstrap applies an McpProject (#547).** `scripts/mcp-sync.sh` is removed (deprecated since 1.2.0, #383). `scripts/bootstrap-project.sh` now applies an
+  `McpProject` for a specification with `mcp:` and waits until the operator reports it `Ready` before it deploys the
+  agents. A specification without `mcp:` removes the `McpProject` that an earlier bootstrap made. The allow-list is the
+  operator's `mcp_allowed_hosts`. Docs: `docs/admin.md`, "Add MCP servers to a project"; `docs/troubleshooting.md`, MCP tools.
+  Breaking for operators who call the script directly or keep MCP hosts in `MCP_ALLOWED_HOSTS` of `config.env`,
+  which is no longer read: follow the upgrade steps.
 - **BREAKING** **run.sh and the numbered step scripts are removed; kind uses infra/ansible/kind.yml only (#417).** `run.sh`, the step scripts `00-prereqs.sh` to `13-secrets.sh` (with `04-coder.sh`) and `99-teardown.sh` are removed
   (deprecated in 1.1.0, #106). Use `ansible-playbook infra/ansible/kind.yml` (a plain run does what `./run.sh` did) and
   `--tags <step>` for one step. Settings are in `kind.vars.yml` (copy of `infra/ansible/kind.example.vars.yml`), passed
   with `-e @kind.vars.yml`; `config.env` is now read only by the scripts in `scripts/`. See docs/admin.md, Upgrade.
 
 ### Fixed
+- **e2e-compat.sh no longer fails on an empty SSO argument list under bash 3.2 (#569).** `scripts/e2e-compat.sh` expands an empty `sso_args` array safely under `set -u`, so the compat run works with the
+  bash 3.2 of macOS when no SSO arguments are set.
+- **Security pause follow-ups, interrupted jobs marked and no toolchain reinstall on every pod (#581).** A job that the drain time of a security pause cuts off is marked "interrupted by security pause": the saved commit
+  names the reason, and after resume the job comments on its issue or PR (operator annotation `agentdev/drain-reason`).
+  An unchanged toolchain is no longer reinstalled on each new pod, because the kubelet's fsGroup mode change no longer
+  changes the manifest hash. `docs/admin.md` lists the default egress hosts and explains why a high-severity stop keeps
+  the normal grace period.
+- **A job stopped by a Spot preemption, drain, scale-down or upgrade pushes its work and is retried, bounded by spec.retries.infrastructure (#593).** A job whose pod is stopped by the infrastructure (pod deleted, Spot preemption, drain, scale-down, upgrade) is retried
+  on the next pod from its pushed work, at most `spec.retries.infrastructure` times (new Agent field, default 2; 0: never).
+  A security pause, a deadline and the job's own errors never retry. The comment says, for example, "Interrupted by node
+  preemption, retried (attempt 2 of 3)". On SIGTERM the loop records the reason, then pushes work in progress to
+  `agent/<agent>/wip/<job>` within 20 s. The operator detects the cause from pod conditions and node taints.
+- **An agent works on any pull request assigned to it, whatever its author or branch (#573).** The agent now also works on a pull request that it did not open: the label `agent:<name>` (GitHub) or an assignment
+  (Gitea), set by a person with write access. It never pushes to another author's branch: it pushes to
+  `agent/<name>/pr-<n>` and opens a stacked PR into the head, or posts a patch when the head is the default branch.
+  A fork, or a label by a person without write access, gets one comment that says why. A wake that starts no job
+  writes `wake: no job started` in the log. Docs: `docs/concepts.md`, "Who may give work".
+- **A security pause for many low or medium events lets the running jobs finish (#577).** A `TooManyEvents` security pause now drains the agent first: the loop starts no new job, the running jobs finish
+  (at most `DRAIN_MAX_MINUTES`), then the pod stops. A high-severity event still stops the pod at once. Repeats of
+  one `run-events-invalid` refusal count once per job toward `SECURITY_PAUSE_AFTER`. The event names the refused repo,
+  the number of events and a hash of the first event. The `Resumed` condition and the operator log name who resumed
+  the agent. Docs: `docs/admin.md`, "Resume an agent that the operator paused"; `docs/security-model.md`.
 - **The operator refuses FORGE_EPHEMERAL_LIMIT below FORGE_MIRROR_LIMIT (#251).** The operator no longer starts when `FORGE_EPHEMERAL_LIMIT` is less than `FORGE_MIRROR_LIMIT` (Ansible `forge_ephemeral_limit`,
   `forge_mirror_limit`). It logs an error that names both values. Before, such a setting got agent pods evicted and
   recreated over and over once the git mirror grew past the forge sidecar's limit.
@@ -220,12 +190,12 @@ If you do not do step 3, the `McpProject` gets the reason `HostNotAllowed`. Then
   another file name is refused. Re-run: the playbook or `ansible-playbook infra/ansible/kind.yml --tags operator`.
 
 ### Upgrade
-From 1.2.0 to 1.3.0-rc.1. Do the steps in this order. Step 2 is **BREAKING** for kind users of `run.sh`. GKE
+From 1.2.0 to 1.3.0. Do the steps in this order. Step 2 is **BREAKING** for kind users of `run.sh`. GKE
 deployments with `deploy.yml` have no breaking change. Every new agent feature (tools, toolchain, permission mode) is
 off by default.
 
-1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.3.0-rc.1` in
-   `terraform/main.tf` and `agentdev_ref: v1.3.0-rc.1` and `image_tag: "1.3.0-rc.1"` in `ansible/instance.yml`, in one
+1. **Pin one release everywhere (ADR 0006).** In the deployment repository, set `ref=v1.3.0` in
+   `terraform/main.tf` and `agentdev_ref: v1.3.0` and `image_tag: "1.3.0"` in `ansible/instance.yml`, in one
    PR. Images and manifests must move together: new operator, API, UI, worker, forge and claude-proxy images.
 2. **kind only, BREAKING (#417, PR #495): `run.sh` and the step scripts are removed.** `run.sh`, `00-prereqs.sh` to
    `13-secrets.sh` (with `04-coder.sh`) and `99-teardown.sh` are gone. `config.env` is now read only by the scripts in
@@ -280,16 +250,34 @@ off by default.
 7. **Permission mode `auto` (#500, #505, #506, #539, #503, #523), optional.** `spec.permission` defaults to
    `dontAsk`, as before: an agent without the field keeps its pod template. To use `auto`, set `agents[].permission`
    (`{mode: auto}`, optional `autoMode` rules) or `kind_agents_permission`, then deploy again. Read the WARNING in
-   docs/admin.md, "Set the permission mode of an agent", first: the classifier is not a security boundary. The live
-   check of `auto` with approvals (#504) runs on this release candidate; until it passes, use `auto` only on test
-   agents. With approvals on, the worker now uses Claude Code's `can_use_tool` host (#539); `APPROVAL_HOST=off` on the
+   docs/admin.md, "Set the permission mode of an agent", first: the classifier is not a security boundary. The live check of
+   `auto` with approvals passed (#504). With approvals on, the worker now uses Claude Code's `can_use_tool` host (#539); `APPROVAL_HOST=off` on the
    agent container keeps the old MCP prompt tool. Approval requests now make one comment per job (#523).
 8. **Per-agent tools and toolchains (#496, #499), optional.** `agents[].tools.allow` and `agents[].toolchain` (kind:
    `kind_agents_tools`, `kind_agents_toolchain`). A toolchain needs the setup egress credential
    `egress-setup-proxy`: the playbook makes it, or Terraform with `external_secrets`. Size the agent volume as in
    docs/admin.md, "Give an agent a toolchain" (Rust: 20 GiB or more).
-9. **Deploy and check.** Run `deploy.yml` (or the Flux render) as usual. Then check that every `agent-<name>-0` is
+9. **MCP projects instead of `mcp-sync.sh` (#547).** Replace each direct call of `scripts/mcp-sync.sh <spec>` in
+   runbooks, cron jobs and CI with `scripts/bootstrap-project.sh <spec>`, the playbook (`mcp_projects`) or an
+   `McpProject`. Copy the hosts from `MCP_ALLOWED_HOSTS` in `config.env` to `mcp_allowed_hosts` (kind:
+   `kind.vars.yml`, GKE: `instance.yml`); without them the `McpProject` gets the reason `HostNotAllowed` and the
+   bootstrap stops after 300 seconds. On kind, apply `--tags mcp,operator` again; on GKE, run the platform playbook
+   again. Do not rotate the tokens: the operator adopts the `agent-<name>-mcp` Secrets, which have the same labels.
+10. **Job diagnostics and infrastructure retries (#588, #593).** The deploy run applies the updated `agents` CRD
+    (`spec.diagnostics`, `spec.retries`) and the new ClusterRole `agentdev-operator-nodes` (`get` on `nodes` only)
+    in `manifests/operator.yaml.tmpl`. An Agent without these fields keeps its pod template and gets 2 retries; set
+    `spec.retries.infrastructure: 0` to turn retries off.
+11. **Diagnostic alerts (#588, #603), optional.** Copy `terraform/monitoring.tf` from the template into the deployment
+    repository and set `enable_diagnostic_alerts = true`. The automation account gets `roles/logging.configWriter`
+    and `roles/monitoring.alertPolicyEditor` while it is on.
+12. **Deploy and check.** Run `deploy.yml` (or the Flux render) as usual. Then check that every `agent-<name>-0` is
    `2/2 Running` and that `scripts/e2e-gke-security.sh` has no FAIL.
+
+### Upgrade from a 1.3.0 release candidate
+1. Pin `v1.3.0` / `1.3.0` in `terraform/main.tf` and `ansible/instance.yml` in one PR (step 1).
+2. From rc.1 or rc.2 only: do steps 9 and 10.
+3. Optional on any rc: step 11.
+4. Run `deploy.yml` (or the Flux render) and check as in step 12.
 
 ## [1.2.0] - 2026-11-24
 
