@@ -82,8 +82,8 @@ kill "${pf}" 2>/dev/null; rm -f "${pf_log}"
 log "Server side: a valid probe certificate runs nothing outside the allow-list"
 # a test-only certificate from the user CA key (the operator never issues one for another command); deleted below
 ca=$(mktemp -d)
-k -n "${EXEC_NS}" get secret step-ca -o jsonpath='{.data.ssh_user_ca_key}' | base64 -d > "${ca}/enc"
-k -n "${EXEC_NS}" get secret step-ca -o jsonpath='{.data.password}' | base64 -d > "${ca}/pw"
+k -n "${SSH_CA_NS}" get secret step-ca -o jsonpath='{.data.ssh_user_ca_key}' | base64 -d > "${ca}/enc"
+k -n "${SSH_CA_NS}" get secret step-ca -o jsonpath='{.data.password}' | base64 -d > "${ca}/pw"
 openssl pkey -in "${ca}/enc" -passin "file:${ca}/pw" -out "${ca}/user_ca" 2>/dev/null && chmod 600 "${ca}/user_ca"
 ssh-keygen -q -t ed25519 -N '' -f "${ca}/id" >/dev/null
 k -n "${EXEC_NS}" get sshtarget e2e -o jsonpath='{.status.hostCAKey}' | sed "s/^/@cert-authority ${HOST} /" > "${ca}/known_hosts"
