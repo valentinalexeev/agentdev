@@ -15,6 +15,7 @@ operator_worker_image: agentdev/worker:mvp
 operator_forge_image: agentdev/forge:mvp
 operator_image_pull_policy: Never        # kind: the tag agents loads the worker and forge images
 # SSH certificate authority (#204): step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+operator_ssh_ca_ns: agentdev-ssh-ca   # step-ca and its keys (R133): never operator_exec_ns
 operator_step_ca_image: smallstep/step-ca:0.28.4@sha256:0f88382ac5af5c6b7bbba0c6e8fcefef52aee6f22ea364df8e02a09ffd0d22f3
 operator_egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
 operator_forge_public_url: http://localhost:3000

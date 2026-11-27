@@ -62,6 +62,8 @@ func main() {
 
 	ns := env("AGENTS_NS", "coding-agents")
 	execNS := os.Getenv("EXEC_NS") // deterministic executors (#69); empty: off
+	// SSH CA (#204, R133): step-ca and its key Secret in their own namespace, never in EXEC_NS (unnamed secrets get there)
+	sshCANS := env("SSH_CA_NS", "agentdev-ssh-ca")
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  cacheOptions(ns, execNS), // per kind: agents namespace, executor kinds in EXEC_NS (#161)
@@ -181,7 +183,7 @@ func main() {
 				EgressProxy:     os.Getenv("EXECUTOR_EGRESS_PROXY"),
 				EgressHosts:     strings.Fields(os.Getenv("EXECUTOR_EGRESS_HOSTS")),
 				EgressMaxEvents: envInt("SECURITY_RATE_BURST", 20)},
-			EgressLogs: kubeSinceLogs(cs), SSHCA: sshCAFromSecret(mgr.GetAPIReader(), execNS)}
+			EgressLogs: kubeSinceLogs(cs), SSHCA: sshCAFromSecret(mgr.GetAPIReader(), sshCANS)}
 		if err := mgr.Add(ex); err != nil {
 			log.Error(err, "executor poller")
 			os.Exit(1)
@@ -198,8 +200,12 @@ func main() {
 			log.Info("probe catalogue on", "listen", listen)
 		}
 		log.Info("deterministic executors on", "namespace", execNS)
+		if sshCANS == execNS || sshCANS == ns {
+			log.Error(nil, "SSH_CA_NS must be its own namespace: the operator may read Secrets in EXEC_NS and the agents namespace")
+			os.Exit(1)
+		}
 		// SSH server enrolment (#204): SSHTargets in EXEC_NS; idle until scripts/ssh-ca-init.sh made the CA Secrets
-		if err := mgr.Add(newSSHEnroller(mgr.GetClient(), mgr.GetAPIReader(), execNS)); err != nil {
+		if err := mgr.Add(newSSHEnroller(mgr.GetClient(), mgr.GetAPIReader(), execNS, sshCANS)); err != nil {
 			log.Error(err, "ssh enroller")
 			os.Exit(1)
 		}

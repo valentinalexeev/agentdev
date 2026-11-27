@@ -1,6 +1,6 @@
 package main
 
-// SSH certificate authority client (#204, docs/adr/0007). The operator is the only requester of step-ca in EXEC_NS:
+// SSH certificate authority client (#204, docs/adr/0007). The operator is the only requester of step-ca in SSH_CA_NS:
 // it signs a one-time token (JWT, ES256) with the agentdev-operator JWK provisioner key (Secret step-ca-provisioner)
 // and posts it with the public key to /1.0/ssh/sign. The CA's template takes principals and key ID from the token and
 // adds no extensions; critical options (force-command, source-address) come only from the token's agentdev claim.

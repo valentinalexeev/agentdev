@@ -1,14 +1,34 @@
-# SSH certificate authority for executors (#204, docs/adr/0007), in the executors namespace. Rendered by 12-operator.sh
-# (envsubst) and infra/ansible/deploy.yml (same template).
+# SSH certificate authority for executors (#204, docs/adr/0007), in its own namespace SSH_CA_NS (R133). Rendered by
+# infra/ansible/deploy.yml and the kind role operator (same template).
 #
+# - Own namespace: the operator has an unnamed secrets get in EXEC_NS (exec-<name>-forge, run Secrets), so the CA keys
+#   must not live there. In SSH_CA_NS the operator may get only Secret step-ca-provisioner, by name; it has no right on
+#   Secret step-ca (CA keys) and none on the Deployment. Only cluster admins write here.
 # - step-ca: one replica, keys and config from Secret step-ca (made by scripts/ssh-ca-init.sh, never by agentdev). The
 #   pod waits (Pending, volume not found) until that Secret exists, so deploying the manifest without a CA is harmless.
 # - Only the operator may connect (NetworkPolicy); the CA's only provisioner is the operator's JWK key.
 # - Its database is an emptyDir: step-ca keeps only issued-certificate records there. agentdev revokes nothing
 #   through it (certificates live minutes; the emergency stop is the KRL on the servers).
+apiVersion: v1
+kind: Namespace
+metadata: {name: ${SSH_CA_NS}, labels: {agentdev/role: ssh-ca}}
+---
+# the operator reads its provisioner key and the CA root certificate, nothing else in this namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: agentdev-operator, namespace: ${SSH_CA_NS}}
+rules:
+- {apiGroups: [""], resources: [secrets], resourceNames: [step-ca-provisioner], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: agentdev-operator, namespace: ${SSH_CA_NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: agentdev-operator}
+subjects: [{kind: ServiceAccount, name: agentdev-operator, namespace: ${PLATFORM_NS}}]
+---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: step-ca, namespace: ${EXEC_NS}, labels: {app: step-ca}}
+metadata: {name: step-ca, namespace: ${SSH_CA_NS}, labels: {app: step-ca}}
 spec:
   replicas: 1
   strategy: {type: Recreate}
@@ -66,15 +86,15 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: step-ca, namespace: ${EXEC_NS}}
+metadata: {name: step-ca, namespace: ${SSH_CA_NS}}
 spec:
   selector: {app: step-ca}
   ports: [{name: https, port: 9000, targetPort: https}]
 ---
-# only the operator may ask the CA (executor Jobs never reach it; executors-no-ingress denies the rest)
+# only the operator may ask the CA (executor Jobs and every other pod never reach it)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: {name: step-ca, namespace: ${EXEC_NS}}
+metadata: {name: step-ca, namespace: ${SSH_CA_NS}}
 spec:
   podSelector: {matchLabels: {app: step-ca}}
   policyTypes: [Ingress, Egress]
@@ -82,3 +102,11 @@ spec:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${PLATFORM_NS}}}, podSelector: {matchLabels: {app: agentdev-operator}}}]
     ports: [{port: 9000}]
   egress: []   # the CA calls nothing
+---
+# nothing else runs here: deny all other traffic of the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: ${SSH_CA_NS}}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]

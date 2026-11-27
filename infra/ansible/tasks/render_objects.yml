@@ -97,7 +97,7 @@
       # SSH certificate authority (#204, ADR 0007): step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
       step_ca: >-
         {{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/step-ca.yaml.tmpl',
-           'values': {'EXEC_NS': exec_ns, 'PLATFORM_NS': platform_ns, 'STEP_CA_IMAGE': step_ca_image}, 'replace': []})
+           'values': {'SSH_CA_NS': ssh_ca_ns, 'PLATFORM_NS': platform_ns, 'STEP_CA_IMAGE': step_ca_image}, 'replace': []})
            | from_yaml_all | list }}
       exec_service_accounts: "{{ lookup('ansible.builtin.template', 'templates/executor-accounts.j2') | from_yaml }}"
       executors: "{{ lookup('ansible.builtin.template', 'templates/executors.j2') | from_yaml }}"
@@ -184,6 +184,7 @@
         AGENT_GRACE_SECONDS: "{{ rollout.grace_seconds | default(300) }}"
         DRAIN_MAX_MINUTES: "{{ rollout.drain_max_minutes | default(60) }}"
         EXEC_NS: "{{ exec_ns }}"
+        SSH_CA_NS: "{{ ssh_ca_ns }}"
         EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
         EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
         EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"

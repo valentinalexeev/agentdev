@@ -347,14 +347,15 @@ func (e *SSHEnroller) writeStatus(ctx context.Context, t *v1.SSHTarget) error {
 }
 
 // newSSHEnroller is the enroller of main: SSH_ENROL_POLL_SECONDS (60) per pass, SSH_PROBE_MINUTES (10) per probe.
-func newSSHEnroller(c client.Client, r client.Reader, ns string) *SSHEnroller {
-	return &SSHEnroller{Client: c, Direct: r, NS: ns, CA: sshCAFromSecret(r, ns), Now: time.Now,
+func newSSHEnroller(c client.Client, r client.Reader, ns, caNS string) *SSHEnroller {
+	return &SSHEnroller{Client: c, Direct: r, NS: ns, CA: sshCAFromSecret(r, caNS), Now: time.Now,
 		Poll:  time.Duration(envInt("SSH_ENROL_POLL_SECONDS", 60)) * time.Second,
 		Probe: time.Duration(envInt("SSH_PROBE_MINUTES", 10)) * time.Minute}
 }
 
-// sshCAFromSecret builds the CA client from Secret step-ca-provisioner in ns (read on every pass: rotation needs no
-// restart).
+// sshCAFromSecret builds the CA client from Secret step-ca-provisioner in ns, the CA's own namespace SSH_CA_NS (read on
+// every pass: rotation needs no restart). R133: the CA keys (Secret step-ca) are in that namespace too, and the
+// operator's Role there allows only get on step-ca-provisioner by name (manifests/step-ca.yaml.tmpl).
 func sshCAFromSecret(r client.Reader, ns string) func(ctx context.Context) (*SSHCA, error) {
 	return func(ctx context.Context) (*SSHCA, error) {
 		var s corev1.Secret

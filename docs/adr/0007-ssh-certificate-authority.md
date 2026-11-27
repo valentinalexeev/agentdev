@@ -18,8 +18,10 @@ This record fixes the technical choices that the issue left open.
 
 ### The CA
 
-- **step-ca in `EXEC_NS`**, one replica, Service `step-ca:9000` (TLS from its own X.509 root). NetworkPolicy: only the
-  operator may connect. The CA has a user key and a host key for SSH (`step ca init --ssh`).
+- **step-ca in its own namespace `SSH_CA_NS`** (default `agentdev-ssh-ca`), one replica, Service `step-ca:9000` (TLS from
+  its own X.509 root). NetworkPolicy: only the operator may connect; `default-deny` for the rest of the namespace. Not in
+  `EXEC_NS`: the operator has an unnamed Secret get there (executor Secrets by name), so it could read the CA keys
+  (review of #264, R133). In `SSH_CA_NS` the operator's Role allows only get on `step-ca-provisioner` by name. The CA has a user key and a host key for SSH (`step ca init --ssh`).
 - **Key ceremony outside the cluster:** `scripts/ssh-ca-init.sh` makes the CA keys with the `step` CLI (local, or the
   pinned `smallstep/step-ca` image) in a temporary directory, writes two Secrets and deletes the directory:
   `step-ca` (CA configuration, keys, password; mounted only in the step-ca pod) and `step-ca-provisioner` (the

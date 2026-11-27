@@ -22,7 +22,7 @@ func TestSSHCALive(t *testing.T) {
 	}
 	prov, _ := os.ReadFile(filepath.Join(dir, "provisioner.json"))
 	root, _ := os.ReadFile(filepath.Join(dir, "root_ca.crt"))
-	ca, err := newSSHCA(url, "step-ca.agentdev-executors.svc", prov, root)
+	ca, err := newSSHCA(url, "step-ca.agentdev-ssh-ca.svc", prov, root)
 	if err != nil {
 		t.Fatal(err)
 	}
