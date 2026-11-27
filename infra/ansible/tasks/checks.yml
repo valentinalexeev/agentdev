@@ -111,5 +111,8 @@
       and claude_job_approval_units is lower than claude_job_budget_units when both are set (#310).
     quiet: true
 
+- name: The Claude model is valid (#609)
+  ansible.builtin.include_tasks: tasks/model_check.yml
+
 - name: Scale to zero has a wake source (#181)
   ansible.builtin.include_tasks: tasks/wake_source.yml

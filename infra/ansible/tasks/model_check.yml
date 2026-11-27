@@ -1,0 +1,18 @@
+# spec.model rule (#564, #609): claude_model and agents[].model are an alias (opus, sonnet, haiku, fable) or a full
+# name of one of these claude-proxy price families, optional [1m], at most 80 characters: the operator's modelChars
+# and the CRD pattern, so a bad value fails here and not as an Agent in phase Invalid. Empty: the CLI's default.
+- name: The Claude model is a claude-proxy price family (#609)
+  ansible.builtin.assert:
+    that:
+      - >-
+        ([claude_model | default('', true) | string] + (agents | default([]) | map(attribute='model', default='')
+        | map('string') | list)) | reject('equalto', '')
+        | reject('match', '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$')
+        | list | length == 0
+      - >-
+        ([claude_model | default('', true) | string] + (agents | default([]) | map(attribute='model', default='')
+        | map('string') | list)) | select('match', '^.{81}') | list | length == 0
+    fail_msg: >-
+      claude_model and agents[].model are opus, sonnet, haiku, fable or a claude-<family>-... name (optional [1m]),
+      at most 80 characters (#609).
+    quiet: true
