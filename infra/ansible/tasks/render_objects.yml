@@ -161,7 +161,7 @@
         EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
       replace: []
     agent_egress_hosts: >-
-      {{ (egress_hosts + egress_extra_hosts) | reject('in', [claude_proxy_upstream_host] if claude_proxy | bool else []) | join(' ') }}
+      {{ (egress_hosts + egress_extra_hosts) | reject('in', agent_egress_drop) | join(' ') }}
     vars_operator:
       src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
       values:

@@ -176,7 +176,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
-		EnvFrom: r.claudeEnvFrom(a),
+		EnvFrom: append(r.claudeEnvFrom(a), registryProxyEnvFrom),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),
 				corev1.ResourceEphemeralStorage: r.D.qty(r.D.AgentEphemeralRequest, defAgentEphemeralRequest)},
@@ -470,6 +470,13 @@ func (r *AgentReconciler) reloadSecrets(a *v1.Agent, forgeSecret string) string 
 
 // forgeProxySecret holds the forge sidecar's egress proxy credential (manifests/egress.yaml.tmpl, #65).
 const forgeProxySecret = "egress-forge-proxy"
+
+// registryProxyEnvFrom: the package manager settings of the registry cache (#203): npm_config_registry,
+// PIP_INDEX_URL, GOPROXY and so on, from the optional ConfigMap registry-proxy (Ansible role registry_cache). They are
+// URLs of the in-cluster gateway, never a credential. Without the ConfigMap the package managers use the public
+// registries through the egress proxy, as before. A changed ConfigMap reaches an agent at its next pod start.
+var registryProxyEnvFrom = corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{
+	LocalObjectReference: corev1.LocalObjectReference{Name: "registry-proxy"}, Optional: ptr.To(true)}}
 
 // claudeEnvFrom: with the credential proxy (#66) the agent container gets no Claude Secret, only the optional MCP
 // token (#14). Without it, exactly one Claude credential per agent (#5), as before.
