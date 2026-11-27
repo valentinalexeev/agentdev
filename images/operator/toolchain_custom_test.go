@@ -325,3 +325,26 @@ func TestCustomToolchainsManifestEnv(t *testing.T) {
 		t.Fatal("no operator Deployment")
 	}
 }
+
+// #598: with no custom toolchain in use the default is unchanged. An empty TOOLCHAINS is no catalogue, and a
+// deployment that defines toolchains does not change the pod template of an agent without spec.toolchain or with
+// presets only (no restart on upgrade).
+func TestCustomToolchainDefaultUnchanged(t *testing.T) {
+	for _, raw := range []string{"", "  ", "{}"} {
+		if cat, err := parseToolchains(raw, ""); err != nil || len(cat) != 0 {
+			t.Errorf("parseToolchains(%q) = %v, %v", raw, cat, err)
+		}
+	}
+	for _, mut := range []func(*v1.Agent){nil, withGo} {
+		r0, c0 := setup(t, agent("alice", mut))
+		reconcile(t, r0, "alice")
+		base := getSTS(t, c0, "alice").Spec.Template
+		_, sts, _ := customSetup(t, shellTools(), agent("alice", mut))
+		got := sts().Spec.Template
+		b0, _ := json.Marshal(base)
+		b1, _ := json.Marshal(got)
+		if string(b0) != string(b1) {
+			t.Errorf("pod template changed with TOOLCHAINS set:\n%s\n%s", b0, b1)
+		}
+	}
+}

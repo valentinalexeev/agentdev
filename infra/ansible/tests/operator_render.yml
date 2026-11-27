@@ -7,6 +7,8 @@
   gather_facts: false
   vars:
     repo_root: "{{ playbook_dir }}/../../.."
+    t_tc: {shell-tools: {files: [{name: bats, kind: tar, arch: {all: {url: "https://github.com/x.tar.gz", sha256: "{{ '1' * 64 }}"}}}],
+                         verify: [[sh, -c, 'echo "a\b" ${HOME} $PATH']]}}
   tasks:
     - name: Load the role defaults
       ansible.builtin.include_vars: ../roles/operator/defaults/main.yml
@@ -75,3 +77,31 @@
         t_hosts: >-
           {{ (operator_egress_hosts + operator_egress_extra_hosts)
              | reject('in', ['api.anthropic.com'] if operator_claude_proxy | bool else []) | list }}
+
+    # #598: TOOLCHAINS reaches the operator Deployment as the exact JSON, also with quotes, backslashes and ${...} in a
+    # value (the role's expression, roles/operator/tasks/main.yml); empty toolchains render as {}
+    - name: Render custom toolchains
+      ansible.builtin.set_fact:
+        t_tc_env: >-
+          {{ t_tc_env | default([]) + [(lookup('ansible.builtin.template', '../templates/render.j2', template_vars={'src': repo_root ~ '/manifests/operator.yaml.tmpl',
+             'values': t_values | combine({'TOOLCHAINS': t_role_tc}), 'replace': []})
+             | from_yaml_all | selectattr('kind', 'equalto', 'Deployment') | first).spec.template.spec.containers[0].env
+             | selectattr('name', 'equalto', 'TOOLCHAINS') | map(attribute='value') | first] }}
+      loop: ["{{ t_tc }}", {}]
+      vars:
+        # the role's expression (roles/operator/tasks/main.yml); the assert below checks that the role still has it
+        t_role_tc: "{{ (item | to_json | replace('$', '\\u0024') | to_json)[1:-1] }}"
+        t_values: "{{ dict(lookup('ansible.builtin.file', '../roles/operator/tasks/main.yml')
+                      | regex_findall('(?m)^        ([A-Z_]+):') | zip_longest([], fillvalue='v')) }}"
+
+    - name: Custom toolchains survive the render
+      ansible.builtin.assert:
+        that:
+          - (t_tc_env[0] | from_json) == t_tc
+          - (t_tc_env[1] | from_json) == {}
+          - lookup('ansible.builtin.file', '../roles/operator/tasks/main.yml') is search(t_expr | regex_escape)
+          - lookup('ansible.builtin.file', '../tasks/render_objects.yml')
+            is search(t_expr | replace('operator_toolchains', 'toolchains | default({})') | regex_escape)
+        quiet: true
+      vars:
+        t_expr: !unsafe "(operator_toolchains | to_json | replace('$', '\\\\u0024') | to_json)[1:-1]"

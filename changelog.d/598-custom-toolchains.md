@@ -34,3 +34,7 @@ Squid now allows the setup client before the forge-host deny, so a custom toolch
 The agent container is refused both lists as before. The worker image adds `xz-utils` for `.tar.xz` archives.
 `spec.toolchain.presets` is now optional; the CRD needs at least one preset or custom toolchain. Agents with presets
 only keep their toolchain key, so their pods do not install again on upgrade. Security: `docs/security.md` R126.
+
+Ansible passes `TOOLCHAINS` as a double-quoted YAML scalar, so quotes, backslashes and `$` in a value reach the
+operator unchanged (`tests/operator_render.yml`). With no custom toolchain in use, the pod template of every agent is
+unchanged (`TestCustomToolchainDefaultUnchanged`).
