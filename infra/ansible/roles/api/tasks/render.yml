@@ -18,7 +18,7 @@
       - api_chat_max_sessions_per_user | string is match('^[0-9]{1,6}$')
       - api_notify_channels | difference(['webpush']) | length == 0
       - api_chat_models is sequence and api_chat_models is not string
-      - api_chat_models | reject('match', '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\\[1m\\])?$') | list | length == 0
+      - api_chat_models | reject('match', api_chat_model_re) | list | length == 0
       - api_chat_efforts is sequence and api_chat_efforts is not string
       - api_chat_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
     fail_msg: >-
