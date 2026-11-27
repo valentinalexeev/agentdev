@@ -2134,6 +2134,13 @@ security event. A PR that is not ready (a check pending) is retried on the next 
 
 Gitea: not supported. The sidecar logs that the endpoint stays off; the agent never merges there.
 
+WARNING: With `mode: gated`, the owner approval starts the merge. The sidecar does not look for the independent
+`Reviewer: OK at <sha>` line that `CLAUDE.md` §4 requires. On a repository that follows `CLAUDE.md`, approve a PR
+only after the reviewer line names its current head.
+
+A head commit with no check runs and no commit statuses passes the check step. Then only `mergeable_state` and
+branch protection stop a merge before the checks start. Thus, set required checks in branch protection.
+
 Keep branch protection on the default branch (required review, dismiss stale approvals, required checks). On kind and
 in `instance.yml` the field is not wired yet: set it on the `Agent` object (`kubectl edit agent <name>`).
 

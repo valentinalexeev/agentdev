@@ -34,7 +34,7 @@ import (
 //     asked through the same approval requests as a protected push (source push, tool merge).
 //
 // The merge call pins the head (sha): GitHub refuses it when the head moved after the checks. Each merge is an audit
-// entry (stdout AGENTDEV_AUDIT, and the API's audit table through its internal listener). A refusal by the policy is a
+// entry (a stdout AGENTDEV_AUDIT line; see auditMerge). A refusal by the policy is a
 // security event and HTTP 403; a PR that is not ready yet (checks pending, approval request pending, mergeability
 // not computed) is HTTP 409 without an event, so the loop can ask again later.
 //
@@ -520,8 +520,9 @@ func (s *server) forgeSend(ctx context.Context, method, path string, body, out a
 
 const auditPrefix = "AGENTDEV_AUDIT "
 
-// auditMerge writes the agent-merge audit entry: one stdout line (the cluster log keeps it), and the API's audit
-// table through its internal listener (best effort: the merge is done; an older API without the endpoint answers 404).
+// auditMerge writes the agent-merge audit entry: one stdout line (the cluster log keeps it). It also posts the entry
+// to POST /internal/merges/<agent> on the API, best effort: the merge is done. The API has no such endpoint yet and
+// answers 404, so today the stdout line is the only record.
 func (s *server) auditMerge(ctx context.Context, res *mergeResult) {
 	e := map[string]any{"time": time.Now().UTC().Format(time.RFC3339), "source": "forge", "action": "agent-merge",
 		"agent": s.c.AgentName, "result": "ok", "merge": res}

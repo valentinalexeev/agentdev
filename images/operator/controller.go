@@ -122,8 +122,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
-	// same for the model and the effort (#564): a model name of safe characters, a known effort level (fail closed)
-	if msg := mergeValid(&a); msg != "" { // #578: spec.merge, fail closed
+	// same for spec.merge (#578): mode off or gated, gated needs approvers (fail closed)
+	if msg := mergeValid(&a); msg != "" {
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "InvalidMerge", Message: msg, ObservedGeneration: a.Generation})
@@ -131,6 +131,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
+	// same for the model and the effort (#564): a model name of safe characters, a known effort level (fail closed)
 	if msg := modelValid(&a); msg != "" {
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
