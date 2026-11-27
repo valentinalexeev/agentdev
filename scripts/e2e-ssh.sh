@@ -33,8 +33,8 @@ k -n "${SSH_CA_NS}" rollout restart deploy/step-ca >/dev/null 2>&1
 k -n "${SSH_CA_NS}" rollout status deploy/step-ca --timeout=180s >/dev/null; check $? "step-ca running"
 k -n "${SSH_CA_NS}" get secret step-ca-provisioner >/dev/null; check $? "provisioner Secret for the operator"
 op="system:serviceaccount:${PLATFORM_NS}:agentdev-operator"
-r=$(k auth can-i get secret/step-ca -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); [[ "${r}" == no ]]; check $? "operator cannot read the CA keys (R133, can-i=${r})"
-r=$(k auth can-i get secret/step-ca-provisioner -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); [[ "${r}" == yes ]]; check $? "operator reads its provisioner key (can-i=${r})"
+r=$(k auth can-i get secret/step-ca -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); rc=1; [[ "${r}" == no ]] && rc=0; check "${rc}" "operator cannot read the CA keys (R133, can-i=${r})"
+r=$(k auth can-i get secret/step-ca-provisioner -n "${SSH_CA_NS}" --as="${op}" 2>/dev/null); rc=1; [[ "${r}" == yes ]] && rc=0; check "${rc}" "operator reads its provisioner key (can-i=${r})"
 
 log "Test SSH server (${SRV_IMAGE}) in ${SRV_NS}"
 if [[ "${SRV_IMAGE}" == agentdev-test-sshd:* ]]; then
