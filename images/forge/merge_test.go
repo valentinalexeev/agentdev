@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -363,5 +365,65 @@ func TestMergeCallerCannotChooseMethodOrApprover(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 || len(f.merged) != 1 || !strings.Contains(f.merged[0], `"merge_method":"merge"`) {
 		t.Fatalf("the method is always merge: %d %v", rec.Code, f.merged)
+	}
+}
+
+// a console chat pod never merges (#578, #571): refused with the chat event before any forge call, GitHub and Gitea
+func TestMergeRefusedInChat(t *testing.T) {
+	f := newMergeForge()
+	var calls int
+	inner := f.handler(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/internal/") {
+			calls++
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := ghConfig(t, srv.URL)
+	c.MergeMode, c.APIURL, c.MergeApprovers, c.ChatSession = "gated", srv.URL, []string{"Owner"}, testChatSession
+	d, err := newGH(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.now = func() time.Time { return ghNow.Add(-30 * time.Minute) }
+	s := newServer(c)
+	s.drv, s.rules = d, d.rules()
+	var out bytes.Buffer
+	old := eventOut
+	eventOut = &out
+	t.Cleanup(func() { eventOut = old })
+	rec := postMerge(s.routes(), "20")
+	if rec.Code != 403 {
+		t.Fatalf("github chat merge: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if calls != 0 || len(f.merged) != 0 {
+		t.Fatalf("github chat merge reached the forge: %d calls, merged %v", calls, f.merged)
+	}
+	if r := eventRules(&out); len(r) != 1 || r[0] != "chat-label-not-asked/medium" {
+		t.Fatalf("events %v, want the chat refusal", r)
+	}
+	if _, err := s.mergePR(context.Background(), "pr-20", "20"); err == nil || calls != 0 {
+		t.Fatalf("mergePR in a chat: %v, %d calls", err, calls)
+	}
+
+	// Gitea: no endpoint at all, and mergePR itself refuses before any call
+	var gcalls int
+	gsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gcalls++; w.WriteHeader(500) }))
+	t.Cleanup(gsrv.Close)
+	gs := newServer(&Config{ForgeURL: gsrv.URL, ForgeUser: "alice", Token: "t", Repos: []string{"o/r"}, MergeMode: "gated", ChatSession: testChatSession})
+	req := httptest.NewRequest("POST", "/merge?pr=1", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	grec := httptest.NewRecorder()
+	gs.routes().ServeHTTP(grec, req)
+	if grec.Code != 404 {
+		t.Fatalf("gitea chat merge: %d, want 404", grec.Code)
+	}
+	var pe *policyError
+	if _, err := gs.mergePR(context.Background(), "pr-1", "1"); !errors.As(err, &pe) || pe.rule != "chat-label-not-asked" {
+		t.Fatalf("gitea mergePR in a chat: %v", err)
+	}
+	if gcalls != 0 {
+		t.Fatalf("gitea chat merge reached the forge: %d calls", gcalls)
 	}
 }

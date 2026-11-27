@@ -5,7 +5,7 @@ section: Added
 status: done
 breaking: false
 title: Opt-in merge of an agent's own pull request after an owner approved its exact head commit
-components: [forge, operator, worker]
+components: [api, forge, operator, worker]
 pr: 580
 ---
 ## Summary
@@ -37,4 +37,5 @@ counts); every check run and commit status on the head passed and the forge repo
 pins the head (`sha`) and always uses `merge_method: merge` (a `MERGE_METHOD` other than merge stops the sidecar at start); the request carries only the PR number, so the agent
 cannot choose the approver or the method. A PR that is not ready (a check pending) gets HTTP 409 without an event;
 the loop asks again on its next pass. On Gitea the sidecar cannot tell a person from another agent's account, so it
-refuses explicitly: no endpoint.
+refuses explicitly: no endpoint. A console chat pod never merges: the API drops `MERGE_*` from its sidecar, and the
+sidecar refuses `POST /merge` with `CHAT_SESSION` set before any forge call (`chat-label-not-asked`).

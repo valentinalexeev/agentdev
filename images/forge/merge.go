@@ -148,6 +148,13 @@ var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func (s *server) merge(w http.ResponseWriter, r *http.Request) {
 	pr := r.URL.Query().Get("pr")
+	if s.c.ChatSession != "" { // the API drops MERGE_* from a chat pod; refused here too, before any forge call
+		err := refuseChat(s, "merge")
+		s.logf("merge of PR #%s refused: %v", pr, err)
+		s.policyEvent(r, err, "merge PR #"+pr)
+		fail(w, err)
+		return
+	}
 	if !prNumRe.MatchString(pr) {
 		http.Error(w, "pr: a pull request number", http.StatusBadRequest)
 		return
@@ -176,6 +183,9 @@ func (s *server) merge(w http.ResponseWriter, r *http.Request) {
 // mergePR checks the policy of the comment at the top of this file against the forge, then merges with the head
 // pinned. job is the loop's X-Agentdev-Job header (informational; used for the protected-path approval).
 func (s *server) mergePR(ctx context.Context, job, pr string) (*mergeResult, error) {
+	if s.c.ChatSession != "" { // never from a console chat pod (merge is the autonomous agent's, #578)
+		return nil, refuseChat(s, "merge")
+	}
 	repo := s.c.Repos[0]
 	n, _ := strconv.ParseInt(pr, 10, 64)
 	base := fmt.Sprintf("/repos/%s/pulls/%s", repo, pr)
