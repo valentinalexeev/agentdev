@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign-in check of the company SSO source on kind (#122), run by 09-authentik.sh.
+"""Sign-in check of the company SSO source on kind (#122), run by kind.yml --tags authentik.
 
 Drives real browser sign-ins through authentik and the local OIDC stand-in (manifests/kind/sso-standin.yaml), then
 reads the result inside the authentik worker. Checks the owner rule of #103 and the default of #122:
@@ -116,10 +116,18 @@ def run_flow(b, base, flow_url):
 
 
 def sign_in(base, idp, claims, user=TEST_USER):
-    b = Browser()
-    url, st, body = follow(b, f"{base}/source/oauth/login/agentdev-sso/", base)
-    if not url.startswith(idp):
-        raise RuntimeError(f"source did not redirect to the stand-in (got {urllib.parse.urlparse(url).netloc})")
+    # #304: on a new cluster the step restarts authentik and applies the SSO blueprint just before this check. For a
+    # short time the source is not usable and authentik answers on its own host. Retry for up to 60 seconds.
+    deadline = time.monotonic() + 60
+    while True:
+        b = Browser()
+        url, st, body = follow(b, f"{base}/source/oauth/login/agentdev-sso/", base)
+        if url.startswith(idp):
+            break
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"source did not redirect to the stand-in (got {urllib.parse.urlparse(url).netloc}, "
+                               f"HTTP {st})")
+        time.sleep(3)
     st, hd, _ = b.req(url, data={"username": user, "claims": json.dumps(claims)})
     loc = hd.get("Location", "")
     if "code=" not in loc:

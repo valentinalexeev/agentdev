@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with ./run.sh 13 done (and 12).
+# kind e2e for the scoped secrets store (#202 part 1). Needs a kind cluster with kind.yml --tags secrets done
+# (it also runs the operator).
 #   CLUSTER_NAME=t14 scripts/e2e-secrets.sh
 # Checks: ProjectSecret -> ExternalSecret -> ps-<n> sync, rotation, CRD CEL, admission policies, deletion.
 # The test value is random and never printed.
@@ -94,6 +95,33 @@ metadata: {name: evil}
 spec: {provider: {kubernetes: {remoteNamespace: kube-system, server: {url: "https://kubernetes.default.svc"}, auth: {serviceAccount: {name: x}}}}}
 EOF
 ) && { no "operator wrote a SecretStore"; k -n "$ns" delete secretstore evil >/dev/null; } || ok "agentdev service accounts cannot write a SecretStore"
+
+# #381 acceptance 3: the agents namespace never reads a platform-* secret, and the operator reads no Secret but the
+# signing key. --dry-run=server runs the admission policies without creating anything (no platform store on kind).
+op="system:serviceaccount:${PLATFORM_NS}:agentdev-operator"
+[[ "$(k -n "$ns" auth can-i get secret/claude-shared --as="$op")" == no ]] \
+  && ok "operator cannot read claude-shared" || no "operator can read claude-shared"
+[[ "$(k -n "$ns" auth can-i get secret/claude-proxy-signing --as="$op")" == yes ]] \
+  && ok "operator reads claude-proxy-signing" || no "operator cannot read claude-proxy-signing"
+[[ "$(k -n "$ns" auth can-i list secrets --as="$op")" == no ]] && ok "operator cannot list Secrets" || no "operator lists Secrets"
+out=$(k -n "$ns" create secret generic claude-evil --from-literal=k=v --as="$op" --dry-run=server 2>&1) \
+  && no "operator wrote a Secret other than agent-*-proxy" || ok "policy limits operator writes to agent-*-proxy"
+readers=0
+for sa in $(k -n "$ns" get sa -o name | sed 's|serviceaccount/||'); do
+  [[ "$(k -n "$ns" auth can-i get secrets --as="system:serviceaccount:$ns:$sa")" == no ]] \
+    || { no "service account $sa in $ns can read Secrets"; readers=$((readers + 1)); }
+done
+[[ $readers -eq 0 ]] && ok "no service account of $ns reads Secrets (auth can-i)"
+out=$(k -n "$ns" apply --dry-run=server -f - 2>&1 <<EOF
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata: {name: e2e-platform}
+spec:
+  secretStoreRef: {name: agentdev-platform-secrets, kind: SecretStore}
+  target: {name: e2e-platform}
+  data: [{secretKey: v, remoteRef: {key: platform-pg-admin}}]
+EOF
+) && no "ExternalSecret naming platform-* accepted in $ns" || ok "policy refuses a platform-* ExternalSecret in $ns"
 
 # deletion
 k -n "$ns" delete projectsecret "$name" >/dev/null

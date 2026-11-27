@@ -13,7 +13,7 @@
     context: "{{ kube_context }}"
     kind: Pod
     namespace: "{{ ingress_forwarder.namespace }}"
-    label_selectors: "{{ ingress_forwarder.pod_selector | dict2items | map('join', '=') | list }}"
+    label_selectors: "{{ ingress_smoke_label_selectors }}"
     wait: true
     wait_condition: {type: Ready, status: "True"}
     wait_timeout: "{{ ingress_smoke_timeout | int }}"

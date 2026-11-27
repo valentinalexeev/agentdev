@@ -81,6 +81,18 @@ api() { case "$1 $2" in
   *) echo '[]';; esac; }
 CANNED=partial issue_job 5 main
 check "PR body: no STATUS line, partial note" "! grep -q 'STATUS:' '${tmp}/prbody' && grep -q 'Partial' '${tmp}/prbody'"
+# #394: the feedback cursor is the time the PR was opened, not after the slow follow-ups (review request, board)
+check "feedback cursor written when the PR opened (#394)" "[[ -s '${STATE}/seen/pr-42' ]]"
+rm -f "${STATE}"/seen/issue-5.* "${STATE}/seen/pr-42"
+request_review() { sleep 2; }   # a slow follow-up: a comment in these seconds must stay newer than the cursor
+start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CANNED=partial issue_job 5 main
+check "a comment during the follow-ups is after the cursor (#394)" "[[ ! \$(cat '${STATE}/seen/pr-42') > '${start}' ]]"
+echo 2026-01-01T00:00:00Z > "${STATE}/seen/pr-42"; rm -f "${STATE}"/seen/issue-5.*
+CANNED=partial issue_job 5 main
+check "a resumed job keeps an existing cursor (#394)" "[[ \$(cat '${STATE}/seen/pr-42') == 2026-01-01T00:00:00Z ]]"
+request_review() { :; }
+rm -f "${STATE}"/seen/pr-42
 # #236: partial opens a draft (GitHub draft=true; Gitea WIP: title), done does not
 check "partial on GitHub: draft PR" "[[ \$(jq -r '.draft' '${tmp}/prbody') == true && \$(jq -r .title '${tmp}/prbody') == T ]]"
 rm -f "${STATE}"/seen/issue-5.*; CANNED='done' issue_job 5 main

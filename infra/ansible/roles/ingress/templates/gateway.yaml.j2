@@ -58,8 +58,9 @@ apiVersion: networking.gke.io/v1
 kind: HealthCheckPolicy
 metadata: {name: webhook-router, namespace: {{ agents_ns }}}
 spec:
-  # /healthz is on the internal port only (#214); the public port 8080 answers 404 for anything but /hook
-  default: {config: {type: HTTP, httpHealthCheck: {requestPath: /healthz, port: 8081}}}
+  # /healthz on the health-only port (#218): the public port 8080 answers 404 for anything but /hook (#214), and the
+  # internal port 8081 (/status, /register) stays closed to the Google Front End ranges
+  default: {config: {type: HTTP, httpHealthCheck: {requestPath: /healthz, port: 8082}}}
   targetRef: {group: "", kind: Service, name: webhook-router}
 {% if ingress_security_policy | length > 0 %}
 ---

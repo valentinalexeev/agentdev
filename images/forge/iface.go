@@ -95,6 +95,10 @@ func checkLabelAdd(s *server, ctx context.Context, m []string, body []byte) erro
 	if len(labels) == 0 || len(labels) > 3 {
 		return refuseAs("api-not-allowed", "medium", "label: 1 to 3 labels")
 	}
+	// exactly agent:<self>: the #227 rule as it is (checkOwnPRLabel), the one path the routing label takes
+	if len(labels) == 1 && labels[0] == "agent:"+s.c.ForgeUser {
+		return checkOwnPRLabel(s, ctx, m, body)
+	}
 	self := false
 	for _, l := range labels {
 		if !labelAllowed(s, l) {

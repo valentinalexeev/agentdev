@@ -1,0 +1,7 @@
+# MCP project spec of tests/render_mode.yml (#383): rendered as one McpProject. Not secret.
+project: demo
+mcp:
+  servers:
+    - {name: docs, url: "https://mcp.example.com/sse"}
+agents:
+  - {name: alice}

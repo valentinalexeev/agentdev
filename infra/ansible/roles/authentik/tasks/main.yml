@@ -1,5 +1,5 @@
 ---
-# authentik on GKE (#114): the same steps as ./run.sh 09 (database, Secret `authentik`, ConfigMap
+# authentik on GKE (#114): the same steps as kind.yml --tags authentik (Secret `authentik`, Job authentik-db-init (#382), ConfigMap
 # `authentik-blueprints`, Helm chart with manifests/authentik-values.yaml), with secrets from Secret Manager.
 # Runs after the platform role (Postgres) and before the roles authentik_sso and api. Every task that holds a secret
 # value has no_log. The blueprints create the group agentdev-admins but never set its members (R53): the only member
@@ -21,13 +21,13 @@
       authentik_trusted_proxy_cidrs (a list of CIDRs, not wider than /8 unless authentik_trusted_proxy_allow_wide: true): example.vars.yml
     quiet: true
 
-# authentik_secret_source: secret_manager (GKE) or files (kind.yml, #106: .secrets/platform, as 09-authentik.sh)
+# authentik_secret_source: secret_manager (GKE) or files (kind.yml, #106: .secrets/platform, as the old 09-authentik.sh)
 - name: Authentik secrets from files (kind)
   ansible.builtin.include_tasks: secrets_files.yml
   when: authentik_secret_source == 'files'
 
 - name: Authentik secrets from Secret Manager
-  when: authentik_secret_source == 'secret_manager'
+  when: authentik_secret_source == 'secret_manager' and authentik_playbook_secrets
   block:
     - name: The authentik secrets exist in Secret Manager (generated once, hex only so they are safe in SQL and env)
       ansible.builtin.shell: |
@@ -66,21 +66,26 @@
     that: authentik_secret['pg-authentik'] is match('^[0-9a-f]{32,}$')
     fail_msg: "the platform secret pg-authentik must hold a hex password"
     quiet: true
-  when: not ansible_check_mode
+  when: not ansible_check_mode and authentik_playbook_secrets
   no_log: true
 
-# init.sql only runs on an empty volume: create the role and database here too (same SQL as 09-authentik.sh)
-- name: Database role and database authentik
-  ansible.builtin.command:
-    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", exec, -i, "{{ authentik_db_pod }}", --,
-           psql, -U, postgres, -v, ON_ERROR_STOP=1, -q]
-    stdin: |
-      SELECT 'CREATE ROLE authentik LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='authentik')\gexec
-      ALTER ROLE authentik PASSWORD '{{ authentik_secret['pg-authentik'] }}';
-      SELECT 'CREATE DATABASE authentik OWNER authentik' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='authentik')\gexec
-  changed_when: false
-  when: not ansible_check_mode
-  no_log: true
+# secrets_mode external (#381): ExternalSecret authentik with the same keys as templates/config.env.j2
+- name: ExternalSecret authentik (configuration)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
+  vars:
+    es_specs:
+      - name: authentik
+        ns: "{{ platform_ns }}"
+        data:
+          key: "{{ platform_sm_prefix }}authentik-secret-key"
+          pg: "{{ platform_sm_prefix }}pg-authentik"
+          admin: "{{ platform_sm_prefix }}authentik-admin"
+        template: "{{ authentik_es_env }}"
+    # config.env.j2 with ESO references in place of the three values (authentik_es_refs: plain strings, Ansible does not
+    # template a variable's value twice, so {{ .key }} reaches ESO as written; tests/external_secrets_render.yml)
+    authentik_secret: "{{ authentik_es_refs }}"
+    authentik_es_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+  when: not authentik_playbook_secrets
 
 - name: Secret authentik (configuration)
   kubernetes.core.k8s:
@@ -93,7 +98,20 @@
   vars:
     authentik_env: "{{ dict(lookup('ansible.builtin.template', 'config.env.j2').splitlines() | select('search', '=') | map('split', '=', 1)) }}"
   register: authentik_config
+  when: authentik_playbook_secrets
   no_log: true
+
+# init.sql of platform-db only runs on an empty volume: the Job authentik-db-init-<hash> makes the login and the
+# database authentik in the cluster (#382, no kubectl exec). The password comes from the Secret authentik by name.
+- name: Job authentik-db-init (login and database authentik)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init.yml"
+  vars:
+    db_init_name: authentik-db-init
+    db_init_image: "{{ authentik_db_init_image }}"
+    db_init_command: [sh, /db-init/authentik.sh]
+    db_init_files: "{{ authentik_db_init_files }}"
+    db_init_env: "{{ authentik_db_init_env }}"
+    db_init_rerun: "{{ authentik_config is changed }}"
 
 # only manifests/authentik-blueprint-*.yaml, never manifests/kind/ (the kind stand-in)
 - name: ConfigMap authentik-blueprints
@@ -117,13 +135,42 @@
     release_namespace: "{{ platform_ns }}"
     values_files: ["{{ repo_root }}/manifests/authentik-values.yaml"]
     # a changed Secret `authentik` restarts the pods (hash only, never the values)
-    values:
-      global:
-        podAnnotations:
-          agentdev/config-hash: "{{ (authentik_config.result.data | default({}) | to_json | hash('sha256'))[:16] }}"
+    # secrets_mode playbook: a changed Secret `authentik` restarts the pods (hash only, never the values).
+    # external (#381): Reloader restarts server and worker when `authentik` or `authentik-sso` changes.
+    values: >-
+      {{ {'global': {'podAnnotations': {'agentdev/config-hash': (authentik_config.result.data | default({}) | to_json | hash('sha256'))[:16]}}}
+         if authentik_playbook_secrets else
+         {'server': {'deploymentAnnotations': {reloader_annotation: 'authentik,authentik-sso'}},
+          'worker': {'deploymentAnnotations': {reloader_annotation: 'authentik,authentik-sso'}}} }}
     wait: true
     timeout: 15m0s
 
-- name: Group agentdev-admins and the break-glass admin
-  ansible.builtin.include_tasks: breakglass.yml
+# Break-glass admin (docs/admin.md): the Job authentik-breakglass-<hash> runs manifests/db-init/breakglass.py with
+# `ak shell` in the authentik image (#382, was a kubectl exec): akadmin into agentdev-admins, add only.
+- name: Group agentdev-admins and the break-glass admin (Job authentik-breakglass)
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/db_init.yml"
+  vars:
+    db_init_name: authentik-breakglass
+    db_init_image: "{{ authentik_image }}"
+    db_init_user: 1000                    # the authentik image's user
+    db_init_memory: 1Gi
+    db_init_command: "{{ authentik_breakglass_command }}"
+    db_init_files: "{{ authentik_breakglass_files }}"
+    db_init_env: "{{ authentik_breakglass_env }}"
+    db_init_env_from: "{{ authentik_breakglass_env_from }}"
+    db_init_timeout: 900s
+  when: authentik_breakglass_admin_group | bool
+
+# #566: the Job prints only markers (no secret): GROUP_WAIT_SECONDS shows how long the blueprint took, the rest of the
+# Job's time is the image pull and `ak shell` start-up
+- name: Result of the break-glass Job
+  ansible.builtin.debug:
+    msg: "{{ db_init_result.stdout_lines | default([]) | select('match', '^(GROUP_WAIT_SECONDS|BREAKGLASS|SUPERUSERS)=') | list }}"
   when: authentik_breakglass_admin_group | bool and not ansible_check_mode
+
+- name: Warn when the break-glass admin akadmin is missing
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: authentik user akadmin not found (renamed or deleted), so no break-glass admin was added to
+      agentdev-admins. Nothing was recreated. Restore one as in docs/admin.md, "Keep a break-glass admin".
+  when: "'BREAKGLASS=missing' in (db_init_result.stdout | default(''))"

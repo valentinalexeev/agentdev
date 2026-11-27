@@ -1,8 +1,29 @@
 ---
 # Company SSO for authentik (#122): the Secret authentik-sso in {{ platform_ns }}, read by the authentik pods
-# (manifests/authentik-values.yaml) and used by manifests/authentik-blueprint-sso.yaml. Same keys as 09-authentik.sh
-# writes for the kind stand-in. The playbook does not deploy authentik yet (#114): until then the Secret waits for it.
+# (manifests/authentik-values.yaml) and used by manifests/authentik-blueprint-sso.yaml. Same keys as the role
+# authentik_kind writes for the kind stand-in. The playbook does not deploy authentik yet (#114): until then the Secret waits for it.
 # The blueprint never sets group members (#103): see docs/admin.md, "Sign in with Google Workspace".
+# secrets_mode external (#381): no value here. The SSO settings get an ESO reference in place of the secret value, and
+# the ExternalSecret authentik-sso fills it in the cluster; Reloader restarts authentik (deploymentAnnotations).
+- name: SSO settings from an ExternalSecret
+  when: secrets_mode | default('playbook') == 'external'
+  block:
+    - name: Build the SSO settings with an ESO reference
+      ansible.builtin.include_tasks: env.yml
+      vars:
+        authentik_sso_idp_cert: "{{ authentik_sso_es_ref if authentik_sso_kind == 'saml' else '' }}"
+        authentik_sso_oidc_client_secret: "{{ authentik_sso_es_ref if authentik_sso_kind == 'oidc' else '' }}"
+        authentik_sso_check_values: false
+
+    - name: ExternalSecret authentik-sso
+      ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
+      vars:
+        es_specs:
+          - name: "{{ authentik_sso_secret }}"
+            ns: "{{ platform_ns }}"
+            data: {sso: "{{ authentik_sso_sm_idp_cert if authentik_sso_kind == 'saml' else authentik_sso_sm_oidc_client_secret }}"}
+            template: "{{ authentik_sso_env }}"
+
 - name: Read the SSO secret from Secret Manager
   ansible.builtin.command: >-
     gcloud secrets versions access latest --project {{ gcp_project }}
@@ -11,17 +32,19 @@
   changed_when: false
   check_mode: false
   failed_when: authentik_sso_sm.rc != 0 and not ansible_check_mode
+  when: secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Keep it in a fact (not logged)
   ansible.builtin.set_fact:
     authentik_sso_idp_cert: "{{ authentik_sso_sm.stdout if authentik_sso_kind == 'saml' else '' }}"
     authentik_sso_oidc_client_secret: "{{ authentik_sso_sm.stdout if authentik_sso_kind == 'oidc' else '' }}"
+  when: secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Build the SSO settings
   ansible.builtin.include_tasks: env.yml
-  when: not ansible_check_mode or authentik_sso_sm.rc == 0
+  when: secrets_mode | default('playbook') == 'playbook' and (not ansible_check_mode or authentik_sso_sm.rc == 0)
 
 - name: Secret authentik-sso
   kubernetes.core.k8s:
@@ -31,6 +54,6 @@
       kind: Secret
       metadata: {name: "{{ authentik_sso_secret }}", namespace: "{{ platform_ns }}"}
       stringData: "{{ authentik_sso_env }}"
-  when: authentik_sso_env is defined
+  when: secrets_mode | default('playbook') == 'playbook' and (authentik_sso_env is defined)
   notify: Restart authentik for the SSO settings
   no_log: true

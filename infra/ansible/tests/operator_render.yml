@@ -1,0 +1,77 @@
+# Render checks of the role operator (#106, was 12-operator.sh), without a cluster: every ${VAR} of the operator and
+# executor egress manifests gets a value, and the agents' egress list drops api.anthropic.com with the Claude proxy.
+# The kind e2e (kind.yml --tags operator) covers the cluster side.
+# Run: ansible-playbook infra/ansible/tests/operator_render.yml
+- name: Role operator values (#106)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars: ../roles/operator/defaults/main.yml
+
+    - name: Render the manifests
+      ansible.builtin.set_fact:
+        t_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=item) | from_yaml_all | list }}"
+      loop:
+        - src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
+          values: {EXEC_NS: x, FORGE_NS: forge, EGRESS_PROXY_IMAGE: squid}
+          replace: []
+        - src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
+          values: {EXEC_NS: x}
+          replace: []
+      register: t_render
+
+    - name: The operator manifest gets every value from the role
+      ansible.builtin.set_fact:
+        t_op: >-
+          {{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars={'src': repo_root ~ '/manifests/operator.yaml.tmpl',
+             'values': t_values, 'replace': []}) | from_yaml_all | list }}
+      vars:
+        # the keys of the role's render (roles/operator/tasks/main.yml); a new ${VAR} in the manifest fails here
+        t_values: "{{ dict(lookup('ansible.builtin.file', '../roles/operator/tasks/main.yml')
+                      | regex_findall('(?m)^        ([A-Z_]+):') | zip_longest([], fillvalue='v')) }}"
+
+    - name: Rendered
+      ansible.builtin.assert:
+        that:
+          - t_op | selectattr('kind', 'equalto', 'Deployment') | list | length == 1
+          - t_render.results | length == 2
+        quiet: true
+
+    # #381 acceptance 3 / review of #445, with #383 and #452: in the agents namespace the operator reads only
+    # claude-proxy-signing by name; one unnamed rule create, patch, delete for agent-*-proxy and agent-*-mcp; no list or
+    # watch; the policy that limits writes and deletes to those names ships with the Role
+    - name: Operator Secret access in the agents namespace
+      ansible.builtin.assert:
+        that:
+          - t_sec | rejectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['create', 'patch', 'delete']]
+          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list == [['claude-proxy-signing'], ['egress-setup-proxy']]
+          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['get'], ['get']]
+          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch', 'update']) | length == 0
+          - t_pol | length == 1
+          - t_pol[0].spec.validations[0].expression is search("-proxy")
+          - t_pol[0].spec.validations[0].expression is search("-mcp")
+          - t_pol[0].spec.validations[0].expression is search("DELETE")
+          - "'DELETE' in t_pol[0].spec.matchConstraints.resourceRules[0].operations"
+          - t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicyBinding')
+            | selectattr('spec.policyName', 'equalto', 'agentdev-operator-secrets') | list | length == 1
+        quiet: true
+      vars:
+        t_role: "{{ t_op | selectattr('kind', 'equalto', 'Role') | selectattr('metadata.namespace', 'equalto', 'v') | first }}"
+        t_sec: "{{ t_role.rules | selectattr('resources', 'contains', 'secrets') | list }}"
+        t_pol: >-
+          {{ t_op | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy')
+             | selectattr('metadata.name', 'equalto', 'agentdev-operator-secrets') | list }}
+
+    - name: The agents' egress list without api.anthropic.com (Claude proxy on)
+      ansible.builtin.assert:
+        that:
+          - "'api.anthropic.com' not in t_hosts"
+          - "'pypi.org' in t_hosts"
+        quiet: true
+      vars:
+        t_hosts: >-
+          {{ (operator_egress_hosts + operator_egress_extra_hosts)
+             | reject('in', ['api.anthropic.com'] if operator_claude_proxy | bool else []) | list }}

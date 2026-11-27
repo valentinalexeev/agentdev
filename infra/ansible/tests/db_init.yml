@@ -1,0 +1,78 @@
+# In-cluster bootstrap (#382): the roles api and authentik make the databases and the break-glass admin with Jobs, never
+# with kubectl exec; the Job names carry a hash of their inputs (same inputs: same name; changed SQL: a new name); the
+# schema version of the role is the one the API computes; the psql image is the platform Postgres image; no secret
+# value is in a Job (secretKeyRef by name only). No cluster: the Job definition is rendered with a fake k8s module.
+# Run: ansible-playbook infra/ansible/tests/db_init.yml
+- name: Database bootstrap Jobs (#382)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../../.."
+    roles_dir: "{{ playbook_dir }}/../roles"
+    exec_files: >-
+      {{ query('ansible.builtin.fileglob', roles_dir + '/api/tasks/*.yml') + query('ansible.builtin.fileglob', roles_dir + '/authentik/tasks/*.yml') }}
+  tasks:
+    - name: Load the defaults (group_vars, roles platform, api, authentik)
+      ansible.builtin.include_vars: "{{ item }}"
+      loop: [../group_vars/all.yml, ../roles/platform/defaults/main.yml, ../roles/api/defaults/main.yml,
+             ../roles/authentik/defaults/main.yml]
+      vars:
+        image_registry: ghcr.io/example
+        image_tag: v0.0.0
+
+    - name: No kubectl exec and no psql in the roles api and authentik
+      ansible.builtin.assert:
+        that:
+          - exec_text is not search('\bexec\b\s*,\s*-i')
+          - exec_text is not search('psql')
+          - exec_text is not search('_db_pod')
+          - exec_text is not search('ak, shell')
+        fail_msg: "{{ item | basename }} still configures the database or authentik with kubectl exec"
+      vars:
+        exec_text: "{{ lookup('ansible.builtin.file', item) }}"
+      loop: "{{ exec_files }}"
+      loop_control: {label: "{{ item | basename }}"}
+
+    - name: Same psql image as the Postgres of the role platform; authentik image follows the chart version
+      ansible.builtin.assert:
+        that:
+          - api_db_init_image == platform_postgres_image
+          - authentik_db_init_image == platform_postgres_image
+          - authentik_image == 'ghcr.io/goauthentik/server:' ~ authentik_version
+
+    - name: The schema version of the role is the API's (images/api/dbinit_test.go uses the same formula)
+      ansible.builtin.assert:
+        that:
+          - api_schema_version is match('^[0-9a-f]{16}$')
+          - api_schema_version == (lookup('ansible.builtin.pipe', sha_cmd)[:16])
+      vars:
+        sql_files: "{{ repo_root }}/images/api/schema.sql {{ repo_root }}/images/api/grants.sql"
+        sha_cmd: "cat {{ sql_files }} | sha256sum 2>/dev/null || cat {{ sql_files }} | shasum -a 256"
+
+    - name: Render the database Job of the role api twice, and with a changed schema
+      ansible.builtin.include_tasks: includes/db_init_render.yml
+      loop:
+        - {key: a1, sql: "{{ api_schema_sql }}", retention: 365}
+        - {key: a2, sql: "{{ api_schema_sql }}", retention: 365}
+        - {key: b, sql: "{{ api_schema_sql ~ '\n-- changed\n' }}", retention: 365}
+        - {key: c, sql: "{{ api_schema_sql }}", retention: 30}
+      loop_control: {loop_var: case}
+
+    - name: Same inputs give the same name, a changed SQL or retention a new one
+      ansible.builtin.assert:
+        that:
+          - db_init_names.a1 == db_init_names.a2
+          - db_init_names.a1 != db_init_names.b
+          - db_init_names.a1 != db_init_names.c
+          - db_init_names.a1 is match('^agentdev-db-init-[0-9a-f]{10}$')
+
+    - name: The Job holds no secret value, only Secret names
+      ansible.builtin.assert:
+        that:
+          - (job_env | selectattr('value', 'defined') | map(attribute='name') | list) == ['SCHEMA_VERSION']
+          - (job_env | selectattr('valueFrom', 'defined') | map(attribute='valueFrom.secretKeyRef.name') | list) == ['platform-db', 'agentdev-api-db']
+          - db_init_job.spec.template.metadata.labels['agentdev/db-client'] == 'true'
+          - db_init_job.spec.template.spec.automountServiceAccountToken == false
+          - db_init_job.spec.template.spec.securityContext.runAsNonRoot
+      vars:
+        job_env: "{{ db_init_job.spec.template.spec.containers[0].env }}"

@@ -11,7 +11,7 @@ import (
 // Agent keys (#66): the agent container calls the proxy with ANTHROPIC_AUTH_TOKEN=<agent>.<hex HMAC-SHA256(signing
 // key, agent)>. The key names the agent and is worth nothing outside the cluster (the proxy is the only place that
 // adds the real credential, and only for that agent's budget). The signing key is only in the proxy pod. The deploy
-// computes the same value with openssl (06-agents.sh, the playbook):
+// computes the same value with openssl (the playbooks kind.yml and deploy.yml):
 //
 //	printf 'agentdev-claude-proxy/v1:%s' "$agent" | openssl dgst -sha256 -hmac "$signing" -r
 

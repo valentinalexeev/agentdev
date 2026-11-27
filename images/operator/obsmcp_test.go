@@ -205,7 +205,7 @@ func TestObsCloudLoggingAddOn(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/token"):
 			if r.Header.Get("Metadata-Flavor") != "Google" {
-				http.Error(w, "no", 403)
+				http.Error(w, "no", http.StatusForbidden)
 				return
 			}
 			_, _ = w.Write([]byte(`{"access_token":"wi-token","expires_in":3600}`))
@@ -227,6 +227,12 @@ func TestObsCloudLoggingAddOn(t *testing.T) {
 	}
 	if gotAuth != "Bearer wi-token" || !strings.Contains(gotBody, "projects/my-project-1") || !strings.Contains(gotBody, "2026-11-07T11:00:00Z") {
 		t.Fatalf("auth %q body %q", gotAuth, gotBody)
+	}
+	// #250: an unbalanced filter is refused before the API call (it could also drop the time bound)
+	gotBody = ""
+	out, isErr = callText(t, cs, "cloud_logging_query", map[string]any{"filter": `x) OR (y`})
+	if !isErr || !strings.HasPrefix(out, "filter:") || gotBody != "" {
+		t.Fatalf("unbalanced filter: %v %q (backend saw %q)", isErr, out, gotBody)
 	}
 }
 
@@ -250,4 +256,157 @@ func TestObsConfigFromEnv(t *testing.T) {
 			t.Errorf("%v: err=%v", tc.env, err)
 		}
 	}
+}
+
+// #250: filters the API would reject are refused before the call, and none can close the wrapper's parenthesis
+func TestCheckLoggingFilter(t *testing.T) {
+	ok := []string{
+		``,
+		`severity>=ERROR`,
+		`(a="x" OR b="y") AND c`,
+		`((a OR (b AND c)) AND (d))`,
+		`textPayload:"a ) b ("`,
+		`jsonPayload.m="say \"(\" now"`,
+		`jsonPayload.m="ends with backslash \\"`,
+		`textPayload:\(literal AND x`,
+		`textPayload:\"(x)`,
+		`a="x" AND (b="y)" OR c="(")`,
+		`labels."k(1)"="v"`,
+		`a="é ( ü"`,
+		`severity>=ERROR -- errors only`,   // trailing comment: the wrapper's newline ends it
+		"-- note (\nseverity>=ERROR",       // parentheses in a comment do not count
+		"a=\"x\" -- say \")\" here\nAND b", // quotes in a comment do not count
+		`a="-- not a comment )("`,          // -- inside a string is text
+		"(a -- )\n)",
+		"severity>=ERROR\r\n-- c (\r\nAND a", // CRLF: \n ends the comment either way
+	}
+	for _, f := range ok {
+		if err := checkLoggingFilter(f); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	bad := []string{
+		`(severity>=ERROR`,
+		`severity>=ERROR)`,
+		`a) OR (b`,
+		`textPayload:"open`,
+		`x) OR timestamp>="2000-01-01" OR (y`,
+		`((a) OR (b)`,
+		`(a)) OR ((b)`,
+		`a="x\") OR (b`,   // escaped quote keeps the string open: unterminated
+		`a="x\\") OR ("b`, // escaped backslash closes the string: ")" is real
+		`a=\" ) OR ( \"`,  // \" outside a string is a literal, the parentheses count
+		`a=\") OR (\"`,
+		`a="b" \`,
+		`a="\`,
+		`)(`,
+		"-- \"\nx) OR (y)\n-- \"", // #268 review: quotes in comments must not hide x) OR (y
+		"-- (\nx)\n--",
+		"(a -- )",              // the ")" is in the comment
+		"a=\"x\ny\"",           // newline in a string
+		"a -- c\u2028x) OR (y", // #268 review 2: every line end other than \n (or CRLF) is refused
+		"-- \r x) OR (y",
+		"a -- c\u2029x) OR (y",
+		"a -- c\u0085x) OR (y",
+		"a -- c\vx) OR (y",
+		"a -- c\fx) OR (y",
+		"a=\"x\u2028y\"", // inside a string too
+		"a\r",
+	}
+	for _, f := range bad {
+		if checkLoggingFilter(f) == nil {
+			t.Errorf("%s: accepted", f)
+		}
+	}
+}
+
+// #268 review: a trailing comment must not swallow the wrapper's ")" or the time bound.
+func TestWrapLoggingFilter(t *testing.T) {
+	since := time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)
+	got := wrapLoggingFilter("severity>=ERROR -- errors only", since)
+	want := "(\nseverity>=ERROR -- errors only\n) AND timestamp>=\"2026-11-07T11:00:00Z\""
+	if got != want {
+		t.Fatalf("got %q", got)
+	}
+	if !boundKept(got) {
+		t.Fatalf("bound lost in %q", got)
+	}
+}
+
+// boundKept is a reference LQL scanner, written apart from checkLoggingFilter: it reports whether the wrapped query
+// ends with " AND timestamp>=..." as code at depth 0 (not in a string or a comment) and is balanced.
+func boundKept(q string) bool {
+	i := strings.LastIndex(q, "\n) AND timestamp>=")
+	if i < 0 {
+		return false
+	}
+	depth := 0
+	inStr, inCmt := false, false
+	rs := []rune(q)
+	pos := len([]rune(q[:i])) // rune index of the wrapper's "\n"
+	for k := 0; k < len(rs); k++ {
+		if k == pos && (inStr || depth != 1) {
+			return false // the wrapper's newline is inside a string, or the filter changed the depth
+		}
+		if k == pos {
+			inCmt = false
+		}
+		c := rs[k]
+		if inCmt {
+			if c == '\n' || isRefLineEnd(c) {
+				inCmt = false
+			}
+			continue
+		}
+		if c == '\\' {
+			k++
+			continue
+		}
+		if inStr {
+			if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			inStr = true
+		case c == '-' && k+1 < len(rs) && rs[k+1] == '-':
+			if k > pos {
+				return false
+			}
+			inCmt = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0 && !inStr && !inCmt
+}
+
+// #268 review: every filter checkLoggingFilter accepts keeps the time bound once wrapped.
+func FuzzCheckLoggingFilter(f *testing.F) {
+	for _, s := range []string{"severity>=ERROR", "-- \"\nx) OR (y)\n-- \"", "a=\"x\\\")\" -- c", "(a -- )\n)", `a=\"(`, "--",
+		"a -- c\u2028x) OR (y", "-- \r x) OR (y", "a -- c\u0085x) OR (y", "a -- c\u2029x) OR (y", "a -- c\vx) OR (y", "a\r\n-- (\r\nb"} {
+		f.Add(s)
+	}
+	since := time.Date(2026, 11, 7, 11, 0, 0, 0, time.UTC)
+	f.Fuzz(func(t *testing.T, s string) {
+		// the filter check alone, without checkQuery (which also refuses CR, VT and FF): the property must not depend on it
+		if checkLoggingFilter(s) != nil {
+			return
+		}
+		if q := wrapLoggingFilter(s, since); !boundKept(q) {
+			t.Fatalf("accepted %q, but the wrapped query loses the bound: %q", s, q)
+		}
+	})
+}
+
+// isRefLineEnd: in boundKept, every character a parser might take as a line end closes a comment (the worst case).
+func isRefLineEnd(c rune) bool {
+	return strings.ContainsRune("\r\v\f\u0085\u2028\u2029", c)
 }

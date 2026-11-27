@@ -10,7 +10,7 @@ terraform {
 }
 
 module "agentdev" {
-  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v0.1.0"
+  source = "github.com/valentinalexeev/agentdev//infra/terraform?ref=v1.3.0-rc.3"
 
   project_id         = var.project_id
   region             = var.region
@@ -23,9 +23,9 @@ module "agentdev" {
   budget_alert_emails  = var.budget_alert_emails
   agent_pool_max_nodes = var.agent_pool_max_nodes
 
-  # public HTTPS entry point (agentdev #120): uncomment with a ref= that contains #120
-  # public_hosts = var.public_hosts
-  # cloud_armor  = var.cloud_armor
+  # public HTTPS entry point (agentdev #120)
+  public_hosts = var.public_hosts
+  cloud_armor  = var.cloud_armor
 
   # no Artifact Registry (agentdev #157): uncomment with a ref= that contains #157
   # create_artifact_registry = var.create_artifact_registry
@@ -46,6 +46,16 @@ module "agentdev" {
   # monitoring_components     = var.monitoring_components
   # budget toggle and billing grant for CI (agentdev #199): uncomment with a ref= that contains #199
   # create_budget = var.create_budget
+  # read-only plan identity for PR plans (agentdev #291, opt-in since #421): first the owner grants of docs/admin.md
+  # "Show the plan on deployment pull requests", and plan_identity: true in ansible/instance.yml for the preflight
+  # create_plan_identity = true
+  # secrets from Secret Manager through the External Secrets Operator (agentdev #381): uncomment with a ref= that
+  # contains #381; see imports.tf.example for an upgrade
+  # external_secrets            = var.external_secrets
+  # agent_names                 = var.agent_names
+  # keep_existing_secret_values = var.keep_existing_secret_values
+  # platform_extra_secret_ids   = var.platform_extra_secret_ids
+  # forge_init                  = var.forge_init   # agentdev #459: with forge_init.enabled in ansible/instance.yml
 }
 
 # Migration (agentdev #199): if this repository has the workaround resource
@@ -61,7 +71,7 @@ variable "region" { type = string }
 variable "zone" { type = string }
 variable "billing_account_id" { type = string }
 variable "github_repository" {
-  description = "This deployment repository (owner/name); its main-branch workflows get Workload Identity access."
+  description = "This deployment repository (owner/name); its main-branch workflows get the apply identity, its pull_request runs the read-only plan identity (agentdev #291)."
   type        = string
 }
 variable "budget_amount_usd" {
@@ -89,7 +99,7 @@ variable "agent_pool_max_nodes" {
 
 output "get_credentials" { value = module.agentdev.get_credentials }
 output "webhook_ip" { value = module.agentdev.webhook_ip }
-# output "ingress" { value = module.agentdev.ingress }   # agentdev #120: values for instance.yml `ingress`
+output "ingress" { value = module.agentdev.ingress } # agentdev #120: values for instance.yml `ingress`
 output "github_actions_auth" { value = module.agentdev.github_actions_auth }
 
 variable "public_hosts" {
@@ -151,6 +161,26 @@ variable "monitoring_components" {
   description = "GKE monitoring components (agentdev #208); null keeps the GKE default list."
   type        = list(string)
   default     = ["SYSTEM_COMPONENTS"]
+}
+variable "external_secrets" {
+  type    = bool
+  default = false
+}
+variable "agent_names" {
+  type    = list(string)
+  default = []
+}
+variable "keep_existing_secret_values" {
+  type    = list(string)
+  default = []
+}
+variable "platform_extra_secret_ids" {
+  type    = list(string)
+  default = []
+}
+variable "forge_init" {
+  type    = bool
+  default = false
 }
 # Deterministic executors (#69), optional. Two Google service accounts per executor: read-only for the plan of every
 # PR, write (only this environment) for the apply of an approved plan. Workload Identity lets only the executor's
