@@ -84,11 +84,13 @@ AGENTDEV_SECURITY_EVENT {"source":"forge|loop","rule":"...","severity":"low|medi
 | forge | `api-other-repo` | high | REST call for a repo other than `REPO` |
 | forge | `api-not-allowed` | medium | REST call outside the allow-list (merge, edit, hooks, ...) |
 | forge | `api-non-loopback` | high | a caller from outside the pod reached the localhost API |
+| forge | `chat-label-not-asked` | high for `agent:*`, else medium | a console chat pod sent a label write that no person allowed in the console (#571, ADR 0011) |
 | forge | `webhook-bad-token` | medium | wake call with a wrong token |
 | loop | `git-worktree-redirected` | high | a worktree `.git` or `commondir` pointed elsewhere (re-pinned) |
 | loop | `git-worktree-forged` | high | symlinked or duplicate worktree admin dir (refused) |
 | loop | `git-hook-present` | high | a hook file in the shared clone (removed) |
 | loop | `git-config-key`, `git-config-worktree` | medium | a git config key outside the plain list, or a `config.worktree` (removed) |
+| ingress | `forwarder-not-ready` | medium | operator: no pod of `ingress.forwarder` Ready for `forwarder_not_ready_minutes` (#213); agent `ingress-forwarder`, never pauses an agent |
 
 `job` comes from the loop; in sidecar events it is the loop's `X-Agentdev-Job` header, which Claude could forge, so
 treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>-0 --all-containers | grep AGENTDEV_SECURITY_EVENT`.
@@ -110,12 +112,18 @@ treat it as a hint. Find events with `kubectl -n coding-agents logs agent-<name>
 - The localhost API needs no auth from inside the pod: the pod is one trust unit with respect to the forge policy,
   and the policy (own branches, protected paths) holds even if Claude calls the API directly. That is the point.
 - The operator renders both containers; the Agent CRD does not change.
+- **Labels (#227, #571, ADR 0011).** The loop may add only `agent:<name>` to its own PR. A console chat pod
+  (`CHAT_SESSION` set by the API) may add labels to any issue or PR of its repositories, `agent:*` included, but
+  only after the API confirms that a person allowed exactly that `Bash` command in the console in the last 5 minutes
+  (one allow, one write); the audit entry `chat-label` names the person. A label the chat adds on GitHub does not
+  start work by itself: the loop's labeler check needs a person with write access as the labeler. Tags, releases
+  and milestones are readable in both modes; their writes stay refused.
 
 ### Phase 2: egress allow-list (fixes R10)
 
 Status: **implemented** in #65, pending an e2e pass on GKE. As built:
 
-- `manifests/egress.yaml.tmpl` (rendered by `06-agents.sh` and the Ansible playbook) holds a Squid forward proxy
+- `manifests/egress.yaml.tmpl` (rendered by the Ansible playbooks `kind.yml` and `deploy.yml`) holds a Squid forward proxy
   (`egress-proxy`, pinned `ubuntu/squid` image, non-root, read-only root) and the NetworkPolicy `agent-egress`. Agent
   pods may connect only to DNS, the proxy, the webhook router, the in-cluster forge (Gitea, kind), botboard and
   ContextForge. The internet, the metadata server and every other cluster service are denied.
@@ -146,7 +154,7 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   on but the type is not served; with `egress_fqdn_policy: false` (and on kind) `egress-proxy-web` lets the proxy reach
   any address on 80/443 and Squid alone enforces the list. GKE patterns match one subdomain level only, so `.x.org`
   allows `a.x.org` but not `a.b.x.org` there.
-- kind: kindnet enforces NetworkPolicy since kind v0.24 (`00-prereqs.sh` checks it). On older kind the proxy is
+- kind: kindnet enforces NetworkPolicy since kind v0.24 (`kind.yml --tags prereqs` checks it). On older kind the proxy is
   advisory: a tool that ignores `HTTPS_PROXY` gets out directly.
 - GKE e2e checklist (before R10 counts as mitigated on GKE): from both containers of an agent pod,
   `curl -m3 http://169.254.169.254/` and `env -u HTTPS_PROXY -u https_proxy curl -m5 https://example.com` fail,
@@ -163,7 +171,7 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
 - Registry cache (#203, optional, `registry_proxy`): npm, PyPI and Go through the in-cluster gateway
   `registry-cache` (Artifact Registry remote repositories on GKE, Verdaccio, devpi and Athens on kind). With it on, the
   public registry hosts leave the agents' list; the gateway is read-only (GET and HEAD) and holds the only Google token
-  (Workload Identity, reader on the three repositories). Private registries per project: #248 (R101).
+  (Workload Identity, reader on the three repositories). Private registries per project: #248 (R130).
 - Not yet: per-project
   extra hosts in the project spec (one instance-wide list for now), and an approval request for a refused host
   (phase 4).
@@ -188,20 +196,34 @@ cluster and the rebase onto #93 (usage) and #65 (egress). Plan and open decision
   mount as a deprecated rollback).
 - **Agent identity:** `<agent>.<hex HMAC-SHA256(signing key, "agentdev-claude-proxy/v1:" + agent)>`. The signing key
   (`claude-proxy-signing`) is only in the proxy pod and the deploy. The model can read its agent's key, but the key
-  is worth nothing outside the cluster and cannot name another agent. A projected ServiceAccount token was the
-  alternative; it is no stronger here (also readable by the model) and needs a TokenReview per request.
+  is worth nothing outside the cluster and cannot name another agent.
+- **Workload identity (#352, 1.1):** each agent has its own ServiceAccount `agent-<name>` (operator-owned, no
+  automounted API token). The agent container gets a projected token of it with audience `claude-proxy` and a
+  10-minute expiry at `/var/run/secrets/agentdev/proxy/token`; the kubelet renews it. The worker hands it to Claude
+  Code through `apiKeyHelper` (re-read each minute), which sends it as `Authorization: Bearer` and `x-api-key`. The
+  proxy checks a JWT-shaped credential with the TokenReview API (audience `claude-proxy`, username
+  `system:serviceaccount:<agents ns>:agent-<name>`) and caches a positive result for at most 5 minutes (and never past
+  the token's `exp`), a negative one for 10 seconds. `CLAUDE_PROXY_AUTH` selects `key` (HMAC only), `both` (default,
+  for mixed 1.0 and 1.1 workers) or `token` (HMAC refused). The model can still read the token, but a copy is useless
+  after its expiry and for any other audience, and no long-lived shared value stays in the pod once the mode is
+  `token` and the key Secret is removed.
 - **Forwarding:** only `POST /v1/messages` and `/v1/messages/count_tokens`. The caller's `Authorization`,
   `x-api-key`, `Cookie` and `Proxy-Authorization` are dropped; the agent's credential is added (`x-api-key` for an API
   key, `Authorization: Bearer` plus the `oauth-2025-04-20` beta for a subscription token). Streaming responses are
-  passed through unbuffered. Any other path, and a missing or wrong key, is refused with a security event
-  (`proxy-path`, `proxy-key-invalid`).
+  passed through unbuffered. Any other path, and a missing or wrong key or token, is refused with a security event
+  (`proxy-path`, `proxy-key-invalid`; the event text says whether a key or a token was refused, and the auth mode). A
+  failed TokenReview call gives `proxy-tokenreview-error` and a 401.
 - **Usage observed by the proxy:** the `anthropic-ratelimit-unified-5h-*` / `-7d-*` / `-status` / `-reset` headers and
   `retry-after`, and the token counts of the body (JSON `usage`, or SSE `message_start` / `message_delta`). One
   `AGENTDEV_USAGE` line per response on the proxy's stdout, with the schema of #93 plus `agent` (from the verified
   key) and `secret`. The model cannot write to that log, so these reports are trustworthy (closes R47: the operator
   reads them, see below).
-- **Budget:** tokens per agent in a rolling 24 h window (hourly buckets), `CLAUDE_BUDGET_TOKENS` for all agents (0 =
-  none), a per-agent value in ConfigMap `claude-proxy-budgets`. Checked before a request is forwarded, so a response
+- **Budget:** cost units per agent (#196, ADR 0002 D2: tokens weighted by type and by the model named in the
+  upstream response, never the request; unknown model = highest multiplier) in a rolling 24 h window (hourly
+  buckets), `CLAUDE_BUDGET_UNITS` for all agents (0 = none), a per-agent value in ConfigMap `claude-proxy-budgets`.
+  Weights in ConfigMap `claude-proxy-prices`, each value pattern-checked (bad value: default kept, event
+  `proxy-price-invalid`). The job header `X-Agentdev-Job` comes from the agent: pattern-checked, stripped before the
+  upstream, used for the per-job report on `GET /status` only. Checked before a request is forwarded, so a response
   in flight can go over by itself. When used up: HTTP 429 `rate_limit_error` (Claude Code stops the run cleanly) and
   one `budget-exhausted` event per exhaustion. Spend is kept on an emptyDir: a new proxy pod starts at zero (a
   restart can grant at most one more budget). `GET /status` lists spend and limits (no secrets); the API adds them to
@@ -251,9 +273,19 @@ the permission prompt if they were running Claude Code interactively.
 ### Forge as an approval surface
 
 Because the right to approve is write access to the repository, the forge is an approval surface too. When a request
-is created, the agent comments on its issue or PR "waiting for approval `<id>`: <request>", linking the UI. A reply
+is created, the agent lists it in the one approvals comment of its issue or PR (#523): a table of the job's requests
+(id, tool, state), the text of each waiting request, and the commands in a `<details>` block. The sidecar edits this
+comment on each new request and change of state; forges send no notification for an edit. A reply
 `/approve <id>`, `/approve-job <id>` or `/deny <id>` from a person with the required access decides it. The UI and
 the forge show the same request.
+
+Push first (#523): before it comments, the sidecar asks the API `GET /internal/approvals/{agent}/reach` (caller: a
+running pod of that agent, repo: one of its repositories). The answer is one bit: whether a Web Push notification of
+the request reaches a subscribed user with a recent console visit, live write access and approvals not muted (the
+checks of the sender). If yes, the request is not commented on the forge; the person decides in the UI. It goes to
+the forge anyway when the agent stopped waiting without a decision, and once a job has its comment, every later
+request of the job is listed there. Any error, an API without the endpoint, or a cost request (never pushed) means
+the forge comment. The decision rules below do not change.
 
 ### Decision rules (UI and forge)
 
@@ -385,7 +417,8 @@ sequenceDiagram
   S->>S: id = random nonce, contentHash = sha256(id, agent, repo, job, source, tool, input)
   S-->>O: log line AGENTDEV_APPROVAL_REQUEST (trusted only from the forge container)
   O->>O: create Approval (spec immutable, hash re-checked)
-  S->>F: comment "waiting for approval <id>"
+  S->>API: GET /internal/approvals/{agent}/reach (does Web Push reach a person who decides?)
+  S->>F: no: add the request to the job's approvals comment (post once, then edit)
   U->>F: /approve <id> | /approve-job <id> | /deny <id>
   API->>F: read comments of the job's issue or PR, commenter's permission
   API->>API: rules 1-6, status update with resourceVersion (first wins), audit
@@ -431,9 +464,11 @@ sequenceDiagram
 - **Lifecycle and deduplication** (owner on #107). A request has a fingerprint: job + tool + exact input for a Claude
   prompt, job + branch + protected paths for a push. The sidecar keeps one record per fingerprint; asking again
   reuses it, with no new log line, Approval or comment. Timeline:
-  1. Claude asks, or a push hits a protected path: one Approval, one forge comment "waiting for approval".
+  1. Claude asks, or a push hits a protected path: one Approval, and one row in the job's approvals comment (none
+     while Web Push reaches a person who decides, #523).
   2. The agent waits (Claude prompt: `APPROVAL_TIMEOUT_MINUTES`, default 30; push: at most 14 min, the loop's request
-     limit). With no decision the action fails closed; the comment is edited once to "still open". The record stays
+     limit). With no decision the action fails closed; the row is edited once to "the agent continued without it"
+     (a request that went only by Web Push is added to the approvals comment now). The record stays
      `pending` and decidable; there is no expiry.
   3. A later ask with the same fingerprint (in the same pod) uses the decision of that record: allowed (once: used
      up), denied (denied again at once, nothing new is filed), or still pending (waits again).
@@ -461,8 +496,9 @@ sequenceDiagram
   content hash and comment id.
 - **API.** `GET /api/approvals?state=pending|decided|allowed|denied|void|all&agent=&project=` and
   `GET /api/approvals/{name}`: requests of repositories where the caller has write access, all for `agentdev-admins`.
-  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods only) answers the
-  sidecar that made the request (per-request secret, see above) with state, scope, decider and decided hash only.
+  The internal listener (port 8081, Service `agentdev-api-internal`, NetworkPolicy: agent pods and console chat
+  pods, #571) answers the sidecar that made the request (per-request secret, see above) with state, scope, decider
+  and decided hash only.
 - **UI.** An **Approvals** tab with a pending count, Pending and History tabs, the request text shown as untrusted
   plain text.
 
@@ -597,8 +633,13 @@ It creates a `SecurityEvent` named `<agent>-<hash prefix>`, then pauses the Agen
 `SecurityPaused` with reason `HighSeverity` or `TooManyEvents`) on a high-severity event or when one run has more than
 `SECURITY_PAUSE_AFTER` (default 5) events. A run is the pod UID plus the job: a new pod (restart, new version) starts
 a new count, an earlier run of the same `issue-N` does not add up, and events without a job share one bucket per pod.
-The count includes the event just created, even when the operator's cache has not seen it yet. Resuming sets the
-condition to `False` (reason `Resumed`) and keeps the message. Objects are pruned hourly: older than 30 days, or beyond
+The count includes the event just created, even when the operator's cache has not seen it yet. Repeats of one
+`run-events-invalid` refusal from the forge sidecar count once per job (#577): one misconfigured sender repeats the
+same refusal for every batch. A `TooManyEvents` pause drains first (#577): the Agent gets the annotation
+`agentdev/pause-drain`, the reconciler keeps the pod and marks it for drain, the loop starts no new job, and the pod
+stops when the running jobs have ended or after `DRAIN_MAX_MINUTES`. A `HighSeverity` pause stops the pod at once,
+also during such a drain. Resuming sets the condition to `False` (reason `Resumed`), keeps the message and names
+the field manager that last wrote `spec.paused`. Objects are pruned hourly: older than 30 days, or beyond
 500 per agent. The API watches the objects and appends them to `security_events` (role separation below).
 Forge comments and notifications to people with write access are not part of #70 (they need #67 and #57).
 
@@ -621,7 +662,7 @@ restarted container keeps its pod UID and name, so the position carries over, bu
 current instance: lines the old instance wrote after the operator's last read are not read again. They remain in the
 cluster log pipeline (the log line is the source of truth); this gap is accepted for #70.
 
-**Postgres roles.** `10-api.sh` creates `agentdev_owner` (no login), which owns the database, `security_events`,
+**Postgres roles.** The Ansible role `api` creates `agentdev_owner` (no login), which owns the database, `security_events`,
 `security_settings` (the retention, set from `SECURITY_DB_RETENTION_DAYS`) and `security_events_prune()`. The API logs
 in as `agentdev_api`, which has only `INSERT` and `SELECT` on `security_events` and `EXECUTE` on the prune function
 (`images/api/grants.sql`). The prune function is `SECURITY DEFINER`, takes no argument and deletes only rows past the

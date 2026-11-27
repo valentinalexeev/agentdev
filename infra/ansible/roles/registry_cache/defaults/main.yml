@@ -3,7 +3,7 @@
 # registry-proxy (the operator adds it to the agent container) and talk to one gateway Service, registry-cache.
 # The gateway only allows GET and HEAD: the cache is read-only, publishing stays an executor job.
 #
-# registry_proxy (group_vars/all.yml; set it in instance.yml, or REGISTRY_PROXY in config.env on kind):
+# registry_proxy (group_vars/all.yml; set it in instance.yml, or in kind.vars.yml on kind):
 #   off               - no cache; agents reach the public registries through the egress proxy (default, as before)
 #   cluster           - in-cluster caches: Verdaccio (npm), devpi (PyPI), Athens (Go) behind the gateway. kind, and GKE
 #                       without Artifact Registry (create_artifact_registry = false, #157)

@@ -1,0 +1,59 @@
+---
+# Renders the ConfigMap and the Job of tasks/db_init.yml (#382) into facts, with no cluster access (tests/db_init.yml).
+- name: "Name with the hash of its inputs of {{ db_init_name }}"
+  ansible.builtin.set_fact:
+    db_init_full: >-
+      {{ db_init_name }}-{{ (db_init_inputs | to_json(sort_keys=true)) | hash('sha256') | truncate(10, true, '') }}
+  vars:
+    db_init_inputs: >-
+      {{ [db_init_files, db_init_image, db_init_command, db_init_env | default([]), db_init_env_from | default([]),
+          db_init_extra | default('')] }}
+
+- name: "ConfigMap and Job of {{ db_init_name }}"
+  ansible.builtin.set_fact:
+    db_init_cm:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ db_init_full }}"
+        namespace: "{{ platform_ns }}"
+        labels: {agentdev/db-init: "{{ db_init_name }}"}
+      immutable: true
+      data: "{{ db_init_files }}"
+    db_init_job:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: "{{ db_init_full }}"
+        namespace: "{{ platform_ns }}"
+        labels: {agentdev/db-init: "{{ db_init_name }}"}
+      spec:
+        backoffLimit: 10
+        activeDeadlineSeconds: 1800
+        template:
+          metadata:
+            # may reach platform-db (NetworkPolicy platform-db, #70)
+            labels: {agentdev/db-init: "{{ db_init_name }}", agentdev/db-client: "true"}
+          spec:
+            restartPolicy: OnFailure
+            automountServiceAccountToken: false
+            enableServiceLinks: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: "{{ db_init_user | default(999) | int }}"
+              runAsGroup: "{{ db_init_user | default(999) | int }}"
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: init
+                image: "{{ db_init_image }}"
+                command: "{{ db_init_command }}"
+                env: "{{ db_init_env | default([]) }}"
+                envFrom: "{{ db_init_env_from | default([]) }}"
+                securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+                resources:
+                  requests: {cpu: 10m, memory: 64Mi}
+                  limits: {memory: "{{ db_init_memory | default('256Mi') }}"}
+                volumeMounts: [{name: scripts, mountPath: /db-init, readOnly: true}, {name: tmp, mountPath: /tmp}]
+            volumes:
+              - {name: scripts, configMap: {name: "{{ db_init_full }}"}}
+              - {name: tmp, emptyDir: {}}

@@ -1,0 +1,31 @@
+# Model rule check (#609): tasks/model_check.yml accepts the claude-proxy price families and refuses anything else.
+# Run: ansible-playbook infra/ansible/tests/model_check.yml
+- name: "Model rule: valid and invalid names (#609)"
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: The instance-wide claude_model is checked too
+      ansible.builtin.include_tasks: ../tasks/model_check.yml
+      vars:
+        claude_model: "sonnet[1m]"
+        agents: [{name: a}]
+
+    - name: Run the check for each case
+      ansible.builtin.include_tasks: cases/model_check_case.yml
+      loop:
+        - {model: "", ok: true}
+        - {model: opus, ok: true}
+        - {model: sonnet, ok: true}
+        - {model: haiku, ok: true}
+        - {model: fable, ok: true}
+        - {model: "sonnet[1m]", ok: true}
+        - {model: claude-opus-5-5, ok: true}
+        - {model: "claude-haiku-5-5[1m]", ok: true}
+        - {model: sonet, ok: false}
+        - {model: gpt-5, ok: false}
+        - {model: Opus, ok: false}
+        - {model: "--verbose", ok: false}
+        - {model: "opus --effort max", ok: false}
+        - {model: "opus[2m]", ok: false}
+        - {model: "claude-opus-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ok: false}
+      loop_control: {loop_var: case}

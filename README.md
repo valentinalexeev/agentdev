@@ -29,14 +29,21 @@ flowchart LR
 ```bash
 cd ~/Work/agentdev
 echo 'ANTHROPIC_API_KEY=...' > .env         # shared Claude credential (gitignored)
-./run.sh                                     # 00 prereqs, 01 cluster+gVisor, 05 Gitea, 06 agents
-open http://localhost:3000                   # login owner / SpikePassw0rd!
+echo 'FORGE_ADMIN_PASSWORD=...' >> .env      # optional Gitea owner password (default SpikePassw0rd!); never in kind.vars.yml
+cp infra/ansible/kind.example.vars.yml kind.vars.yml   # local settings (gitignored); edit as needed
+set -a; source .env; set +a
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml   # prereqs, cluster+gVisor, Gitea, operator, agents
+open http://localhost:3000                   # login owner / FORGE_ADMIN_PASSWORD (default SpikePassw0rd!)
 # file an issue in owner/playground, assign it to alice or bob, then review the PR they open
 kubectl --context kind-agentdev -n coding-agents logs -f -l app=coding-agent --prefix
-./99-teardown.sh
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags teardown   # deletes the cluster
 ```
 
-**Agents and accounts.** `AGENTS="alice bob"` in `config.env`. Adding a name creates a Gitea user, gives it
+One part again: `--tags <tag>` (`prereqs`, `cluster`, `forge`, `operator`, `agents`; and, not in a plain run,
+`sandbox`, `sandbox-test`, `botboard`, `mcp`, `authentik`, `api`, `ui`, `secrets`, `teardown`). `run.sh` and the
+numbered step scripts were removed in 1.3.0 (#417); see docs/admin.md, *Move from run.sh to the playbook*.
+
+**Agents and accounts.** The agent list (`AGENTS`, default `alice bob`) is in `kind.vars.yml`. Adding a name creates a Gitea user, gives it
 write access to the repo, mints a token (`.secrets/<name>.token`) and a StatefulSet `agent-<name>`.
 Claude credential per agent: put `ANTHROPIC_API_KEY=...` or `CLAUDE_CODE_OAUTH_TOKEN=...` (from
 `claude setup-token`, i.e. a Claude subscription login) in `.secrets/<name>.claude`; otherwise the shared
@@ -45,10 +52,11 @@ key from `.env` is used. State (clone, feedback cursor) and `~/.claude` are PVCs
 | File | Role |
 |---|---|
 | `images/worker/agent-loop.sh` | the loop (Gitea REST API, git, `claude -p`) |
-| `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent token budget, usage from the response headers |
+| `images/credproxy/` | the Claude credential proxy (#66): the only holder of the Claude login, per-agent budget in cost units (#196), per-job cost, usage from the response headers |
 | `images/operator/` | one agent = an `Agent` object; the operator renders its Secret refs + StatefulSet under gVisor |
-| `manifests/gitea.yaml`, `05-forge.sh` | forge, owner/agent accounts, seeded repo (`seed/`); runs `infra/ansible/kind.yml --tags forge` (#106) |
-| `06-agents.sh` | builds the worker image, creates one `Agent` per agent (installs the operator if missing) |
+| `infra/ansible/kind.yml` | the local install: one tag per part (`forge`, `agents`, `operator`, ...); settings in `kind.vars.yml` |
+| `manifests/gitea.yaml`, role `gitea_forge` | forge, owner/agent accounts, seeded repo (`seed/`); `kind.yml --tags forge` |
+| role `kind_agents` | builds the worker image, creates one `Agent` per agent; `kind.yml --tags agents` |
 | `scripts/bootstrap-project.sh`, `examples/project.yaml`, `process/` | connect an existing repo from one spec (#31) |
 
 **Connect another repo (#31).** Copy `examples/project.yaml`, set `forge.repo` to an existing repo and list the
@@ -60,10 +68,12 @@ merge, deploys the agents and waits until each one posts a readiness report (for
 **Chat in a project (#38).** `scripts/agent-chat.sh start examples/project.yaml` opens an interactive Claude Code
 session with a fresh clone of the project; detach with Ctrl-b d and `scripts/agent-chat.sh attach` re-attaches from any
 terminal with cluster access. The session can read and file issues but not push; it ends after 30 min unattended.
+A console chat session (Chat page) acts as the agent; it can add labels to an issue only when a person allows that
+exact call in the console, and the audit log names that person (#571, `docs/adr/0011-chat-label-writes.md`).
 
 **Scale to zero (default, #181).** An agent with no work for 15 minutes stops; on GKE its node goes away too. The router
 starts it again on a webhook, or when its wake poll (every 5 minutes) finds new work on the forge. Set
-`SCALE_TO_ZERO=false` (kind) or `scale_to_zero: false` (GKE) to keep agents running (docs/admin.md, Scale to zero).
+`SCALE_TO_ZERO` to false in `kind.vars.yml` (kind) or `scale_to_zero: false` (GKE) to keep agents running (docs/admin.md, Scale to zero).
 
 **MVP limits.** Polling (20 s), not webhooks. No merge, no CI gate: you review and merge.
 
@@ -71,8 +81,9 @@ starts it again on a webhook, or when its wake poll (every 5 minutes) finds new 
 
 ## Earlier spike: kind + gVisor + agent-sandbox + Coder
 
-Steps `02`–`04` (`./run.sh 02 03 04`) evaluated sandbox orchestration and interactive workspaces. Steps `02` and `03`
-now run the Ansible playbook `infra/ansible/kind.yml --tags sandbox` and `--tags sandbox-test` (#106).
+The former steps `02`–`04` evaluated sandbox orchestration and interactive workspaces. Steps `02` and `03` are now
+the tags `sandbox` and `sandbox-test` of `infra/ansible/kind.yml` (#106). Step `04` (Coder) was removed in 1.3.0
+(#417).
 
 A throwaway, dedicated kind cluster (`agentdev`) that answers one question:
 can a fully open-source Kubernetes stack give a personal agentic dev environment
@@ -83,24 +94,23 @@ suspend-to-zero with persistent workspaces?
 
 ```bash
 cd ~/Work/agentdev
-brew install kind kubectl helm coder      # whatever 00 reports missing
-export ANTHROPIC_API_KEY=...               # optional: enables a real Claude Code turn in step 03
-./run.sh                                   # or: ./run.sh 01 02 03   (Coder is step 04)
-./99-teardown.sh                           # deletes the cluster when done
+brew install kind kubectl helm           # whatever --tags prereqs reports missing
+export ANTHROPIC_API_KEY=...               # optional: enables a real Claude Code turn in sandbox-test
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags prereqs,cluster,sandbox,sandbox-test
+ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags teardown   # deletes the cluster when done
 ```
 
 Needs ~6 GiB RAM and 4 CPUs in the Docker/OrbStack/Colima VM. Takes ~10–15 min on first run (image pulls).
-Results land in `results.md`.
 
 ## What each step proves
 
-| Step | Builds | Checks |
+| Step (tag) | Builds | Checks |
 |---|---|---|
-| 00 | — | tools present, engine VM big enough |
-| 01 | kind: control plane + `agentdev/pool=sandboxes` worker; gVisor `runsc` copied into nodes; `RuntimeClass gvisor` | busybox under gVisor shows gVisor's kernel in `dmesg` |
-| 02 | agent-sandbox v1.0.8 (core + extensions); `claude-agent` image; SandboxTemplate (gVisor, 2 PVCs) + WarmPool(1) | warm pool reaches 1 ready |
-| 03 | SandboxClaim | claim latency from warm pool · gVisor in sandbox · **suspend** (`operatingMode: Suspended`) drops the pod and keeps PVCs · **resume** restores files + git repo · **warm pool → 0** · optional headless `claude -p` |
-| 04 | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
+| 00 (`prereqs`) | nothing | tools present, engine VM big enough |
+| 01 (`cluster`) | kind: control plane + `agentdev/pool=sandboxes` worker; gVisor `runsc` copied into nodes; `RuntimeClass gvisor` | busybox under gVisor shows gVisor's kernel in `dmesg` |
+| 02 (`sandbox`) | agent-sandbox v1.0.8 (core + extensions); `claude-agent` image; SandboxTemplate (gVisor, 2 PVCs) + WarmPool(1) | warm pool reaches 1 ready |
+| 03 (`sandbox-test`) | SandboxClaim | claim latency from warm pool · gVisor in sandbox · **suspend** (`operatingMode: Suspended`) drops the pod and keeps PVCs · **resume** restores files + git repo · **warm pool → 0** · optional headless `claude -p` |
+| 04 (removed in 1.3.0, #417; history only) | Postgres + Coder 2.38 (Helm, NodePort → `localhost:8080`); `spike-gvisor` Terraform template | workspace under gVisor · **stop** → 0 pods, home PVC kept · **start** → home intact · default auto-stop 30m |
 
 ## Two layers, two jobs
 
@@ -114,13 +124,13 @@ Results land in `results.md`.
 - **Node autoscaling is not exercised** — kind nodes are fixed containers. Scale-to-zero here is at the
   pod level (suspend / stop / warm pool 0). Node scale-to-zero needs Cluster Autoscaler on a real cloud.
 - **Egress goes through an allow-list proxy** (#65), but the API key still sits in a Secret inside the pod
-  (credential proxy: security-model.md phase 3). Optional registry cache for npm, PyPI and Go (#203, `REGISTRY_PROXY`,
+  (credential proxy: security-model.md phase 3). Optional registry cache for npm, PyPI and Go (#203, `registry_proxy`,
   docs/admin.md "Configure the registry cache").
 - **local-path storage** is node-local; real clusters need a CSI driver with snapshots (Longhorn, JuiceFS, cloud PD).
-- gVisor on Apple Silicon inside Docker Desktop/OrbStack generally works; if 01's smoke test fails, run the
+- gVisor on Apple Silicon inside Docker Desktop/OrbStack generally works; if the `cluster` smoke test fails, run the
   spike on a Linux VM instead (any 4 vCPU / 8 GB box).
 
 ## Pinned versions
 
-See `config.env`: agent-sandbox v1.0.8, gVisor 20261012.0, Coder chart 2.38.4. Manifests were schema-checked
-against the v1.0.8 CRDs; the Coder template is derived from `coder/coder` `examples/templates/kubernetes`.
+See `infra/ansible/kind.example.vars.yml` and the role defaults: agent-sandbox v1.0.8, gVisor 20261012.0. Manifests
+were schema-checked against the v1.0.8 CRDs. The removed Coder step used Coder chart 2.38.4.

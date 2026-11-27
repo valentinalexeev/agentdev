@@ -24,6 +24,7 @@ spec:
       tolerations:
       - {key: agentdev/pool, operator: Equal, value: sandboxes, effect: NoSchedule}
       - {key: sandbox.gke.io/runtime, operator: Equal, value: gvisor, effect: NoSchedule}
+      serviceAccountName: agent-${CHAT_AGENT}   # #352: the agent's identity at claude-proxy (projected token below only)
       automountServiceAccountToken: false
       securityContext: {runAsUser: 1000, runAsNonRoot: true, fsGroup: 1000}
       containers:
@@ -60,8 +61,11 @@ spec:
         - {name: state, mountPath: /state}
         - {name: claude, mountPath: /home/node/.claude}
         - {name: guide, mountPath: /etc/agentdev/guide, readOnly: true}   # harness guide of CHAT_AGENT (#206)
+        - {name: proxy-token, mountPath: /var/run/secrets/agentdev/proxy, readOnly: true}   # #352, see the agent pod
       volumes:
       - {name: state, emptyDir: {}}    # a fresh clone per session
       - {name: claude, emptyDir: {}}
       - name: guide                    # written by the operator; optional: no guide, no section
         configMap: {name: agentdev-guides, optional: true, defaultMode: 0444, items: [{key: "${CHAT_AGENT}", path: guide.md}]}
+      - name: proxy-token              # #352: same token as the agent pod (audience claude-proxy, 10 min, renewed)
+        projected: {defaultMode: 0444, sources: [{serviceAccountToken: {audience: claude-proxy, expirationSeconds: 600, path: token}}]}

@@ -1,0 +1,647 @@
+{
+  "metadata": {
+    "labels": {
+      "agent": "alice",
+      "app": "coding-agent"
+    }
+  },
+  "spec": {
+    "volumes": [
+      {
+        "name": "forge",
+        "emptyDir": {
+          "sizeLimit": "4Gi"
+        }
+      },
+      {
+        "name": "usage",
+        "configMap": {
+          "name": "agentdev-usage",
+          "defaultMode": 292,
+          "optional": true
+        }
+      },
+      {
+        "name": "guide",
+        "configMap": {
+          "name": "agentdev-guides",
+          "items": [
+            {
+              "key": "alice",
+              "path": "guide.md"
+            }
+          ],
+          "defaultMode": 292,
+          "optional": true
+        }
+      },
+      {
+        "name": "podinfo",
+        "downwardAPI": {
+          "items": [
+            {
+              "path": "annotations",
+              "fieldRef": {
+                "apiVersion": "v1",
+                "fieldPath": "metadata.annotations"
+              }
+            }
+          ],
+          "defaultMode": 292
+        }
+      },
+      {
+        "name": "proxy-token",
+        "projected": {
+          "sources": [
+            {
+              "serviceAccountToken": {
+                "audience": "claude-proxy",
+                "expirationSeconds": 600,
+                "path": "token"
+              }
+            }
+          ],
+          "defaultMode": 292
+        }
+      },
+      {
+        "name": "toolchain-tmp",
+        "emptyDir": {
+          "sizeLimit": "2Gi"
+        }
+      }
+    ],
+    "initContainers": [
+      {
+        "name": "state-init",
+        "image": "ghcr.io/example/agentdev-worker:v0.0.0",
+        "command": [
+          "mkdir",
+          "-p",
+          "/state/claude",
+          "/state/toolchain",
+          "/state/cache"
+        ],
+        "resources": {
+          "limits": {
+            "cpu": "100m",
+            "ephemeral-storage": "64Mi",
+            "memory": "64Mi"
+          },
+          "requests": {
+            "cpu": "10m",
+            "ephemeral-storage": "16Mi",
+            "memory": "16Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "state",
+            "mountPath": "/state"
+          }
+        ],
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File",
+        "imagePullPolicy": "IfNotPresent",
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      },
+      {
+        "name": "toolchain",
+        "image": "ghcr.io/example/agentdev-worker:v0.0.0",
+        "command": [
+          "toolchain-install"
+        ],
+        "env": [
+          {
+            "name": "TOOLCHAIN_SPEC",
+            "value": "{\"v\":1,\"image\":\"ghcr.io/example/agentdev-worker:v0.0.0\",\"epoch\":0,\"path\":[],\"presets\":[{\"name\":\"go\",\"version\":\"1.27.4\",\"kind\":\"tar\",\"arch\":{\"amd64\":{\"url\":\"https://dl.google.com/go/go1.27.4.linux-amd64.tar.gz\",\"sha256\":\"7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840\"},\"arm64\":{\"url\":\"https://dl.google.com/go/go1.27.4.linux-arm64.tar.gz\",\"sha256\":\"3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92\"}},\"bin\":\"go/bin\",\"verify\":[\"go\",\"version\"]}]}"
+          },
+          {
+            "name": "TOOLCHAIN_DIR",
+            "value": "/state/toolchain"
+          },
+          {
+            "name": "TMPDIR",
+            "value": "/tmp"
+          },
+          {
+            "name": "HOME",
+            "value": "/tmp"
+          },
+          {
+            "name": "TOOLCHAIN_EXPECT",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "agentdev-toolchains",
+                "key": "alice",
+                "optional": true
+              }
+            }
+          },
+          {
+            "name": "EGRESS_SETUP_KEY",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "agent-alice-setup-proxy",
+                "key": "password"
+              }
+            }
+          },
+          {
+            "name": "HTTPS_PROXY",
+            "value": "http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "HTTP_PROXY",
+            "value": "http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "https_proxy",
+            "value": "http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "http_proxy",
+            "value": "http://setup:$(EGRESS_SETUP_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "NO_PROXY",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          },
+          {
+            "name": "no_proxy",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          }
+        ],
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "ephemeral-storage": "3Gi",
+            "memory": "1Gi"
+          },
+          "requests": {
+            "cpu": "100m",
+            "ephemeral-storage": "256Mi",
+            "memory": "256Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "state",
+            "mountPath": "/state"
+          },
+          {
+            "name": "toolchain-tmp",
+            "mountPath": "/tmp"
+          }
+        ],
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File",
+        "imagePullPolicy": "IfNotPresent",
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsUser": 1000,
+          "runAsNonRoot": true,
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      }
+    ],
+    "containers": [
+      {
+        "name": "agent",
+        "image": "ghcr.io/example/agentdev-worker:v0.0.0",
+        "envFrom": [
+          {
+            "secretRef": {
+              "name": "agent-alice-mcp",
+              "optional": true
+            }
+          },
+          {
+            "configMapRef": {
+              "name": "registry-proxy",
+              "optional": true
+            }
+          }
+        ],
+        "env": [
+          {
+            "name": "FORGE_URL",
+            "value": "http://forge"
+          },
+          {
+            "name": "FORGE_USER",
+            "value": "alice"
+          },
+          {
+            "name": "AGENT_NAME",
+            "value": "alice"
+          },
+          {
+            "name": "REPO",
+            "value": "owner/repo"
+          },
+          {
+            "name": "WAKE_FILE",
+            "value": "/state/agent-wake"
+          },
+          {
+            "name": "FORGE_API",
+            "value": "http://127.0.0.1:7070"
+          },
+          {
+            "name": "HTTPS_PROXY",
+            "value": "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "HTTP_PROXY",
+            "value": "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "https_proxy",
+            "value": "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "http_proxy",
+            "value": "http://egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "NO_PROXY",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          },
+          {
+            "name": "no_proxy",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          },
+          {
+            "name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+            "value": "1"
+          },
+          {
+            "name": "POLL_SECONDS",
+            "value": "20"
+          },
+          {
+            "name": "MAX_CONCURRENT",
+            "value": "2"
+          },
+          {
+            "name": "MAX_TURNS",
+            "value": "40"
+          },
+          {
+            "name": "REVIEWER",
+            "value": "owner"
+          },
+          {
+            "name": "ROUTER_URL",
+            "value": "http://webhook-router.coding-agents.svc.cluster.local:8081"
+          },
+          {
+            "name": "SCALE_TO_ZERO",
+            "value": "true"
+          },
+          {
+            "name": "APPROVALS",
+            "value": "true"
+          },
+          {
+            "name": "IDLE_SECONDS",
+            "value": "900"
+          },
+          {
+            "name": "BOTBOARD_URL"
+          },
+          {
+            "name": "FORGE_PUBLIC_URL"
+          },
+          {
+            "name": "READY_ISSUE",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "agent-alice-project",
+                "key": "READY_ISSUE",
+                "optional": true
+              }
+            }
+          },
+          {
+            "name": "ANTHROPIC_BASE_URL",
+            "value": "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+          },
+          {
+            "name": "ANTHROPIC_AUTH_TOKEN",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "agent-alice-proxy",
+                "key": "ANTHROPIC_AUTH_TOKEN"
+              }
+            }
+          },
+          {
+            "name": "CLAUDE_TOOLS_EXTRA",
+            "value": "Bash(go mod:*),Bash(gofmt:*),Bash(go fmt:*),Bash(go run:*)"
+          },
+          {
+            "name": "TOOLCHAIN",
+            "value": "/state/toolchain/current"
+          },
+          {
+            "name": "PATH",
+            "value": "/state/toolchain/current/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          },
+          {
+            "name": "GOCACHE",
+            "value": "/state/cache/go/build"
+          },
+          {
+            "name": "GOMODCACHE",
+            "value": "/state/cache/go/mod"
+          },
+          {
+            "name": "GOPATH",
+            "value": "/state/cache/go"
+          },
+          {
+            "name": "GOTOOLCHAIN",
+            "value": "local"
+          }
+        ],
+        "resources": {
+          "limits": {
+            "cpu": "2",
+            "ephemeral-storage": "8Gi",
+            "memory": "3Gi"
+          },
+          "requests": {
+            "cpu": "200m",
+            "ephemeral-storage": "1Gi",
+            "memory": "512Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "state",
+            "mountPath": "/state"
+          },
+          {
+            "name": "state",
+            "mountPath": "/home/node/.claude",
+            "subPath": "claude"
+          },
+          {
+            "name": "usage",
+            "readOnly": true,
+            "mountPath": "/etc/agentdev/usage"
+          },
+          {
+            "name": "guide",
+            "readOnly": true,
+            "mountPath": "/etc/agentdev/guide"
+          },
+          {
+            "name": "podinfo",
+            "readOnly": true,
+            "mountPath": "/etc/agentdev/pod"
+          },
+          {
+            "name": "state",
+            "readOnly": true,
+            "mountPath": "/state/toolchain",
+            "subPath": "toolchain"
+          },
+          {
+            "name": "proxy-token",
+            "readOnly": true,
+            "mountPath": "/var/run/secrets/agentdev/proxy"
+          }
+        ],
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File",
+        "imagePullPolicy": "IfNotPresent"
+      },
+      {
+        "name": "forge",
+        "image": "ghcr.io/example/agentdev-forge:v0.0.0",
+        "ports": [
+          {
+            "name": "webhook",
+            "containerPort": 8080,
+            "protocol": "TCP"
+          }
+        ],
+        "env": [
+          {
+            "name": "FORGE_URL",
+            "value": "http://forge"
+          },
+          {
+            "name": "FORGE_USER",
+            "value": "alice"
+          },
+          {
+            "name": "AGENT_NAME",
+            "value": "alice"
+          },
+          {
+            "name": "REPO",
+            "value": "owner/repo"
+          },
+          {
+            "name": "WAKE_FILE",
+            "value": "/state/agent-wake"
+          },
+          {
+            "name": "FORGE_API",
+            "value": "http://127.0.0.1:7070"
+          },
+          {
+            "name": "EGRESS_FORGE_KEY",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "egress-forge-proxy",
+                "key": "password"
+              }
+            }
+          },
+          {
+            "name": "HTTPS_PROXY",
+            "value": "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "HTTP_PROXY",
+            "value": "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "https_proxy",
+            "value": "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "http_proxy",
+            "value": "http://forge:$(EGRESS_FORGE_KEY)@egress-proxy.coding-agents.svc.cluster.local:3128"
+          },
+          {
+            "name": "NO_PROXY",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          },
+          {
+            "name": "no_proxy",
+            "value": "localhost,127.0.0.1,::1,.svc,.svc.cluster.local,.cluster.local"
+          },
+          {
+            "name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+            "value": "1"
+          },
+          {
+            "name": "ROUTER_URL",
+            "value": "http://webhook-router.coding-agents.svc.cluster.local:8081"
+          },
+          {
+            "name": "SELF_URL",
+            "value": "http://agent-alice.coding-agents.svc.cluster.local:8080/"
+          },
+          {
+            "name": "FORGE_KIND",
+            "value": "gitea"
+          },
+          {
+            "name": "MIRROR_DIR",
+            "value": "/forge/repo.git"
+          },
+          {
+            "name": "USAGE_REPORTS",
+            "value": "off"
+          },
+          {
+            "name": "APPROVALS",
+            "value": "true"
+          },
+          {
+            "name": "APPROVALS_URL",
+            "value": "http://agentdev-api-internal.agentdev-platform.svc.cluster.local:8081"
+          },
+          {
+            "name": "APPROVAL_TIMEOUT_MINUTES",
+            "value": "30"
+          },
+          {
+            "name": "CLAUDE_PROXY_URL",
+            "value": "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+          },
+          {
+            "name": "WAKE_TOKEN",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "agent-alice",
+                "key": "WAKE_TOKEN",
+                "optional": true
+              }
+            }
+          },
+          {
+            "name": "REGISTER_TOKEN",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "agent-alice",
+                "key": "REGISTER_TOKEN",
+                "optional": true
+              }
+            }
+          },
+          {
+            "name": "FORGE_TOKEN",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "agent-alice",
+                "key": "FORGE_TOKEN"
+              }
+            }
+          }
+        ],
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "ephemeral-storage": "5Gi",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "20m",
+            "ephemeral-storage": "256Mi",
+            "memory": "64Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "name": "state",
+            "mountPath": "/state"
+          },
+          {
+            "name": "forge",
+            "mountPath": "/forge"
+          },
+          {
+            "name": "state",
+            "readOnly": true,
+            "mountPath": "/state/toolchain",
+            "subPath": "toolchain"
+          }
+        ],
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File",
+        "imagePullPolicy": "IfNotPresent",
+        "securityContext": {
+          "capabilities": {
+            "drop": [
+              "ALL"
+            ]
+          },
+          "runAsUser": 1001,
+          "runAsGroup": 1000,
+          "runAsNonRoot": true,
+          "readOnlyRootFilesystem": true,
+          "allowPrivilegeEscalation": false
+        }
+      }
+    ],
+    "terminationGracePeriodSeconds": 300,
+    "nodeSelector": {
+      "agentdev/pool": "sandboxes"
+    },
+    "serviceAccountName": "agent-alice",
+    "automountServiceAccountToken": false,
+    "shareProcessNamespace": false,
+    "securityContext": {
+      "runAsUser": 1000,
+      "runAsNonRoot": true,
+      "fsGroup": 1000
+    },
+    "tolerations": [
+      {
+        "key": "agentdev/pool",
+        "operator": "Equal",
+        "value": "sandboxes",
+        "effect": "NoSchedule"
+      },
+      {
+        "key": "sandbox.gke.io/runtime",
+        "operator": "Equal",
+        "value": "gvisor",
+        "effect": "NoSchedule"
+      }
+    ],
+    "runtimeClassName": "gvisor"
+  }
+}

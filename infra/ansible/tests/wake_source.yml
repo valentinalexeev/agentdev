@@ -1,5 +1,5 @@
 # Check (#181): scale to zero is the default, and the playbook refuses it when no wake source is left (no webhooks,
-# wake_poll_seconds 0). Runs the same task file as deploy.yml.
+# wake_poll_seconds 0). Runs the same task file as deploy.yml; the router values are in tasks/render_objects.yml (#384).
 # Run: ansible-playbook infra/ansible/tests/wake_source.yml
 - name: Scale to zero needs a wake source (#181)
   hosts: localhost
@@ -8,7 +8,7 @@
   vars:
     agents: [{name: alice, user: alice, repos: o/r}, {name: bob, user: bob, repos: o/r, scale_to_zero: false}]
     router_tmpl: "{{ lookup('ansible.builtin.file', playbook_dir + '/../../../manifests/router.yaml.tmpl') }}"
-    deploy: "{{ lookup('ansible.builtin.file', playbook_dir + '/../deploy.yml') }}"
+    deploy: "{{ lookup('ansible.builtin.file', playbook_dir + '/../tasks/render_objects.yml') }}"
   tasks:
     - name: Defaults are scale to zero with a 300 s wake poll, and no webhooks without an ingress
       ansible.builtin.assert:

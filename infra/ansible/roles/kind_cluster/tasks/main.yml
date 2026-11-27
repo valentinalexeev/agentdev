@@ -1,17 +1,8 @@
 ---
 # Same result as the old 01-cluster.sh: a kind cluster (1 control plane + 1 sandbox worker), gVisor in every node,
 # RuntimeClass gvisor (handler runsc) and a smoke test that a pod really runs under gVisor.
-- name: Read the kind version
-  ansible.builtin.command: kind version
-  register: kind_cluster_version
-  changed_when: false
-
-- name: Kind version gate
-  ansible.builtin.include_tasks: version.yml
-
-- name: The container engine runs
-  ansible.builtin.command: "{{ kind_cluster_engine }} info --format '{{ '{{' }}.ID{{ '}}' }}'"
-  changed_when: false
+- name: Host prerequisites (tools, engine, kind version)
+  ansible.builtin.include_tasks: prereqs.yml
 
 - name: List the kind clusters
   ansible.builtin.command: kind get clusters

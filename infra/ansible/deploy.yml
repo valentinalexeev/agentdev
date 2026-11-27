@@ -9,6 +9,12 @@
 # Uses the same manifests as the kind setup (manifests/*.tmpl), so both environments stay in step.
 # Secrets come from Secret Manager at run time (gcloud as the caller) and are only ever passed to
 # the Kubernetes API: every task that touches one has no_log.
+# Read-only checks first (#314): Claude secret formats (#212), same release (#218), CRDs, images on ghcr.io.
+# Only the checks: --tags preflight (or scripts/upgrade-check.sh). Skip them: --skip-tags preflight.
+- name: Preflight
+  ansible.builtin.import_playbook: preflight.yml
+  tags: [preflight]
+
 - name: Deploy agentdev to GKE
   hosts: localhost
   gather_facts: false
@@ -17,71 +23,9 @@
     k8s_common: &k8s
       context: "{{ kube_context }}"
   tasks:
-    - name: Instance values come from the deployment repo (see example.vars.yml)
-      ansible.builtin.assert:
-        that:
-          - gcp_project is defined and gcp_project | length > 0
-          - gcp_zone is defined and gcp_zone | length > 0
-          - image_tag is defined and image_tag | length > 0
-          - reviewer is defined and reviewer | length > 0
-          - agents is defined and agents | length > 0
-          # GitHub App (#2): App id (not secret) in instance.yml, validated; the private key in Secret Manager
-          - forge_kind != 'github' or (github_app.app_id | default('') | string) is match('^[1-9][0-9]{0,15}$')
-          - forge_kind != 'github' or (github_app.installation_id | default('') | string) is match('^([1-9][0-9]{0,15})?$')
-          - agents | map(attribute='name') | select('match', '^[a-z0-9][a-z0-9-]{0,40}$') | list | length == agents | length
-        fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
-        quiet: true
-
-    # Labels (#184): GCP and Kubernetes rules, the same as Terraform's labels validation. They reach a manifest
-    # value (COST_LABELS), so check them before any task uses them.
-    - name: Labels are valid (lower-case keys and values, environment dev/stage/prod)
-      ansible.builtin.assert:
-        that:
-          - agentdev_effective_labels is mapping
-          - agentdev_effective_labels.keys() | select('match', '^[a-z][a-z0-9_-]{0,62}$') | list | length == agentdev_effective_labels | length
-          - agentdev_effective_labels.values() | map('string') | select('match', '^[a-z0-9_-]{0,63}$') | list | length == agentdev_effective_labels | length
-          - agentdev_effective_labels.environment | default('prod') in ['dev', 'stage', 'prod']
-        fail_msg: "agentdev_labels: keys ^[a-z][a-z0-9_-]{0,62}$, values ^[a-z0-9_-]{0,63}$, environment dev, stage or prod."
-        quiet: true
-
-    # Executor names and environments become parts of shell commands and object names below: check them before any
-    # task uses them, with the same rules as the operator's validExecutor and the CRD (#69, review of #116).
-    - name: Executors are valid (names, environments, image by digest, one executor per environment)
-      ansible.builtin.assert:
-        that:
-          - item.name is defined and item.name is string and item.name is match('^[a-z0-9-]{1,40}$')
-          - item.environment is defined and item.environment is string and item.environment is match('^[a-z0-9]([-a-z0-9]{0,28}[a-z0-9])?$')
-          - item.repo is defined and item.repo is match('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') and '..' not in item.repo
-          - item.image is defined and item.image is match('^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$')
-          - item.plan is defined and item.plan is sequence and item.plan is not string and item.plan | length > 0
-          - item.apply is defined and item.apply is sequence and item.apply is not string and item.apply | length > 0
-          - "'..' not in (item.path | default(''))"
-          - (item.egress_hosts | default([])) is sequence and (item.egress_hosts | default([])) is not string
-          - (item.egress_hosts | default([])) | reject('match', '^\\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
-          - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
-          - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
-          - executors | selectattr('name', 'equalto', item.name) | list | length == 1
-        fail_msg: >-
-          executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
-          plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
-        quiet: true
-      loop: "{{ executors }}"
-      loop_control: {label: "{{ item.name | default('?') }}"}
-
-    - name: "Approvals need agentdev-api (#67, #115): deployed only when api.oidc_issuer is set"
-      ansible.builtin.assert:
-        that: >-
-          not (approvals.enabled | default(true) | bool)
-          or (api_effective_issuer | length > 0)
-        fail_msg: >-
-          approvals are on by default on GKE and need the management API. The operator sends every request to
-          agentdev-api-internal, which this playbook deploys only with an OIDC issuer (api.oidc_issuer, or authentik
-          with ingress.auth_host); without it every prompt and protected push would be refused. Set one, or opt out with approvals.enabled: false
-          (docs/admin.md, Turn on approvals).
-        quiet: true
-
-    - name: Scale to zero has a wake source (#181)
-      ansible.builtin.include_tasks: tasks/wake_source.yml
+    # value checks (#384): the same file runs in render.yml, so the CI of a deployment repository finds them before a merge
+    - name: Value checks of the instance (labels, executors, approvals, budget, wake source)
+      ansible.builtin.include_tasks: tasks/checks.yml
 
     - name: Check the kube context exists
       ansible.builtin.command: kubectl config get-contexts {{ kube_context }} -o name
@@ -97,6 +41,7 @@
       register: platform_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Keep them in facts (not logged)
       ansible.builtin.set_fact:
@@ -104,48 +49,32 @@
         register_token: "{{ platform_secrets.results[1].stdout }}"
         forge_webhook_secret: "{{ platform_secrets.results[2].stdout }}"
       no_log: true
+      when: secrets_mode == 'playbook'
 
-    - name: Namespace
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ agents_ns }}", labels: "{{ agentdev_effective_labels }}"}}
-
-    - name: RuntimeClass gvisor (GKE Sandbox ships it as gvisor already; ensure it exists)
-      kubernetes.core.k8s:
-        <<: *k8s
-        state: present
-        definition: {apiVersion: node.k8s.io/v1, kind: RuntimeClass, metadata: {name: gvisor}, handler: gvisor}
-      failed_when: false   # GKE manages this object; an existing one is fine
-
-    # claude-shared holds KEY=VALUE lines (ANTHROPIC_API_KEY=... or CLAUDE_CODE_OAUTH_TOKEN=...)
-    - name: Shared Claude credential
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata: {name: claude-shared, namespace: "{{ agents_ns }}"}
-          stringData: "{{ dict(claude_shared_env.splitlines() | select('search', '=') | map('split', '=', 1)) }}"
-      no_log: true
-
-    - name: Webhook router
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
+    - name: Refuse a claude-shared without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
       vars:
-        vars_router:
-          src: "{{ repo_root }}/manifests/router.yaml.tmpl"
-          values:
-            AGENTS_NS: "{{ agents_ns }}"
-            FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
-            REGISTER_TOKEN: "{{ register_token }}"
-            ROUTER_IMAGE: "{{ router_image }}"
-            IMAGE_PULL_POLICY: IfNotPresent
-            WAKE_POLL_SECONDS: "{{ wake_poll_seconds | int }}"
-            GITEA_URL: "{{ forge_url if forge_kind == 'gitea' else '' }}"
-            GITHUB_API_URL: "{{ forge_url if forge_kind == 'github' else 'https://api.github.com' }}"
-          replace: []
-      no_log: true
+        claude_cred_text: "{{ claude_shared_env }}"
+        claude_cred_name: "{{ sm_claude_shared }}"
+      when: secrets_mode == 'playbook'
+
+    - name: Secrets mode is playbook or external (#381)
+      ansible.builtin.assert:
+        that: secrets_mode in ['playbook', 'external']
+        fail_msg: "external_secrets.mode must be playbook or external (example.vars.yml)"
+        quiet: true
+
+    # ---------- secrets_mode external (#381): no secret value on this machine, no `gcloud secrets` call ----------
+    - name: External Secrets Operator, Reloader and the platform secrets stores
+      ansible.builtin.include_role: {name: external_secrets}
+      when: secrets_mode == 'external'
+
+    - name: ExternalSecrets of the agents and executors namespaces
+      ansible.builtin.include_tasks: tasks/external_secrets.yml
+      vars:
+        es_specs: >-
+          {{ lookup('ansible.builtin.template', 'templates/externalsecrets-agents.j2') | from_yaml }}
+      when: secrets_mode == 'external'
 
     - name: Forge sidecar egress credential (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
@@ -159,94 +88,23 @@
       args: {executable: /bin/bash}
       register: forge_proxy_key
       changed_when: false
-      when: not ansible_check_mode
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
 
-    - name: Forge sidecar egress credential Secret (password for the sidecar, header regex for Squid)
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata: {name: egress-forge-proxy, namespace: "{{ agents_ns }}"}
-          stringData:
-            password: "{{ forge_proxy_key.stdout }}"
-            auth: "^Basic {{ ('forge:' ~ forge_proxy_key.stdout) | b64encode }}$"
-      when: not ansible_check_mode
+    - name: "Toolchain setup egress credential (generated once, kept in Secret Manager, #499)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ sm_egress_setup_proxy }}"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+        fi
+        gcloud secrets versions access latest --secret "$name" --project {{ gcp_project }}
+      args: {executable: /bin/bash}
+      register: setup_proxy_key
+      changed_when: false
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
       no_log: true
-
-    - name: Egress allow-list (#65) - proxy and agent NetworkPolicy
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_egress) | from_yaml_all | list }}"
-      vars:
-        vars_egress:
-          src: "{{ repo_root }}/manifests/egress.yaml.tmpl"
-          values:
-            AGENTS_NS: "{{ agents_ns }}"
-            PLATFORM_NS: "{{ platform_ns }}"
-            FORGE_NS: forge
-            BOTBOARD_NS: botboard
-            # with the credential proxy, only claude-proxy reaches the Claude API (docs/security.md R64)
-            EGRESS_HOSTS: "{{ (egress_hosts + egress_extra_hosts) | reject('in', agent_egress_drop) | join(' ') }}"
-            FORGE_EGRESS_HOSTS: "{{ forge_egress_hosts | join(' ') }}"
-            FORGE_PROXY_AUTH_SHA: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] }}"
-            EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
-          replace: []
-
-    # Dataplane V2 enforces this on the proxy pod: even a changed squid.conf reaches nothing else. Squid's
-    # ".example.com" becomes the name example.com plus the pattern *.example.com (GKE patterns match one level only);
-    # the mapping lives in egress_fqdn.j2 (tested by tests/egress_fqdn.yml).
-    - name: Egress hosts as FQDNNetworkPolicy matches
-      ansible.builtin.set_fact:
-        egress_fqdn_matches: "{{ lookup('ansible.builtin.template', 'egress_fqdn.j2') | from_yaml }}"
-
-    - name: Is the FQDNNetworkPolicy type served (enable_fqdn_network_policy)?
-      kubernetes.core.k8s_info:
-        <<: *k8s
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: fqdnnetworkpolicies.networking.gke.io
-      register: fqdn_crd
-      when: egress_fqdn_policy | bool
-
-    # also runs in --check (a dry run against the served type) when the type exists; without it the proxy has DNS only
-    - name: "Egress proxy FQDNNetworkPolicy (GKE, #65)"
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition:
-          apiVersion: networking.gke.io/v1alpha1
-          kind: FQDNNetworkPolicy
-          metadata: {name: egress-proxy, namespace: "{{ agents_ns }}"}
-          spec:
-            podSelector: {matchLabels: {app: egress-proxy}}
-            egress:
-              - matches: "{{ egress_fqdn_matches }}"
-                ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
-      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length > 0)
-
-    - name: The FQDN policy is on, but the cluster does not serve it
-      ansible.builtin.fail:
-        msg: >-
-          egress_fqdn_policy is true, but FQDNNetworkPolicy is not available: apply infra/terraform
-          (enable_fqdn_network_policy) or set egress_fqdn_policy: false
-      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length == 0) and not ansible_check_mode
-
-    - name: Egress proxy may reach any address on 80/443 when the FQDN policy is off (Squid alone enforces the list)
-      kubernetes.core.k8s:
-        <<: *k8s
-        state: "{{ 'absent' if egress_fqdn_policy | bool else 'present' }}"
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_web) | from_yaml }}"
-      vars:
-        vars_web:
-          src: "{{ repo_root }}/manifests/egress-proxy-web.yaml.tmpl"
-          values: {AGENTS_NS: "{{ agents_ns }}"}
-          replace: []
-
-    # registry cache (#203): gateway registry-cache and, for registry_proxy cluster, the in-cluster caches; off removes
-    # them. Agents read the ConfigMap registry-proxy at pod start.
-    - name: Registry cache for npm, PyPI and Go (#203)
-      ansible.builtin.include_role: {name: registry_cache}
 
     - name: Per-agent wake tokens (generated once, kept in Secret Manager)
       ansible.builtin.shell: |
@@ -261,6 +119,7 @@
       loop: "{{ agents }}"
       register: wake_created
       changed_when: "'created' in wake_created.stdout"
+      when: secrets_mode == 'playbook'
 
     - name: Read per-agent secrets
       ansible.builtin.shell: |
@@ -280,175 +139,24 @@
       register: agent_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
+
+    # An agent-<name>-claude that exists but has no recognised key would silently fall back to claude-shared (#212).
+    - name: Refuse an agent-<name>-claude without a recognised key (#212)
+      ansible.builtin.include_tasks: tasks/claude_credential.yml
+      vars:
+        claude_cred_text: "{{ agent_secrets.results[idx].stdout_lines[2:] | join('\n') }}"
+        claude_cred_name: "agent-{{ item.name }}-claude"
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      when: secrets_mode == 'playbook' and (agent_secrets.results[idx].stdout_lines[2:] | map('trim') | select | list | length > 0)
 
     - name: GitHub App private key (#2), only for the agents' forge sidecars
       ansible.builtin.command: gcloud secrets versions access latest --secret {{ sm_github_app_private_key }} --project {{ gcp_project }}
       register: github_app_key
       changed_when: false
       no_log: true
-      when: forge_kind == 'github'
-
-    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun and ProjectSecret CRDs (#47, #70, #67, #69, #202)"
-      kubernetes.core.k8s:
-        <<: *k8s
-        src: "{{ repo_root }}/images/operator/config/crd/{{ item }}"
-        # Agents below need the type to be served
-        wait: true
-        wait_condition: {type: Established, status: "True"}
-        wait_timeout: 60
-      loop: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-             agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml]
-
-    - name: Platform namespace
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ platform_ns }}", labels: "{{ agentdev_effective_labels }}"}}
-
-    - name: Postgres + ContextForge, then mcp-sync per project (#51)
-      ansible.builtin.include_role: {name: platform}
-
-    # authentik (#114): same chart, values and blueprints as ./run.sh 09; before the API, which uses it as the issuer
-    - name: Identity provider authentik (blueprints, break-glass admin)
-      ansible.builtin.include_role: {name: authentik}
-      when: authentik_enabled | bool
-
-    # Company SSO for authentik (#122): only when instance.yml sets authentik.sso. Writes the Secret authentik-sso and
-    # restarts authentik (deployed by the role authentik above).
-    - name: Company SSO settings for authentik (Secret authentik-sso)
-      ansible.builtin.include_role: {name: authentik_sso}
-      when: ((authentik | default({})).sso | default({})) | length > 0
-
-    # Management API (#46, #104): needs an OIDC provider: api.oidc_issuer, or authentik on ingress.auth_host (#114).
-    - name: Management API (database roles, Secrets, Deployment)
-      ansible.builtin.include_role: {name: api}
-      when: api_effective_issuer | length > 0
-
-    # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
-    # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host
-    # or ingress.mode. ingress.mode external (#160): no Gateway; your own reverse proxy publishes the hosts.
-    - name: Public entry point (Gateway, or external ingress)
-      ansible.builtin.include_role: {name: ingress}
-      when: (ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined
-
-    # one disk per agent (#173): the cheapest GCE disk type; created only when the class is not the cluster default
-    - name: "Agent StorageClass (pd-standard, #173)"
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata: {name: "{{ agent_storage_class }}", labels: {app.kubernetes.io/part-of: agentdev}}
-          provisioner: pd.csi.storage.gke.io
-          parameters: {type: pd-standard}
-          reclaimPolicy: Delete
-          volumeBindingMode: WaitForFirstConsumer
-          allowVolumeExpansion: true
-      when: agent_storage_class | length > 0
-
-    - name: Agent operator (#47); it renders every agent's StatefulSet
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_operator) | from_yaml_all | list }}"
-      vars:
-        vars_operator:
-          src: "{{ repo_root }}/manifests/operator.yaml.tmpl"
-          values:
-            PLATFORM_NS: "{{ platform_ns }}"
-            AGENTS_NS: "{{ agents_ns }}"
-            COST_LABELS: "{{ agentdev_effective_labels.items() | map('join', '=') | join(',') }}"
-            OPERATOR_IMAGE: "{{ operator_image }}"
-            WORKER_IMAGE: "{{ worker_image }}"
-            FORGE_IMAGE: "{{ forge_image }}"
-            IMAGE_PULL_POLICY: IfNotPresent
-            FORGE_URL: "{{ forge_url }}"
-            FORGE_PUBLIC_URL: "{{ forge_public_url | default('') }}"
-            FORGE_ADMIN_USER: "{{ reviewer }}"
-            BOTBOARD_URL: "{{ botboard_url }}"
-            POLL_SECONDS: "{{ poll_seconds }}"
-            IDLE_SECONDS: "{{ idle_seconds }}"
-            AGENT_STORAGE_CLASS: "{{ agent_storage_class }}"
-            AGENT_STATE_STORAGE: "{{ agent_state_storage }}"
-            EGRESS_PROXY: "http://egress-proxy.{{ agents_ns }}.svc.cluster.local:3128"
-            # harness guide (#206): the same list as the agents' egress proxy, for the text only
-            AGENT_EGRESS_HOSTS: >-
-              {{ (egress_hosts + egress_extra_hosts)
-                 | reject('in', agent_egress_drop) | join(' ') }}
-            SECURITY_PAUSE_AFTER: "{{ security.pause_after | default(5) }}"
-            SECURITY_RETENTION_DAYS: "{{ security.retention_days | default(30) }}"
-            SECURITY_MAX_PER_AGENT: "{{ security.max_per_agent | default(500) }}"
-            SECURITY_RATE_PER_MIN: "{{ security.rate_per_min | default(10) }}"
-            SECURITY_RATE_BURST: "{{ security.rate_burst | default(20) }}"
-            APPROVAL_RETENTION_DAYS: "{{ approvals.retention_days | default(90) }}"
-            APPROVALS: "{{ approvals.enabled | default(true) | string | lower }}"
-            APPROVAL_TIMEOUT_MINUTES: "{{ approvals.timeout_minutes | default(30) }}"
-            EXEC_NS: "{{ exec_ns }}"
-            EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
-            EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
-            EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
-            EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
-            USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
-            USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
-            # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
-            SECRETS_STORE: ""
-            SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
-            CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
-          replace: []
-
-    # Executor egress (#135): default deny for executor Jobs plus the executor proxy (same template as 12-operator.sh).
-    # The operator writes each Executor's credential and hosts into Secret executor-egress-proxy.
-    - name: Executors namespace labels (#184); the operator manifest creates the namespace
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: {apiVersion: v1, kind: Namespace, metadata: {name: "{{ exec_ns }}", labels: "{{ agentdev_effective_labels }}"}}
-
-    - name: Executor egress allow-list (#135) - proxy and executor NetworkPolicy
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_exec_egress) | from_yaml_all | list }}"
-      vars:
-        vars_exec_egress:
-          src: "{{ repo_root }}/manifests/executor-egress.yaml.tmpl"
-          values:
-            EXEC_NS: "{{ exec_ns }}"
-            FORGE_NS: forge
-            EGRESS_PROXY_IMAGE: "{{ egress_proxy_image }}"
-          replace: []
-
-    # GKE: the executor proxy itself may reach only the hosts of all executors (same mapping as the agents' proxy)
-    - name: Executor egress hosts as FQDNNetworkPolicy matches
-      ansible.builtin.set_fact:
-        exec_egress_fqdn_matches: >-
-          {{ lookup('ansible.builtin.template', 'egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
-             'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
-      vars:
-        executor_egress_all_hosts: >-
-          {{ (executor_egress_hosts + (['github.com'] if forge_kind == 'github' else [])
-              + (executors | map(attribute='egress_hosts', default=[]) | flatten)) | unique | list }}
-
-    - name: "Executor egress proxy FQDNNetworkPolicy (GKE, #135)"
-      kubernetes.core.k8s:
-        <<: *k8s
-        definition:
-          apiVersion: networking.gke.io/v1alpha1
-          kind: FQDNNetworkPolicy
-          metadata: {name: executor-egress-proxy, namespace: "{{ exec_ns }}"}
-          spec:
-            podSelector: {matchLabels: {app: executor-egress-proxy}}
-            egress:
-              - matches: "{{ exec_egress_fqdn_matches }}"
-                ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
-      when: egress_fqdn_policy | bool and (fqdn_crd.resources | default([]) | length > 0)
-
-    - name: Executor egress proxy may reach any address on 80/443 when the FQDN policy is off (Squid alone enforces the list)
-      kubernetes.core.k8s:
-        <<: *k8s
-        state: "{{ 'absent' if egress_fqdn_policy | bool else 'present' }}"
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_exec_web) | from_yaml }}"
-      vars:
-        vars_exec_web:
-          src: "{{ repo_root }}/manifests/executor-egress-web.yaml.tmpl"
-          values: {EXEC_NS: "{{ exec_ns }}"}
-          replace: []
+      when: secrets_mode == 'playbook' and (forge_kind == 'github')
 
     # Deterministic executors (#69), optional. Per executor: the forge token from Secret Manager
     # (exec-<name>-forge-token), optional plan/apply env Secrets (exec-<name>-plan-env, exec-<name>-apply-env: KEY=VALUE
@@ -467,6 +175,316 @@
       register: exec_secrets
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
+
+    # Wake poll (#181): the router's read-only forge credential. GitHub: the App (the router narrows its installation
+    # tokens to read access); Gitea: the optional Secret Manager entry router-poll-forge-token (a read-only token).
+    - name: Gitea read-only token of the wake poll (optional)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if gcloud secrets describe {{ sm_router_poll_token }} --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets versions access latest --secret {{ sm_router_poll_token }} --project {{ gcp_project }}
+        fi
+      args: {executable: /bin/bash}
+      register: router_poll_token
+      changed_when: false
+      no_log: true
+      when: secrets_mode == 'playbook' and (forge_kind == 'gitea' and (wake_poll_seconds | int) > 0)
+
+    - name: Scale to zero on Gitea has a wake poll token or webhooks (#190)
+      ansible.builtin.include_tasks: tasks/wake_source.yml
+      vars: {wake_poll_token: "{{ router_poll_token.stdout | default('') }}"}
+      when: secrets_mode == 'playbook' and (forge_kind == 'gitea' and (wake_poll_seconds | int) > 0)
+
+    # ---------- Claude credential proxy (#66, same template as kind.yml tag agents) ----------
+    - name: Claude proxy signing key (generated once, kept in Secret Manager)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        name="{{ sm_claude_proxy_signing }}"
+        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
+          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
+          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
+          echo created
+        fi
+      args: {executable: /bin/bash}
+      register: proxy_signing_created
+      changed_when: "'created' in proxy_signing_created.stdout"
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
+
+    - name: Claude proxy keys of the agents (HMAC of the agent name; never the credential)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        k=$(gcloud secrets versions access latest --secret {{ sm_claude_proxy_signing }} --project {{ gcp_project }})
+        for a in {{ agents | map(attribute='name') | map('quote') | join(' ') }}; do
+          [[ "$a" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "bad agent name" >&2; exit 1; }
+          printf '%s.%s\n' "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
+        done
+        printf 'SIGNING=%s\n' "$k"
+      args: {executable: /bin/bash}
+      register: proxy_keys
+      changed_when: false
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
+      no_log: true
+
+    # the Claude proxy NetworkPolicy names the API server (#352). platform.kube_api_ips (terraform output platform) is the
+    # source; without it the addresses are read here to fill that one value, never to choose a template (#384)
+    - name: API server addresses (Service default/kubernetes) for the Claude proxy egress
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: "{{ item }}"
+        namespace: default
+        name: kubernetes
+      loop: [Service, Endpoints]
+      register: kube_api
+      when: claude_proxy | bool and (platform | default({})).kube_api_ips is not defined
+
+    - name: Agents with their own Claude Secret (agent-<name>-claude has a KEY=VALUE line, issue 5)
+      ansible.builtin.set_fact:
+        # secrets_mode external: agents[].own_claude says that agent-<name>-claude exists (the playbook does not read it)
+        agent_own_claude: >-
+          {{ agent_own_claude | default({}) | combine({item.name:
+             (item.own_claude | default(false) | bool) if secrets_mode == 'external'
+             else (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0)}) }}
+      loop: "{{ agents }}"
+      loop_control: {index_var: idx, label: "{{ item.name }}"}
+      no_log: true
+
+    - name: Values for the renderer (API server addresses, forge proxy credential hash)
+      ansible.builtin.set_fact:
+        kube_api_ips_read: >-
+          {{ ((kube_api.results[0].resources | default([]))[:1] | map(attribute='spec.clusterIP') | list)
+             + ((kube_api.results[1].resources | default([])) | map(attribute='subsets', default=[]) | flatten
+                | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list)
+             if kube_api.results is defined else [] }}
+        # secrets_mode external: Reloader restarts the proxy on a new credential (no hash of it in pod metadata)
+        forge_proxy_auth_sha: "{{ (forge_proxy_key.stdout | default('') | hash('sha256'))[:16] if secrets_mode == 'playbook' else 'reloader' }}"
+        setup_proxy_auth_sha: "{{ (setup_proxy_key.stdout | default('') | hash('sha256'))[:16] if secrets_mode == 'playbook' else 'reloader' }}"
+      no_log: true
+
+    # #449 review: a cluster that does not serve a CRD the values select fails here with a clear message, also under
+    # --check. This read only checks; it never selects a template (#384 criterion 3). render.yml does not run it.
+    - name: Read the CRDs the instance values need (FQDNNetworkPolicy, Gateway API)
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item.name }}"
+      loop: >-
+        {{ ([{'name': 'fqdnnetworkpolicies.networking.gke.io',
+              'why': 'platform.egress.fqdn gke. Apply infra/terraform, or set platform.egress.fqdn: none'}]
+            if deploy_fqdn == 'gke' else [])
+           + ([{'name': 'gateways.gateway.networking.k8s.io',
+                'why': 'ingress.mode gateway. Set Terraform public_hosts and apply, or use ingress.mode external'}]
+              if deploy_gateway | bool else []) }}
+      loop_control: {label: "{{ item.name }}"}
+      register: deploy_crds
+      vars:
+        deploy_fqdn: >-
+          {{ (((platform | default({})).egress | default({})).fqdn
+             | default('gke' if egress_fqdn_policy | bool else 'none')) | string }}
+        deploy_gateway: >-
+          {{ ((ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined)
+             and (ingress | default({})).mode | default('gateway') == 'gateway' }}
+
+    - name: Stop when the cluster does not serve a CRD the instance values need
+      ansible.builtin.assert:
+        that: item.resources | length > 0
+        fail_msg: "The cluster does not serve the CRD {{ item.item.name }}. It is needed by {{ item.item.why }}."
+        quiet: true
+      loop: "{{ deploy_crds.results | default([]) }}"
+      loop_control: {label: "{{ item.item.name }}"}
+
+    # one renderer for deploy.yml and render.yml (#384); the objects have no secret values, the Secrets are made below
+    - name: Render the instance objects (tasks/render_objects.yml)
+      ansible.builtin.include_tasks: tasks/render_objects.yml
+
+    - name: Namespaces
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.namespaces }}"
+      when: agentdev_objects.namespaces | length > 0
+
+    - name: RuntimeClass gvisor (GKE Sandbox ships it as gvisor already; ensure it exists)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: present
+        definition: {apiVersion: node.k8s.io/v1, kind: RuntimeClass, metadata: {name: gvisor}, handler: gvisor}
+      failed_when: false   # GKE manages this object; an existing one is fine
+
+    # claude-shared holds KEY=VALUE lines (ANTHROPIC_API_KEY=... or CLAUDE_CODE_OAUTH_TOKEN=...)
+    - name: Shared Claude credential
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: claude-shared, namespace: "{{ agents_ns }}"}
+          stringData: "{{ dict(claude_shared_env.splitlines() | select('search', '=') | map('split', '=', 1)) }}"
+      no_log: true
+      when: secrets_mode == 'playbook'
+
+    - name: Webhook router Secret (forge webhook secret, register token)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: webhook-router, namespace: "{{ agents_ns }}"}
+          stringData:
+            FORGE_SECRETS: "{{ forge_kind }}={{ forge_webhook_secret }}"
+            REGISTER_TOKEN: "{{ register_token }}"
+      no_log: true
+      when: secrets_mode == 'playbook'   # external (#381): the Secret webhook-router comes from its ExternalSecret
+
+    - name: Webhook router
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.router }}"
+      when: agentdev_objects.router | length > 0
+
+    - name: Forge sidecar egress credential Secret (password for the sidecar, header regex for Squid)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: egress-forge-proxy, namespace: "{{ agents_ns }}"}
+          stringData:
+            password: "{{ forge_proxy_key.stdout }}"
+            auth: "^Basic {{ ('forge:' ~ forge_proxy_key.stdout) | b64encode }}$"
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
+      no_log: true
+
+    - name: Toolchain setup egress credential Secret (#499; the operator copies it per agent, Squid reads the regex)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: {name: egress-setup-proxy, namespace: "{{ agents_ns }}"}
+          stringData:
+            password: "{{ setup_proxy_key.stdout }}"
+            auth: "^Basic {{ ('setup:' ~ setup_proxy_key.stdout) | b64encode }}$"
+      when: secrets_mode == 'playbook' and (not ansible_check_mode)
+      no_log: true
+
+    - name: Egress allow-list (#65) - proxy and agent NetworkPolicy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.egress }}"
+      when: agentdev_objects.egress | length > 0
+
+    # platform.egress.fqdn gke (#65, #384): Dataplane V2 enforces this on the proxy pod, so even a changed squid.conf
+    # reaches nothing else. The preflight (crds) checks that the cluster serves the type.
+    - name: "Egress proxy FQDNNetworkPolicy (GKE, #65)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.egress_fqdn }}"
+      when: platform_fqdn == 'gke'
+
+    - name: Remove the web policy of the egress proxy (the FQDN policy is on)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: absent
+        definition: {apiVersion: networking.k8s.io/v1, kind: NetworkPolicy, metadata: {name: egress-proxy-web, namespace: "{{ agents_ns }}"}}
+      when: platform_fqdn == 'gke'
+
+    - name: Egress proxy may reach any address on 80/443 (FQDN policy off; Squid alone enforces the list)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.egress_web }}"
+      when: platform_fqdn == 'none'
+
+    # registry cache (#203): gateway registry-cache and, for registry_proxy cluster, the in-cluster caches; off removes
+    # them. Before the agents: they read the ConfigMap registry-proxy at pod start.
+    - name: Registry cache for npm, PyPI and Go (#203)
+      ansible.builtin.include_role: {name: registry_cache}
+      vars:
+        registry_cache_fqdn_policy: "{{ platform_fqdn == 'gke' }}"
+
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #202, #383)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.crds }}"
+        # Agents below need the type to be served
+        wait: true
+        wait_condition: {type: Established, status: "True"}
+        wait_timeout: 60
+
+    - name: "Postgres + ContextForge, then one McpProject per project (#51, #383)"
+      ansible.builtin.include_role: {name: platform}
+
+    # authentik (#114): same chart, values and blueprints as kind.yml --tags authentik; before the API, which uses it as the issuer
+    - name: Identity provider authentik (blueprints, break-glass admin)
+      ansible.builtin.include_role: {name: authentik}
+      when: authentik_enabled | bool
+
+    # Company SSO for authentik (#122): only when instance.yml sets authentik.sso. Writes the Secret authentik-sso and
+    # restarts authentik (deployed by the role authentik above).
+    - name: Company SSO settings for authentik (Secret authentik-sso)
+      ansible.builtin.include_role: {name: authentik_sso}
+      when: ((authentik | default({})).sso | default({})) | length > 0
+
+    # Management API (#46, #104): needs an OIDC provider: api.oidc_issuer, or authentik on ingress.auth_host (#114).
+    - name: Management API (database roles, Secrets, Deployment)
+      ansible.builtin.include_role: {name: api}
+      when: api_effective_issuer | length > 0
+
+    # External Gitea (#442), opt-in: collaborators, labels, router webhook and branch protection through the Gitea API
+    # (Job forge-init-<hash>, admin token from Secret Manager through ESO). Default: secrets-only, nothing runs here.
+    - name: Optional setup of the external Gitea (forge-init Job)
+      ansible.builtin.include_tasks: tasks/forge_init.yml
+      when: forge_kind == 'gitea' and (forge_init.enabled | default(false) | bool)
+
+    # Public HTTPS entry point (#120): Gateway with the Terraform static IP and managed certificate. Only the webhook
+    # path of the router and the web UI (with its /api proxy) are public. Runs only when instance.yml sets ingress.host
+    # or ingress.mode. ingress.mode external (#160): no Gateway; your own reverse proxy publishes the hosts.
+    - name: Public entry point (Gateway, or external ingress)
+      ansible.builtin.include_role: {name: ingress}
+      when: (ingress | default({})).host | default('') | length > 0 or (ingress | default({})).mode is defined
+
+    - name: "Agent StorageClass (pd-standard, #173)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.storage_class }}"
+      when: agentdev_objects.storage_class | length > 0
+
+    - name: Agent operator (#47); it renders every agent's StatefulSet
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.operator }}"
+      when: agentdev_objects.operator | length > 0
+
+    - name: Executors namespace labels (#184)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.exec_namespace }}"
+      when: agentdev_objects.exec_namespace | length > 0
+
+    - name: Executor egress allow-list (#135) - proxy and executor NetworkPolicy
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.exec_egress }}"
+      when: agentdev_objects.exec_egress | length > 0
+
+    - name: "Executor egress proxy FQDNNetworkPolicy (GKE, #135)"
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.exec_egress_fqdn }}"
+      when: platform_fqdn == 'gke'
+
+    - name: Remove the web policy of the executor egress proxy (the FQDN policy is on)
+      kubernetes.core.k8s:
+        <<: *k8s
+        state: absent
+        definition: {apiVersion: networking.k8s.io/v1, kind: NetworkPolicy, metadata: {name: executor-egress-proxy-web, namespace: "{{ exec_ns }}"}}
+      when: platform_fqdn == 'gke'
+
+    - name: Executor egress proxy may reach any address on 80/443 (FQDN policy off)
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.exec_egress_web }}"
+      when: platform_fqdn == 'none'
 
     - name: Executor Secrets exec-<name>-forge (FORGE_TOKEN), -plan and -apply (KEY=VALUE lines)
       kubernetes.core.k8s:
@@ -481,46 +499,19 @@
       loop: "{{ exec_secrets.results | default([]) }}"
       loop_control: {label: "exec-{{ item.item.0.name }}-{{ item.item.1 }}"}
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Executor service accounts (GKE Workload Identity, read-only for plan, write for apply)
       kubernetes.core.k8s:
         <<: *k8s
-        definition:
-          apiVersion: v1
-          kind: ServiceAccount
-          metadata:
-            name: "exec-{{ item.0.name }}-{{ item.1 }}"
-            namespace: "{{ exec_ns }}"
-            annotations: "{{ {'iam.gke.io/gcp-service-account': item.0[item.1 + '_gsa']} if item.0[item.1 + '_gsa'] | default('') else {} }}"
-          automountServiceAccountToken: false
-      loop: "{{ executors | product(['plan', 'apply']) | list }}"
-      loop_control: {label: "exec-{{ item.0.name }}-{{ item.1 }}"}
+        definition: "{{ agentdev_objects.exec_service_accounts }}"
+      when: agentdev_objects.exec_service_accounts | length > 0
 
     - name: Executors (#69)
       kubernetes.core.k8s:
         <<: *k8s
-        definition:
-          apiVersion: agentdev.dev/v1alpha1
-          kind: Executor
-          metadata: {name: "{{ item.name }}", namespace: "{{ exec_ns }}"}
-          spec:
-            environment: "{{ item.environment }}"
-            repo: "{{ item.repo }}"
-            forge: "{{ forge_kind }}"
-            branch: "{{ item.branch | default('main') }}"
-            path: "{{ item.path | default('') }}"
-            image: "{{ item.image }}"
-            plan: {command: "{{ item.plan }}"}
-            apply: {command: "{{ item.apply }}"}
-            planCredentials: {secretName: "exec-{{ item.name }}-plan", serviceAccountName: "exec-{{ item.name }}-plan"}
-            applyCredentials: {secretName: "exec-{{ item.name }}-apply", serviceAccountName: "exec-{{ item.name }}-apply"}
-            forgeSecret: "exec-{{ item.name }}-forge"
-            approvalHours: "{{ item.approval_hours | default(24) | int }}"
-            allowForkPRs: "{{ item.allow_fork_prs | default(false) | bool }}"
-            egressHosts: "{{ item.egress_hosts | default([]) }}"
-      loop: "{{ executors }}"
-      loop_control: {label: "{{ item.name }}"}
-      when: not ansible_check_mode   # the Executor type is unknown before the CRD exists (as for Agents)
+        definition: "{{ agentdev_objects.executors }}"
+      when: agentdev_objects.executors | length > 0 and not ansible_check_mode   # the type is unknown before the CRD exists
 
     - name: Per-agent token Secrets (agent-<name>), read by the operator-rendered pods
       kubernetes.core.k8s:
@@ -539,25 +530,7 @@
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
       no_log: true
-
-    # Wake poll (#181): the router's read-only forge credential. GitHub: the App (the router narrows its installation
-    # tokens to read access); Gitea: the optional Secret Manager entry router-poll-forge-token (a read-only token).
-    - name: Gitea read-only token of the wake poll (optional)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if gcloud secrets describe {{ sm_router_poll_token }} --project {{ gcp_project }} >/dev/null 2>&1; then
-          gcloud secrets versions access latest --secret {{ sm_router_poll_token }} --project {{ gcp_project }}
-        fi
-      args: {executable: /bin/bash}
-      register: router_poll_token
-      changed_when: false
-      no_log: true
-      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
-
-    - name: Scale to zero on Gitea has a wake poll token or webhooks (#190)
-      ansible.builtin.include_tasks: tasks/wake_source.yml
-      vars: {wake_poll_token: "{{ router_poll_token.stdout | default('') }}"}
-      when: forge_kind == 'gitea' and (wake_poll_seconds | int) > 0
+      when: secrets_mode == 'playbook'
 
     - name: Wake poll credential (Secret webhook-router-poll, router pod only)
       kubernetes.core.k8s:
@@ -572,36 +545,7 @@
                 'github-installation-id': github_app.installation_id | default('') | string}
                if forge_kind == 'github' else {'gitea-token': router_poll_token.stdout | default('')} }}
       no_log: true
-
-    # ---------- Claude credential proxy (#66, same template as 06-agents.sh) ----------
-    - name: Claude proxy signing key (generated once, kept in Secret Manager)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        name="{{ sm_claude_proxy_signing }}"
-        if ! gcloud secrets describe "$name" --project {{ gcp_project }} >/dev/null 2>&1; then
-          gcloud secrets create "$name" --project {{ gcp_project }} --replication-policy automatic >/dev/null
-          openssl rand -hex 32 | tr -d '\n' | gcloud secrets versions add "$name" --project {{ gcp_project }} --data-file=- >/dev/null
-          echo created
-        fi
-      args: {executable: /bin/bash}
-      register: proxy_signing_created
-      changed_when: "'created' in proxy_signing_created.stdout"
-      when: claude_proxy | bool and not ansible_check_mode
-
-    - name: Claude proxy keys of the agents (HMAC of the agent name; never the credential)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        k=$(gcloud secrets versions access latest --secret {{ sm_claude_proxy_signing }} --project {{ gcp_project }})
-        for a in {{ agents | map(attribute='name') | map('quote') | join(' ') }}; do
-          [[ "$a" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]] || { echo "bad agent name" >&2; exit 1; }
-          printf '%s.%s\n' "$a" "$(printf 'agentdev-claude-proxy/v1:%s' "$a" | openssl dgst -sha256 -hmac "$k" -r | cut -d' ' -f1)"
-        done
-        printf 'SIGNING=%s\n' "$k"
-      args: {executable: /bin/bash}
-      register: proxy_keys
-      changed_when: false
-      when: claude_proxy | bool and not ansible_check_mode
-      no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Claude proxy signing Secret
       kubernetes.core.k8s:
@@ -611,7 +555,7 @@
           kind: Secret
           metadata: {name: claude-proxy-signing, namespace: "{{ agents_ns }}"}
           stringData: {key: "{{ proxy_keys.stdout_lines[-1] | regex_replace('^SIGNING=', '') }}"}
-      when: claude_proxy | bool and not ansible_check_mode
+      when: secrets_mode == 'playbook' and (claude_proxy | bool and not ansible_check_mode)
       no_log: true
 
     - name: Per-agent proxy key Secrets (agent-<name>-proxy), the only Claude-related value in an agent pod
@@ -624,75 +568,33 @@
           stringData: {ANTHROPIC_AUTH_TOKEN: "{{ item }}"}
       loop: "{{ proxy_keys.stdout_lines[:-1] if (claude_proxy | bool and not ansible_check_mode) else [] }}"
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: Claude credential proxy
       kubernetes.core.k8s:
         <<: *k8s
-        definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_proxy) | from_yaml_all | list }}"
-      vars:
-        vars_proxy:
-          src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"
-          values:
-            AGENTS_NS: "{{ agents_ns }}"
-            PLATFORM_NS: "{{ platform_ns }}"
-            CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
-            IMAGE_PULL_POLICY: IfNotPresent
-            CLAUDE_BUDGET_TOKENS: "{{ claude_budget_tokens | int }}"
-            # one optional projected Secret source per Claude Secret (same output as scripts/claude-proxy-sources.sh)
-            CLAUDE_SECRET_SOURCES: "{{ lookup('ansible.builtin.template', 'templates/claude-proxy-sources.j2') | trim }}"
-          replace: []
-      when: claude_proxy | bool
-
-    # GKE (review #119): narrow the proxy's egress to the Anthropic API by name. The plain NetworkPolicy of the
-    # template allows HTTPS to any public address; Dataplane V2 enforces this one in addition when the type is served
-    # (infra/terraform enable_fqdn_network_policy). Not served: the playbook says so and keeps the plain policy.
-    - name: Is the FQDNNetworkPolicy type served (for the Claude proxy)?
-      kubernetes.core.k8s_info:
-        <<: *k8s
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: fqdnnetworkpolicies.networking.gke.io
-      register: proxy_fqdn_crd
-      when: claude_proxy | bool
+        definition: "{{ agentdev_objects.claude_proxy }}"
+      when: agentdev_objects.claude_proxy | length > 0
 
     - name: Claude proxy FQDNNetworkPolicy (egress to api.anthropic.com only)
       kubernetes.core.k8s:
         <<: *k8s
-        definition:
-          apiVersion: networking.gke.io/v1alpha1
-          kind: FQDNNetworkPolicy
-          metadata: {name: claude-proxy, namespace: "{{ agents_ns }}"}
-          spec:
-            podSelector: {matchLabels: {app: claude-proxy}}
-            egress:
-              - matches: [{name: "{{ claude_proxy_upstream_host }}"}]
-                ports: [{protocol: TCP, port: 443}]
-      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length > 0)
+        definition: "{{ agentdev_objects.claude_proxy_fqdn }}"
+      when: agentdev_objects.claude_proxy_fqdn | length > 0
 
-    - name: Claude proxy egress is not narrowed by name (FQDNNetworkPolicy not served)
+    - name: Claude proxy egress is not narrowed by name (platform.egress.fqdn none)
       ansible.builtin.debug:
-        msg: "FQDNNetworkPolicy is not available: claude-proxy may reach any public address on 443 (docs/security.md R63)"
-      when: claude_proxy | bool and (proxy_fqdn_crd.resources | default([]) | length == 0)
+        msg: "FQDNNetworkPolicy is off: claude-proxy may reach any public address on 443 (docs/security.md R63)"
+      when: claude_proxy | bool and platform_fqdn != 'gke'
 
+    # blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0
     - name: "Agents (#57): one Agent object each; own Claude secret if present, else the shared one (#5)"
       kubernetes.core.k8s:
         <<: *k8s
-        # blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0
-        definition:
-          apiVersion: agentdev.dev/v1alpha1
-          kind: Agent
-          metadata: {name: "{{ item.name }}", namespace: "{{ agents_ns }}"}
-          spec:
-            repo: "{{ item.repos }}"
-            forge: "{{ forge_kind }}"
-            claudeSecret: "{{ ('claude-' + item.name) if (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list) else 'claude-shared' }}"
-            maxConcurrent: "{{ (item.max_concurrent | default(max_concurrent)) | int }}"
-            scaleToZero: "{{ (item.scale_to_zero | default(scale_to_zero)) | bool }}"
-      loop: "{{ agents }}"
-      loop_control: {index_var: idx, label: "{{ item.name }}"}
-      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below
-      when: not ansible_check_mode
-      no_log: true
+        definition: "{{ agentdev_objects.agents }}"
+      # --check does not create the CRD, so on a first run the Agent type is unknown: skip, like the wait below.
+      # agents_source git (#58): Flux applies the Agent objects from the deployment repository, not the playbook
+      when: not ansible_check_mode and (agents_source | default('api')) == 'api'
 
     - name: Per-agent Claude secrets (only agents that have one)
       kubernetes.core.k8s:
@@ -704,13 +606,13 @@
           stringData: "{{ dict(agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | map('split', '=', 1)) }}"
       loop: "{{ agents }}"
       loop_control: {index_var: idx, label: "{{ item.name }}"}
-      when: agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0
+      when: secrets_mode == 'playbook' and (agent_secrets.results[idx].stdout_lines[2:] | select('search', '=') | list | length > 0)
       no_log: true
 
     # SIEM outputs (#70, #71): non-secret settings from instance.yml security.siem.*, secret values (webhook secret,
     # OTLP headers, CA, client certificate and key) as KEY=VALUE lines in the optional Secret Manager secret
     # sm_security_siem. Both go into the Secret agentdev-api-siem that the API reads (manifests/api.yaml.tmpl); same
-    # keys as .secrets/platform/siem-webhook on kind (10-api.sh). The role api reads it (#104).
+    # keys as .secrets/platform/siem-webhook on kind (kind.yml tag api). The role api reads it (#104).
     - name: Read the SIEM output secrets (optional)
       ansible.builtin.shell: |
         if gcloud secrets describe {{ sm_security_siem }} --project {{ gcp_project }} >/dev/null 2>&1; then
@@ -719,6 +621,7 @@
       register: siem_secret
       changed_when: false
       no_log: true
+      when: secrets_mode == 'playbook'
 
     - name: SIEM outputs Secret agentdev-api-siem
       vars:
@@ -738,10 +641,10 @@
           stringData: >-
             {{ siem_env | dict2items | rejectattr('value', 'equalto', '') | items2dict
                | combine(dict(siem_secret.stdout_lines | select('search', '=') | map('split', '=', 1))) }}
-      when: (security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0
+      when: secrets_mode == 'playbook' and ((security.siem | default({})) | length > 0 or siem_secret.stdout | length > 0)
       no_log: true
 
-    # same checks as run.sh 06 and 12 (rollout status): a Deployment that does not become ready fails the run (#121)
+    # same checks as kind.yml --tags agents,operator (rollout status): a Deployment that does not become ready fails the run (#121)
     - name: Wait for the operator, router, egress proxies and Claude proxy
       ansible.builtin.command: >-
         kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
@@ -752,7 +655,7 @@
       changed_when: false
       when: not ansible_check_mode
 
-    - name: Wait for the router and agents
+    - name: Wait for the router
       kubernetes.core.k8s_info:
         <<: *k8s
         kind: Pod
@@ -760,8 +663,22 @@
         wait: true
         wait_condition: {type: Ready, status: "True"}
         wait_timeout: 600
-        label_selectors: ["{{ item }}"]
-      loop: ["app=webhook-router", "app=coding-agent"]
+        label_selectors: ["app=webhook-router"]
+      when: not ansible_check_mode
+
+    # only agents with replicas above 0: stopped agents (scale to zero) have no pod to wait for (#491)
+    - name: Read the agent StatefulSets
+      kubernetes.core.k8s_info:
+        <<: *k8s
+        kind: StatefulSet
+        namespace: "{{ agents_ns }}"
+        label_selectors: ["app=coding-agent"]
+      register: agent_statefulsets
+      when: not ansible_check_mode
+
+    - name: Wait for the running agents
+      ansible.builtin.include_tasks: tasks/agent_pods_wait.yml
+      vars: {agent_pods_wait_statefulsets: "{{ agent_statefulsets.resources }}"}
       when: not ansible_check_mode
 
     # post-deploy smoke test (#213): the public hosts answer from outside and the forwarder is Ready. Last, after the

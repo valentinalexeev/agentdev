@@ -1,0 +1,305 @@
+---
+# Test of the render mode (#384): ansible-playbook infra/ansible/tests/render_mode.yml (no cluster, no gcloud).
+# Renders the example instance with the FQDN policy (gke) and without it (none), with the Gateway, and checks that the
+# output has no Secret, the right groups, and that a bad value is refused before anything is written.
+- name: Render mode
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}"
+  tasks:
+    - name: Remove old output
+      ansible.builtin.file: {path: "{{ out }}", state: absent}
+
+    - name: Render with the FQDN policy and the Gateway
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/gke", -e, '{"mcp_projects": ["{{ playbook_dir }}/files/render_mcp_project.yml"]}']
+      changed_when: false
+
+    - name: Render without the FQDN policy
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/none", -e, '{"platform": {"egress": {"fqdn": "none"}, "ingress": {"gateway_api": true},
+               "kube_api_ips": ["10.30.0.1"]}}']
+      changed_when: false
+
+    - name: Read the output
+      ansible.builtin.find: {paths: "{{ out }}/{{ item }}", patterns: "*.yaml"}
+      loop: [gke, none]
+      register: files
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        docs: >-
+          {{ docs | default({}) | combine({item.item: item.files | map(attribute='path') | sort
+             | map('ansible.builtin.extract', texts) | map('from_yaml_all') | map('list') | flatten}) }}
+      loop: "{{ files.results }}"
+      loop_control: {label: "{{ item.item }}"}
+      vars:
+        texts: "{{ dict(item.files | map(attribute='path') | zip(query('ansible.builtin.file', *(item.files | map(attribute='path'))))) }}"
+
+    - name: Check the output
+      ansible.builtin.assert:
+        that:
+          - docs.gke | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.none | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | map(attribute='metadata.name') | sort
+            == ['claude-proxy', 'egress-proxy', 'executor-egress-proxy']
+          - docs.none | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | list | length == 0
+          - docs.none | selectattr('metadata.name', 'equalto', 'egress-proxy-web') | list | length == 1
+          - docs.none | selectattr('metadata.name', 'equalto', 'executor-egress-proxy-web') | list | length == 1
+          - docs.gke | selectattr('metadata.name', 'equalto', 'egress-proxy-web') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'Gateway') | list | length == 1
+          - docs.gke | selectattr('kind', 'equalto', 'Agent') | map(attribute='spec.claudeSecret') | list == ['claude-shared', 'claude-bob']
+          - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
+          # the CRD refuses an empty path, so an executor without executors[].path has no path key
+          - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='spec') | selectattr('path', 'defined') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 8   # 7 of the operator + NotificationChannel (role api)
+          # #447: platform, authentik (helm template), API, UI, NotificationChannel and the database Job
+          - docs.gke | selectattr('kind', 'equalto', 'StatefulSet') | map(attribute='metadata.name') | list == ['platform-db']
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.name') | select('match', '^authentik-')
+            | list | length == 2
+          - docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'in', ['agentdev-api', 'agentdev-ui'])
+            | list | length == 2
+          # #451 review: the Jobs of tasks/db_init_render.yml (#382), each with its ConfigMap
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='metadata.name') | map('regex_replace', '-[0-9a-f]{10}$', '')
+            | sort | list == ['agentdev-db-init', 'authentik-breakglass', 'authentik-db-init']
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.labels', 'defined')
+            | selectattr('metadata.labels', 'contains', 'agentdev/db-init') | list | length == 3
+          # the API waits for SCHEMA_VERSION (#382): the Job must write it
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | selectattr('metadata.name', 'match', '^agentdev-db-init-')
+            | map(attribute='spec.template.spec.containers') | flatten | map(attribute='env') | flatten
+            | selectattr('name', 'equalto', 'SCHEMA_VERSION') | map(attribute='value') | select('match', '^[0-9a-f]{16}$')
+            | list | length == 1
+          # no secret values: every env of a db Job is a plain non-secret value or a secretKeyRef
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Job') | map(attribute='spec.template.spec.containers') | flatten
+            | map(attribute='env') | flatten | selectattr('value', 'defined') | map(attribute='name')
+            | reject('in', ['SCHEMA_VERSION', 'AUTHENTIK_POSTGRESQL__PORT']) | list | length == 0
+          # no shell-expanded password in a script (the #451 db-setup did ALTER ROLE ... PASSWORD '$VAR')
+          - (docs.gke | to_json) is not search("PASSWORD '\$")
+          - docs.gke | selectattr('kind', 'equalto', 'NotificationChannel') | list | length == 1
+          # #383: one McpProject per spec, the same object as roles/platform/tasks/main.yml
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'McpProject') | map(attribute='metadata.name') | list == ['demo']
+          - >-
+            (docs.gke | selectattr('kind', 'equalto', 'McpProject') | first).spec
+            == {'servers': [{'name': 'docs', 'url': 'https://mcp.example.com/sse'}], 'agents': ['alice']}
+          - docs.none | selectattr('kind', 'equalto', 'McpProject') | list | length == 0
+          # #451 review: restarts on a config change (Reloader annotation, render-time config hash)
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='metadata.annotations') | map('to_json')
+            | select('search', '"secret.reloader.stakater.com/reload": "authentik,authentik-sso"') | list | length == 2
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'match', '^authentik-')
+            | map(attribute='spec.template.metadata.annotations') | map(attribute='agentdev/config-hash')
+            | select('match', '^[0-9a-f]{16}$') | list | length == 2
+          - docs.gke | selectattr('metadata.annotations', 'defined') | map(attribute='metadata.annotations') | select
+            | map('dict2items') | flatten | selectattr('key', 'search', 'helm.sh/hook') | list | length == 0
+          - "'rendered-without-secret' not in (docs.gke | to_json)"
+          - (files.results[0].files | map(attribute='path') | map('basename') | sort | first) == '00-namespaces.yaml'
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agent-alice-proxy')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('claude-bob')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('exec-tf-prod-forge')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-platform \\| platform-db')
+          - lookup('ansible.builtin.file', out ~ '/gke/SECRETS.md') is search('agentdev-api-vapid')
+          # the Claude proxy NetworkPolicy names the API server from platform.kube_api_ips
+          - >-
+            docs.gke | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'claude-proxy')
+            | map(attribute='spec.egress') | flatten | map(attribute='to', default=[]) | flatten
+            | selectattr('ipBlock', 'defined') | map(attribute='ipBlock.cidr') | select('in', ['10.30.0.1/32', '172.16.0.2/32'])
+            | list | length == 2
+        quiet: true
+
+    # #457: secrets_mode playbook writes no ESO object (SECRETS.md lists the Secrets)
+    - name: Playbook mode has no ESO object
+      ansible.builtin.assert:
+        that:
+          - docs.gke | selectattr('apiVersion', 'match', '^external-secrets[.]io/') | list | length == 0
+          - docs.gke | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | map(attribute='metadata.name')
+            | select('in', secrets_policies) | list | length == 0
+        quiet: true
+      vars:
+        secrets_policies: [agentdev-platform-externalsecret-agents, agentdev-projectsecret-externalsecret,
+                           agentdev-projectsecret-synced, agentdev-secretstores]
+
+    - name: A bad value is refused before anything is written
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/bad", -e, '{"agentdev_labels": {"environment": "Prod"}}']
+      register: bad
+      changed_when: false
+      failed_when: bad.rc == 0
+
+    - name: A Gateway without the Gateway API is refused
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/nogw", -e, '{"platform": {"egress": {"fqdn": "gke"}, "ingress": {"gateway_api": false},
+               "kube_api_ips": ["10.30.0.1"]}}']
+      register: nogw
+      changed_when: false
+      failed_when: nogw.rc == 0 or 'gateway_api' not in nogw.stdout
+
+    - name: No output for refused values
+      ansible.builtin.stat: {path: "{{ out }}/{{ item }}"}
+      loop: [bad, nogw]
+      register: refused
+      failed_when: refused.stat.exists
+
+# #457: secrets_mode external. The output has the SecretStores, the CEL policies and the ExternalSecrets that deploy.yml
+# and the roles apply (the same spec templates), and no SECRETS.md. Valid for kubeconform, clean for gitleaks.
+- name: Render mode with secrets_mode external
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}"
+    kubeconform_image: ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+    gitleaks_image: zricethezav/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
+    sso: {kind: oidc, admin_group: admins, allowed_domains: [example.com], oidc_client_id: cid,
+          oidc_authorize_url: "https://idp.example.com/a", oidc_token_url: "https://idp.example.com/t",
+          oidc_userinfo_url: "https://idp.example.com/u"}
+    # GitHub with company SSO; Gitea with forge-init (#442) and a deployed forwarder (#316)
+    cases:
+      ext: {external_secrets: {mode: external}, authentik: {sso: "{{ sso }}"}}
+      gitea:
+        external_secrets: {mode: external}
+        forge_kind: gitea
+        forge_url: https://gitea.example.com
+        forge_init: {enabled: true}
+        ingress:
+          host: agentdev.example.com
+          webhook_host: hooks.example.com
+          auth_host: auth.example.com
+          certificate: agentdev-public
+          forwarder:
+            namespace: funnel
+            pod_selector: {app: funnel}
+            deploy: {image: "ghcr.io/example/funnel:1.0.0", control_url: "https://control.example.com",
+                     services: ["webhook-router.coding-agents.svc.cluster.local:8080"]}
+  tasks:
+    - name: Render with secrets_mode external
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/{{ item.key }}", -e, "{{ item.value | to_json }}"]
+      changed_when: false
+      loop: "{{ cases | dict2items }}"
+      loop_control: {label: "{{ item.key }}"}
+
+    - name: Read the output
+      ansible.builtin.find: {paths: "{{ out }}/{{ item }}", patterns: "*.yaml"}
+      loop: [ext, gitea]
+      register: files
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        docs: >-
+          {{ docs | default({}) | combine({item.item: item.files | map(attribute='path') | sort
+             | map('ansible.builtin.extract', texts) | map('from_yaml_all') | map('list') | flatten}) }}
+      loop: "{{ files.results }}"
+      loop_control: {label: "{{ item.item }}"}
+      vars:
+        texts: "{{ dict(item.files | map(attribute='path') | zip(query('ansible.builtin.file', *(item.files | map(attribute='path'))))) }}"
+
+    - name: Check the ESO objects
+      vars:
+        es: "{{ docs.ext | selectattr('kind', 'equalto', 'ExternalSecret') | list }}"
+        es_gitea: "{{ docs.gitea | selectattr('kind', 'equalto', 'ExternalSecret') | list }}"
+        all_es: "{{ es + es_gitea }}"
+        stores: "{{ docs.ext | selectattr('kind', 'equalto', 'SecretStore') | list }}"
+        eso_sso: !unsafe '{{ .sso }}'  # noqa: jinja[invalid]
+      ansible.builtin.assert:
+        that:
+          - docs.ext | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.gitea | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          # the names of deploy.yml (templates/externalsecrets-agents.j2) and of the roles platform, authentik,
+          # authentik_sso and api (their templates/externalsecrets.j2 and tasks/main.yml)
+          - >-
+            es | map(attribute='metadata.name') | sort == (['claude-shared', 'claude-bob', 'webhook-router', 'webhook-router-poll',
+            'egress-forge-proxy', 'egress-setup-proxy', 'claude-proxy-signing', 'agent-alice', 'agent-bob', 'exec-tf-prod-forge', 'exec-tf-prod-plan',
+            'exec-tf-prod-apply', 'platform-db', 'authentik', 'authentik-sso', 'agentdev-api-db', 'agentdev-api-forge',
+            'agentdev-api-github', 'agentdev-api-siem', 'agentdev-api-vapid'] | sort)
+          - es | selectattr('metadata.namespace', 'equalto', 'coding-agents') | map(attribute='metadata.name') | sort
+            == ['agent-alice', 'agent-bob', 'claude-bob', 'claude-proxy-signing', 'claude-shared', 'egress-forge-proxy',
+                'egress-setup-proxy', 'webhook-router', 'webhook-router-poll']
+          # every ExternalSecret uses the platform store of its own namespace, never a value in the spec
+          - all_es | map(attribute='spec.secretStoreRef.name') | unique == ['agentdev-platform-secrets']
+          - all_es | map(attribute='spec.data') | flatten | rejectattr('remoteRef.key', 'defined') | list | length == 0
+          - es | selectattr('metadata.namespace', 'equalto', 'coding-agents') | map(attribute='spec.data') | flatten
+            | map(attribute='remoteRef.key') | select('match', '^platform-') | list | length == 0
+          - >-
+            (es | selectattr('metadata.name', 'equalto', 'authentik-sso') | first).spec.target.template.data.AGENTDEV_SSO_OIDC_CLIENT_SECRET
+            == eso_sso
+          # one store per namespace (platform, agents, executors), with its Google service account
+          - stores | map(attribute='metadata.namespace') | sort == ['agentdev-executors', 'agentdev-platform', 'coding-agents']
+          - stores | map(attribute='metadata.name') | unique == ['agentdev-platform-secrets']
+          - >-
+            docs.ext | selectattr('kind', 'equalto', 'ServiceAccount') | selectattr('metadata.name', 'equalto', 'agentdev-platform-secrets')
+            | map(attribute='metadata.annotations') | map('dict2items') | flatten
+            | selectattr('key', 'equalto', 'iam.gke.io/gcp-service-account') | map(attribute='value') | sort
+            == ['agentdev-sm-agents@my-agentdev.iam.gserviceaccount.com', 'agentdev-sm-executors@my-agentdev.iam.gserviceaccount.com',
+                'agentdev-sm-platform@my-agentdev.iam.gserviceaccount.com']
+          - docs.ext | selectattr('kind', 'equalto', 'ValidatingAdmissionPolicy') | map(attribute='metadata.name')
+            | select('in', ['agentdev-platform-externalsecret-agents', 'agentdev-projectsecret-externalsecret',
+                            'agentdev-projectsecret-synced', 'agentdev-secretstores']) | list | length == 4
+          # Gitea: forge-init (#442) and the deployed forwarder's key, each with the store of its namespace
+          - es_gitea | selectattr('metadata.name', 'in', ['forge-init', 'funnel-sidecar']) | map(attribute='metadata.namespace') | sort
+            == ['agentdev-platform', 'funnel']
+          - docs.gitea | selectattr('kind', 'equalto', 'SecretStore') | map(attribute='metadata.namespace')
+            | select('equalto', 'funnel') | list | length == 1
+          - docs.gitea | selectattr('kind', 'equalto', 'Job') | map(attribute='metadata.name')
+            | select('match', '^forge-init-[0-9a-f]{10}$') | list | length == 1
+          # the stores and ExternalSecrets come after every namespace and CRD group (apply order)
+          - (files.results[0].files | map(attribute='path') | map('basename') | sort | last) is search('externalsecrets')
+          - "'rendered-without-secret' not in (docs.ext | to_json)"
+        quiet: true
+
+    - name: No SECRETS.md in external mode (the ExternalSecrets make the Secrets)
+      ansible.builtin.stat: {path: "{{ out }}/{{ item }}/SECRETS.md"}
+      loop: [ext, gitea]
+      register: secrets_md
+      failed_when: secrets_md.stat.exists
+
+    - name: Kubeconform (strict; CRD types without a schema are skipped)
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}/{{ item }}:/w:ro", "{{ kubeconform_image }}", -strict, -summary, -ignore-missing-schemas, /w]
+      changed_when: false
+      loop: [ext, gitea]
+
+    - name: Gitleaks finds no secret in the output
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}/{{ item }}:/w:ro", "{{ gitleaks_image }}", dir, /w, --no-banner, --exit-code, "1"]
+      changed_when: false
+      loop: [ext, gitea]
+
+# acceptance criterion 1 of #384: the render output of examples/deployment/gcp-gke passes kubeconform and gitleaks.
+# Both from pinned container images (the kubeconform image is the one of .github/workflows/ci.yml).
+- name: The example deployment renders to valid manifests without secrets
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}/example"
+    example: "{{ playbook_dir }}/../../../examples/deployment/gcp-gke/ansible/instance.yml.example"
+    kubeconform_image: ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+    gitleaks_image: zricethezav/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
+  tasks:
+    - name: Render the example instance (with the values of `terraform output platform`)
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ example }}", -e, "render_dir={{ out }}",
+               -e, '{"platform": {"egress": {"fqdn": "gke"}, "ingress": {"gateway_api": true}, "kube_api_ips": ["10.30.0.1"]},
+               "approvals": {"enabled": false}}']
+      changed_when: false
+
+    - name: Kubeconform (strict; CRD types without a schema are skipped)
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}:/w:ro", "{{ kubeconform_image }}", -strict, -summary, -ignore-missing-schemas, /w]
+      changed_when: false
+
+    - name: Gitleaks finds no secret in the output
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}:/w:ro", "{{ gitleaks_image }}", dir, /w, --no-banner, --exit-code, "1"]
+      changed_when: false
