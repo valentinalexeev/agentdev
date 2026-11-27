@@ -134,7 +134,9 @@ func TestChatStartModel(t *testing.T) {
 	}
 	// the allow-list and the multipliers for the cost hint
 	old := modelPrices
-	modelPrices = func(context.Context) map[string]float64 { return map[string]float64{"claude-opus": 1.67, "claude-sonnet": 1} }
+	modelPrices = func(context.Context) map[string]float64 {
+		return map[string]float64{"claude-opus": 1.67, "claude-sonnet": 1}
+	}
 	t.Cleanup(func() { modelPrices = old })
 	w := e.call("GET", "/api/sessions", "reader", "")
 	if !strings.Contains(w.Body.String(), `"options":{"models":["opus","haiku"],"efforts":["low"],"multipliers":{"claude-opus":1.67,"claude-sonnet":1}}`) {
@@ -229,3 +231,23 @@ func jsonText(v any) string {
 	return string(b)
 }
 
+// #570: the chat allow-list takes only model names of the price families and known effort levels.
+func TestChatChoiceRules(t *testing.T) {
+	for _, ok := range []string{"opus", "sonnet[1m]", "claude-haiku-5-5", "fable"} {
+		if !modelChoiceOK(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", "sonet", "gpt-5", "--verbose", "Opus", "opus --effort max", "claude-opus-" + strings.Repeat("a", 80)} {
+		if modelChoiceOK(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	t.Setenv("CHAT_X", " sonnet, haiku ,sonnet,,")
+	if got := envChoices("CHAT_X", modelChoiceOK); strings.Join(got, ",") != "sonnet,haiku" {
+		t.Errorf("envChoices = %v", got)
+	}
+	if effortChoiceOK("ultra") || !effortChoiceOK("xhigh") {
+		t.Error("effort rules")
+	}
+}

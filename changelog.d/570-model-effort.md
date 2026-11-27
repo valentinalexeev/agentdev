@@ -1,29 +1,37 @@
 ---
 issue: 570
-type: fix
+type: feature
 section: Added
-status: in-progress
+status: done
 breaking: false
-title: Per-agent Claude model and effort, and a model and effort choice for chat sessions
-components: [operator, worker, api, credproxy, ansible]
+title: Model and effort choice for chat sessions; spec.model limited to the claude-proxy price families
+components: [operator, worker, api, ui, credproxy, ansible]
 pr: 576
 ---
 ## Summary
 
-`Agent` has `spec.model` (an alias or a full name of a `claude-proxy` price family) and `spec.effort` (`low` to `max`).
-Agent runs and chat sessions start Claude Code with `--model` and `--effort`; unset keeps today's behaviour. Set them
-with `agents[].model` and `agents[].effort` (GKE) or `kind_agents_model` and `kind_agents_effort` (kind). A chat
-session can change them with `POST /api/sessions/{id}/settings`. Docs: `docs/admin.md`, "Set the model and effort of
-an agent".
+A chat session starts with the agent's `spec.model` and `spec.effort`. A person with write access can choose another
+model or effort on **Start session** or in the session header, from the agent's own values and the instance allow-list
+`api.chat.models`, `api.chat.efforts` (`CHAT_MODELS`, `CHAT_EFFORTS`). The menus show the `claude-proxy` multiplier
+as a cost hint. `spec.model` now accepts only `opus`, `sonnet`, `haiku`, `fable` or `claude-<family>-...` (optional
+`[1m]`). The agent drawer shows the values; each change is an audit entry. Docs: `docs/admin.md`, "Set the model and
+effort of an agent".
+
+## Upgrade
+
+1. The `Agent` CRD changes: `spec.model` has a stricter pattern and a maximum length of 80 (was 100). Apply the new
+   CRD with the operator (`deploy.yml` does it). Run
+   `kubectl get agents -A -o custom-columns=NAME:.metadata.name,MODEL:.spec.model` first: an agent with a model
+   outside the families (for example another vendor's name) gets the phase `invalid` until you fix `claude_model`,
+   `agents[].model` or `kind_agents_model`, and the API server refuses new writes of that value.
+2. Optional: set `api.chat.models` and `api.chat.efforts` in `ansible/instance.yml` to allow other values in chat.
+   An invalid entry stops the Ansible run and the API (fail closed).
 
 ## Description
 
-The operator refuses an unknown model or effort (phase `invalid`), so a typo never counts at the highest multiplier;
-the worker drops a value outside the rules. An agent without the fields gets no new environment, so its pod is not
-restarted on upgrade. Each change of `spec.model` or `spec.effort` makes one audit entry, action `model`. The chat
-server sends `set_model` and `apply_flag_settings` (`effortLevel`) to Claude and records a `settings` event when
-Claude answers.
-
-Not yet done: the model and effort picker in the console (thread header and **Start session**), reading the chat
-allow-list `CHAT_MODELS` and `CHAT_EFFORTS` from the API environment, and a check of the control requests against the
-pinned Claude Code version on a live cluster.
+Built on #564 (`AGENT_MODEL`, `AGENT_EFFORT`). The chat session server reads the same variables; the API sets them on
+the session's chat container only from the allow-list, and the admission policy for session Jobs still admits the
+pod (test `TestChatPodModelEnv`). The server sends `set_model` and `apply_flag_settings` (`effortLevel`) to Claude and
+records a `settings` event when Claude answers. The proxy's `/status` adds `models` (multiplier by prefix) for the
+cost hint; budgets and counting are unchanged. Not checked yet: the control requests against the pinned Claude Code
+version on a live cluster.
