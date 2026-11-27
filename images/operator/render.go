@@ -172,7 +172,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), modelEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...)...),
+		), append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...)...),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
@@ -236,39 +236,6 @@ func (d Defaults) qty(v, def string) resource.Quantity {
 	return resource.MustParse(def)
 }
 
-// modelRe and efforts: spec.model and spec.effort, as the CRD rules (#570). A model is an alias or a full name of a
-// family that the claude-proxy price table knows (images/credproxy/prices.go), so the cost units of a run never fall
-// back to the highest multiplier through a typo.
-var (
-	modelRe = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$`)
-	efforts = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
-)
-
-// modelValid is the operator's check behind the CRD rules (#570): "" when spec.model and spec.effort are unset or valid.
-func modelValid(a *v1.Agent) string {
-	if m := a.Spec.Model; m != "" && (len(m) > 80 || !modelRe.MatchString(m)) {
-		return fmt.Sprintf("spec.model: %q is not opus, sonnet, haiku, fable or a claude-<family>-... name", m)
-	}
-	if e := a.Spec.Effort; e != "" && !efforts[e] {
-		return fmt.Sprintf("spec.effort: %q is not low, medium, high, xhigh or max", e)
-	}
-	return ""
-}
-
-// modelEnv passes spec.model and spec.effort to the worker (#570) as CLAUDE_MODEL and CLAUDE_EFFORT; agent-loop passes
-// them as --model and --effort, and a chat session (the same pod spec) starts with them. Nothing when unset, so the pod
-// template of an agent without the fields is unchanged (no restart on upgrade).
-func modelEnv(a *v1.Agent) []corev1.EnvVar {
-	var out []corev1.EnvVar
-	if a.Spec.Model != "" {
-		out = append(out, corev1.EnvVar{Name: "CLAUDE_MODEL", Value: a.Spec.Model})
-	}
-	if a.Spec.Effort != "" {
-		out = append(out, corev1.EnvVar{Name: "CLAUDE_EFFORT", Value: a.Spec.Effort})
-	}
-	return out
-}
-
 // ruleChars: one rule of spec.permission.autoMode, as the CRD pattern (#500): no control characters.
 var ruleChars = regexp.MustCompile(`^[^\x00-\x1f\x7f]+$`)
 
@@ -320,6 +287,64 @@ func toolsValid(a *v1.Agent) string {
 		}
 	}
 	return ""
+}
+
+// modelChars: spec.model, as the CRD pattern (#564, #570): an alias (opus, sonnet, haiku, fable) or a full name of one
+// of these claude-proxy price families (images/credproxy/prices.go), optionally with the context suffix [1m]. A typo
+// is refused instead of counted at the highest multiplier, and the value never starts with a dash (never a flag).
+var modelChars = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`)
+
+// effortLevels: the levels of `claude --effort` in the pinned Claude Code CLI (#564), as the CRD enum.
+var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
+// modelValid is the operator's check behind the CRD rules (#564): "" when spec.model and spec.effort are unset or valid.
+func modelValid(a *v1.Agent) string {
+	if m := a.Spec.Model; m != "" && (len(m) > 80 || !modelChars.MatchString(m)) {
+		return "spec.model: longer than 80, or not opus, sonnet, haiku, fable or a claude-<family>-... name (optional [1m])"
+	}
+	if e := a.Spec.Effort; e != "" && !effortLevels[e] {
+		return "spec.effort: not one of low, medium, high, xhigh, max"
+	}
+	return ""
+}
+
+// modelEnv passes spec.model and spec.effort to the worker (#564) as AGENT_MODEL and AGENT_EFFORT, which become
+// `claude --model` and `--effort`. Nothing when unset (the CLI's own default), so the pod template of an agent without
+// the fields is unchanged (no restart on upgrade).
+func modelEnv(a *v1.Agent) []corev1.EnvVar {
+	var e []corev1.EnvVar
+	if a.Spec.Model != "" {
+		e = append(e, corev1.EnvVar{Name: "AGENT_MODEL", Value: a.Spec.Model})
+	}
+	if a.Spec.Effort != "" {
+		e = append(e, corev1.EnvVar{Name: "AGENT_EFFORT", Value: a.Spec.Effort})
+	}
+	return e
+}
+
+// diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
+// the resource samples of each run. Nothing when off (the default), so the pod template of an agent without the field
+// is unchanged (no restart on upgrade) and the worker adds no load.
+func diagnosticsEnv(a *v1.Agent) []corev1.EnvVar {
+	d := a.Spec.Diagnostics
+	if d == nil || !d.Resources {
+		return nil
+	}
+	e := []corev1.EnvVar{{Name: "DIAG_RESOURCES", Value: "true"}}
+	if d.IntervalSeconds >= 5 && d.IntervalSeconds <= 3600 {
+		e = append(e, corev1.EnvVar{Name: "DIAG_INTERVAL_SECONDS", Value: strconv.Itoa(int(d.IntervalSeconds))})
+	}
+	return e
+}
+
+// retriesEnv passes spec.retries.infrastructure to the worker (#593) as INFRA_RETRIES. Nothing when unset or at the
+// default (2), so the pod template of an agent without the field is unchanged (no restart on upgrade).
+func retriesEnv(a *v1.Agent) []corev1.EnvVar {
+	n := infraRetries(a)
+	if n == defaultInfraRetries {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "INFRA_RETRIES", Value: strconv.Itoa(n)}}
 }
 
 // toolsEnv passes spec.tools.allow to the worker (#496, ADR 0010 D1) as CLAUDE_TOOLS_EXTRA, comma-joined; the worker

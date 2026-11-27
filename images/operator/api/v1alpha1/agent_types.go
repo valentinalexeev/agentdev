@@ -47,17 +47,17 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Maximum=500
 	// +optional
 	MaxTurns int32 `json:"maxTurns,omitempty"`
-	// Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #570): an alias (opus,
-	// sonnet, haiku, fable) or a full name of one of these families, so the claude-proxy price table always has a
-	// multiplier for it. Unset: the default of Claude Code.
+	// Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #564, #570): an alias
+	// (opus, sonnet, haiku, fable) or a full name of one of these families such as "claude-opus-5-5", optionally with
+	// the context suffix "[1m]", so the claude-proxy price table always has a multiplier for it. Unset: the Claude
+	// Code CLI's own default for the credential, as before.
+	// +optional
 	// +kubebuilder:validation:MaxLength=80
-	// +kubebuilder:validation:Pattern=`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$`
-	// +optional
+	// +kubebuilder:validation:Pattern=`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`
 	Model string `json:"model,omitempty"`
-	// Effort level of the agent's runs and the default of its chat sessions (`claude --effort`, #570). Unset: the
-	// default of Claude Code.
-	// +kubebuilder:validation:Enum=low;medium;high;xhigh;max
+	// Reasoning effort of the agent's runs (`claude --effort`, #564). Unset: the CLI's own default, as before.
 	// +optional
+	// +kubebuilder:validation:Enum=low;medium;high;xhigh;max
 	Effort string `json:"effort,omitempty"`
 	// How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
 	// approvals).
@@ -70,6 +70,12 @@ type AgentSpec struct {
 	// read-only to the agent. Unset: none, and the pod is as before.
 	// +optional
 	Toolchain *AgentToolchain `json:"toolchain,omitempty"`
+	// Diagnostics of the agent's jobs (#588). Unset: none, and the pod is as before.
+	// +optional
+	Diagnostics *AgentDiagnostics `json:"diagnostics,omitempty"`
+	// Retries of a job that the infrastructure stopped (#593). Unset: the defaults, and the pod is as before.
+	// +optional
+	Retries *AgentRetries `json:"retries,omitempty"`
 	// Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
 	// Default true (#181): an Agent without the field scales to zero; set false to keep it running.
 	// +kubebuilder:default=true
@@ -78,6 +84,33 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentDiagnostics turns on extra records of the agent's jobs (#588). Default off: no extra load.
+type AgentDiagnostics struct {
+	// Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+	// container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+	// a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+	// values show as n/a.
+	// +optional
+	Resources bool `json:"resources,omitempty"`
+	// Seconds between two samples. Default 60.
+	// +optional
+	// +kubebuilder:validation:Minimum=5
+	// +kubebuilder:validation:Maximum=3600
+	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
+}
+
+// AgentRetries bounds how often a job is run again after an interruption (#593).
+type AgentRetries struct {
+	// How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+	// preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+	// deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+	// +optional
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	Infrastructure *int32 `json:"infrastructure,omitempty"`
 }
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).

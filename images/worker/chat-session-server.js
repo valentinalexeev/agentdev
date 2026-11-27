@@ -89,17 +89,17 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,99}$/;
 
 // #570: the model and effort forms, as the operator's rules (images/operator/render.go modelValid): an alias or a full
 // name of a claude-proxy price family, and the effort levels of Claude Code.
-const MODEL_RE = /^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)$/;
+const MODEL_RE = /^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$/;
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 function modelOK(m) { return typeof m === 'string' && m.length <= 80 && MODEL_RE.test(m); }
 function effortOK(e) { return typeof e === 'string' && EFFORTS.includes(e); }
 
-// startSettings reads CLAUDE_MODEL and CLAUDE_EFFORT (the agent's spec.model and spec.effort, or the choice at the
+// startSettings reads AGENT_MODEL and AGENT_EFFORT (the agent's spec.model and spec.effort, or the choice at the
 // start of the session, set in the pod by the API) and returns the Claude flags and the settings; a bad value is dropped.
 function startSettings(env) {
   const out = { args: [], settings: { model: '', effort: '' } };
-  if (modelOK(env.CLAUDE_MODEL)) { out.args.push('--model', env.CLAUDE_MODEL); out.settings.model = env.CLAUDE_MODEL; }
-  if (effortOK(env.CLAUDE_EFFORT)) { out.args.push('--effort', env.CLAUDE_EFFORT); out.settings.effort = env.CLAUDE_EFFORT; }
+  if (modelOK(env.AGENT_MODEL)) { out.args.push('--model', env.AGENT_MODEL); out.settings.model = env.AGENT_MODEL; }
+  if (effortOK(env.AGENT_EFFORT)) { out.args.push('--effort', env.AGENT_EFFORT); out.settings.effort = env.AGENT_EFFORT; }
   return out;
 }
 

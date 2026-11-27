@@ -566,6 +566,58 @@ func TestMaxTurnsFromSpec(t *testing.T) { // #336: maxTurns in the Agent reaches
 	}
 }
 
+// #564: spec.model and spec.effort reach the worker as AGENT_MODEL and AGENT_EFFORT; unset: neither (CLI default).
+func TestModelEffortFromSpec(t *testing.T) {
+	r, c := setup(t, agent("alice", nil),
+		agent("bob", func(a *v1.Agent) { a.Spec.Model, a.Spec.Effort = "claude-opus-5-5", "high" }),
+		agent("carol", func(a *v1.Agent) { a.Spec.Model = "sonnet" }))
+	for _, n := range []string{"alice", "bob", "carol"} {
+		reconcile(t, r, n)
+	}
+	for _, tc := range []struct{ agent, model, effort string }{
+		{"alice", "<unset>", "<unset>"}, {"bob", "claude-opus-5-5", "high"}, {"carol", "sonnet", "<unset>"},
+	} {
+		s := getSTS(t, c, tc.agent)
+		if got := envOf(s, "AGENT_MODEL"); got != tc.model {
+			t.Errorf("%s: AGENT_MODEL = %q, want %q", tc.agent, got, tc.model)
+		}
+		if got := envOf(s, "AGENT_EFFORT"); got != tc.effort {
+			t.Errorf("%s: AGENT_EFFORT = %q, want %q", tc.agent, got, tc.effort)
+		}
+		for _, e := range s.Spec.Template.Spec.Containers[0].Env {
+			if (e.Name == "AGENT_MODEL" && tc.model == "<unset>") || (e.Name == "AGENT_EFFORT" && tc.effort == "<unset>") {
+				t.Errorf("%s: has %s without the field (pod template must stay unchanged)", tc.agent, e.Name)
+			}
+		}
+	}
+}
+
+func TestModelEffortInvalidRefused(t *testing.T) {
+	for name, mut := range map[string]func(*v1.Agent){
+		"flag":    func(a *v1.Agent) { a.Spec.Model = "--dangerously-skip-permissions" },
+		"space":   func(a *v1.Agent) { a.Spec.Model = "opus --effort max" },
+		"newline": func(a *v1.Agent) { a.Spec.Model = "opus\nx" },
+		"long":    func(a *v1.Agent) { a.Spec.Model = "claude-opus-" + strings.Repeat("a", 80) },
+		"typo":    func(a *v1.Agent) { a.Spec.Model = "sonet" },  // #570: outside the price families
+		"other":   func(a *v1.Agent) { a.Spec.Model = "gpt-5" },  // #570
+		"upper":   func(a *v1.Agent) { a.Spec.Model = "Opus" },   // #570
+		"suffix":  func(a *v1.Agent) { a.Spec.Model = "opus[2m]" }, // #570: only [1m]
+		"effort":  func(a *v1.Agent) { a.Spec.Effort = "ultra" },
+	} {
+		r, c := setup(t, agent("mallory", mut))
+		reconcile(t, r, "mallory")
+		var s appsv1.StatefulSet
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
+			t.Errorf("%s: rendered a pod", name)
+		}
+		var a v1.Agent
+		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
+		if a.Status.Phase != "invalid" {
+			t.Errorf("%s: phase = %q, want invalid", name, a.Status.Phase)
+		}
+	}
+}
+
 // #500: spec.permission reaches the worker as CLAUDE_PERMISSION_MODE and CLAUDE_AUTO_MODE; dontAsk or unset: neither.
 func TestPermissionFromSpec(t *testing.T) {
 	r, c := setup(t, agent("alice", nil),
@@ -593,58 +645,6 @@ func TestPermissionFromSpec(t *testing.T) {
 			if strings.HasPrefix(e.Name, "CLAUDE_PERMISSION") || e.Name == "CLAUDE_AUTO_MODE" {
 				t.Errorf("%s: forge container has %s", tc.agent, e.Name)
 			}
-		}
-	}
-}
-
-// #570: spec.model and spec.effort reach the agent container as CLAUDE_MODEL and CLAUDE_EFFORT; unset: neither.
-func TestModelFromSpec(t *testing.T) {
-	r, c := setup(t, agent("alice", nil),
-		agent("bob", func(a *v1.Agent) { a.Spec.Model, a.Spec.Effort = "sonnet", "high" }),
-		agent("carol", func(a *v1.Agent) { a.Spec.Model = "claude-opus-5-5" }))
-	for _, n := range []string{"alice", "bob", "carol"} {
-		reconcile(t, r, n)
-	}
-	for _, tc := range []struct{ agent, model, effort string }{
-		{"alice", "<unset>", "<unset>"}, {"bob", "sonnet", "high"}, {"carol", "claude-opus-5-5", "<unset>"},
-	} {
-		s := getSTS(t, c, tc.agent)
-		if got := envOf(s, "CLAUDE_MODEL"); got != tc.model {
-			t.Errorf("%s: CLAUDE_MODEL = %q, want %q", tc.agent, got, tc.model)
-		}
-		if got := envOf(s, "CLAUDE_EFFORT"); got != tc.effort {
-			t.Errorf("%s: CLAUDE_EFFORT = %q, want %q", tc.agent, got, tc.effort)
-		}
-		for _, e := range s.Spec.Template.Spec.Containers[1].Env {
-			if e.Name == "CLAUDE_MODEL" || e.Name == "CLAUDE_EFFORT" {
-				t.Errorf("%s: forge container has %s", tc.agent, e.Name)
-			}
-		}
-	}
-}
-
-// #570: a model outside the price families or an unknown effort is refused (phase invalid), never run at the highest
-// multiplier.
-func TestModelInvalidRefused(t *testing.T) {
-	for name, f := range map[string]func(a *v1.Agent){
-		"typo":       func(a *v1.Agent) { a.Spec.Model = "sonet" },
-		"other":      func(a *v1.Agent) { a.Spec.Model = "gpt-5" },
-		"flag":       func(a *v1.Agent) { a.Spec.Model = "--dangerously-skip-permissions" },
-		"upper":      func(a *v1.Agent) { a.Spec.Model = "Opus" },
-		"long":       func(a *v1.Agent) { a.Spec.Model = "claude-opus-" + strings.Repeat("a", 80) },
-		"effort":     func(a *v1.Agent) { a.Spec.Effort = "ultra" },
-		"effort-arg": func(a *v1.Agent) { a.Spec.Effort = "high --verbose" },
-	} {
-		r, c := setup(t, agent("mallory", f))
-		reconcile(t, r, "mallory")
-		var s appsv1.StatefulSet
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
-			t.Errorf("%s: rendered a pod", name)
-		}
-		var a v1.Agent
-		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
-		if a.Status.Phase != "invalid" {
-			t.Errorf("%s: phase = %q, want invalid", name, a.Status.Phase)
 		}
 	}
 }

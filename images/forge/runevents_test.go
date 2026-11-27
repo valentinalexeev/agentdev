@@ -70,6 +70,15 @@ func TestRunEvents(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("a refused batch was forwarded: %d", len(got))
 	}
+	// #577: a refused batch names its repo, size and first event hash, never the event text
+	if l := log.String(); !strings.Contains(l, `run events refused: repo is not one of this agent's (repo other/repo, 1 events, first event sha256 `) {
+		t.Fatalf("refused repo not recorded: %s", l)
+	}
+	log.Reset()
+	call(t, h, "POST", "/run-events", `{"job":"issue-1","repo":"x\ny","events":[{"kind":"text","time":"","text":"secret words"}]}`)
+	if l := log.String(); !strings.Contains(l, "repo not of the form owner/name, 1 events") || strings.Contains(l, "secret words") {
+		t.Fatalf("unsafe repo or event text in the event: %s", l)
+	}
 	if rec := call(t, h, "POST", "/run-events", `{"job":"issue-1","events":[`+strings.Repeat(`{"kind":"text","time":"","text":"a"},`, 101)+`{"kind":"text","time":""}]}`); rec.Code != 400 {
 		t.Errorf("too many events: %d", rec.Code)
 	}

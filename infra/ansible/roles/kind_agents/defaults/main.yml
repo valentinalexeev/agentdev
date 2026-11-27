@@ -30,12 +30,12 @@ kind_agents_forge_admin_user: owner
 kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN_PASSWORD') | default('SpikePassw0rd!', true) }}"
 kind_agents_max_concurrent: 2
 kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; formerly MAX_TURNS in config.env)
+# Claude model and reasoning effort of every agent's runs (#564): `claude --model`, `--effort`. Empty: the CLI's own
+# default. model: an alias (opus, sonnet) or a full model name; effort: low, medium, high, xhigh, max.
+kind_agents_model: ""
+kind_agents_effort: ""
 # permission mode per agent (#500): {alice: {mode: auto, autoMode: {allow: ["..."]}}}; an agent not named: dontAsk
 kind_agents_permission: {}
-# Claude model and effort per agent (#570): {alice: sonnet} and {alice: high}; an agent not named: Claude Code's default.
-# Model: opus, sonnet, haiku, fable or a claude-<family>-... name; effort: low, medium, high, xhigh or max.
-kind_agents_model: {}
-kind_agents_effort: {}
 # tools added to the default allow-list per agent (#496): {alice: ["Bash(npm ci:*)"]}; an agent not named: default only
 kind_agents_tools: {}
 # toolchain per agent (#499, ADR 0010 D2): {alice: {presets: {go: "1.27.4"}, refresh: 168h}}; an agent not named: none.

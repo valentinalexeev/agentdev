@@ -128,11 +128,11 @@ test('http: token required, requests from the pod itself refused', async () => {
 
 // #570: model and effort. The message shapes are the stream-json control protocol of the pinned Claude Code (2.1.312):
 // set_model {model} answers {model: <effective>}; apply_flag_settings {settings: {effortLevel}} answers {}.
-test('settings: start flags from CLAUDE_MODEL and CLAUDE_EFFORT, bad values dropped', () => {
-  assert.deepStrictEqual(startSettings({ CLAUDE_MODEL: 'sonnet', CLAUDE_EFFORT: 'high' }),
+test('settings: start flags from AGENT_MODEL and AGENT_EFFORT, bad values dropped', () => {
+  assert.deepStrictEqual(startSettings({ AGENT_MODEL: 'sonnet', AGENT_EFFORT: 'high' }),
     { args: ['--model', 'sonnet', '--effort', 'high'], settings: { model: 'sonnet', effort: 'high' } });
   assert.deepStrictEqual(startSettings({}), { args: [], settings: { model: '', effort: '' } });
-  for (const bad of [{ CLAUDE_MODEL: 'gpt-5' }, { CLAUDE_MODEL: '--dangerously-skip-permissions' }, { CLAUDE_EFFORT: 'ultra' }, { CLAUDE_MODEL: 'opus --verbose' }]) {
+  for (const bad of [{ AGENT_MODEL: 'gpt-5' }, { AGENT_MODEL: '--dangerously-skip-permissions' }, { AGENT_EFFORT: 'ultra' }, { AGENT_MODEL: 'opus --verbose' }]) {
     assert.deepStrictEqual(startSettings(bad).args, [], JSON.stringify(bad));
   }
 });

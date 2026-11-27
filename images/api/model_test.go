@@ -196,7 +196,7 @@ func TestChatSettings(t *testing.T) {
 	}
 }
 
-// #570: the start values reach the chat container as CLAUDE_MODEL and CLAUDE_EFFORT, and the admission policy takes it.
+// #570: the start values reach the chat container as AGENT_MODEL and AGENT_EFFORT, and the admission policy takes it.
 func TestChatPodModelEnv(t *testing.T) {
 	k := &kubeChat{cfg: chatJobConfig{Namespace: "coding-agents", WorkerImage: testWorkerImage, IdleSeconds: 1800, MaxSeconds: 28800}}
 	j, err := k.jobFrom(agentFixture(t, "gitea"), chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/repo",
@@ -206,11 +206,11 @@ func TestChatPodModelEnv(t *testing.T) {
 	}
 	p := j.Spec.Template.Spec
 	env := envMap(containerNamed(p, "chat"))
-	if env["CLAUDE_MODEL"].Value != "opus" || env["CLAUDE_EFFORT"].Value != "low" {
-		t.Errorf("chat env %v %v", env["CLAUDE_MODEL"], env["CLAUDE_EFFORT"])
+	if env["AGENT_MODEL"].Value != "opus" || env["AGENT_EFFORT"].Value != "low" {
+		t.Errorf("chat env %v %v", env["AGENT_MODEL"], env["AGENT_EFFORT"])
 	}
 	for _, c := range containerNamed(p, "forge").Env {
-		if c.Name == "CLAUDE_MODEL" || c.Name == "CLAUDE_EFFORT" {
+		if c.Name == "AGENT_MODEL" || c.Name == "AGENT_EFFORT" {
 			t.Errorf("forge container has %s", c.Name)
 		}
 	}
@@ -219,8 +219,8 @@ func TestChatPodModelEnv(t *testing.T) {
 	}
 	// no start values: nothing added (the agent's own env stays as the operator rendered it)
 	env = envMap(containerNamed(chatJobFor(t, "gitea").Spec.Template.Spec, "chat"))
-	if _, ok := env["CLAUDE_MODEL"]; ok {
-		t.Errorf("CLAUDE_MODEL without a choice: %v", env["CLAUDE_MODEL"])
+	if _, ok := env["AGENT_MODEL"]; ok {
+		t.Errorf("AGENT_MODEL without a choice: %v", env["AGENT_MODEL"])
 	}
 }
 

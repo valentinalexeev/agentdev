@@ -15,10 +15,15 @@
       - api_chat_retention_days | string is match('^[1-9][0-9]{0,4}$')
       - api_chat_max_sessions | string is match('^[0-9]{1,6}$')
       - api_chat_max_sessions_per_user | string is match('^[0-9]{1,6}$')
+      - api_chat_models is sequence and api_chat_models is not string
+      - api_chat_models | reject('match', '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\\[1m\\])?$') | list | length == 0
+      - api_chat_efforts is sequence and api_chat_efforts is not string
+      - api_chat_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
     fail_msg: >-
       api.oidc_issuer must be https://, api.db_retention_days a positive number, api.max_agents and
       api.max_agents_per_user whole numbers 0 or more (0 = no limit), agents_source api or git, api.chat.idle_minutes and
-      api.chat.retention_days positive numbers, api.chat.max_sessions(_per_user) 0 or more (example.vars.yml)
+      api.chat.retention_days positive numbers, api.chat.max_sessions(_per_user) 0 or more, api.chat.models (opus, sonnet, haiku, fable or claude-<family>-...)
+      and api.chat.efforts (low, medium, high, xhigh, max) lists (example.vars.yml)
     quiet: true
 
 - name: API image on kind (build or pull, load)
@@ -91,6 +96,8 @@
         CHAT_RETENTION_DAYS: "{{ api_chat_retention_days }}"
         CHAT_MAX_SESSIONS: "{{ api_chat_max_sessions }}"
         CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
+        CHAT_MODELS: "{{ api_chat_models | join(',') }}"
+        CHAT_EFFORTS: "{{ api_chat_efforts | join(',') }}"
         NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
       replace: []
   register: api_applied
