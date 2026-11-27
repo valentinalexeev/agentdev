@@ -9,8 +9,13 @@
       - kind_agents_agents | reject('match', kind_agents_name_re) | list | length == 0
       - kind_agents_wake_poll_seconds | string is match('^[0-9]+$')
       - kind_agents_github_installation_id | string is match('^([1-9][0-9]{0,15})?$')
+      - kind_agents_model | string | length == 0 or
+        (kind_agents_model | string is match(kind_agents_model_re) and kind_agents_model | string | length <= 80)
+      - kind_agents_effort | string in ['', 'low', 'medium', 'high', 'xhigh', 'max']
     fail_msg: >-
-      FORGE_KIND must be gitea or github; AGENTS are DNS labels; WAKE_POLL_SECONDS is a number; GITHUB_INSTALLATION_ID is empty or a number
+      FORGE_KIND must be gitea or github; AGENTS are DNS labels; WAKE_POLL_SECONDS is a number; GITHUB_INSTALLATION_ID is empty or a number;
+      kind_agents_model is empty, opus, sonnet, haiku, fable or claude-<family>-... (max. 80); kind_agents_effort is empty, low, medium,
+      high, xhigh or max
     quiet: true
 
 - name: Claude proxy settings (budget, prices, job limits, auth mode, telemetry)

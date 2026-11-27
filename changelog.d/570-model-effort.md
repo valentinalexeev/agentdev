@@ -23,7 +23,8 @@ effort of an agent".
    CRD with the operator (`deploy.yml` does it). Run
    `kubectl get agents -A -o custom-columns=NAME:.metadata.name,MODEL:.spec.model` first: an agent with a model
    outside the families (for example another vendor's name) gets the phase `invalid` until you fix `claude_model`,
-   `agents[].model` or `kind_agents_model`, and the API server refuses new writes of that value.
+   `agents[].model` or `kind_agents_model`, and the API server refuses new writes of that value. `deploy.yml`,
+   `render.yml` and `kind.yml` (tag `agents`) now stop before they apply anything when one of these values is wrong.
 2. Optional: set `api.chat.models` and `api.chat.efforts` in `ansible/instance.yml` to allow other values in chat.
    An invalid entry stops the Ansible run and the API (fail closed).
 

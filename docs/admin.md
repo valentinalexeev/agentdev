@@ -259,7 +259,8 @@ units"). Each agent has its own values. Its chat sessions start with the same va
 
 NOTE: The CRD and the operator refuse a model outside these families or an unknown effort. The agent then has the
 phase `invalid`. Thus a typing error or another vendor's model name cannot make the agent count at the highest
-multiplier, and no value can become a flag of `claude`.
+multiplier, and no value can become a flag of `claude`. On `kind` and GKE, the Ansible run stops before it
+applies anything when a model or an effort breaks these rules.
 
 Each change of `spec.model` or `spec.effort` makes one entry in the audit log: action `model`, with the old and the
 new values in `before.claude` and `after.claude`. The console shows the values in the agent drawer, and the API

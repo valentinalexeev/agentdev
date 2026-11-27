@@ -32,6 +32,26 @@
       non-empty list of IPv4 addresses when claude_proxy is on. Copy them from `terraform output platform` (#384).
     quiet: true
 
+# #570: a bad model or effort fails here, not late at the CRD apply (the same rule as the CRD and the operator)
+- name: Check the model and effort of the agents
+  ansible.builtin.assert:
+    that:
+      - t_models | reject('match', claude_model_re) | list | length == 0
+      - t_models | map('length') | select('gt', 80) | list | length == 0
+      - t_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) | length == 0
+    fail_msg: >-
+      claude_model and agents[].model: opus, sonnet, haiku, fable or claude-<family>-..., optional [1m], max. 80
+      characters; claude_effort and agents[].effort: low, medium, high, xhigh, max (docs/admin.md). Found: {{ t_models
+      | reject('match', claude_model_re) | list + t_efforts | difference(['low', 'medium', 'high', 'xhigh', 'max']) }}
+    quiet: true
+  vars:
+    t_models: >-
+      {{ ([claude_model | default('', true)] + (agents | default([]) | map(attribute='model', default='') | list))
+         | map('string') | select | list }}
+    t_efforts: >-
+      {{ ([claude_effort | default('', true)] + (agents | default([]) | map(attribute='effort', default='') | list))
+         | map('string') | select | list }}
+
 - name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
   ansible.builtin.set_fact:
     egress_fqdn_matches: >-
