@@ -2733,7 +2733,9 @@ NOTE: The forge hosts and the toolchain download hosts stay closed to the agent 
 agent contains them.
 
 NOTE: The playbook refuses a host with a wildcard (`*`), an IP address, a port or a path, and, while the credential
-proxy is on, a host that covers the Claude API. Use the form `example.com` or `.example.com`.
+proxy is on, a host that covers the Claude API (`claude_proxy_upstream_host`, `api.anthropic.com` by default; the
+operator gets it as `CLAUDE_UPSTREAM_HOST` and drops such a host too). Kind applies the same checks to
+`kind_agents_agent_hosts`, including the limit of 64 hosts per agent. Use the form `example.com` or `.example.com`.
 
 NOTE: A console chat session of the agent uses the list of the agent.
 

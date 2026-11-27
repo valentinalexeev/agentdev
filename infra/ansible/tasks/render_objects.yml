@@ -226,6 +226,7 @@
         MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
         CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
+        CLAUDE_UPSTREAM_HOST: "{{ claude_proxy_upstream_host }}"
       replace: []
     vars_proxy:
       src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"

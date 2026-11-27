@@ -232,6 +232,13 @@ func TestAgentEgressNeverWidens(t *testing.T) {
 		t.Errorf("bob-egress got an egress key Secret: %v", err)
 	}
 
+	// #599 review: the Claude host comes from CLAUDE_UPSTREAM_HOST when set, not only api.anthropic.com
+	r.D.ClaudeUpstreamHost = "claude.example.internal"
+	if hs := r.agentEgressHosts(agent("x", withHosts(".example.internal", "api.anthropic.com"))); len(hs) != 1 || hs[0] != "api.anthropic.com" {
+		t.Errorf("custom Claude host: %v", hs)
+	}
+	r.D.ClaudeUpstreamHost = ""
+
 	// without the credential proxy (deprecated rollback) the Claude API is on the list anyway: no reason to drop it
 	r.D.ClaudeProxyURL = ""
 	if hs := r.agentEgressHosts(agent("x", withHosts("api.anthropic.com"))); len(hs) != 1 {

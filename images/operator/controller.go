@@ -39,6 +39,9 @@ type Defaults struct {
 	// ANTHROPIC_BASE_URL with its per-agent key (Secret agent-<name>-proxy). Empty: the credential Secret is mounted
 	// as before (deprecated rollback path).
 	ClaudeProxyURL string
+	// ClaudeUpstreamHost: the Claude API host only claude-proxy reaches (CLAUDE_UPSTREAM_HOST, Ansible
+	// claude_proxy_upstream_host). Empty: api.anthropic.com. An agent's own egress hosts never cover it (#599, R64).
+	ClaudeUpstreamHost string
 	// CostLabels (#184): service/environment on the StatefulSet and the pod (COST_LABELS); never override own labels
 	CostLabels map[string]string
 	// agent volume (#173): StorageClass (empty: cluster default) and size of the one state claim

@@ -42,8 +42,16 @@ const (
 // agentEgressSecretName: the agent's copy of its own key, read only by the agent container's proxy URL.
 func agentEgressSecretName(agent string) string { return "agent-" + agent + "-egress-proxy" }
 
-// claudeUpstreamHost is the Claude API host that only claude-proxy may reach while the credential proxy is on (R64).
-const claudeUpstreamHost = "api.anthropic.com"
+// defaultClaudeUpstreamHost is the Claude API host that only claude-proxy may reach while the credential proxy is on
+// (R64), unless CLAUDE_UPSTREAM_HOST names another (the same value as the playbook's claude_proxy_upstream_host).
+const defaultClaudeUpstreamHost = "api.anthropic.com"
+
+func (r *AgentReconciler) claudeUpstreamHost() string {
+	if h := strings.ToLower(strings.TrimSpace(r.D.ClaudeUpstreamHost)); h != "" {
+		return h
+	}
+	return defaultClaudeUpstreamHost
+}
 
 // coversHost: the Squid dstdomain entry h matches the name host ("x.org" that name, ".x.org" x.org and subdomains).
 func coversHost(h, host string) bool {
@@ -64,7 +72,7 @@ func (r *AgentReconciler) agentEgressHosts(a *v1.Agent) []string {
 		if !egressHostRE.MatchString(h) || len(h) > 253 || seen[h] {
 			continue
 		}
-		if r.D.ClaudeProxyURL != "" && coversHost(h, claudeUpstreamHost) {
+		if r.D.ClaudeProxyURL != "" && coversHost(h, r.claudeUpstreamHost()) {
 			continue
 		}
 		seen[h] = true
