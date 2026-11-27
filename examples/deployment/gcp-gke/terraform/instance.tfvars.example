@@ -29,3 +29,7 @@ labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service
 # keep_existing_secret_values = []   # upgrade from 1.1.x: the names of imports.tf.example, so the values stay
 # platform_extra_secret_ids   = []   # e.g. ["funnel-sidecar-authkey"]
 # forge_init                  = false   # true with forge_init.enabled (external Gitea): reads gitea-admin-token
+# Diagnostics for killed agent jobs, exit code 137 (agentdev #588): log-based metrics (security auto-pause, Spot preemption,
+# autoscaler scale-down, Pending agent pod) and e-mail alerts for the first two, see terraform/monitoring.tf. Off by default.
+# It also grants the automation account roles/logging.configWriter and roles/monitoring.alertPolicyEditor.
+# enable_diagnostic_alerts = true
