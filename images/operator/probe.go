@@ -470,13 +470,21 @@ func (s *ProbeServer) run(ctx context.Context, e *v1.Executor, t *v1.SSHTarget, 
 	if approval != "" {
 		labels["agentdev/approval"] = approval
 	}
-	r := &v1.ExecutorRun{ObjectMeta: metav1.ObjectMeta{Name: e.Name + "-probe-" + hex.EncodeToString(rnd[:]), Namespace: s.P.C.NS,
+	name := e.Name + "-probe-" + hex.EncodeToString(rnd[:])
+	if approval != "" {
+		// single use, atomically: the run is named after the approval, so a second run with it is AlreadyExists
+		name = e.Name + "-probe-" + approval
+	}
+	r := &v1.ExecutorRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.P.C.NS,
 		Labels: labels}, Spec: v1.ExecutorRunSpec{Executor: e.Name, Action: "probe", Stage: "probe", Target: t.Name, Check: pr.Name,
 		Args: req.Args, Approval: approval}}
 	if err := controllerutil.SetControllerReference(e, r, s.P.Scheme()); err != nil {
 		return probeAnswer{Status: "error", Message: err.Error()}
 	}
 	if err := s.P.Create(ctx, r); err != nil {
+		if apierrors.IsAlreadyExists(err) && approval != "" {
+			return probeAnswer{Status: "refused", Message: "approval " + approval + " was already used; call again to request a new one"}
+		}
 		if apierrors.IsAlreadyExists(err) {
 			return probeAnswer{Status: "error", Message: "try again"}
 		}
@@ -489,6 +497,7 @@ func (s *ProbeServer) run(ctx context.Context, e *v1.Executor, t *v1.SSHTarget, 
 	if err := s.P.record(ctx, e, "", r.Name, "executor.probe", map[bool]string{true: "medium", false: "low"}[pr.Sensitive], action); err != nil {
 		log.FromContext(ctx).Error(err, "probe event")
 	}
+	var out string
 	ca, err := s.P.SSHCA(ctx)
 	if err == nil {
 		cctx, cancel := context.WithTimeout(ctx, probeTimeout)
@@ -497,15 +506,39 @@ func (s *ProbeServer) run(ctx context.Context, e *v1.Executor, t *v1.SSHTarget, 
 		if run == nil {
 			run = s.sshProbeRun
 		}
-		var out string
 		out, err = run(cctx, ca, t, "check/"+r.Name, "check "+strings.Join(append([]string{pr.Name}, req.Args...), " "))
 		if err == nil {
 			s.finishRun(ctx, r, "Succeeded", "ok")
 			return probeAnswer{Status: "ok", Output: redactSnapshot(clip(out, probeMaxOutput)), Run: r.Name}
 		}
 	}
-	s.finishRun(ctx, r, "Failed", clip(err.Error(), 300))
-	return probeAnswer{Status: "error", Message: "the check failed: " + clip(err.Error(), 300), Run: r.Name}
+	// R132: server output never goes into an error message or the run status; the message is fixed text, the output
+	// (if any) is redacted here and fenced as untrusted by obs-mcp, like on success.
+	msg := probeFailure(err)
+	if msg == "connection failed" {
+		log.FromContext(ctx).Error(err, "probe run", "run", r.Name)
+	}
+	s.finishRun(ctx, r, "Failed", msg)
+	return probeAnswer{Status: "error", Message: "the check failed: " + msg, Output: redactSnapshot(clip(out, probeMaxOutput)), Run: r.Name}
+}
+
+// probeExitError: the check ran and exited non-zero. It carries no server output (R132).
+type probeExitError struct{ code int }
+
+func (e probeExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+
+var errProbeTimeout = errors.New("timeout")
+
+// probeFailure maps a run error to fixed text: an exit code, a timeout or a connection failure; never server output.
+func probeFailure(err error) string {
+	var ee probeExitError
+	switch {
+	case errors.As(err, &ee):
+		return ee.Error()
+	case errors.Is(err, errProbeTimeout):
+		return "timeout"
+	}
+	return "connection failed"
 }
 
 func (s *ProbeServer) finishRun(ctx context.Context, r *v1.ExecutorRun, phase, msg string) {
@@ -547,11 +580,11 @@ func (s *ProbeServer) sshProbeRun(ctx context.Context, ca *SSHCA, t *v1.SSHTarge
 	go func() { done <- sess.Run(command) }()
 	select {
 	case <-ctx.Done():
-		return out.String(), errors.New("timeout")
+		return out.String(), errProbeTimeout
 	case err := <-done:
 		var ee *ssh.ExitError
 		if errors.As(err, &ee) {
-			return out.String(), fmt.Errorf("exit %d: %s", ee.ExitStatus(), clip(strings.TrimSpace(out.String()), 200))
+			return out.String(), probeExitError{ee.ExitStatus()}
 		}
 		return out.String(), err
 	}

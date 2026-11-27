@@ -694,6 +694,11 @@ func (s *obsServer) serverCheck(ctx context.Context, _ *mcp.CallToolRequest, in 
 	case "pending":
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pending: " + a.Message}}}, nil, nil
 	}
+	if a.Output != "" {
+		// a failed check's output: untrusted like on success (R132)
+		fenced := fenceUntrusted("server "+in.Target+", check "+in.Check+" (run "+a.Run+", failed)", redactSecrets(a.Output), s.c.MaxOutput)
+		return obsError(a.Status + ": " + clip(a.Message, 500) + "\n" + fenced), nil, nil
+	}
 	return obsError(a.Status + ": " + clip(a.Message, 500)), nil, nil
 }
 
