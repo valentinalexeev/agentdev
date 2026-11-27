@@ -1,0 +1,80 @@
+name: compat
+
+# Compatibility e2e (#178, ADR 0006): the previous release's worker and forge images against the PR head's router,
+# operator and Claude proxy, on kind, with a stubbed Claude (tools/claude-stub). No secret on pull_request runs.
+# The real model runs only nightly or by hand, with the repository secret COMPAT_ANTHROPIC_API_KEY.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      real_model: {description: "Use the real Claude model (secret COMPAT_ANTHROPIC_API_KEY)", type: boolean, default: false}
+      prev_tag: {description: "Image tag of the previous release (default: newest v* tag)", type: string, default: ""}
+      api: {description: "Also deploy the PR-head API and run the chat-policy denial checks (COMPAT_API=1)", type: boolean, default: true}
+
+concurrency:
+  group: compat-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 75   # nightly: two e2e passes (API roles plus real model); each step has its own bound
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}   # tags: the previous release
+      # #566: on PRs the API and authentik run only when the PR touches them
+      - name: paths
+        id: paths
+        if: github.event_name == 'pull_request'
+        env: {BASE_REF: "${{ github.base_ref }}"}
+        run: |
+          if git diff --name-only "origin/${BASE_REF}...HEAD" \
+             | grep -Eq '^(images/api/|manifests/authentik|manifests/kind/sso|manifests/db-init/|infra/ansible/roles/(api|authentik[a-z_]*)/|scripts/sso-check\.py|scripts/e2e-gke-security\.sh|scripts/e2e-compat\.sh)'; then
+            echo "api=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "api=0" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: helm/kind-action@v1
+        with: {install_only: true}
+      - name: tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq gettext-base
+          pipx install --include-deps ansible-core
+          ansible-galaxy collection install -r infra/ansible/requirements.yml
+          pipx inject ansible-core kubernetes
+      - uses: azure/setup-helm@v4
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.api) || steps.paths.outputs.api == '1'
+      - name: e2e (stubbed Claude)
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.real_model)
+        timeout-minutes: 35
+        env:
+          PREV_TAG: ${{ inputs.prev_tag }}
+          # #556: the API and chat-policy denial checks run on demand, not on every PR (they need helm, Postgres, authentik)
+          COMPAT_API: ${{ ((github.event_name == 'workflow_dispatch' && inputs.api) || steps.paths.outputs.api == '1') && '1' || '0' }}
+        run: scripts/e2e-compat.sh
+      - name: e2e (stubbed Claude, API and chat policy, nightly)
+        if: github.event_name == 'schedule'
+        timeout-minutes: 35
+        env:
+          COMPAT_API: "1"
+        run: scripts/e2e-compat.sh
+      - name: e2e (real model)
+        # !cancelled(): a failed API pass must not skip the nightly real-model run (#557 review)
+        if: "!cancelled() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_model))"
+        timeout-minutes: 35
+        env:
+          PREV_TAG: ${{ inputs.prev_tag }}
+          CLAUDE_REAL: "1"
+          # dispatch with real_model and api: the real-model pass also runs the API checks
+          COMPAT_API: ${{ (github.event_name == 'workflow_dispatch' && inputs.api) && '1' || '0' }}
+          ANTHROPIC_API_KEY: ${{ secrets.COMPAT_ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then echo "::notice::secret COMPAT_ANTHROPIC_API_KEY not set: real-model run skipped"; exit 0; fi
+          scripts/e2e-compat.sh

@@ -1,0 +1,58 @@
+---
+# Notification channels of the instance (#347). notifications.channels lists the channels that are on: webpush
+# (Bark: #402). For webpush the role makes the VAPID key pair once (Secret Manager on GKE, .secrets/platform on kind),
+# keeps it in the Secret agentdev-api-vapid and writes the NotificationChannel object the API reads. Turning webpush
+# off removes the NotificationChannel; the key pair stays, so existing browser subscriptions work again when it is
+# turned back on.
+- name: Check the notification settings
+  ansible.builtin.assert:
+    that:
+      - api_notify_channels | difference(['webpush']) | length == 0
+      - api_notify_subject is match('^(mailto:[^\s@]+@[^\s@]+|https://\S+)$')
+      - api_notify_push_hosts | reject('match', api_notify_host_re) | list | length == 0
+    fail_msg: >-
+      notifications.channels may contain webpush only (Bark: #402); notifications.subject must be
+      mailto:<address> or https://<url>; notifications.push_hosts are host names or *.suffix (example.vars.yml)
+    quiet: true
+  vars:
+    api_notify_host_re: '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$'
+  when: "'webpush' in api_notify_channels"
+
+- name: NotificationChannel CRD (agentdev.dev)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_notificationchannels.yaml"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
+
+- name: VAPID key pair
+  ansible.builtin.include_tasks: notify_keys.yml
+  when: "'webpush' in api_notify_channels and api_playbook_secrets"
+
+- name: Secret agentdev-api-vapid
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: agentdev-api-vapid, namespace: "{{ platform_ns }}"}
+      stringData:
+        publicKey: "{{ api_vapid.publicKey | default('') }}"
+        privateKey: "{{ api_vapid.privateKey | default('') }}"
+  no_log: true
+  when: "'webpush' in api_notify_channels and api_playbook_secrets"
+
+- name: NotificationChannel webpush
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: "{{ 'present' if 'webpush' in api_notify_channels else 'absent' }}"
+    definition:
+      apiVersion: agentdev.dev/v1alpha1
+      kind: NotificationChannel
+      metadata: {name: webpush, namespace: "{{ platform_ns }}"}
+      spec:
+        type: webpush
+        subject: "{{ api_notify_subject }}"
+        vapid: {secretRef: {name: agentdev-api-vapid}}
+        allowedHosts: "{{ api_notify_push_hosts }}"

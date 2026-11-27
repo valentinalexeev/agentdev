@@ -101,5 +101,5 @@ rc=0; "$root/scripts/cluster-start.sh" >/dev/null 2>&1 || rc=$?
 [[ $rc == 0 ]] || fail "start from STATE_FILE exit $rc"
 echo 1 > "$FAKE/nodes"; echo 99 > "$FAKE/resize_fail"; rm -f "$STATE_FILE"
 rc=0; RETRIES=2 "$root/scripts/cluster-stop.sh" > "$work/stop2.out" 2>&1 || rc=$?
-[[ $rc == 1 ]] && grep -q 'FAIL: pool system still has 1 nodes' "$work/stop2.out" || fail "exhausted retries: exit $rc"
+if ! { [[ $rc == 1 ]] && grep -q 'FAIL: pool system still has 1 nodes' "$work/stop2.out"; }; then fail "exhausted retries: exit $rc"; fi
 echo "PASS start from STATE_FILE; stop exits 1 when the pool does not reach 0"

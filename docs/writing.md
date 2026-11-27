@@ -100,11 +100,14 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | branch | a git branch |
 | cluster | a Kubernetes cluster |
 | concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
-| config.env | the file with the local default settings |
+| config.env | the file with the default settings of the helper scripts in `scripts/`. Since 1.3.0 the `kind` playbook does not read it |
 | ContextForge | the MCP gateway in the platform namespace |
+| cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
+| effort | the reasoning effort level of a Claude run (`claude --effort`): `low`, `medium`, `high`, `xhigh` or `max` (#564) |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
+| GitOps engine | a program in the cluster (Argo CD, Flux) that applies the manifests of a git repository or OCI artifact (#384) |
 | guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
@@ -112,7 +115,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | instance | one installation of agentdev |
 | issue | a work item on the forge |
 | `kind` | the local Kubernetes cluster tool (always written as code) |
+| `kind.vars.yml` | the file with the local settings for the `kind` playbook, a copy of `infra/ansible/kind.example.vars.yml` in the repository root |
+| Markdown | the text format with `#` headings, `-` lists, tables and fenced code blocks that the console shows as formatted text |
 | MCP tool, MCP server | a tool for Claude that a Model Context Protocol server gives |
+| model | the Claude model that a Claude run uses (`claude --model`), an alias such as `opus` or a full model name (#564) |
 | operator | the agentdev operator program, which creates and updates agent pods from Agent objects. Never use this word for a person |
 | pod | a Kubernetes pod |
 | Prometheus, Loki | the metrics and log services that the observability tools read |
@@ -127,7 +133,10 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | public port | the port of a service that a Gateway or a reverse proxy publishes (router: 8080, webhooks only) |
 | internal port | the port of a service that only callers in the cluster use (router: 8081, `/status`, `/healthz`, `/register`, `/idle`) |
 | health port | the port of a service that gives only its health status (router: 8082, `GET /healthz`), for the probes and the health check of the load balancer |
-| run.sh step | one numbered script of the installation, for example `./run.sh 11`. Always write "run.sh step", because STEP alone is the STE noun for a step of a procedure |
+| playbook | an Ansible playbook, for example `infra/ansible/kind.yml` (local) or `infra/ansible/deploy.yml` (GKE) |
+| tag | an Ansible tag that selects one part of a playbook, for example `--tags api`. Write "the tag `api`", not "step", because STEP alone is the STE noun for a step of a procedure |
+| plain run | a run of the `kind` playbook without `--tags` (prereqs, cluster, forge, operator, agents) |
+| run.sh step | one numbered script of the old installation, for example `./run.sh 11`. Removed in 1.3.0; use only in history and upgrade notes |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
 | thread | a comment on a line of a pull request, with its replies |
@@ -141,15 +150,15 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | SIEM | a security information and event management system that collects security events |
 | webhook | an HTTP request that a service sends to a URL when an event occurs |
 | Postgres | the PostgreSQL database of the instance |
-| setting | a value in `config.env` or `instance.yml` that changes how agentdev operates |
+| setting | a value in `kind.vars.yml` or `instance.yml` that changes how agentdev operates |
 | sidecar | a second container in the agent pod |
 | Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
 | billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
 | quota project | the Google Cloud project that a Google API charges for a request |
-| token budget | the number of Claude tokens that one agent can use in 24 hours |
+| token budget | old name of the budget, before 1.2.0 it counted raw tokens; now the budget counts cost units |
 | specification (spec) | the project file, for example `my-project.yaml` |
-| sync | one run of `scripts/mcp-sync.sh` |
+| sync | one reconcile of an `McpProject` by the operator (was one run of `scripts/mcp-sync.sh`) |
 | dialog | a small window of the web UI that asks you to confirm or to cancel an action |
 | web UI | the agentdev management user interface |
 | Gateway | the GKE Gateway (a Google Cloud load balancer) that the Ansible role `ingress` makes in `ingress.mode: gateway` |
@@ -179,7 +188,11 @@ Helm chart, Ingress, JSON, MFA, NetworkPolicy, Postgres, Redis, tailnet, Terrafo
 Dataplane V2, webhook, workflow, dry run, gateway, annotation, replica, volume, manifest, label (of an issue), card, log,
 gVisor, node pool, VM (virtual machine), Workload Identity, SemVer, Spot (VM), billing (the payment account of a
 Google Cloud project), state bucket, GKE, GCP, issuer (of a token), endpoint (of an API), certificate (TLS), cookie,
-kindnet, Argo CD, Flux, terminal, Claude Code.
+kindnet, Argo CD, Flux, terminal, Claude Code, push notification (a message that the browser shows when the web UI is
+not open, #347), Web Push, VAPID key pair, push service, subscription (of a browser to push notifications), device,
+field manager (the name that Kubernetes records for the writer of a field, #58), deployment repository,
+condition (a status entry of a Kubernetes object, for example `Ready`, #386), health check (of Flux or Argo CD),
+Kustomization (the Flux object that applies a directory of a Git repository).
 
 User interface labels are written in bold, exactly as the interface shows them, for example **Log in** on the
 authentik page. A label is not a word of the text, so a label does not break the word rules.
@@ -194,9 +207,13 @@ authentik page. A label is not a word of the text, so a label does not break the
 | click | push a button of a user interface with the mouse pointer |
 | deploy | install a component into the cluster |
 | deny | refuse an approval request |
+| render | write the manifests of an instance to files, with no change to the cluster (`infra/ansible/render.yml`, #384) |
+| drain | tell an agent to start no new job and let its running jobs finish (#174) |
 | edit | change the text of a forge comment after you wrote it |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
+| mute | stop the notifications of a project or a type (#347) |
 | merge | add the changes of a pull request to the main branch |
+| prune | delete the objects that Flux applied before and that are no longer in Git (#58) |
 | publish | make a Service of the cluster available on a public or tailnet URL |
 | pause | stop an agent until a person starts it again (STE alternative: stop) |
 | git-push | send git commits to the forge with `git push`. STE approves PUSH only as "apply force to move", so write "send the commits" in the text, or `git push` as code |
@@ -205,6 +222,8 @@ authentik page. A label is not a word of the text, so a label does not break the
 | resolve | mark a thread of a pull request as done |
 | revoke | make a token not valid |
 | sign in, sign out | start or end a session in the web UI |
+| snooze | delay a notification, so that it comes again later (#347) |
+| subscribe | ask for push notifications on a device (#347) |
 
 ## Before you merge a manual change
 

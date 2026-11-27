@@ -1,0 +1,41 @@
+name: Changelog
+
+# Changelog fragments (#448, changelog.d/README.md):
+#   check  every changelog.d/ fragment is valid, and the script tests pass
+#   gate   on a PR: code changes need a fragment (unless label no-changelog), and no direct edit of
+#          "## [Unreleased]" in CHANGELOG.md (release chore/release-* and forward-merge merge/* branches are exempt,
+#          also as agent/<name>/release-* and agent/<name>/merge-*, #510)
+# Runs again when labels change, so adding no-changelog re-evaluates the gate.
+on:
+  push:
+    branches: [main, "release/**", "next/**"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+concurrency:
+  group: changelog-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: validate fragments
+        run: scripts/changelog.sh check
+      - name: script tests
+        run: bash scripts/test/changelog-test.sh
+      - name: preview of the next release
+        run: scripts/changelog.sh preview >> "$GITHUB_STEP_SUMMARY"
+      - name: fragment required, no direct Unreleased edits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: scripts/changelog.sh pr-gate "$BASE" HEAD

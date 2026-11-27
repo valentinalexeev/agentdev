@@ -2,7 +2,7 @@
 # login. No instance values here: they come from the optional Secret `authentik-sso` as AGENTDEV_SSO_* env of the
 # authentik pods (manifests/authentik-values.yaml). Without that Secret no entry applies.
 #   GKE: the playbook writes the Secret from instance.yml authentik.sso and Secret Manager (infra/ansible, #114).
-#   kind: 09-authentik.sh writes it for the local OIDC stand-in (manifests/kind/sso-standin.yaml).
+#   kind: the role authentik_kind writes it for the local OIDC stand-in (manifests/kind/sso-standin.yaml).
 # AGENTDEV_SSO_SAML=true: Google Workspace SAML app. AGENTDEV_SSO_OIDC=true: an OIDC provider (the kind stand-in).
 #
 # Admin group sync (owner rule on #103: no automated process may lock out legitimate users):
@@ -16,7 +16,7 @@
 # - No entry in any blueprint sets `users:`.
 # Only e-mail addresses of AGENTDEV_SSO_ALLOWED_DOMAINS sign in (policy agentdev-sso-allowed-domains).
 # The values that go into expressions are checked against strict patterns before they reach the Secret
-# (09-authentik.sh, infra/ansible/roles/authentik_sso): no quotes, backslashes or new lines.
+# (infra/ansible/roles/authentik_kind and authentik_sso): no quotes, backslashes or new lines.
 version: 1
 metadata: {name: agentdev company SSO}
 entries:

@@ -363,9 +363,8 @@ func (p *ExecutorPoller) admitEgress(run, host string, win time.Time) (rec, firs
 	}
 	a := p.egressAgg[run]
 	if a == nil || !a.win.Equal(win) {
-		if a != nil && a.win.After(win) { // an older line (another proxy replica lags): judge it by the newer window
-			win = a.win
-		} else {
+		// an older line (another proxy replica lags) is judged by the newer window: keep a as it is
+		if a == nil || !a.win.After(win) {
 			a = &egressAgg{win: win, hosts: map[string]bool{}}
 			p.egressAgg[run] = a
 		}

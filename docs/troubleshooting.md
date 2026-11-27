@@ -10,15 +10,19 @@
    `kubectl -n coding-agents logs deploy/webhook-router`
 4. Find the symptom in the tables below and do the procedure.
 
+NOTE: On `kind`, "run the tag `<tag>`" means this command:
+`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags <tag>`. Load the secrets before it:
+`set -a; source .env; set +a`. A `kind` setting such as `MCP_PROJECTS` is in `kind.vars.yml`.
+
 ## Agents and issues
 
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The agent log shows `claude-proxy: the token budget of agent ... is used`. | The agent used its token budget for 24 hours (#66). | 1. Wait. The agent continues when the 24-hour window has free tokens. 2. Or set a larger budget (admin.md, *Claude proxy and token budget*). |
-| The agent log shows `claude-proxy: missing or wrong agent key`. | The Secret `agent-<name>-proxy` does not agree with the signing key. | 1. Deploy again: `./run.sh 06`, or a pull request in the deployment repository. 2. Start the agent again. |
+| The agent log shows `claude-proxy: missing or wrong agent key`. | The Secret `agent-<name>-proxy` does not agree with the signing key. | 1. Deploy again: run the tag `agents` (kind), or a pull request in the deployment repository. 2. Start the agent again. |
 | The agent log shows `claude-proxy: no Claude credential for agent`. | The proxy has no `claude-shared` and no `claude-<name>`. | 1. Add the credential (admin.md, *Give an agent its own Claude credential*). 2. Deploy again. |
 | The playbook stops with `has no recognised Claude credential`. | The Secret Manager secret has no line `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...`. For example, it has only the token. | 1. Add a new version with the key name: `CLAUDE_CODE_OAUTH_TOKEN=<token>`. 2. Deploy again. |
-| The forge sidecar log shows the security event `usage-report-refused`. | The agent image is older than the proxy. Or a tool in the agent pod sent a usage report. | 1. Update the agent images (`./run.sh 06`, or the playbook). 2. If the images are new, read the job and look for an injection attempt. |
+| The forge sidecar log shows the security event `usage-report-refused`. | The agent image is older than the proxy. Or a tool in the agent pod sent a usage report. | 1. Update the agent images (the tag `agents` on kind, or the playbook). 2. If the images are new, read the job and look for an injection attempt. |
 | The agent log shows `claude-proxy: upstream not reachable`. | The proxy cannot connect to `api.anthropic.com`. | 1. Run `kubectl -n coding-agents logs deploy/claude-proxy`. 2. Examine the NetworkPolicy `claude-proxy` and the DNS of the cluster. |
 | The agent does not write a comment on an assigned issue. | The assignee is not the exact login of the agent. Or the agent does not run. Or the forge token is not valid. | 1. Examine the assignee. 2. Run `kubectl -n coding-agents get pods`. 3. If the log shows `cannot authenticate to forge`, give the agent a new forge token. |
 | The agent does not start an assigned issue. The log shows `label not added by a writer, skipped`. | The person who assigned the issue (Gitea) or added the label (GitHub) last does not have write permission on the repository (#237). | 1. Make sure that a person with write permission assigns the issue again. 2. Or give that person write permission. |
@@ -31,6 +35,8 @@
 | The router log shows `no agent among [...]`. | The event is about a person who has no agent. | No procedure. This is correct for issues that are not assigned to an agent. |
 | The agent pod shows `OOMKilled`. | The agent has too many items at the same time for its memory limit. | 1. Decrease `MAX_CONCURRENT`, or increase the memory limit. |
 | The agent stopped and does not start again. | Scale to zero is on, and no event for the agent occurred. | 1. Assign an issue or write a comment. 2. Find `scaled ... -> 1` and errors in the router log. |
+| An agent stays on the old image after an upgrade. Its `Updated` condition shows `Draining`. | The agent has a running job (#174). | 1. Wait. The operator replaces the pod after the job, or after `DRAIN_MAX_MINUTES`. 2. To replace it now, delete the pod: `kubectl -n coding-agents delete pod agent-<name>-0`. The job continues on the new pod. |
+| The agent does not start new work. The log shows `drain requested: no new jobs`. | The pod has the annotation `agentdev/drain`. | 1. If no upgrade runs, remove the annotation: `kubectl -n coding-agents annotate pod agent-<name>-0 agentdev/drain-`. |
 | The agent log shows `continuing an interrupted job`. | The pod stopped while the job ran (#175). The job continues from its last step. | No procedure. If the log then shows `could not resume Claude session`, the transcript is gone and Claude starts the task again. |
 | The agent tries the same item again after a delay. | The job failed. The delay increases up to a maximum. | 1. Read the log of the agent. It shows the failure and `retry in Ns`. |
 | The bootstrap stops with a message about branch protection. | The repository has a rule already. The bootstrap keeps the rule. | 1. Keep the rule, or run the bootstrap again with `REPLACE_BRANCH_PROTECTION=1`. |
@@ -71,10 +77,10 @@
 
 | Symptom | Cause | Procedure |
 |---|---|---|
-| The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `scripts/mcp-sync.sh <spec>` again and read its gateway errors. |
-| `scripts/mcp-sync.sh` stops with `has mcp: but ContextForge is not deployed`. Or the agents do not get MCP tools. | ContextForge is deployed only for the project specifications in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE). | 1. Add the path of the specification to `MCP_PROJECTS` in `config.env`, or to `mcp_projects` in `ansible/instance.yml`. 2. Run `./run.sh 08` or the playbook again. |
-| On GKE, the playbook stops at `Run scripts/mcp-sync.sh`. The output is hidden (`no_log`). | The specification path is not correct, a server host is not in `mcp_allowed_hosts`, or `yq`, `jq` or `curl` is not on the machine that runs the playbook. | 1. Make sure that each path in `mcp_projects` is correct. 2. Make sure that the host of each server in `mcp:` is in `mcp_allowed_hosts`. 3. Install `yq`, `jq` and `curl`. 4. Run the playbook again. 5. To see the error, run `scripts/mcp-sync.sh <spec>` with `KUBECTL`, `MCP_ALLOWED_HOSTS` and `CF_ADMIN_FILE` set. The script does not show tokens. |
-| `mcp-sync.sh` stops with `host ... is not in MCP_ALLOWED_HOSTS`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the sync again. |
+| The readiness shows `mcp: ContextForge did not list this project's tools`. | ContextForge does not run, or a server in `mcp:` is not available. | 1. Run `kubectl -n agentdev-platform get pods`. 2. Run `kubectl -n coding-agents describe mcpp <project>` and read the message. |
+| `scripts/bootstrap-project.sh` stops with `has mcp: but ContextForge is not deployed`. Or the agents do not get MCP tools. | ContextForge is deployed only for the project specifications in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE). | 1. Add the path of the specification to `MCP_PROJECTS` in `kind.vars.yml`, or to `mcp_projects` in `ansible/instance.yml`. 2. Run the tag `mcp` (kind) or the playbook (GKE) again. |
+| `kubectl -n coding-agents get mcpp` shows `Ready` `False`. Or the agents do not get MCP tools. | The `McpProject` status gives the reason: `HostNotAllowed` (a server is not in the allow-list), `ContextForgeUnavailable` (ContextForge is not deployed, or the admin login failed), `NoTools` (a server does not answer), `SyncFailed` (the message names the step). | 1. Run `kubectl -n coding-agents describe mcpp <project>` and read the message. 2. For `ContextForgeUnavailable`, make sure that the specification is in `MCP_PROJECTS` (kind) or `mcp_projects` (GKE) and run the tag `mcp` (kind) or the playbook (GKE). 3. For `NoTools`, make sure that the MCP server pods operate. The operator tries again every minute. |
+| An `McpProject` shows `HostNotAllowed`. | The server is not in the allow-list. | 1. Make sure that you trust the server (`docs/security.md` R51). 2. Add its host to `MCP_ALLOWED_HOSTS` (kind) or `mcp_allowed_hosts` (GKE). 3. Run the tags `mcp,operator` (kind) or the playbook (GKE): the operator gets the new list. |
 | The agent does not have a new tool. | The pod started before the sync. | 1. Run `kubectl -n coding-agents delete pod agent-<name>-0`. |
 
 ## authentik, API and web UI
@@ -82,12 +88,12 @@
 | Symptom | Cause | Procedure |
 |---|---|---|
 | The authentik login page shows again after each login. | The port-forward uses http. The session cookies are only for https. | 1. Start the port-forward to port `443`. 2. Use https://localhost:9443/. |
-| The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run `./run.sh 10` again. |
+| The API gives 401 for a new token. | The issuer of the token is not the same as `API_OIDC_ISSUER`. You logged in through a different URL. | Do one of these procedures. A: Log in through the URL in `API_OIDC_ISSUER`. B: Set `API_OIDC_ISSUER` to your URL. Then run the tag `api` again. |
 | External ingress: the authentik login page goes to `http://` or to the Service name. | The reverse proxy does not send `X-Forwarded-Proto` or the public `Host`, or its address is not in `authentik_trusted_proxy_cidrs`. | 1. Set the headers `Host`, `X-Forwarded-Proto: https` and `X-Forwarded-For` on the reverse proxy. 2. Add its source range to `authentik_trusted_proxy_cidrs`. 3. Run the playbook again. Refer to *Use an external ingress* in the administration guide. |
 | A SecurityEvent with source `ingress` and rule `forwarder-not-ready` (agent `ingress-forwarder`). | No pod of the external forwarder (`ingress.forwarder`) was Ready for `ingress.forwarder_not_ready_minutes`. The public hosts do not answer. An example cause is an expired auth key of the forwarder. | 1. Examine the pods: `kubectl -n <forwarder namespace> get pods -l <pod_selector>`. 2. Read the logs of the forwarder pod. 3. Repair the cause (for example, a new auth key). 4. Make sure that the operator log shows `external forwarder is Ready again`. |
 | External ingress: the reverse proxy gets a timeout from `agentdev-ui` or `authentik-server`. | The default-deny NetworkPolicy of the platform namespace stops the reverse proxy. `ingress.forwarder` is not set, or it does not select the reverse proxy. | 1. Set `ingress.forwarder` (`namespace`, `pod_selector` or `cidrs`). 2. Run the playbook again. 3. Examine the policies: `kubectl -n agentdev-platform get networkpolicy agentdev-ui-from-forwarder -o yaml`. |
 | The playbook stops at "Check the ingress mode and hosts". | `ingress.mode` is not `gateway` or `external`, or `ingress.host` is not set or is not a plain DNS name. | Correct the `ingress` values in `instance.yml`. |
-| In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run `./run.sh 09` again. |
+| In the web UI, **Sign in** does nothing. The browser console shows a CORS error. | The address of the web UI is not a strict redirect URI of the `agentdev` client. | 1. In `manifests/authentik-blueprint-agentdev.yaml`, add `http(s)://<ui host>/callback` as `strict`. 2. Run the tag `authentik` again. |
 
 ## Approvals
 
@@ -96,43 +102,50 @@
 | The agent waits, and a `/approve` comment has no effect | The comment is edited, the id is wrong, or the commenter does not have write access | Write a new comment with the correct id. Make sure that you have write access to the repository. |
 | No request gets a decision | The API does not have a forge token, or `APPROVALS` is not set on the API | Refer to *Turn on approvals* in the administration guide. Examine the log of `deploy/agentdev-api`. |
 | A request shows "void" | The job ended, the issue or pull request closed, a new commit replaced the old commit, or the agent pod stopped | No action. If the agent needs the action again, it makes a new request. |
-| No "waiting for approval" comment | The job is not known, or the forge refused the comment | Examine the log of the `forge` container of the agent pod. |
+| No approvals comment | Web Push sent the request to a person with write access, so the agent wrote no comment. Or the job is not known, or the forge refused the comment | Open **Approvals** in the web UI. Examine the log of the `forge` container of the agent pod: "sent by Web Push, no forge comment" is the first cause. |
 | A push is refused with `push-approval-pending` | Nobody made a decision in 14 minutes | Make a decision on the same request. The agent sends the same commit again in the next pass and uses the decision. |
 
-## kind cluster (run.sh step 01)
+## Deployment CI (GKE)
 
 | Symptom | Cause | Procedure |
 |---|---|---|
-| Step 01 stops with `kind v0.24 or later is needed`. | The installed `kind` is too old, or `kind version` shows no version. | 1. Install a new `kind`: `brew upgrade kind`. 2. Do run.sh step 01 again. |
-| Step 01 stops with `ansible-playbook: command not found`. | ansible-core is not installed. | 1. Install it: `pipx install ansible-core` (2.17 or later). 2. Do run.sh step 01 again. |
-| `kind create cluster` stops with `port is already allocated` or `address already in use`. | A different program or a different `kind` cluster uses port 8080 or 3000 of the computer. `manifests/kind-config.yaml` (`extraPortMappings`) needs these ports. | 1. Stop the other program, or delete the other cluster: `kind delete cluster --name <name>`. 2. Or remove `extraPortMappings` from a copy of the configuration and set `kind_cluster_config` to the copy. Then use `kubectl port-forward` for the web pages. |
+| The `preflight` job of the deployment CI stops at `get-credentials` or at `Required CRDs` with `NOT_FOUND` or `cluster agentdev not found`, and `infra` does not run. | The GKE cluster does not exist (a first install, or the cluster was deleted to stop the cost). The template from before #471 checks the cluster before `infra` can make it. | 1. Pin agentdev 1.2.0 or later (`ref=`, `image_tag`, `agentdev_ref`). 2. Copy `.github/workflows/deploy.yml` from `examples/deployment/gcp-gke` of that release. 3. Run the workflow again (Actions, deploy, Run workflow). `preflight` then does only the checks that need no cluster, `infra` makes the cluster, and `preflight-cluster` checks the CRDs. Do not apply `terraform/` locally. |
+| `preflight-cluster` shows the notice `no cluster` and `deploy` or `render` continues. | `infra` ran, but the cluster is not there (an apply that made no cluster). | Examine the log of the `infra` job. The `deploy` job stops at `get-credentials` if the cluster is missing. |
+| `preflight-cluster` stops with `cannot read the GKE cluster`. | `gcloud container clusters describe` failed for a reason that is not "not found" (permission, API). The checks are not skipped. | Examine the gcloud message in the log. Make sure that the automation account has `roles/container.admin`. |
 
-## agent-sandbox (run.sh step 02)
-
-| Symptom | Cause | Procedure |
-|---|---|---|
-| Step 02 stops at `Download the agent-sandbox release manifest`. | No access to github.com, or `AGENT_SANDBOX_VERSION` is not a release. | 1. Examine the version in `config.env`. 2. Do run.sh step 02 again. The manifest is kept in `~/.cache/agentdev` after the first download. |
-| Step 02 stops with `No module named 'kubernetes'`. | The Python package of `kubernetes.core` is not installed for ansible. | 1. Install it: `pipx inject ansible-core kubernetes`. 2. Install the collection: `ansible-galaxy collection install -r infra/ansible/requirements.yml`. 3. Do run.sh step 02 again. |
-| Step 02 stops at `Warm pool has 1 ready sandbox` after 300 s. | The sandbox pod can not start (image not loaded, PVC not bound, or the sandbox node is full). | 1. Examine the pods: `kubectl --context kind-agentdev -n agents get pods,pvc`. 2. Examine the events: `kubectl --context kind-agentdev -n agents describe pod`. 3. Do run.sh step 02 again. |
-
-## Sandbox checks (run.sh step 03)
+## kind cluster (tag `cluster`)
 
 | Symptom | Cause | Procedure |
 |---|---|---|
-| Step 03 stops at `Claim is Ready`. | Step 02 was not done, or the warm pool has no ready sandbox. | 1. Do run.sh step 02 again. 2. Examine the pool: `kubectl --context kind-agentdev -n agents get sandboxwarmpool,sandbox,pods`. 3. Do run.sh step 03 again. |
-| Step 03 stops at `Isolation check` or `Pod uses the runtime class gvisor`. | The sandbox does not run under gVisor. | 1. Do run.sh step 01 again (it checks gVisor). 2. Examine `runtimeClassName` in `manifests/sandbox-template.yaml`. 3. Do run.sh step 03 again. |
-| Step 03 stops at `Suspend released the pod` or `Sandbox is Ready again`. | The controller did not suspend or resume the sandbox in 180 s. | 1. Examine the controller: `kubectl --context kind-agentdev -n agent-sandbox-system logs deploy/agent-sandbox-controller`. 2. Do run.sh step 03 again. The step sets the sandbox to `Running` and the warm pool to 1 also after a failure. |
-| Step 03 says `Claude Code ran but hello.txt is missing`. | The API key is not valid, or the sandbox has no access to the Claude API. | 1. Examine the key. 2. Do run.sh step 02 with `ANTHROPIC_API_KEY` exported. 3. Do run.sh step 03 again. This is a warning, the step does not fail. |
+| The tag `prereqs` or `cluster` stops with `kind v0.24 or later is needed`. | The installed `kind` is too old, or `kind version` shows no version. | 1. Install a new `kind`: `brew upgrade kind`. 2. Run the tag `cluster` again. |
+| The shell shows `ansible-playbook: command not found`. | ansible-core is not installed. | 1. Install it: `pipx install ansible-core` (2.17 or later). 2. Run the playbook again. || `kind create cluster` stops with `port is already allocated` or `address already in use`. | A different program or a different `kind` cluster uses port 8080 or 3000 of the computer. `manifests/kind-config.yaml` (`extraPortMappings`) needs these ports. | 1. Stop the other program, or delete the other cluster: `kind delete cluster --name <name>`. 2. Or remove `extraPortMappings` from a copy of the configuration and set `kind_cluster_config` to the copy. Then use `kubectl port-forward` for the web pages. |
 
-To claim a new sandbox, delete the claim of the step: `kubectl --context kind-agentdev -n agents delete sandboxclaim agentdev-sandbox-test`.
-
-## Forge (run.sh step 05)
+## agent-sandbox (tag `sandbox`)
 
 | Symptom | Cause | Procedure |
 |---|---|---|
-| Step 05 stops at `Gitea answers on http://localhost:3000`. | The kind cluster has no port mapping for 3000, or Gitea did not start. | 1. Examine the pod: `kubectl --context kind-agentdev -n forge get pods,pvc`. 2. If the cluster was made without `manifests/kind-config.yaml`, do run.sh step 01 again. 3. Do run.sh step 05 again. |
-| Step 05 stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Export the password that was used the first time. 2. Do run.sh step 05 again. |
-| An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Do run.sh step 05 again, it mints a new token. |
+| The tag `sandbox` stops at `Download the agent-sandbox release manifest`. | No access to github.com, or `AGENT_SANDBOX_VERSION` is not a release. | 1. Examine the version in `kind.vars.yml`. 2. Run the tag `sandbox` again. The manifest is kept in `~/.cache/agentdev` after the first download. |
+| The tag `sandbox` stops with `No module named 'kubernetes'`. | The Python package of `kubernetes.core` is not installed for ansible. | 1. Install it: `pipx inject ansible-core kubernetes`. 2. Install the collection: `ansible-galaxy collection install -r infra/ansible/requirements.yml`. 3. Run the tag `sandbox` again. |
+| The tag `sandbox` stops at `Warm pool has 1 ready sandbox` after 300 s. | The sandbox pod can not start (image not loaded, PVC not bound, or the sandbox node is full). | 1. Examine the pods: `kubectl --context kind-agentdev -n agents get pods,pvc`. 2. Examine the events: `kubectl --context kind-agentdev -n agents describe pod`. 3. Run the tag `sandbox` again. |
+
+## Sandbox checks (tag `sandbox-test`)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The tag `sandbox-test` stops at `Claim is Ready`. | The tag `sandbox` was not done, or the warm pool has no ready sandbox. | 1. Run the tag `sandbox` again. 2. Examine the pool: `kubectl --context kind-agentdev -n agents get sandboxwarmpool,sandbox,pods`. 3. Run the tag `sandbox-test` again. |
+| The tag `sandbox-test` stops at `Isolation check` or `Pod uses the runtime class gvisor`. | The sandbox does not run under gVisor. | 1. Run the tag `cluster` again (it checks gVisor). 2. Examine `runtimeClassName` in `manifests/sandbox-template.yaml`. 3. Run the tag `sandbox-test` again. |
+| The tag `sandbox-test` stops at `Suspend released the pod` or `Sandbox is Ready again`. | The controller did not suspend or resume the sandbox in 180 s. | 1. Examine the controller: `kubectl --context kind-agentdev -n agent-sandbox-system logs deploy/agent-sandbox-controller`. 2. Run the tag `sandbox-test` again. The tag sets the sandbox to `Running` and the warm pool to 1 also after a failure. |
+| The tag `sandbox-test` says `Claude Code ran but hello.txt is missing`. | The API key is not valid, or the sandbox has no access to the Claude API. | 1. Examine the key. 2. Run the tag `sandbox` with `ANTHROPIC_API_KEY` exported. 3. Run the tag `sandbox-test` again. This is a warning, the tag does not fail. |
+
+To claim a new sandbox, delete the claim of the tag: `kubectl --context kind-agentdev -n agents delete sandboxclaim agentdev-sandbox-test`.
+
+## Forge (tag `forge`)
+
+| Symptom | Cause | Procedure |
+|---|---|---|
+| The tag `forge` stops at `Gitea answers on http://localhost:3000`. | The kind cluster has no port mapping for 3000, or Gitea did not start. | 1. Examine the pod: `kubectl --context kind-agentdev -n forge get pods,pvc`. 2. If the cluster was made without `manifests/kind-config.yaml`, run the tag `cluster` again. 3. Run the tag `forge` again. |
+| The tag `forge` stops at `Repo owner/playground` with status 401. | `FORGE_ADMIN_PASSWORD` is not the password of the existing owner account. | 1. Write the password that was used the first time in `.env`, and load `.env` again. 2. Run the tag `forge` again. |
+| An agent can not push: the token in `.secrets/<agent>.token` is rejected. | The token file is from an older forge (the forge was made again). | 1. Delete `.secrets/<agent>.token`. 2. Run the tag `forge` again, it mints a new token. |
 
 ## Report a problem that continues
 

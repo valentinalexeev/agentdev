@@ -3,3 +3,8 @@
 # false positives: fake credential shapes in the redaction test (#205), split at runtime since
 cca5ee0d7b250c022fe33833626941b0cee74d3d:images/operator/obsmcp_test.go:aws-access-token:175
 cca5ee0d7b250c022fe33833626941b0cee74d3d:images/operator/obsmcp_test.go:jwt:176
+# false positive: a fake checksum in the template render test of step 06 (#106, PR #288)
+929b77eb1dd8667426376b556cae6beab3f58b5c:infra/ansible/tests/kind_agents.yml:generic-api-key:75
+# the same fake checksum, moved by the toolchain setup egress values (#499, PR #537)
+3f50625f102f08214cc69faf6322818b692c5ddc:infra/ansible/tests/kind_agents.yml:generic-api-key:75
+3f50625f102f08214cc69faf6322818b692c5ddc:infra/ansible/tests/kind_agents.yml:generic-api-key:76

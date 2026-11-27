@@ -1,0 +1,12 @@
+# Flux controllers (agentdev #385). Only when agentdev installs Flux. On a cluster that already runs Flux, remove the
+# line `- flux-system` from ../kustomization.yaml and do not write gotk-components.yaml (#472).
+# The patch controller-nodepool.yaml puts every Flux controller on the GKE node pool `system`: the engine must never
+# keep a node of the agent pool (agentdev/pool=sandboxes) awake, so that pool can scale to zero (#181). For a cluster
+# without a pool named `system`, change `value` in controller-nodepool.yaml to the name of your system pool.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gotk-components.yaml
+patches:
+  - target: {kind: Deployment, labelSelector: app.kubernetes.io/part-of=flux}
+    path: controller-nodepool.yaml

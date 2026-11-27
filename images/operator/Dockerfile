@@ -1,7 +1,7 @@
 # agentdev operator (#47). Published as ghcr.io/valentinalexeev/agentdev-operator (#28).
 # The build stage runs on the builder's own platform and cross-compiles (GOOS/GOARCH from buildx), so multi-arch
 # images need no QEMU emulation for the Go build. Vet and tests run in CI (lint job), not here.
-FROM --platform=$BUILDPLATFORM golang:1.25.14-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
