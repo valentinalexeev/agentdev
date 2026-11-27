@@ -124,6 +124,7 @@ func mergeServer(t *testing.T, f *mergeForge, mode string) (http.Handler, *bytes
 	t.Cleanup(srv.Close)
 	c, _ := ghConfig(t, srv.URL)
 	c.MergeMode, c.MergeMethod, c.APIURL = mode, "squash", srv.URL
+	c.MergeApprovers = []string{"Owner"}
 	c.Protected = []string{".github/workflows/"}
 	d, err := newGH(c)
 	if err != nil {
@@ -204,7 +205,23 @@ func TestMergeRefusals(t *testing.T) {
 		}, 403, "agent or a bot", "merge-refused/high"},
 		"no write access": {func(f *mergeForge) {
 			f.reviews = []map[string]any{review("reader", "User", "APPROVED", mergeHead)}
-		}, 403, "no approval", "merge-refused/medium"},
+		}, 403, "not an owner", "merge-refused/medium"},
+		"approval by a non-owner with write access": {func(f *mergeForge) {
+			f.reviews = []map[string]any{review("helper", "User", "APPROVED", mergeHead)}
+		}, 403, "not an owner", "merge-refused/medium"},
+		"dismissed owner approval": {func(f *mergeForge) {
+			f.reviews = []map[string]any{review("owner", "User", "APPROVED", mergeHead), review("owner", "User", "DISMISSED", mergeHead)}
+		}, 403, "dismissed", "merge-refused/medium"},
+		"owner approved another commit, non-owner the head": {func(f *mergeForge) {
+			f.reviews = []map[string]any{review("owner", "User", "APPROVED", strings.Repeat("0", 40)), review("helper", "User", "APPROVED", mergeHead)}
+		}, 403, "stale approval", "merge-refused/medium"},
+		"no reviews": {func(f *mergeForge) { f.reviews = nil }, 403, "no approval", "merge-refused/medium"},
+		"pending status": {func(f *mergeForge) {
+			f.statuses = []map[string]any{{"context": "ci/x", "state": "pending"}}
+		}, 409, "ci/x is pending", ""},
+		"cancelled check": {func(f *mergeForge) {
+			f.runs = append(f.runs, map[string]any{"name": "e2e", "status": "completed", "conclusion": "cancelled"})
+		}, 403, "e2e: cancelled", "merge-refused/medium"},
 		"changes requested": {func(f *mergeForge) {
 			f.reviews = append(f.reviews, review("helper", "User", "CHANGES_REQUESTED", mergeHead))
 		}, 403, "requests changes", "merge-refused/medium"},
@@ -308,10 +325,12 @@ func TestMergeConfig(t *testing.T) {
 	for _, tc := range []struct {
 		mode, method string
 		ok           bool
-	}{{"", "", true}, {"off", "", true}, {"gated", "squash", true}, {"gated", "rebase", true},
-		{"on", "", false}, {"gated", "fast-forward", false}} {
-		env := map[string]string{"MERGE_MODE": tc.mode, "MERGE_METHOD": tc.method}
-		_, _, err := mergeConfig(func(k, def string) string {
+		approvers    string
+	}{{"", "", true, ""}, {"off", "", true, ""}, {"gated", "squash", true, "owner"}, {"gated", "rebase", true, "a, b"},
+		{"on", "", false, "owner"}, {"gated", "fast-forward", false, "owner"},
+		{"gated", "", false, ""}, {"gated", "", false, " , "}, {"gated", "", false, "bad login!"}} {
+		env := map[string]string{"MERGE_MODE": tc.mode, "MERGE_METHOD": tc.method, "MERGE_APPROVERS": tc.approvers}
+		_, _, _, err := mergeConfig(func(k, def string) string {
 			if v := env[k]; v != "" {
 				return v
 			}
@@ -320,5 +339,28 @@ func TestMergeConfig(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("%+v: %v", tc, err)
 		}
+	}
+}
+
+// the caller cannot choose the merge method or the approval: the query and body are ignored beyond pr
+func TestMergeCallerCannotChooseMethodOrApprover(t *testing.T) {
+	f := newMergeForge()
+	f.reviews = []map[string]any{review("helper", "User", "APPROVED", mergeHead)}
+	h, _ := mergeServer(t, f, "gated")
+	req := httptest.NewRequest("POST", "/merge?pr=20&merge_method=rebase&approver=helper&sha="+mergeHead,
+		strings.NewReader(`{"merge_method":"rebase","approver":"helper","approved":true}`))
+	req.RemoteAddr = "127.0.0.1:5555"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 403 || len(f.merged) != 0 {
+		t.Fatalf("forged approval: %d %s, merged %v", rec.Code, rec.Body, f.merged)
+	}
+	f.reviews = []map[string]any{review("owner", "User", "APPROVED", mergeHead)}
+	req = httptest.NewRequest("POST", "/merge?pr=20&merge_method=rebase", strings.NewReader(`{"merge_method":"rebase"}`))
+	req.RemoteAddr = "127.0.0.1:5555"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || len(f.merged) != 1 || !strings.Contains(f.merged[0], `"merge_method":"squash"`) {
+		t.Fatalf("method must come from MERGE_METHOD: %d %v", rec.Code, f.merged)
 	}
 }

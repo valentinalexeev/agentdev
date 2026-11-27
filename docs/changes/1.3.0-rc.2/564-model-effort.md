@@ -1,12 +1,7 @@
----
-issue: 564
-type: feature
-section: Added
-status: done
-breaking: false
-title: Per-agent Claude model and reasoning effort
-components: [operator, worker, ansible]
----
+# Per-agent Claude model and reasoning effort (#564)
+
+Released in 1.3.0-rc.2 (2026-11-25). Type: feature. Section: Added. Components: operator, worker, ansible.
+
 ## Summary
 
 `Agent` has `spec.model` (an alias such as `opus`, or a full model name) and `spec.effort` (`low`, `medium`, `high`,

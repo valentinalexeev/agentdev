@@ -63,6 +63,24 @@ spec:
                   Only claude-* names (claude-shared or claude-<agent>), for the same reason.
                 pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              diagnostics:
+                description: 'Diagnostics of the agent''s jobs (#588). Unset: none,
+                  and the pod is as before.'
+                properties:
+                  intervalSeconds:
+                    description: Seconds between two samples. Default 60.
+                    format: int32
+                    maximum: 3600
+                    minimum: 5
+                    type: integer
+                  resources:
+                    description: |-
+                      Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+                      container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+                      a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+                      values show as n/a.
+                    type: boolean
+                type: object
               effort:
                 description: 'Reasoning effort of the agent''s runs (`claude --effort`,
                   #564). Unset: the CLI''s own default, as before.'
@@ -107,9 +125,18 @@ spec:
                 description: 'Whether the agent may merge its own pull requests (#578).
                   Unset or mode off: never, as before (a person merges).'
                 properties:
+                  approvers:
+                    description: |-
+                      Forge logins of the owners whose approval of the exact head commit allows the merge. Required with mode gated:
+                      an approval by anyone else (another collaborator with write access, an agent, a bot) never merges.
+                    items:
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$
+                      type: string
+                    maxItems: 20
+                    type: array
                   method:
                     description: Merge method, as the repository allows it. Default
-                      merge.
+                      merge (a merge commit).
                     enum:
                     - merge
                     - squash
@@ -192,6 +219,21 @@ spec:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
+              retries:
+                description: 'Retries of a job that the infrastructure stopped (#593).
+                  Unset: the defaults, and the pod is as before.'
+                properties:
+                  infrastructure:
+                    default: 2
+                    description: |-
+                      How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+                      preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+                      deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+                    format: int32
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
               scaleToZero:
                 default: true
                 description: |-

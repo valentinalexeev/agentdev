@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -149,6 +151,29 @@ func (s *server) checkRunEvents(b *runEventBatch) error {
 	return nil
 }
 
+// runEventRepoRe: a repo value that can be shown in a security event as it is (owner/name, no other characters).
+var runEventRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
+
+// refusedBatch: what an administrator needs to find the sender of a refused batch (#577): the repo it named (only when
+// it has the owner/name form; else a fixed text), the number of events and a short hash of the first event. Never
+// the event text: run events are model output.
+func refusedBatch(b *runEventBatch) string {
+	repo := "repo " + b.Repo
+	switch {
+	case b.Repo == "":
+		repo = "no repo"
+	case !runEventRepoRe.MatchString(b.Repo):
+		repo = "repo not of the form owner/name"
+	}
+	first := "none"
+	if len(b.Events) > 0 {
+		j, _ := json.Marshal(b.Events[0])
+		h := sha256.Sum256(j)
+		first = hex.EncodeToString(h[:6])
+	}
+	return fmt.Sprintf("%s, %d events, first event sha256 %s", repo, len(b.Events), first)
+}
+
 func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 	var b runEventBatch
 	dec := json.NewDecoder(io.LimitReader(r.Body, runEventsMaxBody+1))
@@ -163,7 +188,7 @@ func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.checkRunEvents(&b); err != nil {
-		s.event(r, "run-events-invalid", "low", "run events refused: "+err.Error())
+		s.event(r, "run-events-invalid", "low", "run events refused: "+err.Error()+" ("+refusedBatch(&b)+")")
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

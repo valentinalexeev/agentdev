@@ -68,6 +68,12 @@ type AgentSpec struct {
 	// read-only to the agent. Unset: none, and the pod is as before.
 	// +optional
 	Toolchain *AgentToolchain `json:"toolchain,omitempty"`
+	// Diagnostics of the agent's jobs (#588). Unset: none, and the pod is as before.
+	// +optional
+	Diagnostics *AgentDiagnostics `json:"diagnostics,omitempty"`
+	// Retries of a job that the infrastructure stopped (#593). Unset: the defaults, and the pod is as before.
+	// +optional
+	Retries *AgentRetries `json:"retries,omitempty"`
 	// Whether the agent may merge its own pull requests (#578). Unset or mode off: never, as before (a person merges).
 	// +optional
 	Merge *AgentMerge `json:"merge,omitempty"`
@@ -79,6 +85,33 @@ type AgentSpec struct {
 	// Paused: no pod, state kept (day-2 pause/resume, #4). Unlike agentdev/blocked it is the owner's desired state.
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+}
+
+// AgentDiagnostics turns on extra records of the agent's jobs (#588). Default off: no extra load.
+type AgentDiagnostics struct {
+	// Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+	// container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+	// a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+	// values show as n/a.
+	// +optional
+	Resources bool `json:"resources,omitempty"`
+	// Seconds between two samples. Default 60.
+	// +optional
+	// +kubebuilder:validation:Minimum=5
+	// +kubebuilder:validation:Maximum=3600
+	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
+}
+
+// AgentRetries bounds how often a job is run again after an interruption (#593).
+type AgentRetries struct {
+	// How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+	// preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+	// deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+	// +optional
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10
+	Infrastructure *int32 `json:"infrastructure,omitempty"`
 }
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).
@@ -154,10 +187,16 @@ type AgentMerge struct {
 	// +kubebuilder:validation:Enum=off;gated
 	// +kubebuilder:default=off
 	Mode string `json:"mode"`
-	// Merge method, as the repository allows it. Default merge.
+	// Merge method, as the repository allows it. Default merge (a merge commit).
 	// +kubebuilder:validation:Enum=merge;squash;rebase
 	// +optional
 	Method string `json:"method,omitempty"`
+	// Forge logins of the owners whose approval of the exact head commit allows the merge. Required with mode gated:
+	// an approval by anyone else (another collaborator with write access, an agent, a bot) never merges.
+	// +kubebuilder:validation:MaxItems=20
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`
+	// +optional
+	Approvers []string `json:"approvers,omitempty"`
 }
 
 // AgentPermission is the Claude Code permission mode of the agent (#500). Only the administrator sets it (the Agent

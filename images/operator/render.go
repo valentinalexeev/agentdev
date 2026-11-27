@@ -172,7 +172,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
 			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), mergeEnv(a, false)...)...),
+		), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), toolsEnv(a)...), toolchainAgentEnv(a)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), mergeEnv(a, false)...)...),
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
 			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
@@ -321,6 +321,9 @@ func modelEnv(a *v1.Agent) []corev1.EnvVar {
 	return e
 }
 
+// mergeLoginRe: a GitHub login (the sidecar checks it again).
+var mergeLoginRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
 // mergeValid is the operator's check behind the CRD enums (#578): "" when spec.merge is unset or valid.
 func mergeValid(a *v1.Agent) string {
 	m := a.Spec.Merge
@@ -333,18 +336,30 @@ func mergeValid(a *v1.Agent) string {
 	if m.Method != "" && m.Method != "merge" && m.Method != "squash" && m.Method != "rebase" {
 		return "spec.merge.method: not one of merge, squash, rebase"
 	}
+	if m.Mode == "gated" && len(m.Approvers) == 0 {
+		return "spec.merge.approvers: mode gated needs the owner logins whose approval allows a merge"
+	}
+	if len(m.Approvers) > 20 {
+		return "spec.merge.approvers: at most 20"
+	}
+	for _, l := range m.Approvers {
+		if !mergeLoginRe.MatchString(l) {
+			return "spec.merge.approvers: not a forge login"
+		}
+	}
 	return ""
 }
 
-// mergeEnv passes spec.merge (#578) to the forge sidecar as MERGE_MODE=gated and MERGE_METHOD, and to the worker as
-// MERGE_MODE=gated (the loop then asks the sidecar to merge an approved PR; the sidecar decides). Nothing with mode
+// mergeEnv passes spec.merge (#578) to the forge sidecar as MERGE_MODE=gated, MERGE_APPROVERS and MERGE_METHOD, and to
+// the worker as MERGE_MODE=gated and MERGE_APPROVERS (the loop asks the sidecar only after an owner approved, so other
+// reviews are no security event; the sidecar decides). The worker never gets the method. Nothing with mode
 // off or unset, so the pod template of an agent without the field is unchanged (no restart on upgrade).
 func mergeEnv(a *v1.Agent, forge bool) []corev1.EnvVar {
 	m := a.Spec.Merge
 	if m == nil || m.Mode != "gated" {
 		return nil
 	}
-	e := []corev1.EnvVar{{Name: "MERGE_MODE", Value: "gated"}}
+	e := []corev1.EnvVar{{Name: "MERGE_MODE", Value: "gated"}, {Name: "MERGE_APPROVERS", Value: strings.Join(m.Approvers, ",")}}
 	if forge {
 		method := m.Method
 		if method == "" {
@@ -353,6 +368,31 @@ func mergeEnv(a *v1.Agent, forge bool) []corev1.EnvVar {
 		e = append(e, corev1.EnvVar{Name: "MERGE_METHOD", Value: method})
 	}
 	return e
+}
+
+// diagnosticsEnv passes spec.diagnostics to the worker (#588): DIAG_RESOURCES=true and DIAG_INTERVAL_SECONDS turn on
+// the resource samples of each run. Nothing when off (the default), so the pod template of an agent without the field
+// is unchanged (no restart on upgrade) and the worker adds no load.
+func diagnosticsEnv(a *v1.Agent) []corev1.EnvVar {
+	d := a.Spec.Diagnostics
+	if d == nil || !d.Resources {
+		return nil
+	}
+	e := []corev1.EnvVar{{Name: "DIAG_RESOURCES", Value: "true"}}
+	if d.IntervalSeconds >= 5 && d.IntervalSeconds <= 3600 {
+		e = append(e, corev1.EnvVar{Name: "DIAG_INTERVAL_SECONDS", Value: strconv.Itoa(int(d.IntervalSeconds))})
+	}
+	return e
+}
+
+// retriesEnv passes spec.retries.infrastructure to the worker (#593) as INFRA_RETRIES. Nothing when unset or at the
+// default (2), so the pod template of an agent without the field is unchanged (no restart on upgrade).
+func retriesEnv(a *v1.Agent) []corev1.EnvVar {
+	n := infraRetries(a)
+	if n == defaultInfraRetries {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "INFRA_RETRIES", Value: strconv.Itoa(n)}}
 }
 
 // toolsEnv passes spec.tools.allow to the worker (#496, ADR 0010 D1) as CLAUDE_TOOLS_EXTRA, comma-joined; the worker

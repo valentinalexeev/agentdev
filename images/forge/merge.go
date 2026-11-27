@@ -23,8 +23,10 @@ import (
 //
 //  1. the PR is open, not a draft, its head is a branch agent/<FORGE_USER>/* of this repository, and its base is the
 //     repository's default branch or another branch of this agent;
-//  2. a person (account type User, not this agent, permission write, maintain or admin) approved the exact head
-//     commit, and no reviewer's latest review requests changes;
+//  2. an owner (a login of MERGE_APPROVERS, the Agent's spec.merge.approvers; account type User, not this agent,
+//     permission write, maintain or admin) approved the exact head commit: their latest deciding review is APPROVED
+//     with commit_id equal to the head. A dismissed approval, an approval of another commit or an approval by anyone
+//     else never counts. No reviewer's latest review requests changes;
 //  3. every check run and commit status on the head commit passed, and the forge says the PR is mergeable now
 //     (mergeable_state clean or has_hooks: required checks, required reviews and "up to date" as the branch rules say);
 //  4. no approval request of this agent on the PR is open (#67);
@@ -41,16 +43,42 @@ import (
 
 var mergeMethods = map[string]bool{"merge": true, "squash": true, "rebase": true}
 
-// mergeConfig reads MERGE_MODE (off | gated) and MERGE_METHOD (merge | squash | rebase, default merge).
-func mergeConfig(get func(string, string) string) (mode, method string, err error) {
+// mergeConfig reads MERGE_MODE (off | gated), MERGE_METHOD (merge | squash | rebase, default merge) and
+// MERGE_APPROVERS (comma-separated owner logins; required with gated, else the sidecar does not start).
+func mergeConfig(get func(string, string) string) (mode, method string, approvers []string, err error) {
 	mode, method = get("MERGE_MODE", "off"), get("MERGE_METHOD", "merge")
 	if mode != "off" && mode != "gated" {
-		return "", "", fmt.Errorf("MERGE_MODE %q: off or gated", mode)
+		return "", "", nil, fmt.Errorf("MERGE_MODE %q: off or gated", mode)
 	}
 	if !mergeMethods[method] {
-		return "", "", fmt.Errorf("MERGE_METHOD %q: merge, squash or rebase", method)
+		return "", "", nil, fmt.Errorf("MERGE_METHOD %q: merge, squash or rebase", method)
 	}
-	return mode, method, nil
+	if mode == "off" {
+		return mode, method, nil, nil
+	}
+	for _, l := range strings.Split(get("MERGE_APPROVERS", ""), ",") {
+		if l = strings.TrimSpace(l); l == "" {
+			continue
+		}
+		if !ghLoginRe.MatchString(l) {
+			return "", "", nil, fmt.Errorf("MERGE_APPROVERS: %q is not a login", l)
+		}
+		approvers = append(approvers, l)
+	}
+	if len(approvers) == 0 {
+		return "", "", nil, errors.New("MERGE_MODE=gated needs MERGE_APPROVERS (the owner logins)")
+	}
+	return mode, method, approvers, nil
+}
+
+// isMergeApprover: login is one of MERGE_APPROVERS (case-insensitive, as GitHub logins are).
+func (s *server) isMergeApprover(login string) bool {
+	for _, a := range s.c.MergeApprovers {
+		if strings.EqualFold(a, login) {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeOn: the endpoint exists only with MERGE_MODE=gated on GitHub.
@@ -265,7 +293,7 @@ func (s *server) mergeApprover(ctx context.Context, prPath, sha string) (string,
 			break
 		}
 	}
-	var stale, bots []string
+	var stale, bots, others, dismissed []string
 	for _, k := range order {
 		if latest[k].State == "CHANGES_REQUESTED" {
 			return "", refuseMerge("medium", "merge refused: %s requests changes", latest[k].User.Login)
@@ -273,6 +301,9 @@ func (s *server) mergeApprover(ctx context.Context, prPath, sha string) (string,
 	}
 	for _, k := range order {
 		rv := latest[k]
+		if rv.State == "DISMISSED" && s.isMergeApprover(rv.User.Login) {
+			dismissed = append(dismissed, rv.User.Login)
+		}
 		if rv.State != "APPROVED" {
 			continue
 		}
@@ -284,7 +315,8 @@ func (s *server) mergeApprover(ctx context.Context, prPath, sha string) (string,
 			bots = append(bots, rv.User.Login)
 			continue
 		}
-		if !ghLoginRe.MatchString(rv.User.Login) {
+		if !ghLoginRe.MatchString(rv.User.Login) || !s.isMergeApprover(rv.User.Login) {
+			others = append(others, rv.User.Login)
 			continue
 		}
 		var perm struct {
@@ -301,10 +333,14 @@ func (s *server) mergeApprover(ctx context.Context, prPath, sha string) (string,
 	switch {
 	case len(bots) > 0:
 		return "", refuseMerge("high", "merge refused: approval by an agent or a bot account (%s) does not count", strings.Join(bots, ", "))
-	case len(stale) > 0:
+	case len(stale) > 0 && len(dismissed) == 0:
 		return "", refuseMerge("medium", "merge refused: stale approval (%s approved an earlier commit, not %s)", strings.Join(stale, ", "), sha[:12])
+	case len(dismissed) > 0:
+		return "", refuseMerge("medium", "merge refused: the approval of %s was dismissed", strings.Join(dismissed, ", "))
+	case len(others) > 0:
+		return "", refuseMerge("medium", "merge refused: approval by %s, not an owner (MERGE_APPROVERS)", strings.Join(others, ", "))
 	}
-	return "", refuseMerge("medium", "merge refused: no approval of head %s by a person with write access", sha[:12])
+	return "", refuseMerge("medium", "merge refused: no approval of head %s by an owner with write access", sha[:12])
 }
 
 // mergeChecks returns "name: conclusion" of every check run and commit status on sha, or refuses or waits when one

@@ -618,9 +618,13 @@ func TestModelEffortInvalidRefused(t *testing.T) {
 // unset: no variable in either container (pod template unchanged).
 func TestMergeFromSpec(t *testing.T) {
 	r, c := setup(t, agent("alice", nil),
-		agent("bob", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Method: "squash"} }),
+		agent("bob", func(a *v1.Agent) {
+			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Method: "squash", Approvers: []string{"owner"}}
+		}),
 		agent("carol", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "off", Method: "rebase"} }),
-		agent("dave", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "gated"} }))
+		agent("dave", func(a *v1.Agent) {
+			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Approvers: []string{"owner", "co-owner"}}
+		}))
 	for _, n := range []string{"alice", "bob", "carol", "dave"} {
 		reconcile(t, r, n)
 	}
@@ -637,9 +641,9 @@ func TestMergeFromSpec(t *testing.T) {
 		}
 		return "<unset>"
 	}
-	for _, tc := range []struct{ agent, worker, mode, method string }{
-		{"alice", "<unset>", "<unset>", "<unset>"}, {"bob", "gated", "gated", "squash"},
-		{"carol", "<unset>", "<unset>", "<unset>"}, {"dave", "gated", "gated", "merge"},
+	for _, tc := range []struct{ agent, worker, mode, method, approvers string }{
+		{"alice", "<unset>", "<unset>", "<unset>", "<unset>"}, {"bob", "gated", "gated", "squash", "owner"},
+		{"carol", "<unset>", "<unset>", "<unset>", "<unset>"}, {"dave", "gated", "gated", "merge", "owner,co-owner"},
 	} {
 		s := getSTS(t, c, tc.agent)
 		if got := envOf(s, "MERGE_MODE"); got != tc.worker {
@@ -654,13 +658,21 @@ func TestMergeFromSpec(t *testing.T) {
 		if got := forgeEnv(s, "MERGE_METHOD"); got != tc.method {
 			t.Errorf("%s: forge MERGE_METHOD = %q, want %q", tc.agent, got, tc.method)
 		}
+		if got := forgeEnv(s, "MERGE_APPROVERS"); got != tc.approvers {
+			t.Errorf("%s: forge MERGE_APPROVERS = %q, want %q", tc.agent, got, tc.approvers)
+		}
+		if got := envOf(s, "MERGE_APPROVERS"); got != tc.approvers {
+			t.Errorf("%s: worker MERGE_APPROVERS = %q, want %q", tc.agent, got, tc.approvers)
+		}
 	}
 }
 
 func TestMergeInvalidRefused(t *testing.T) {
 	for name, m := range map[string]*v1.AgentMerge{
-		"mode":   {Mode: "always"},
-		"method": {Mode: "gated", Method: "fast-forward"},
+		"mode":            {Mode: "always"},
+		"method":          {Mode: "gated", Method: "fast-forward", Approvers: []string{"owner"}},
+		"gated, no owner": {Mode: "gated"},
+		"bad approver":    {Mode: "gated", Approvers: []string{"owner,mallory"}},
 	} {
 		r, c := setup(t, agent("mallory", func(a *v1.Agent) { a.Spec.Merge = m }))
 		reconcile(t, r, "mallory")

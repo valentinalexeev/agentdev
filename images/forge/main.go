@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ type Config struct {
 	AgentName, ForgeKind     string
 	// #578: MERGE_MODE off (default) | gated, MERGE_METHOD merge | squash | rebase (merge.go)
 	MergeMode, MergeMethod string
+	MergeApprovers         []string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
 	RegisterEvery                                   time.Duration
@@ -103,7 +105,7 @@ func loadConfig() (*Config, error) {
 		return nil, fmt.Errorf("REGISTER_EVERY: %q", os.Getenv("REGISTER_EVERY"))
 	}
 	c.RegisterEvery = time.Duration(every) * time.Second
-	if c.MergeMode, c.MergeMethod, err = mergeConfig(getenv); err != nil {
+	if c.MergeMode, c.MergeMethod, c.MergeApprovers, err = mergeConfig(getenv); err != nil {
 		return nil, err
 	}
 	if c.ForgeKind == "github" {
@@ -156,5 +158,49 @@ func main() {
 	startWebhook(c, s.logf)
 	s.logf("forge API on %s, repos=%s, protected=%s", c.Listen, strings.Join(c.Repos, ","), strings.Join(c.Protected, ","))
 	srv := &http.Server{Addr: c.Listen, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second}
+	// #593: on SIGTERM the sidecar keeps serving while the loop pushes the work in progress of its jobs, until the
+	// loop says it is done (a loop-exit line in the wake file) or FORGE_TERM_HOLD_SECONDS pass
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	go func() {
+		<-term
+		hold := termHold(getenv("FORGE_TERM_HOLD_SECONDS", "25"))
+		s.logf("SIGTERM: serving the loop's last pushes for at most %s", hold)
+		waitLoopExit(c.WakeFile, hold, 200*time.Millisecond)
+		os.Exit(0)
+	}()
 	log.Fatal(srv.ListenAndServe())
+}
+
+// termHold: FORGE_TERM_HOLD_SECONDS, 0..300, default 25 (a Spot VM gets 30 s in all)
+func termHold(v string) time.Duration {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 300 {
+		n = 25
+	}
+	return time.Duration(n) * time.Second
+}
+
+// waitLoopExit returns once the wake file grows by a line with "loop-exit" (the loop's SIGTERM handler is done), or
+// after max. Only the end of the file written after the call is read.
+func waitLoopExit(wakeFile string, max, poll time.Duration) bool {
+	var off int64
+	if fi, err := os.Stat(wakeFile); err == nil {
+		off = fi.Size()
+	}
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		if f, err := os.Open(wakeFile); err == nil {
+			if fi, err := f.Stat(); err == nil && fi.Size() > off {
+				buf := make([]byte, min(fi.Size()-off, 1<<16))
+				if n, _ := f.ReadAt(buf, off); n > 0 && strings.Contains(string(buf[:n]), " loop-exit") {
+					f.Close()
+					return true
+				}
+			}
+			f.Close()
+		}
+		time.Sleep(poll)
+	}
+	return false
 }

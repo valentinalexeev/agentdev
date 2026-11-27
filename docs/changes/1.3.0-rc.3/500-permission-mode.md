@@ -1,12 +1,7 @@
----
-issue: 500
-type: feature
-section: Added
-status: in-progress
-breaking: false
-title: Per-agent Claude Code permission mode (auto) with administrator rules
-components: [operator, worker, ansible]
----
+# Per-agent Claude Code permission mode (auto) with administrator rules (#500)
+
+Released in 1.3.0-rc.3 (2026-11-26). Type: feature. Section: Added. Components: operator, worker, ansible. PR: #502.
+
 ## Summary
 
 `Agent` has `spec.permission`: `mode: dontAsk` (default, as before) or `mode: auto`, with optional classifier rules in
@@ -23,6 +18,5 @@ with control characters (phase `invalid`); the worker falls back to `dontAsk` on
 the field gets no new environment, so its pod is not restarted on upgrade. `bypassPermissions` is not supported, and
 the hard deny rules of Claude Code cannot be changed.
 
-Not yet done: the mode in the API audit log and the console, a security event for a call the classifier allowed
-outside `CLAUDE_TOOLS`, and a check on a live cluster that the classifier calls pass `claude-proxy` and that
-`--permission-mode auto` combines with `--permission-prompt-tool`.
+The owner checked mode `auto` on a live cluster with 1.3.0-rc.2 (#504). Not yet done: the mode in the API audit log
+and the console, and a security event for a call the classifier allowed outside `CLAUDE_TOOLS`.

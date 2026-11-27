@@ -561,7 +561,10 @@ func (r *AgentReconciler) toolchainEvent(ctx context.Context, a *v1.Agent, p *co
 	ev := &v1.SecurityEvent{ObjectMeta: metav1.ObjectMeta{Name: eventName(spec), Namespace: a.Namespace,
 		Labels: map[string]string{"agent": a.Name, "agentdev/severity": spec.Severity, "agentdev/pod-uid": string(p.UID), "agentdev/job": ""}},
 		Spec: spec}
-	if err := r.Create(ctx, ev); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, ev); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil // the same report of the same pod, seen on an earlier reconcile: logged then (#577)
+		}
 		return fmt.Errorf("toolchain security event: %w", err)
 	}
 	log.FromContext(ctx).Info("security event", "agent", a.Name, "rule", spec.Rule, "severity", spec.Severity)

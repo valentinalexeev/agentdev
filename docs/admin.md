@@ -33,6 +33,7 @@ The bootstrap does these actions:
   replaces the rule.
 - It adds the labels.
 - It proposes the process pack in a pull request.
+- If the specification has `mcp:`, it applies an `McpProject` and waits until the operator syncs it (#547).
 - It deploys the agents and waits for the **ready** comment of each agent.
 
 Limits of v1:
@@ -747,10 +748,49 @@ NOTE: To change the `service` label, set `service` in `labels`.
 NOTE: The `labels` field of a notification channel is its configuration (`email_address`), not resource labels. A tag
 scanner that reads it reports a false positive.
 
-## Spot system pool (GKE)
+## Spot VMs (GKE)
 
-The system pool runs the router, the operator, the UI and the proxies. On GKE it can run on Spot VMs to cut its cost
-by about 60-70%. Spot is off by default.
+On GKE, agentdev can run its node pools on Spot VMs. A Spot VM costs about 60-70% less than a normal VM. Google can
+stop a Spot VM at any time, with about 30 seconds of notice. This is a preemption (also "reclaim"). Two settings in
+the deployment repository control the pools:
+
+- `system_pool_spot`: the system pool (router, operator, API, UI, proxies). Off by default.
+- `agent_pool_spot`: the agent pool (the pods of the agents and their jobs).
+
+### What Spot VMs change
+
+A preemption gives a different effect for each pool.
+
+| Node that Google stops | Effect |
+|---|---|
+| System node | The platform is down until the pool has a new node, usually about 1 minute. Webhooks sent in this time are lost. Each agent finds its work at the next poll (`poll_seconds`). |
+| Agent node | Each job on the node stops. The issue or pull request gets a comment that says the job was interrupted by a node preemption. The operator starts the job again, up to the retry limit (see "How agentdev limits the effect"). |
+| Agent node, then no new node | The agent pod stays `Pending`. The reason is `FailedScheduling`. See "Agents stay Pending". |
+
+NOTE: A node upgrade has the same effect on the pods of the node as a preemption. GKE restarts the pods of each
+node, one node at a time.
+
+The agent volume stays when its node stops, because it is a separate disk. Do not trust work that the agent did not
+push to the forge. A job that did not finish does not continue on its own.
+
+#### Agents stay Pending
+
+The agent volume is a zonal disk. The agent pod can start only on a node in the zone of its volume. If this zone has
+no Spot capacity, GKE cannot make a node, and the pod stays `Pending`. This can take many hours. The agent starts
+no job in this time.
+
+#### Other causes of exit code 137
+
+Exit code 137 means that the process got SIGKILL. A preemption is only one cause. Other causes are:
+
+- a security auto-pause of the agent (`agent paused by security event` in the operator log)
+- a scale-down of the agent pool by the cluster autoscaler
+- a pod replaced during an upgrade
+- a memory limit of the pod (an out-of-memory kill)
+
+The comment on the issue shows the reason when agentdev can find it, for example `security-pause`, `node-preempted` or
+`oom`. If the comment shows `unknown` or `pod-deleted`, or only the exit code, use the next
+task to find the cause.
 
 ### Run the system pool on Spot VMs
 
@@ -771,6 +811,100 @@ by about 60-70%. Spot is off by default.
 NOTE: The platform components have one replica each, so no PodDisruptionBudget is set: a budget with one replica
 blocks node upgrades, and a Spot preemption does not respect it. The router has a readiness probe, so the Service
 sends traffic only to a ready pod.
+
+### How agentdev limits the effect
+
+agentdev 1.3.0-rc.3 has these measures. They reduce the loss from a preemption. They do not prevent it.
+
+1. **Drain before an upgrade.** The operator replaces an agent pod only when the agent has no running job, for at most
+   `rollout.drain_max_minutes`. This protects jobs from an upgrade of agentdev. It does not protect them from a
+   preemption, because Google gives no time to drain. (See "What happens to running jobs during an upgrade".)
+2. **The reason of a stop is recorded.** When a job ends without a summary, the comment and the job record show a
+   reason. The operator finds the reason before the pod is gone:
+
+   | Reason | Meaning | Job starts again |
+   |---|---|---|
+   | `node-preempted` | Google stopped the Spot node (the node shut down). | yes |
+   | `drain`, `scale-down` | A node drain or the cluster autoscaler evicted the pod. | yes |
+   | `upgrade` | agentdev replaced the pod during an upgrade. | yes |
+   | `pod-deleted` | The pod was deleted and agentdev cannot tell why. | yes |
+   | `security-pause` | The operator paused the agent. | no |
+   | `deadline`, `oom`, `evicted`, `unknown` | The job ended for its own reason, or agentdev cannot tell. | no |
+
+   For a `security-pause`, the `SecurityPaused` condition and the Kubernetes Event name the jobs and the events that
+   caused the pause.
+3. **The agent pushes its work when the pod stops.** On SIGTERM, the worker records the reason, stops the jobs, and
+   saves the work in progress as a commit. It pushes the commit to the branch `agent/<forge user>/wip/<job>` (`<job>`
+   is `issue-<n>` or `pr-<n>`), for at most 20 seconds (`TERM_PUSH_SECONDS`). The forge sidecar continues to accept
+   these pushes for at most 25 seconds after its own SIGTERM (`FORGE_TERM_HOLD_SECONDS`). This fits the 30 seconds
+   of notice of a Spot VM. Each job also pushes its work before each Claude run, when the job has commits that the
+   forge does not have.
+
+   NOTE: The work in progress goes only to the `wip/` branch. It never reaches the job branch or a pull request. A
+   job that starts again on a new pod continues from the `wip/` branch if its volume has no copy.
+4. **The operator starts the job again after an infrastructure stop.** The job continues on the next pod. The
+   operator starts it again at most `spec.retries.infrastructure` times (default 2, range 0 to 10). With the default,
+   a job has at most 3 attempts. The comment shows the attempt, for example
+   "Interrupted by node preemption, retried (attempt 2 of 3)". When all attempts are used, the job ends. The comment
+   names the `wip/` branch, and the issue is marked as done.
+
+   WARNING: A job that a security pause stopped never starts again. Set the limit with care: a job that stops again
+   and again can use the budget of the agent.
+5. **The end of the agent process is recorded.** When the agent process ends with an error, the worker writes one log
+   line, the file `jobs/<job>.exit` (JSON) and a run event for the job record. They have:
+   - the exit status and the signal, for example `137 (SIGKILL)`
+   - who sent the signal: `killed by worker: <cause>`, or `not by the worker`
+   - the run time and the job time
+   - `memory.peak` and the `oom_kill` count of the container (`n/a` if the node does not show them, for example under
+     gVisor)
+   - the last 4 KiB of the error output, with secrets removed
+
+   NOTE: The memory figures are for the whole container, not for the Claude process, and only at the end of the
+   run. If the kernel kills the whole container, the loop dies too. No record is written in this case.
+
+To record the memory use of the agent container during a job, set `spec.diagnostics.resources: true`. The interval is
+`spec.diagnostics.intervalSeconds` (default 60). It is off by default, and it adds no load when it is off.
+
+#### Upgrade to 1.3.0-rc.3
+
+The deployment playbook applies the new Agent field and a new ClusterRole `agentdev-operator-nodes`. The role has
+only `get` on `nodes`. Without it, the operator finds the reason from the pod condition alone. An Agent without
+`spec.retries` keeps its pod template and gets 2 retries.
+
+### Find out if a preemption stopped a job
+
+Do this task when a job ends with exit code 137.
+
+1. Write down the time of the comment on the issue or pull request.
+2. Show the preemptions of the last two days. Replace `PROJECT` with the Google Cloud project:
+   `gcloud logging read 'logName="projects/PROJECT/logs/cloudaudit.googleapis.com%2Fsystem_event" AND protoPayload.methodName="compute.instances.preempted"' --project PROJECT --freshness=2d --format='value(timestamp,resource.labels.instance_id)'`
+3. Compare the times. A preemption a few minutes before the comment is the likely cause.
+4. If there is no preemption, look for a security pause:
+   `kubectl -n agentdev-platform logs deploy/agentdev-operator | grep 'paused by security event'`
+5. If there is also no pause, look at the node events:
+   `kubectl get events -A --field-selector reason=ScaleDown`
+
+NOTE: The Compute log keeps the preemptions of the project. The Kubernetes events stay for about 1 hour. Look for the
+cause soon after the job ends.
+
+### Reduce the effect of preemptions
+
+Choose the options that fit the cost target of the instance.
+
+- Run the system pool on normal VMs. Set `system_pool_spot = false`. The platform no longer stops when Google
+  reclaims a node. The cost of the system pool increases.
+- Run the agent pool on normal VMs. Set `agent_pool_spot = false`. Jobs are no longer stopped by a preemption, and
+  agents do not wait for Spot capacity. The cost of each agent hour increases.
+- Make the system nodes larger with `system_machine_type`, if the nodes have too little memory (`kubectl top nodes`).
+- Keep `spec.retries.infrastructure` at its default of 2, or set it higher for an agent on Spot VMs.
+- Give each issue a task of a size that a job can finish in a short time. A short job loses less in a preemption.
+
+CAUTION: A change of `system_pool_spot` or `agent_pool_spot` replaces the node pool. The platform, or the agents
+of the pool, are down until the new nodes are ready. Do the change when no job runs. Run `terraform plan` first and
+read which pool it replaces.
+
+NOTE: This work is a spending change. Put it in a pull request of the deployment repository and let the owner
+approve it.
 
 ### Make the system pool smaller
 
@@ -901,12 +1035,12 @@ NOTE: In the dry run (`--check`) on a new cluster, the `McpProject` CRD does not
    `McpProject` shows the cause: `kubectl -n coding-agents get mcpp` (`Ready` is `False`, reason `HostNotAllowed`).
 3. Run the playbook (on kind, with the tag `mcp`). The operator syncs the `McpProject`.
    You can also write the `McpProject` yourself, for example from Git with Flux (refer to "Reference: the MCP sync").
-   NOTE: Since 1.2.0, the operator does the sync (#383). `scripts/mcp-sync.sh <spec>` is deprecated. It stays only
-   because `scripts/bootstrap-project.sh` still runs it. It is removed when the bootstrap writes an `McpProject` (#547).
+   NOTE: The operator does the sync (#383). `scripts/bootstrap-project.sh` also applies the `McpProject` of its
+   specification (#547). `scripts/mcp-sync.sh` is removed.
 4. Start each agent again to get the new tools: `kubectl -n coding-agents delete pod agent-<name>-0`
 
 NOTE: If a specification has `mcp:` and you did not run the playbook tag `mcp`, the bootstrap stops before it deploys the
-agents. The bootstrap tells you the cause.
+agents. The bootstrap tells you the cause. The bootstrap also stops if the `McpProject` is not `Ready` after 5 minutes.
 
 ### Give agents the observability tools
 
@@ -1972,6 +2106,38 @@ The test does not operate in check mode (`--check`).
 The objects are in `infra/ansible/roles/ingress/templates/gateway.yaml.j2`. Risks: `docs/security.md` R66 to R68.
 Cost: the forwarding rule costs approximately $18 each month; Cloud Armor adds approximately $7 each month.
 
+## Gated merge of the agent's own PRs
+
+Off by default: agents never merge. To let one agent merge its **own** PRs after you approve them (#578):
+
+```yaml
+spec:
+  merge:
+    mode: gated            # off (default) | gated
+    method: merge          # merge (default, a merge commit) | squash | rebase
+    approvers: [your-login] # required with gated: whose approval counts
+```
+
+The forge sidecar (`POST /merge`, `images/forge/merge.go`) reads everything from GitHub with its own credential and
+merges only when all hold:
+
+1. The PR is open, not a draft, opened by the agent from `agent/<name>/*` of the same repository, into the default
+   branch (or another branch of the same agent).
+2. The latest deciding review of an `approvers` login is `APPROVED` on the exact head commit. A dismissed approval, an
+   approval of an earlier commit, or an approval by anyone else (other collaborators, bots, the agent) never counts.
+   No reviewer's latest review requests changes.
+3. Every check run and commit status on the head passed, and GitHub reports the PR mergeable under the branch rules.
+4. No approval request of the agent on the PR is open, and changes to protected paths have a person's approval.
+
+The merge call pins the head sha and uses the configured method; the agent sends only the PR number. Each merge prints
+an `AGENTDEV_AUDIT` line with `action: agent-merge` (PR, sha, approver, checks); a refusal is a `merge-refused`
+security event. A PR that is not ready (a check pending) is retried on the next loop pass without an event.
+
+Gitea: not supported. The sidecar logs that the endpoint stays off; the agent never merges there.
+
+Keep branch protection on the default branch (required review, dismiss stale approvals, required checks). On kind and
+in `instance.yml` the field is not wired yet: set it on the `Agent` object (`kubectl edit agent <name>`).
+
 ## Security events
 
 A security event is a record of an action that a guardrail stopped. The forge sidecar and the agent loop write each
@@ -2047,6 +2213,22 @@ The operator pauses an agent when a high severity event occurs. The operator als
 more than 5 events (`SECURITY_PAUSE_AFTER`). The count starts again for a new pod. The operator also pauses an
 agent when its containers write more than 10 events in one minute (rule `rate-limited`).
 
+The operator counts the same `run-events-invalid` refusal only one time for each job. The event text gives the repo
+of the refused batch, the number of events and a hash of the first event.
+
+When the operator pauses an agent for too many events, the running jobs continue until they end. The agent does
+not start new jobs. Then the operator stops the pod. The maximum time is `DRAIN_MAX_MINUTES`. When a high severity
+event occurs, the operator stops the pod immediately.
+
+When the drain time of a pause for too many events ends and jobs still run, the operator stops the pod. Each job that
+this stops is marked "interrupted by security pause" (#581): its saved commit names the reason, and when you resume
+the agent, the job writes a comment on its issue or pull request and continues from its saved work.
+
+A stop for a high severity event uses the usual termination grace period of the pod (`AGENT_GRACE_SECONDS`, default
+300 seconds), not a shorter one (#581). On SIGTERM the agent immediately stops all job processes and Claude, so no job
+can push or comment after the stop. The grace period is only for the save of the work in progress as a local commit
+on the state volume. A shorter grace period would lose that work and not stop the agent sooner.
+
 WARNING: Do not resume the agent before you read the events and the issue or the pull request of the job. The text
 of the issue can contain a prompt injection.
 
@@ -2056,7 +2238,8 @@ of the issue can contain a prompt injection.
 3. Read the issue or the pull request of the job.
 4. Resume the agent:
    `kubectl -n coding-agents patch agent <name> --type merge -p '{"spec":{"paused":false}}'`
-   The agent starts again. The condition `SecurityPaused` changes to `False`.
+   The agent starts again. The condition `SecurityPaused` changes to `False`. The message of the condition gives
+   the field manager that resumed the agent, for example `kubectl-patch` or `agentdev-api`.
 
 ### Send the security events to a SIEM
 
@@ -2241,9 +2424,10 @@ NOTE: The event shows only the method, the host and the port. The event does not
 
 | Setting | Default | Where |
 |---|---|---|
-| Allow-list | the Claude API, GitHub, npm, PyPI, Go, crates.io | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
+| Allow-list | `api.anthropic.com`, `.github.com`, `.githubusercontent.com`, `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `proxy.golang.org`, `sum.golang.org`, `index.crates.io`, `static.crates.io` (a leading dot also allows the subdomains) | `EGRESS_HOSTS` in `kind.vars.yml`; Ansible `egress_hosts` |
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
+| Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`) | Ansible `setup_egress_hosts` |
 | More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
 | Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |

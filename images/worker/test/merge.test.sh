@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # variables are read inside the check strings (eval)
 # Unit test for the merge of the agent's own PR (#578): with MERGE_MODE=gated the loop asks the sidecar to merge only
-# when the forge shows an approval of the current head by a person and no request for changes. A 409 (not ready)
+# when the forge shows an approval of the current head by an owner (MERGE_APPROVERS) and no request for changes. A 409 (not ready)
 # keeps a retry marker; a merge, a refusal or no approval drops it. MERGE_MODE off or Gitea: never asked.
 #   bash images/worker/test/merge.test.sh      (bash >= 4, jq)
 set -uo pipefail
@@ -14,7 +14,7 @@ log() { echo "$*" >> "${tmp}/log"; }
 # shellcheck disable=SC1090
 source <(sed -n '/^# merge_own_pr <pr> (#578)/,/^handle_feedback() {/p' "${loop}" | sed '$d')
 fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fail=1; fi; }
-FORGE_KIND=github MY_LOGIN='my-agentdev[bot]'
+FORGE_KIND=github MY_LOGIN='my-agentdev[bot]' MERGE_APPROVERS='Owner,co-owner'
 head=1111111111111111111111111111111111111111; old=0000000000000000000000000000000000000000
 rv() { printf '{"user":{"login":"%s","type":"%s"},"state":"%s","commit_id":"%s"}' "$1" "$2" "$3" "$4"; }
 api() {
@@ -41,6 +41,14 @@ REVIEWS="[$(rv owner User APPROVED "${old}")]"; try; rc=$?
 check "stale approval: the sidecar is not asked (no security event for waiting)" "[[ ${rc} == 1 && ! -s \"\${tmp}/curl\" ]]"
 REVIEWS="[$(rv 'my-agentdev[bot]' Bot APPROVED "${head}")]"; try
 check "approval by the App bot does not count" "[[ ! -s \"\${tmp}/curl\" ]]"
+REVIEWS="[$(rv dev User APPROVED "${head}")]"; try
+check "approval by a person who is not an owner: the sidecar is not asked" "[[ ! -s \"\${tmp}/curl\" ]]"
+REVIEWS="[$(rv owner User APPROVED "${head}"),$(rv owner User DISMISSED "${head}")]"; try
+check "a dismissed owner approval does not count" "[[ ! -s \"\${tmp}/curl\" ]]"
+REVIEWS="[$(rv co-owner User APPROVED "${head}")]"; try
+check "a second configured owner counts" "[[ -s \"\${tmp}/curl\" ]]"
+MERGE_APPROVERS='' ; try; MERGE_APPROVERS='Owner,co-owner'
+check "no owners configured: never asked" "[[ ! -s \"\${tmp}/curl\" ]]"
 REVIEWS="[$(rv owner User APPROVED "${head}"),$(rv dev User CHANGES_REQUESTED "${head}")]"; try
 check "a request for changes blocks" "[[ ! -s \"\${tmp}/curl\" ]]"
 REVIEWS="[$(rv owner User CHANGES_REQUESTED "${old}"),$(rv owner User APPROVED "${head}")]"; try
