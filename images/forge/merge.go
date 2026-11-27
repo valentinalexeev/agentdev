@@ -255,7 +255,7 @@ func (s *server) mergePR(ctx context.Context, job, pr string) (*mergeResult, err
 		Merged bool   `json:"merged"`
 		SHA    string `json:"sha"`
 	}
-	code, err := s.forgeSend(ctx, http.MethodPut, base+"/merge", map[string]string{"sha": p.Head.SHA, "merge_method": mergeMethod}, &out)
+	code, err := s.mergeSend(ctx, http.MethodPut, base+"/merge", map[string]string{"sha": p.Head.SHA, "merge_method": mergeMethod}, &out)
 	switch {
 	case err != nil:
 		return nil, err
@@ -489,8 +489,9 @@ func (a *approvals) openOn(job string) bool {
 	return false
 }
 
-// forgeSend sends a JSON body with the agent's credential and returns the HTTP status; out receives a 2xx answer.
-func (s *server) forgeSend(ctx context.Context, method, path string, body, out any) (int, error) {
+// mergeSend sends a JSON body with the agent's credential and returns the HTTP status; out receives a 2xx answer.
+// (Not iface.go's forgeSend: that one takes a full URL and maps GraphQL errors; this one decodes the answer.)
+func (s *server) mergeSend(ctx context.Context, method, path string, body, out any) (int, error) {
 	b, _ := json.Marshal(body)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
