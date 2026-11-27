@@ -26,7 +26,7 @@ const bot = { login: 'my-agentdev[bot]' };
 
 before(async () => {
   router = spawn(process.execPath, [path.join(__dirname, '..', 'router.js')], {
-    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT,   // every call here goes to the internal port (#214)
+    env: { ...process.env, PORT: PORT + 5, INTERNAL_PORT: PORT, HEALTH_PORT: PORT + 6,   // every call here goes to the internal port (#214)
     FORGE_SECRETS: `github=${SECRET}`, REGISTER_TOKEN: REG }, stdio: 'ignore' });
   for (const [name, port] of [['alice', 18181], ['bob', 18182]]) {
     servers.push(http.createServer((q, s) => { wakes[name]++; q.resume(); s.writeHead(204).end(); }).listen(port));
@@ -47,6 +47,19 @@ test('a labelled issue wakes that agent only', async () => {
     issue: { number: 12, user: { login: 'octo-dev' }, labels: [{ name: 'agent:alice' }], assignees: [] } });
   await settle();
   assert.strictEqual(r.body.routed, 1); assert.deepStrictEqual(wakes, { alice: 1, bob: 0 });
+});
+
+test('a label on a PR by a person, from any branch, wakes that agent (#573)', async () => {
+  reset();
+  const r = await hook({ action: 'labeled', repository: repo, label: { name: 'agent:alice' },
+    pull_request: { number: 13, user: { login: 'octo-dev' }, head: { ref: 'main' }, labels: [{ name: 'agent:alice' }], requested_reviewers: [] } }, 'pull_request');
+  await settle();
+  assert.strictEqual(r.body.routed, 1); assert.deepStrictEqual(wakes, { alice: 1, bob: 0 });
+  reset();
+  await hook({ action: 'opened', repository: repo,
+    pull_request: { number: 17, user: { login: 'octo-dev' }, head: { ref: 'feature/x' }, labels: [], requested_reviewers: [] } }, 'pull_request');
+  await settle();
+  assert.deepStrictEqual(wakes, { alice: 0, bob: 0 });
 });
 
 test('a review on an agent PR routes by the head branch, not the shared bot login', async () => {

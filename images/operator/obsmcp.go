@@ -175,6 +175,73 @@ func checkQuery(q string) error {
 	return nil
 }
 
+// checkLoggingFilter refuses a Cloud Logging filter the API would reject, before the call (#250): unbalanced
+// parentheses, an unterminated string, a newline inside a string and a trailing backslash. Parentheses inside "..."
+// do not count. A backslash escapes the next character inside and outside a string, as in the Logging query
+// language, so \" or \) outside a string is a literal. "--" outside a string starts a comment that runs to the end
+// of the line: nothing in it counts. The filter is wrapped as "(\n<filter>\n) AND timestamp>=..." (wrapLoggingFilter),
+// so balanced parentheses mean the filter cannot close the wrapper, and the newline ends a trailing comment before
+// the time bound.
+func checkLoggingFilter(f string) error {
+	depth, inStr, inCmt, esc := 0, false, false, false
+	rs := []rune(f)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		if isOtherLineEnd(r) && (r != '\r' || i+1 >= len(rs) || rs[i+1] != '\n') {
+			return fmt.Errorf("filter: line end character %U (use \\n)", r)
+		}
+		switch {
+		case inCmt:
+			inCmt = r != '\n'
+		case esc:
+			esc = false
+		case r == '\\':
+			esc = true
+		case inStr && r == '\n':
+			return errors.New("filter: newline in a string")
+		case r == '"':
+			inStr = !inStr
+		case inStr:
+		case r == '-' && i+1 < len(rs) && rs[i+1] == '-':
+			inCmt = true
+			i++
+		case r == '(':
+			depth++
+		case r == ')':
+			depth--
+			if depth < 0 {
+				return errors.New("filter: ')' without '('")
+			}
+		}
+	}
+	switch {
+	case esc:
+		return errors.New("filter: trailing backslash")
+	case inStr:
+		return errors.New("filter: unterminated string")
+	case depth != 0:
+		return errors.New("filter: unbalanced parentheses")
+	}
+	return nil
+}
+
+// isOtherLineEnd reports a character a parser may take as a line end, apart from \n: CR, VT, FF, NEL, LS, PS. The
+// Logging docs do not define the line end that closes a "--" comment, so checkLoggingFilter refuses these anywhere
+// (inside strings too) and only \n (or CRLF) ends a comment (#268 review).
+func isOtherLineEnd(r rune) bool {
+	switch r {
+	case '\r', '\v', '\f', '\u0085', '\u2028', '\u2029':
+		return true
+	}
+	return false
+}
+
+// wrapLoggingFilter adds the time bound to a filter checkLoggingFilter accepted. The newlines end a comment on the
+// filter's first or last line, so it cannot swallow the wrapper's parentheses or the bound.
+func wrapLoggingFilter(f string, since time.Time) string {
+	return fmt.Sprintf("(\n%s\n) AND timestamp>=%q", f, since.UTC().Format(time.RFC3339))
+}
+
 func checkSince(m, def int) (int, error) {
 	if m == 0 {
 		return def, nil
@@ -433,6 +500,9 @@ func (s *obsServer) cloudLogging(ctx context.Context, _ *mcp.CallToolRequest, in
 	if err := checkQuery(in.Filter); err != nil {
 		return obsError(err.Error()), nil, nil
 	}
+	if err := checkLoggingFilter(in.Filter); err != nil {
+		return obsError(err.Error()), nil, nil
+	}
 	since, err := checkSince(in.SinceMin, 60)
 	if err != nil {
 		return obsError(err.Error()), nil, nil
@@ -454,7 +524,7 @@ func (s *obsServer) cloudLogging(ctx context.Context, _ *mcp.CallToolRequest, in
 	if json.Unmarshal(tb, &tok) != nil || tok.AccessToken == "" {
 		return obsError("cloud logging: no Workload Identity token"), nil, nil
 	}
-	filter := fmt.Sprintf("(%s) AND timestamp>=%q", in.Filter, s.now().Add(-time.Duration(since)*time.Minute).UTC().Format(time.RFC3339))
+	filter := wrapLoggingFilter(in.Filter, s.now().Add(-time.Duration(since)*time.Minute))
 	body, _ := json.Marshal(map[string]any{"resourceNames": []string{"projects/" + s.c.CloudLoggingProj},
 		"filter": filter, "orderBy": "timestamp desc", "pageSize": limit})
 	hreq, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.c.CloudLoggingURL+"/v2/entries:list", strings.NewReader(string(body)))

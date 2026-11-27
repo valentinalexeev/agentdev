@@ -8,12 +8,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -51,6 +54,8 @@ type eventFilter struct {
 	Since           time.Time
 	Before          int64 // cursor: only ids below this (0 = from the newest)
 	Limit           int
+	// Agents limits the result to these agents (R35, #308); nil = every agent (admin)
+	Agents []string
 }
 
 // eventStore is the security_events table (pgStore) or an in-memory copy (tests, no database configured).
@@ -85,8 +90,8 @@ func decodeCursor(s string) (int64, error) {
 
 type pgStore struct{ db *pgxpool.Pool }
 
-// schema.sql creates the table, the append-only trigger and the prune function. In a deployment 10-api.sh applies it
-// as the owner role agentdev_owner and grants the API login (agentdev_api) only INSERT and SELECT plus EXECUTE on
+// schema.sql creates the table, the append-only trigger and the prune function. In a deployment the db-init Job (#382,
+// manifests/db-init) applies it as the owner role agentdev_owner and grants the API login (agentdev_api) only INSERT and SELECT plus EXECUTE on
 // security_events_prune(); the API then cannot UPDATE, DELETE, TRUNCATE, drop the trigger or change the retention.
 // Tests and a standalone API without that setup pass migrate=true and run it as their own login.
 //
@@ -117,6 +122,36 @@ func newPgStore(ctx context.Context, url string, migrate bool) (*pgStore, error)
 		}
 	}
 	return &pgStore{db: db}, nil
+}
+
+// schemaVersion is the version the db-init Job writes to schema_version (#382): the first 16 hex characters of the
+// sha256 of schema.sql followed by grants.sql. The role api computes the same value from the same files.
+func schemaVersion() string {
+	h := sha256.Sum256([]byte(schemaSQL + grantsSQL))
+	return hex.EncodeToString(h[:])[:16]
+}
+
+// schemaWait bounds how long the API waits for the db-init Job; the Deployment's startupProbe allows the same time.
+var schemaWait = 15 * time.Minute
+
+// waitSchema blocks until the db-init Job applied this API's schema.sql and grants.sql (#382): the API does not serve
+// (and its readiness fails) before that, so an upgrade never runs a new API on an old schema.
+func waitSchema(ctx context.Context, db *pgxpool.Pool, want string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	var got string
+	for logged := false; ; logged = true {
+		err := db.QueryRow(ctx, `SELECT version FROM schema_version WHERE id = 1`).Scan(&got)
+		if err == nil && got == want {
+			return nil
+		}
+		if !logged {
+			log.Printf("waiting for the db-init Job: schema version %q, want %q (err: %v)", got, want, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("schema version %q, want %q: the db-init Job did not apply this version (err: %v)", got, want, err)
+		}
+		time.Sleep(3 * time.Second)
+	}
 }
 
 // Insert reads the agent's last chain value and inserts the linked row in one transaction. A transaction-scoped
@@ -153,8 +188,9 @@ func (s *pgStore) Insert(ctx context.Context, e *securityEvent) (bool, error) {
 func (s *pgStore) List(ctx context.Context, f eventFilter) ([]securityEvent, error) {
 	q := `SELECT id, schema, time, agent, job, source, untrusted, rule, severity, action, pod, container, hash, prev, chain FROM security_events
 		WHERE ($1 = '' OR agent = $1) AND ($2 = '' OR severity = $2) AND time >= $3 AND ($4 = 0 OR id < $4)
+		AND ($6::text[] IS NULL OR agent = ANY($6))
 		ORDER BY id DESC LIMIT $5`
-	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit)
+	rows, err := s.db.Query(ctx, q, f.Agent, f.Severity, f.Since, f.Before, f.Limit, f.Agents)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +271,7 @@ func (m *memStore) List(_ context.Context, f eventFilter) ([]securityEvent, erro
 	for i := len(m.rows) - 1; i >= 0 && len(out) < f.Limit; i-- {
 		e := m.rows[i]
 		if (f.Agent == "" || e.Agent == f.Agent) && (f.Severity == "" || e.Severity == f.Severity) &&
-			!e.Time.Before(f.Since) && (f.Before == 0 || e.ID < f.Before) {
+			!e.Time.Before(f.Since) && (f.Before == 0 || e.ID < f.Before) && (f.Agents == nil || slices.Contains(f.Agents, e.Agent)) {
 			out = append(out, e)
 		}
 	}
@@ -257,7 +293,9 @@ func (m *memStore) Counts(_ context.Context, since time.Time) (map[string]int, e
 
 // listSecurityEvents serves GET /api/security-events?agent=&severity=&since=&limit=&cursor=. since is RFC 3339 or a
 // Go duration back from now (24h); limit 1..500, default 100. The response has next_cursor while more pages exist.
-func listSecurityEvents(store eventStore) http.Handler {
+// R35 (#308): an admin sees every event; any other user sees only the events of the agents with at least one
+// repository where the user has write access on the forge (the agent's owners). wr nil (tests only): no filter.
+func listSecurityEvents(store eventStore, wr *writer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "security events are not configured"})
@@ -297,6 +335,19 @@ func listSecurityEvents(store eventStore) http.Handler {
 			}
 			f.Before = id
 		}
+		if wr != nil {
+			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
+			f.Agents = wr.visibleAgents(r.Context(), id)
+			// repo and scope=mine (#345) narrow to the agents of the matching repositories
+			sc, err := wr.scopeOf(r.Context(), id, q)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if sc.repoFilter != "" || sc.mine {
+				f.Agents = narrowAgents(r.Context(), wr, f.Agents, sc)
+			}
+		}
 		// one extra row tells whether another page exists
 		want := f.Limit
 		f.Limit++
@@ -314,4 +365,61 @@ func listSecurityEvents(store eventStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
+}
+
+// visibleAgents: nil for an admin (every agent), else the names of the agents with at least one repository where the
+// caller has write access on the forge. A forge error hides that repository (fail closed).
+func (w *writer) visibleAgents(ctx context.Context, id *identity) []string {
+	if id != nil && w.isAdmin(id) {
+		return nil
+	}
+	out := []string{}
+	if id == nil {
+		return out
+	}
+	lister, ok := w.store.(agentLister)
+	if !ok {
+		return out
+	}
+	list, err := lister.List(ctx)
+	if err != nil {
+		log.Printf("list agents for security event visibility: %v", err)
+		return out
+	}
+	cache := map[string]bool{}
+	for _, a := range list {
+		for _, repo := range a.Repos {
+			key := a.Forge + "\x00" + repo
+			ok, seen := cache[key]
+			if !seen {
+				p, err := w.repoPerm(ctx, id, a.Forge, repo)
+				ok = err == nil && p >= permWrite
+				cache[key] = ok
+			}
+			if ok {
+				out = append(out, a.Name)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// narrowAgents keeps the names of visible (nil = all) that have a repository passing sc.
+func narrowAgents(ctx context.Context, wr *writer, visible []string, sc scope) []string {
+	out := []string{}
+	lister, ok := wr.store.(agentLister)
+	if !ok {
+		return out
+	}
+	list, err := lister.List(ctx)
+	if err != nil {
+		return out
+	}
+	for _, a := range list {
+		if (visible == nil || slices.Contains(visible, a.Name)) && sc.agent(a) {
+			out = append(out, a.Name)
+		}
+	}
+	return out
 }

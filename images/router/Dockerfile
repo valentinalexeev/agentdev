@@ -4,5 +4,5 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 COPY router.js /app/router.js
 USER 1000
-EXPOSE 8080 8081
+EXPOSE 8080 8081 8082
 CMD ["node", "/app/router.js"]

@@ -1,6 +1,6 @@
 ---
 name: Incident
-about: Something already went wrong (red CI on main, leaked/expired secret, broken run.sh, agent damage)
+about: Something already went wrong (red CI on main, leaked/expired secret, broken kind.yml install, agent damage)
 labels: incident
 ---
 <!-- Never paste secrets, even partially. -->

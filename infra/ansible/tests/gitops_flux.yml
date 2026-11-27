@@ -1,0 +1,33 @@
+---
+# Test of the Flux template (#385): renders examples/deployment/gcp-gke and runs scripts/check-flux-tree.sh on the
+# Flux tree and the rendered layers (kustomize build, kubeconform with the Flux CRD schemas, system pool, prune,
+# dependsOn, pinned charts, no StatefulSet replicas, no Secret), then the script tests of scripts/test/gitops-test.sh.
+# Run: ansible-playbook infra/ansible/tests/gitops_flux.yml (needs docker, helm, kustomize, yq v4).
+- name: Flux template
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}/flux-example"
+    root: "{{ playbook_dir }}/../../.."
+  tasks:
+    - name: Remove old output
+      ansible.builtin.file: {path: "{{ out }}", state: absent}
+
+    - name: Render the example instance
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ root }}/examples/deployment/gcp-gke/ansible/instance.yml.example",
+               -e, "render_dir={{ out }}", -e, '{"platform": {"egress": {"fqdn": "gke"}, "ingress": {"gateway_api": true},
+               "kube_api_ips": ["10.30.0.1"]}, "approvals": {"enabled": false}}']
+      changed_when: false
+
+    - name: Check the Flux tree and the rendered layers
+      ansible.builtin.command:
+        argv: [bash, "{{ root }}/scripts/check-flux-tree.sh", "{{ out }}"]
+      environment: {PYTHON: "{{ ansible_playbook_python }}"}
+      changed_when: false
+
+    - name: Script tests (status adapter, layout)
+      ansible.builtin.command:
+        argv: [bash, "{{ root }}/scripts/test/gitops-test.sh"]
+      environment: {PYTHON: "{{ ansible_playbook_python }}"}
+      changed_when: false

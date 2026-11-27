@@ -1,0 +1,19 @@
+---
+# Helper of kind_prereqs.yml: prereqs.yml must fail, and the failure message contains every string of prereqs_expect.
+- name: "Prereqs refuse: {{ prereqs_expect | join(', ') }}"
+  environment: "{{ prereqs_env | default({}) }}"
+  block:
+    - name: Run the prereqs
+      ansible.builtin.include_tasks: ../../roles/kind_cluster/tasks/prereqs.yml
+    - name: The prereqs did not fail
+      ansible.builtin.fail:
+        msg: "prereqs passed, expected {{ prereqs_expect }}"
+      register: prereqs_passed
+  rescue:
+    - name: The failure is the expected message
+      ansible.builtin.assert:
+        that:
+          - prereqs_passed is not defined
+          - prereqs_expect | select('in', ansible_failed_result.msg) | list | length == prereqs_expect | length
+        fail_msg: "unexpected failure: {{ ansible_failed_result.msg }}"
+        quiet: true

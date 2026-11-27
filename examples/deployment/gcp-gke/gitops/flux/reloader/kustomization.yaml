@@ -1,0 +1,7 @@
+# Reloader layer (agentdev #385): Stakater Reloader in scoped mode. Its chart writes a Role in each watched namespace,
+# so it runs after the platform layer, which makes these namespaces (render.yml 00-namespaces.yaml and
+# 08-exec-namespace.yaml). The HelmRepository stakater is in the infrastructure layer.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - helmrelease.yaml

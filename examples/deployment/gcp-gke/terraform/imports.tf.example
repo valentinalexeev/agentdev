@@ -1,0 +1,21 @@
+# Upgrade from 1.1.x to external_secrets mode (agentdev #381). Copy to imports.tf for one apply, then delete it.
+# The playbook of 1.1.x already made these Secret Manager secrets with values that the databases and pods use.
+# Terraform adopts the secret containers here. List the same names in keep_existing_secret_values (instance.tfvars),
+# so Terraform adds no new version and the values stay. Remove the lines of secrets your instance does not have
+# (no platform namespace: drop every platform-*). Check with `terraform plan`: no secret_version may be created
+# for these names.
+locals {
+  agentdev_existing_secrets = [
+    "platform-pg-admin", "platform-pg-contextforge", "platform-pg-agentdev", "platform-pg-authentik",
+    "platform-jwt", "platform-enc", "platform-cf-admin", "platform-cf-default-user", "platform-cf-basic-auth",
+    "platform-authentik-secret-key", "platform-authentik-admin", "platform-pg-agentdev-api",
+    "egress-forge-proxy", "claude-proxy-signing", "agentdev-api-chat-token-key",
+    # one per agent: "agent-alice-wake-token",
+  ]
+}
+
+import {
+  for_each = toset(local.agentdev_existing_secrets)
+  to       = module.agentdev.google_secret_manager_secret.generated[each.value]
+  id       = "projects/${var.project_id}/secrets/${each.value}"
+}

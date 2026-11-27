@@ -15,6 +15,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -160,8 +161,10 @@ func (r *ProjectSecretReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 
 func (r *ProjectSecretReconciler) setStatus(ctx context.Context, ps *v1.ProjectSecret, phase, msg string, synced *metav1.Time) (ctrl.Result, error) {
-	st := v1.ProjectSecretStatus{Phase: phase, Message: msg, SecretName: ProjectSecretPrefix + ps.Name, SyncedAt: synced, ObservedGeneration: ps.Generation}
-	if ps.Status.Phase != st.Phase || ps.Status.Message != st.Message || ps.Status.ObservedGeneration != st.ObservedGeneration ||
+	st := v1.ProjectSecretStatus{Phase: phase, Message: msg, SecretName: ProjectSecretPrefix + ps.Name, SyncedAt: synced, ObservedGeneration: ps.Generation,
+		Conditions: append([]metav1.Condition(nil), ps.Status.Conditions...)}
+	meta.SetStatusCondition(&st.Conditions, projectSecretReady(phase, msg, ps.Generation))
+	if len(ps.Status.Conditions) == 0 || ps.Status.Phase != st.Phase || ps.Status.Message != st.Message || ps.Status.ObservedGeneration != st.ObservedGeneration ||
 		ps.Status.SecretName != st.SecretName || !synced.Equal(ps.Status.SyncedAt) {
 		ps.Status = st
 		if err := r.Status().Update(ctx, ps); err != nil {

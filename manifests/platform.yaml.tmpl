@@ -1,5 +1,5 @@
 # agentdev platform (#14, ADR 0001): the instance's Postgres and the ContextForge MCP gateway, in namespace ${PLATFORM_NS}.
-# Rendered by 08-mcp.sh (envsubst). Postgres is shared: one database and login per component (contextforge now, the
+# Rendered by the role platform (kind.yml tag mcp, deploy.yml). Postgres is shared: one database and login per component (contextforge now, the
 # agentdev API in #12). Secret values come from .secrets/platform/ (kind) or Secret Manager (GKE); never from git.
 apiVersion: v1
 kind: Namespace
@@ -75,7 +75,8 @@ stringData:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: contextforge, namespace: ${PLATFORM_NS}, labels: {app: contextforge}, annotations: {secret.reloader.stakater.com/reload: "contextforge"}}
 spec:
   replicas: 1                      # DB cache, no Redis: one replica (ADR 0001)
   selector: {matchLabels: {app: contextforge}}
@@ -142,4 +143,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
   - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ${AGENTS_NS}}}}]
+    ports: [{port: 4444}]
+  # the operator's McpProject controller (#383) calls the admin API; it replaced the port-forward of mcp-sync.sh
+  - from: [{podSelector: {matchLabels: {app: agentdev-operator}}}]
     ports: [{port: 4444}]

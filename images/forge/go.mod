@@ -1,3 +1,5 @@
 module github.com/valentinalexeev/agentdev/images/forge
 
-go 1.25.14
+go 1.26.0
+
+toolchain go1.27.4

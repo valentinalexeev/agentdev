@@ -13,8 +13,8 @@ Secrets or policies, and it does not pause an agent. It does these writes only:
   with source `egress`. Egress events do not pause an agent.
 - One refused `POST /usage` from the agent container. The script skips this check when the pod has almost
   `SECURITY_PAUSE_AFTER` events.
-- With `--github`: one test issue, the pull request of the agent and one review comment. At the end, the script
-  closes the issue and the pull request and deletes the branch.
+- With `--github` or `--gitea`: one test issue, the pull request of the agent and one change-request review. At the
+  end, the script closes the issue and the pull request and deletes the branch.
 
 The script does not show secret values. It compares only the names of environment variables.
 
@@ -38,8 +38,20 @@ If your own reverse proxy publishes the instance (`ingress.mode: external`, #160
 `--auth-host <auth host>` to make sure that authentik publishes the correct issuer and accepts the UI callback.
 In external mode, the script does not examine the HTTP redirect and the TLS version. It shows them as `MANUAL`.
 
-The GitHub check (#2) takes up to 30 minutes for each step. To change this time, use `--github-timeout <minutes>`.
+The GitHub check (#2) and the Gitea check (#216) take up to 30 minutes for each step. To change this time, use `--github-timeout <minutes>`.
 To do only some sections, use `--only egress,claude`.
+
+### Do the Gitea check
+
+The `gitea` section does the same steps as the `github` section on a Gitea repository (#216). The script assigns the
+issue to the agent (on Gitea, an assignment gives work) and does not use a label.
+
+1. Make the Gitea API available on your computer. On kind: `kubectl -n forge port-forward svc/gitea 3000:3000`.
+2. Give the credential of your Gitea account (the `--owner` account). Use one of these:
+   - `E2E_GITEA_TOKEN`: a token with the scopes `write:issue` and `write:repository`.
+   - `FORGE_ADMIN_USER` and `FORGE_ADMIN_PASSWORD` (the kind default; `config.env`).
+3. Run the section:
+   `scripts/e2e-gke-security.sh --kind --only gitea --gitea <owner>/<repo> --owner <your Gitea login> --gitea-url http://localhost:3000`
 
 Then do the `MANUAL` checks that the script shows. Use a private browser window and test accounts. Do not change
 real users.
@@ -56,15 +68,17 @@ issue in agentdev. A `FAIL` blocks the release, unless the owner records an acce
 | `pods` | agent pod 2/2 ready; router, egress proxy and Claude proxy available; gVisor | |
 | `creds` | no forge or Claude credential in the agent container (environment, Secret references, Secret volumes, other processes); no service account token; no shared process namespace | R4, R11 |
 | `git` | in a throwaway repo under `/tmp` in the agent container, the loop's own `lgit` (from the deployed `agent-loop`) does not run a hook or a `core.fsmonitor` program written into the repo. MANUAL: in a real job, a hook or filter driver that Claude writes into `.git` is removed and reported as a `SecurityEvent` | R7 |
-| `egress` | from both containers: the metadata server is blocked (direct and through the proxy); direct egress is blocked; a host off the list is refused; an allowed host operates; GitHub only from the sidecar; the refusal is a `SecurityEvent`; `FQDNNetworkPolicy` exists | R10, R63 |
-| `claude` | `api.anthropic.com` refused from both containers; the agent uses `claude-proxy`; only `claude-proxy` uses the Claude Secrets; `agent-egress` selects chat session pods, and a running chat session (`scripts/agent-chat.sh`) has no `claude-*` Secret reference, uses `claude-proxy` and cannot reach `api.anthropic.com` (MANUAL when no session runs) | R11, R64 |
+| `egress` | from both containers: the metadata server is blocked (direct and through the proxy); direct egress is blocked; a host off the list is refused; an allowed host operates; GitHub only from the sidecar, with its proxy credential (a wrong credential is refused); the refusal is a `SecurityEvent`; `FQDNNetworkPolicy` exists | R10, R63 |
+| `claude` | `api.anthropic.com` refused from both containers; the agent uses `claude-proxy`; only `claude-proxy` uses the Claude Secrets; `agent-egress` selects chat session pods, and a running chat session (`scripts/agent-chat.sh`) has no `claude-*` Secret reference, uses `claude-proxy` and cannot reach `api.anthropic.com` (MANUAL when no session runs); with `CLAUDE_PROXY_AUTH` `both` or `token`: only the agent container has the projected token, the proxy accepts it and refuses a token of `agent-<name>` for another audience (401); with `token`: the proxy refuses the HMAC key (401, SKIP otherwise) | R11, R64, R107 |
 | `usage` | the sidecar refuses `POST /usage` (410); the agent cannot change its Agent object | R47 |
 | `approvals` | the agent cannot write Approvals or their status; the internal endpoint gives nothing without the secret; the agent cannot decide through the API. MANUAL: an `/approve` from the agent account or in a quote is ignored | R70, R73, R78, R90 |
 | `executors` | own namespace; the agent cannot read or make Secrets, Executors, runs, Jobs or pods there; executor egress (#135): from an executor pod a direct connection fails, a host off its list is refused through the proxy and gives an `egress-host` event of the executor, a host on its list works. MANUAL: approval binding | R80 to R83, R97 |
 | `https` | HTTP to HTTPS; HSTS; TLS 1.1 refused; `/status`, `/healthz` and `/internal` not public; `/hook` refuses an unsigned body | R66 to R68 |
 | `api` | no token or a forged token gives 401; a decision without a person's token gives 401; a reader gets 403 for a change and for the audit | R42, R90 |
+| `chat` | NetworkPolicy `chat-session-server` lets only `agentdev-api` reach port 7681; a live probe from the agent pod to a running console chat pod is refused (GKE; kind does not enforce NetworkPolicy); server dry runs as `system:serviceaccount:<platform>:agentdev-api`: a chat Job of the right shape is allowed, a Job with another image, another Secret or added capabilities is denied by `agentdev-api-chat-jobs`, and so is a Job whose projected `claude-proxy` token has an `expirationSeconds` other than 600 or is mounted in a container other than `chat` (`forge`, the `state-init` clone step, #416), and deleting a non-console Job is denied by `agentdev-api-chat-jobs-delete` (the script makes a suspended dummy Job for this and removes it). The kind e2e (`scripts/e2e-compat.sh` with `COMPAT_API=1`) runs this section | R101 |
 | `sso` | the SSO source is configured. MANUAL: a user outside the Workspace domain or the admin group is refused (#134) | |
-| `github` | the agent takes the labelled issue, opens a pull request with you as reviewer, and replies to your review (#2) | |
+| `github` | the agent takes the labelled issue, opens a pull request with you as reviewer, replies to your change request and pushes a new commit (#2, #216) | |
+| `gitea` | the same as `github` on Gitea: the agent takes the assigned issue, opens a pull request with you as reviewer and the label `agent:<name>`, replies to your change request and pushes a new commit (#216) | |
 
 ## Use the script on kind
 

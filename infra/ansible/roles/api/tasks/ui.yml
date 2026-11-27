@@ -1,0 +1,53 @@
+---
+# Web UI (#48, #120) next to the API: manifests/ui.yaml.tmpl, the same as the old 11-ui.sh. On GKE main.yml runs it
+# after the API (api.ui); on kind, kind.yml runs it alone with the tag ui. Users reach it through the role ingress
+# (GKE) or a port-forward (kind).
+- name: UI image on kind (build or pull, load)
+  when: api_kind_cluster | length > 0
+  block:
+    - name: Build the local UI image
+      ansible.builtin.command:
+        argv: ["{{ api_container_engine }}", build, -q, -t, "{{ api_ui_image }}", "{{ repo_root }}/images/ui"]
+      changed_when: false
+      when: api_ui_image is match('agentdev-ui:')
+
+    - name: Published UI image present locally
+      ansible.builtin.shell: >-
+        {{ api_container_engine }} image inspect {{ api_ui_image | quote }} >/dev/null 2>&1
+        || { {{ api_container_engine }} pull -q {{ api_ui_image | quote }} >/dev/null && echo pulled; }
+      register: api_ui_pull
+      changed_when: "'pulled' in api_ui_pull.stdout"
+      when: api_ui_image is not match('agentdev-ui:')
+
+    - name: Load the UI image into kind
+      ansible.builtin.command:
+        argv: [kind, load, docker-image, "{{ api_ui_image }}", --name, "{{ api_kind_cluster }}"]
+      register: api_ui_load
+      changed_when: "'already present on all nodes' not in (api_ui_load.stdout ~ api_ui_load.stderr)"
+
+- name: Web UI Deployment, Service and NetworkPolicies
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=ui_render) | from_yaml_all | list }}"
+  vars:
+    ui_render:
+      src: "{{ repo_root }}/manifests/ui.yaml.tmpl"
+      values:
+        PLATFORM_NS: "{{ platform_ns }}"
+        UI_IMAGE: "{{ api_ui_image }}"
+        OIDC_ISSUER: "{{ api_oidc_issuer }}"
+        OIDC_CLIENT_ID: "{{ api_oidc_client_id }}"
+        OIDC_SCOPES: "{{ api_ui_oidc_scopes }}"
+      replace: []
+
+# a new local image on kind keeps its tag: restart so the pod runs it
+- name: Restart the web UI after a new local image (kind)
+  ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout restart deploy/agentdev-ui
+  when: api_ui_load is changed and not ansible_check_mode
+  changed_when: true
+
+- name: Wait for the web UI
+  ansible.builtin.command: >-
+    kubectl --context {{ kube_context }} -n {{ platform_ns }} rollout status deploy/agentdev-ui --timeout=120s
+  changed_when: false
+  when: not ansible_check_mode

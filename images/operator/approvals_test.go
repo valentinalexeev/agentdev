@@ -40,3 +40,25 @@ func TestApprovalFromLine(t *testing.T) {
 		}
 	}
 }
+
+// #310: a cost request (source cost, tool step-<n>) from the forge sidecar becomes an Approval with the labels
+// claude-proxy selects on; any other tool of source cost, or the line from the agent container, does not.
+func TestApprovalFromLineCost(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "agent-carol-0", Labels: map[string]string{"agent": "carol"}}}
+	line := func(tool string) string {
+		h := ApprovalHash("0123456789abcdef", "carol", "o/r", "issue-7", "cost", tool, "x")
+		return fmt.Sprintf(`2026-11-01T08:00:00Z AGENTDEV_APPROVAL_REQUEST {"id":"0123456789abcdef","repo":"o/r","job":"issue-7","source":"cost","tool":%q,"input":"x","contentHash":%q,"timeoutSeconds":600,"requesterId":42,"secretHash":"`+strings.Repeat("c", 64)+`"}`, tool, h)
+	}
+	a, ok := approvalFromLine(line("step-1"), pod, "forge", "ns")
+	if !ok || a.Spec.Source != "cost" || a.Labels["agentdev/source"] != "cost" || a.Labels["agentdev/job"] != "issue-7" || a.Labels["agent"] != "carol" {
+		t.Fatalf("cost request: %v %+v", ok, a)
+	}
+	for _, tool := range []string{"Bash", "step-0", "step-1x", "step-1234567"} {
+		if _, ok := approvalFromLine(line(tool), pod, "forge", "ns"); ok {
+			t.Errorf("cost tool %q accepted", tool)
+		}
+	}
+	if _, ok := approvalFromLine(line("step-1"), pod, "agent", "ns"); ok {
+		t.Error("cost request from the agent container accepted")
+	}
+}

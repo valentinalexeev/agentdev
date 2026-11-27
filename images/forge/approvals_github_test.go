@@ -60,11 +60,11 @@ func TestApprovalsOnGitHub(t *testing.T) {
 	s.drv, s.rules = d, d.rules()
 	s.enableApprovals("http://127.0.0.1:1", time.Minute)
 
-	r, err := s.appr.open("issue-12", "claude", "Bash", `{"command":"npm i"}`)
+	r, err := s.appr.open("issue-12", "claude", "Bash", `{"command":"npm i"}`, why{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.RequesterID != 201234567 || r.Forge != "github" || r.commentID != 9001 {
+	if r.RequesterID != 201234567 || r.Forge != "github" || s.appr.jobs["issue-12"] == nil || s.appr.jobs["issue-12"].id != 9001 {
 		t.Fatalf("request %+v", r)
 	}
 	var line approvalRequest
@@ -85,7 +85,7 @@ func TestApprovalsOnGitHub(t *testing.T) {
 	}
 	labels = `[{"name":"agent:bob"}]` // another agent's issue
 	mu.Unlock()
-	if _, err := s.appr.open("issue-12", "claude", "Bash", `{}`); err == nil || !strings.Contains(err.Error(), "agent:alice") {
+	if _, err := s.appr.open("issue-12", "claude", "Bash", `{}`, why{}); err == nil || !strings.Contains(err.Error(), "agent:alice") {
 		t.Fatalf("issue of another agent: %v", err)
 	}
 }

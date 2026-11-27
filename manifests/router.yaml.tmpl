@@ -1,4 +1,4 @@
-# Webhook router (#3): the cluster's single webhook endpoint. Rendered by 06-agents.sh (envsubst).
+# Webhook router (#3): the cluster's single webhook endpoint. Rendered by kind.yml (tag agents) and deploy.yml.
 # Forges deliver here; the router verifies the signature and wakes the registered agents involved.
 # For github.com, expose this Service through an Ingress (one public HTTPS URL for the GitHub App).
 apiVersion: v1
@@ -28,7 +28,8 @@ subjects: [{kind: ServiceAccount, name: webhook-router, namespace: ${AGENTS_NS}}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}}
+# Stakater Reloader (#381): a change of these Secrets restarts the pods; no effect where Reloader is not installed
+metadata: {name: webhook-router, namespace: ${AGENTS_NS}, labels: {app: webhook-router}, annotations: {secret.reloader.stakater.com/reload: "webhook-router,webhook-router-poll"}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: webhook-router}}
@@ -53,16 +54,17 @@ spec:
         - {name: FORGE_POLL_DIR, value: /var/run/agentdev/forge-poll}
         volumeMounts: [{name: forge-poll, mountPath: /var/run/agentdev/forge-poll, readOnly: true}]
         # http: webhook deliveries only (the port a Gateway or reverse proxy publishes); internal: /healthz, /status,
-        # /register, /idle for in-cluster callers (#214)
-        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}]
-        readinessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 5}
-        livenessProbe: {httpGet: {path: /healthz, port: internal}, periodSeconds: 20, failureThreshold: 3}
+        # /register, /idle for in-cluster callers (#214); health: GET /healthz only, for the probes and the load
+        # balancer health check (#218)
+        ports: [{name: http, containerPort: 8080}, {name: internal, containerPort: 8081}, {name: health, containerPort: 8082}]
+        readinessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20, failureThreshold: 3}
         resources:
           requests: {cpu: 20m, memory: 32Mi}
           limits:   {cpu: 500m, memory: 128Mi}
       volumes:
       # read-only forge credential of the wake poll: gitea-token, or github-app-id, private-key.pem and
-      # github-installation-id. Written by 06-agents.sh (kind) or the playbook (GKE); no Secret = no poll credential.
+      # github-installation-id. Written by kind.yml (tag agents) or deploy.yml (GKE); no Secret = no poll credential.
       - {name: forge-poll, secret: {secretName: webhook-router-poll, optional: true, defaultMode: 0440}}
 ---
 apiVersion: v1
@@ -70,4 +72,6 @@ kind: Service
 metadata: {name: webhook-router, namespace: ${AGENTS_NS}}
 spec:
   selector: {app: webhook-router}
-  ports: [{name: http, port: 8080, targetPort: http}, {name: internal, port: 8081, targetPort: internal}]
+  # health: the GKE HealthCheckPolicy probes it (#218)
+  ports: [{name: http, port: 8080, targetPort: http}, {name: internal, port: 8081, targetPort: internal},
+          {name: health, port: 8082, targetPort: health}]

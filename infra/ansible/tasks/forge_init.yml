@@ -1,0 +1,45 @@
+---
+# Optional setup of an external Gitea (#442), opt-in with forge_init.enabled. Applies the ExternalSecret forge-init
+# (ESO, #381: Secret Manager gitea-admin-token and the webhook secret) and the Job forge-init-<hash>, which runs
+# `agentdev-operator forge-init` against the Gitea API (images/operator/forgeinit.go). No kubectl exec, no token on
+# the operator machine: the admin token reaches only the Job's env through secretKeyRef. Same objects on a GitOps
+# path (#385): both are plain manifests, rendered by tasks/forge_init_render.yml.
+- name: "Forge-init: render"
+  ansible.builtin.include_tasks: forge_init_render.yml
+
+- name: "Forge-init: ExternalSecret forge-init"
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ forge_init_es }}"
+
+- name: "Forge-init: Job"
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition: "{{ forge_init_job }}"
+
+- name: "Forge-init: wait for the Job"
+  when: not ansible_check_mode
+  block:
+    - name: "Forge-init: wait until complete"
+      ansible.builtin.command: >-
+        kubectl --context {{ kube_context }} -n {{ platform_ns }} wait --for=condition=complete
+        job/{{ forge_init_full }} --timeout=600s
+      changed_when: false
+  rescue:
+    - name: "Forge-init: log of the failed Job (no secret values: they are only in env)"
+      ansible.builtin.command: kubectl --context {{ kube_context }} -n {{ platform_ns }} logs job/{{ forge_init_full }} --tail=40
+      register: forge_init_log
+      changed_when: false
+      failed_when: false
+
+    - name: "Forge-init: stop"
+      ansible.builtin.fail:
+        msg: "Job {{ forge_init_full }} did not complete: {{ forge_init_log.stdout | default('') }}"
+
+- name: "Forge-init: remove Jobs of other hashes"
+  ansible.builtin.command:
+    argv: [kubectl, --context, "{{ kube_context }}", -n, "{{ platform_ns }}", delete, job, -l, "agentdev/forge-init=true",
+           --field-selector, "metadata.name!={{ forge_init_full }}", --ignore-not-found, --cascade=background]
+  register: forge_init_gc
+  changed_when: "'deleted' in forge_init_gc.stdout"
+  when: not ansible_check_mode

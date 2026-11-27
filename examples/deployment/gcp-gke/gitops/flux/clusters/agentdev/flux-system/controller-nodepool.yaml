@@ -1,0 +1,4 @@
+# Node pool of the Flux controllers (#181, #472). Default: the agentdev pool `system`. Change `value` to override.
+- op: add
+  path: /spec/template/spec/nodeSelector/cloud.google.com~1gke-nodepool
+  value: system

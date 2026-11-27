@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# kind e2e of SSH server enrolment (#204, docs/adr/0007). Needs a kind cluster with the operator (./run.sh 01 12).
+# kind e2e of SSH server enrolment (#204, docs/adr/0007). Needs a kind cluster with the operator (kind.yml --tags cluster,operator).
 #   scripts/e2e-ssh.sh [enrol]   CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
-#   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (./run.sh 05): PR head without SSH,
+#   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (kind.yml --tags forge): PR head without SSH,
 #                                merge plan with the check certificate, apply after the approval, snapshot
 #   scripts/e2e-ssh.sh probes    ansible, then drift and the probe catalogue (#205): server_check through obs-mcp, a
 #                                bad argument refused, the server's allow-list against a valid probe certificate, no

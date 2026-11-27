@@ -1,4 +1,4 @@
-# authentik blueprint (#46): the agentdev OIDC application. 09-authentik.sh puts it in ConfigMap
+# authentik blueprint (#46): the agentdev OIDC application. The role authentik puts it in ConfigMap
 # authentik-blueprints, mounted by the chart; the worker applies it at start and when it changes (identifiers make it
 # update in place). Public client: the UI (#48) logs in with authorization code +
 # PKCE; the API accepts that client's tokens (audience = client id). No secret to store.
@@ -39,7 +39,7 @@ entries:
     redirect_uris:
     # strict entries also set the CORS origin authentik allows for the browser's discovery/token calls
     # the web UI: on GKE https://<ingress.host>/callback (env AGENTDEV_UI_CALLBACK from the Secret authentik, #114),
-    # on kind the local UI (./run.sh 11 port-forward)
+    # on kind the local UI (kind.yml tag ui, port-forward)
     - {matching_mode: strict, url: !Env [AGENTDEV_UI_CALLBACK, 'http://localhost:8091/callback']}
     - {matching_mode: regex, url: '^http://(localhost|127\.0\.0\.1)(:[0-9]+)?/.*$'}   # CLI and test logins
     property_mappings:

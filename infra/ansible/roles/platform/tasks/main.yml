@@ -1,5 +1,5 @@
 ---
-# Postgres + ContextForge in {{ platform_ns }} (#14, #51), then scripts/mcp-sync.sh for each project spec.
+# Postgres + ContextForge in {{ platform_ns }} (#14, #51), then one McpProject per project spec (#383).
 # Every task that holds a secret value has no_log.
 # platform_secret_source: secret_manager (GKE, deploy.yml) or files (kind, kind.yml: .secrets/platform, #106).
 - name: Platform images on kind (pull, load)
@@ -11,7 +11,7 @@
   when: platform_secret_source == 'files'
 
 - name: Platform secrets from Secret Manager
-  when: platform_secret_source == 'secret_manager'
+  when: platform_secret_source == 'secret_manager' and secrets_mode | default('playbook') == 'playbook'
   block:
     - name: Platform secrets exist in Secret Manager (generated once)
       ansible.builtin.shell: |
@@ -47,16 +47,29 @@
         platform_secret: "{{ dict(platform_secret_keys | zip(platform_sm.results | map(attribute='stdout'))) }}"
       no_log: true
 
+# secrets_mode external (#381): ExternalSecrets platform-db and contextforge, with the same keys as the template's
+# Secrets. The values are made by Terraform (infra/terraform/secrets.tf) and never pass through Ansible.
+- name: ExternalSecrets platform-db and contextforge
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/external_secrets.yml"
+  vars:
+    es_specs: >-
+      {{ lookup('ansible.builtin.template', 'externalsecrets.j2') | from_yaml }}
+  when: secrets_mode | default('playbook') == 'external'
+
 # ContextForge (Secret, Deployment, Service, NetworkPolicy, all named contextforge) only when
 # platform_contextforge_enabled (default: mcp_projects is not empty, #172). Postgres always: the API uses it.
 - name: Postgres, ContextForge and their NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
+    # secrets_mode external: the two Secrets come from their ExternalSecrets, so only the other objects apply
     definition: >-
-      {{ platform_docs if platform_contextforge_enabled | bool
-         else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list }}
+      {{ (platform_docs if platform_contextforge_enabled | bool
+          else platform_docs | rejectattr('metadata.name', 'equalto', 'contextforge') | list)
+         | rejectattr('kind', 'equalto', 'Secret' if secrets_mode | default('playbook') == 'external' else '-') | list }}
   vars:
     platform_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=platform_render) | from_yaml_all | list }}"
+    # secrets_mode external: no values here (the Secret documents are not applied), placeholders fill the template
+    platform_ps: "{{ platform_secret | default(dict(platform_secret_keys | zip(['-'] * platform_secret_keys | length))) }}"
     platform_render:
       src: "{{ repo_root }}/manifests/platform.yaml.tmpl"
       values:
@@ -66,16 +79,16 @@
         POSTGRES_IMAGE: "{{ platform_postgres_image }}"
         CONTEXTFORGE_IMAGE: "{{ platform_contextforge_image }}"
         CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
-        PG_ADMIN_PASSWORD: "{{ platform_secret['pg-admin'] }}"
-        PG_CF_PASSWORD: "{{ platform_secret['pg-contextforge'] }}"
-        PG_AGENTDEV_PASSWORD: "{{ platform_secret['pg-agentdev'] }}"
-        PG_AUTHENTIK_PASSWORD: "{{ platform_secret['pg-authentik'] }}"
-        CF_JWT_SECRET: "{{ platform_secret['jwt'] }}"
-        CF_ENC_SECRET: "{{ platform_secret['enc'] }}"
+        PG_ADMIN_PASSWORD: "{{ platform_ps['pg-admin'] }}"
+        PG_CF_PASSWORD: "{{ platform_ps['pg-contextforge'] }}"
+        PG_AGENTDEV_PASSWORD: "{{ platform_ps['pg-agentdev'] }}"
+        PG_AUTHENTIK_PASSWORD: "{{ platform_ps['pg-authentik'] }}"
+        CF_JWT_SECRET: "{{ platform_ps['jwt'] }}"
+        CF_ENC_SECRET: "{{ platform_ps['enc'] }}"
         # same rule as 08-mcp.sh: ContextForge wants upper, lower, digit and symbol
-        CF_ADMIN_PASSWORD: "Aa1!{{ platform_secret['cf-admin'] }}"
-        CF_DEFAULT_USER_PASSWORD: "Aa1!{{ platform_secret['cf-default-user'] }}"
-        CF_BASIC_AUTH_PASSWORD: "Aa1!{{ platform_secret['cf-basic-auth'] }}"
+        CF_ADMIN_PASSWORD: "Aa1!{{ platform_ps['cf-admin'] }}"
+        CF_DEFAULT_USER_PASSWORD: "Aa1!{{ platform_ps['cf-default-user'] }}"
+        CF_BASIC_AUTH_PASSWORD: "Aa1!{{ platform_ps['cf-basic-auth'] }}"
       replace: []
   no_log: true
 
@@ -105,7 +118,7 @@
   loop_control: {label: "{{ item.kind }}/contextforge"}
   when: not platform_contextforge_enabled | bool
 
-- name: Find MCP token Secrets of the agents (made by mcp-sync)
+- name: Find MCP token Secrets of the agents (made by the operator, or by scripts/mcp-sync.sh before 1.2.0)
   kubernetes.core.k8s_info:
     context: "{{ kube_context }}"
     kind: Secret
@@ -150,10 +163,11 @@
   check_mode: false
   failed_when: platform_obs_token.rc != 0 and not ansible_check_mode
   when: platform_obs_mcp_enabled | bool and platform_secret_source == 'secret_manager'
-    and (obs_mcp.token_secret | default('')) | length > 0
+    and (obs_mcp.token_secret | default('')) | length > 0 and secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 - name: Observability MCP token Secret (only in obs-mcp's namespace, never in the agents namespace)
+  # secrets_mode external: ExternalSecret obs-mcp-token (externalsecrets.j2)
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
     state: "{{ 'present' if platform_obs_token.stdout | default('') | length > 0 else 'absent' }}"
@@ -162,7 +176,7 @@
       kind: Secret
       metadata: {name: obs-mcp-token, namespace: "{{ platform_ns }}"}
       stringData: {token: "{{ platform_obs_token.stdout | default('') }}"}
-  when: platform_obs_mcp_enabled | bool
+  when: platform_obs_mcp_enabled | bool and secrets_mode | default('playbook') == 'playbook'
   no_log: true
 
 # Probe catalogue (#205): one random token shared by obs-mcp and the operator's probe server. Made once in the
@@ -226,36 +240,58 @@
   changed_when: false
   when: platform_obs_mcp_enabled | bool and not ansible_check_mode
 
-- name: MCP sync for each project spec
-  when: mcp_projects | length > 0 and platform_contextforge_enabled | bool and not ansible_check_mode
-  block:
-    - name: Admin password file for mcp-sync (0600, removed below)
-      ansible.builtin.tempfile: {state: file, suffix: .cf}
-      register: platform_cf_file
+# MCP per project (#383): each spec in mcp_projects becomes an McpProject; the operator's controller registers the
+# servers in ContextForge and keeps the agents' token Secrets (was scripts/mcp-sync.sh with a temp password file). The
+# admin login stays in the Secret contextforge; the allow-list is the operator's MCP_ALLOWED_HOSTS, and a refused host
+# shows in `kubectl get mcpp` (Ready=False, HostNotAllowed). No secret value is read here.
+- name: McpProject CRD (also applied by the operator role; kind runs this role first)
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    src: "{{ repo_root }}/images/operator/config/crd/agentdev.dev_mcpprojects.yaml"
+    wait: true
+    wait_condition: {type: Established, status: "True"}
+    wait_timeout: 60
 
-    - name: Write the admin password
-      ansible.builtin.copy:
-        dest: "{{ platform_cf_file.path }}"
-        content: "{{ platform_secret['cf-admin'] }}"
-        mode: "0600"
-      no_log: true
+- name: McpProject CRD served (in --check on a first run it is not)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: mcpprojects.agentdev.dev
+  register: platform_mcp_crd
 
-    # mcp-sync.sh never prints a token; no_log as a second guard (GHAS on #99). Only listed MCP hosts are registered.
-    - name: Run scripts/mcp-sync.sh
-      ansible.builtin.command:
-        argv: ["{{ repo_root }}/scripts/mcp-sync.sh", "{{ item }}"]
-      environment:
-        KUBECTL: "kubectl --context {{ kube_context }}"
-        PLATFORM_NS: "{{ platform_ns }}"
-        AGENTS_NS: "{{ agents_ns }}"
-        CF_ADMIN_EMAIL: "{{ platform_cf_admin_email }}"
-        CF_ADMIN_FILE: "{{ platform_cf_file.path }}"
-        MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
-      loop: "{{ mcp_projects }}"
-      register: platform_mcp_sync
-      changed_when: "': registered' in platform_mcp_sync.stdout or 'token scoped' in platform_mcp_sync.stdout or 'removed' in platform_mcp_sync.stdout"
-      no_log: true
-  always:
-    - name: Remove the admin password file
-      ansible.builtin.file: {path: "{{ platform_cf_file.path }}", state: absent}
-      when: platform_cf_file.path is defined
+- name: McpProject per project spec
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    definition:
+      apiVersion: agentdev.dev/v1alpha1
+      kind: McpProject
+      metadata: {name: "{{ item.project }}", namespace: "{{ agents_ns }}", labels: {agentdev/mcp-source: ansible}}
+      spec:
+        servers: "{{ (item.mcp | default({}, true)).servers | default([], true) }}"
+        agents: "{{ item.agents | default([], true) | map(attribute='name') | list }}"
+  loop: "{{ platform_mcp_specs }}"
+  loop_control: {label: "{{ item.project }}"}
+  when: platform_mcp_crd.resources | length > 0
+
+- name: McpProjects from earlier runs
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    api_version: agentdev.dev/v1alpha1
+    kind: McpProject
+    namespace: "{{ agents_ns }}"
+    label_selectors: [agentdev/mcp-source=ansible]
+  register: platform_mcp_have
+  when: platform_mcp_crd.resources | length > 0
+
+# the operator revokes their tokens and deletes their Secrets (finalizer)
+- name: Remove McpProjects no longer in mcp_projects
+  kubernetes.core.k8s:
+    context: "{{ kube_context }}"
+    state: absent
+    api_version: agentdev.dev/v1alpha1
+    kind: McpProject
+    namespace: "{{ agents_ns }}"
+    name: "{{ item }}"
+  loop: "{{ platform_mcp_have.resources | default([]) | map(attribute='metadata.name') | list
+            | difference(platform_mcp_specs | map(attribute='project') | list) }}"

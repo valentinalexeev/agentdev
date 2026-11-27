@@ -234,4 +234,8 @@ func TestNewSSHCARefusesBadKeys(t *testing.T) {
 			t.Errorf("accepted %s", j)
 		}
 	}
+	_, err := newSSHCA("https://x", "x", []byte(`{"kty":"EC","crv":"P-256","kid":"k","x":"AA","y":"AA","d":"!!"}`), root)
+	if err == nil || !strings.Contains(err.Error(), "field d is not base64url") {
+		t.Errorf("bad base64 in d: got %v", err)
+	}
 }

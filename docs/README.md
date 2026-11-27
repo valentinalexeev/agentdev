@@ -10,8 +10,11 @@ issues assigned to it, opens pull requests and reacts to review feedback. People
 | [Install](install.md) | admins | local evaluation on kind, production on GCP/GKE |
 | [Private deployment](private-deployment.md) | admins | one GKE + GitHub + Google Workspace instance from a private repo: secrets, first admin, backup, upgrade, security checklist |
 | [Administration](admin.md) | admins | projects, agents, credentials, concurrency, scale to zero, upgrades, removal |
+| [Threat model](threat-model.md) | owner, admins, reviewers | attackers, assets, trust boundaries and attack paths, with the control or the open question for each (#401) |
 | [E2E security checklist](e2e-security.md) | owner | scripted security checks on a real GKE instance, before each release |
 | [Troubleshooting](troubleshooting.md) | admins | symptoms, where to look, fixes |
+| [Design system](design-system.md) | contributors, website | colours, type, the mark, icons and the shared UI components |
+| [Console UX](console-ux.md) | contributors | who uses the web console and for what, daily use, product research, screens and phases |
 | [Writing the manuals](writing.md) | contributors | ASD-STE100 rules and the project word list for the manuals |
 | [Release checklist](release.md) | maintainers | gates and steps to cut a release (1.0.0) |
 | [Decision records](adr/) | maintainers | architecture decisions (ADR) |

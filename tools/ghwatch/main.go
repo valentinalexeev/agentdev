@@ -35,12 +35,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	pending := fs.Bool("pending", false, "print owner events not yet acknowledged (from the outbox) and exit")
 	ack := fs.Bool("ack", false, "with -pending: mark the printed events as acknowledged")
 	gapAfter := fs.Duration("gap-after", 5*time.Minute, "report a gap when the last poll is older than this")
-	api := fs.String("api", "https://api.github.com", "GitHub API base URL")
+	api := fs.String("api", "https://api.github.com", "API base URL (Gitea: https://gitea.example/api/v1)")
+	forge := fs.String("forge", envOr("GHWATCH_FORGE", "github"), "github | gitea (#241)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *repo == "" || *owner == "" || *statePath == "" || (*format != "json" && *format != "text") {
-		fmt.Fprintln(stderr, "ghwatch: -repo, -owner and -state are required; -format is json or text")
+	if *repo == "" || *owner == "" || *statePath == "" || (*format != "json" && *format != "text") || (*forge != "github" && *forge != "gitea") {
+		fmt.Fprintln(stderr, "ghwatch: -repo, -owner and -state are required; -format is json or text; -forge is github or gitea")
 		return 2
 	}
 	st, err := loadState(*statePath, *repo, *owner)
@@ -73,7 +74,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		c := &client{base: *api, repo: *repo, token: os.Getenv("GH_TOKEN"), http: &http.Client{Timeout: 30 * time.Second}}
+		c := &client{base: *api, repo: *repo, token: os.Getenv("GH_TOKEN"), http: &http.Client{Timeout: 30 * time.Second}, gitea: *forge == "gitea"}
+		if c.gitea {
+			c.token = os.Getenv("GITEA_TOKEN")
+		}
 		snap, err = fetch(ctx, c, st.Cursor, time.Now())
 		if err != nil {
 			fmt.Fprintln(stderr, "ghwatch: fetch:", err) // partial snapshots are never reduced
@@ -169,4 +173,11 @@ func less(a, b string) bool {
 		return len(a) < len(b)
 	}
 	return a < b
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

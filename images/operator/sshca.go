@@ -66,11 +66,18 @@ func newSSHCA(url, serverName string, provisionerJSON, rootPEM []byte) (*SSHCA, 
 	if k.Kty != "EC" || k.Crv != "P-256" || k.D == "" || k.Kid == "" {
 		return nil, errors.New("provisioner key: want a private EC P-256 JWK with kid")
 	}
-	b := func(s string) *big.Int {
-		v, _ := base64.RawURLEncoding.DecodeString(s)
+	var decErr error
+	b := func(field, s string) *big.Int {
+		v, err := base64.RawURLEncoding.DecodeString(s)
+		if err != nil && decErr == nil {
+			decErr = fmt.Errorf("provisioner key: field %s is not base64url: %w", field, err)
+		}
 		return new(big.Int).SetBytes(v)
 	}
-	priv := &ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: b(k.X), Y: b(k.Y)}, D: b(k.D)}
+	priv := &ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: b("x", k.X), Y: b("y", k.Y)}, D: b("d", k.D)}
+	if decErr != nil {
+		return nil, decErr
+	}
 	if !priv.Curve.IsOnCurve(priv.X, priv.Y) {
 		return nil, errors.New("provisioner key: point not on curve")
 	}

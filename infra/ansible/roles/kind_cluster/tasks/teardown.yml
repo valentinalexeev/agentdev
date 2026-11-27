@@ -1,0 +1,21 @@
+---
+# Delete the kind cluster (#106, was 99-teardown.sh). Only with the tag teardown, which kind.yml also tags never.
+# Nothing outside the cluster is touched apart from the old Coder spike session (.coder); the local images stay.
+- name: List the kind clusters
+  ansible.builtin.command: kind get clusters
+  register: kind_cluster_list
+  changed_when: false
+
+- name: Delete the kind cluster
+  ansible.builtin.command: kind delete cluster --name {{ kind_cluster_name | quote }}
+  when: kind_cluster_name in kind_cluster_list.stdout_lines
+  changed_when: true
+
+- name: Remove the Coder spike session (.coder, from 04-coder.sh)
+  ansible.builtin.file:
+    path: "{{ kind_cluster_repo_root }}/.coder"
+    state: absent
+
+- name: Result
+  ansible.builtin.debug:
+    msg: "kind cluster {{ kind_cluster_name }} is gone. Remove the local images with: {{ kind_cluster_engine }} rmi <image>"

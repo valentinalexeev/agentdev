@@ -1,0 +1,60 @@
+# Check (#421): with plan_identity: true the preflight tests the apply account's permissions for the read-only plan
+# identity (#291) and stops with the owner grant commands. Fake gcloud and curl (files/fake-gcloud), no cloud access.
+# Run: ansible-playbook infra/ansible/tests/plan_identity_preflight.yml
+- name: "Preflight checks the plan identity permissions (#421)"
+  hosts: localhost
+  gather_facts: false
+  vars:
+    work: "{{ pi_tmp.path }}"
+    ansible_env_path: "{{ lookup('ansible.builtin.env', 'PATH') }}"
+    all_perms: >-
+      iam.workloadIdentityPools.create storage.buckets.getIamPolicy storage.buckets.setIamPolicy
+      billing.accounts.getIamPolicy billing.accounts.setIamPolicy
+    base: {gcp_project: p, gcp_zone: z, image_tag: "0.0.0", agents: [{name: alice}], preflight_checks: [plan_identity]}
+    cases:
+      - {name: off by default (no gcloud call), extra: {}, perms: "", ok: true, calls: 0}
+      - {name: all granted, extra: {plan_identity: true, plan_identity_billing_account: "0-0-0"}, perms: all, ok: true,
+         calls: 3}
+      - {name: no budget skips billing, extra: {plan_identity: true, plan_identity_billing_account: ""},
+         perms: "iam.workloadIdentityPools.create storage.buckets.getIamPolicy storage.buckets.setIamPolicy",
+         ok: true, calls: 2}
+      # yamllint disable rule:line-length
+      - name: "1.0.x apply account (the #421 failure)"
+        extra: {plan_identity: true, plan_identity_billing_account: "0-0-0"}
+        perms: ""
+        ok: false
+        expect:
+          - "gcloud projects add-iam-policy-binding p --member=serviceAccount:agentdev-automation@p.iam.gserviceaccount.com --role=roles/iam.workloadIdentityPoolAdmin --condition=None"
+          - "gcloud storage buckets add-iam-policy-binding gs://p-tfstate --member=serviceAccount:agentdev-automation@p.iam.gserviceaccount.com --role=roles/storage.admin"
+          - "gcloud billing accounts add-iam-policy-binding 0-0-0 --member=serviceAccount:agentdev-automation@p.iam.gserviceaccount.com --role=roles/billing.admin"
+      # yamllint enable rule:line-length
+      - name: only billing missing, custom bucket
+        extra: {plan_identity: true, plan_identity_billing_account: "0-0-0", plan_identity_state_bucket: my-state}
+        perms: "iam.workloadIdentityPools.create storage.buckets.getIamPolicy storage.buckets.setIamPolicy"
+        ok: false
+        expect: ["lacks billing.accounts.setIamPolicy.", "gcloud billing accounts add-iam-policy-binding 0-0-0"]
+        absent: ["workloadIdentityPoolAdmin", "storage.admin"]
+      - {name: missing billing account value, extra: {plan_identity: true}, perms: all, ok: false,
+         expect: ["set plan_identity_billing_account"]}
+  tasks:
+    - name: Work directory
+      ansible.builtin.tempfile: {state: directory, prefix: agentdev-pi-}
+      register: pi_tmp
+
+    - name: Bin directory
+      ansible.builtin.file: {path: "{{ work }}/bin", state: directory, mode: "0700"}
+
+    - name: Fake gcloud and curl on PATH
+      ansible.builtin.copy:
+        src: files/fake-gcloud
+        dest: "{{ work }}/bin/{{ item }}"
+        mode: "0755"
+      loop: [gcloud, curl]
+
+    - name: Run each case
+      ansible.builtin.include_tasks: includes/plan_identity_case.yml
+      loop: "{{ cases }}"
+      loop_control: {loop_var: case, label: "{{ case.name }}"}
+
+    - name: Clean up
+      ansible.builtin.file: {path: "{{ work }}", state: absent}

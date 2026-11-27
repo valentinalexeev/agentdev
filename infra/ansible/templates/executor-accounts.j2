@@ -1,0 +1,13 @@
+{#- Executor service accounts (#69, #384): read-only for plan, write for apply; GKE Workload Identity when
+    executors[].plan_gsa / apply_gsa is set. Rendered by tasks/render_objects.yml. -#}
+{%- set out = [] -%}
+{%- for e in executors -%}
+{%-   for k in ['plan', 'apply'] -%}
+{%-     set gsa = e[k ~ '_gsa'] | default('') -%}
+{%-     set _ = out.append({'apiVersion': 'v1', 'kind': 'ServiceAccount',
+          'metadata': {'name': 'exec-' ~ e.name ~ '-' ~ k, 'namespace': exec_ns,
+                       'annotations': ({'iam.gke.io/gcp-service-account': gsa} if gsa else {})},
+          'automountServiceAccountToken': false}) -%}
+{%-   endfor -%}
+{%- endfor -%}
+{{ out | to_json }}
