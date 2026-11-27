@@ -254,6 +254,11 @@ func (in *AgentStatus) DeepCopy() *AgentStatus {
 func (in *AgentToolchain) DeepCopyInto(out *AgentToolchain) {
 	*out = *in
 	out.Presets = in.Presets
+	if in.Custom != nil {
+		in, out := &in.Custom, &out.Custom
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Path != nil {
 		in, out := &in.Path, &out.Path
 		*out = make([]string, len(*in))

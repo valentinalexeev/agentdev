@@ -77,6 +77,27 @@ spec:
   only while the agent is idle (no job running), the same as other pod changes. The pod then restarts and the
   toolchain is installed again. A change to the spec waits for idle in the same way.
 
+**Amendment (#598): custom toolchains of the deployment instead of free-form steps.** The free-form `steps` above
+are replaced by declarative custom toolchains:
+
+- A deployment defines named toolchains in its instance config (Ansible `toolchains`, kind `operator_toolchains`),
+  which reaches the operator as the JSON environment variable `TOOLCHAINS`. An Agent names them in
+  `spec.toolchain.custom`. Neither the repository nor issue text can define or name one. A change needs a deploy,
+  not an agentdev release.
+- Each toolchain has pinned downloads (`tar`, `file` or `deb`, a SHA-256 per architecture or one for `all`), `path`
+  entries, `verify` commands, `env` and `allow` entries, and extra `hosts` for redirects. The install steps are
+  the script's own: no admin-written shell runs with the setup proxy credential. Unpacking and `verify` run
+  without it, the same rule as for presets (review of #537).
+- `deb` unpacks a Debian package with `dpkg-deb -x`: no root, no maintainer scripts, no dependencies. This covers
+  a single-binary tool such as `make` without `apt-get`, which stays rejected.
+- Hosts: every URL host and extra host must be in `SETUP_EGRESS_HOSTS`, the instance-wide setup ACL. So the setup
+  ACL stays one list for all agents, written by the administrator. A per-agent ACL is not needed. The setup client
+  is allowed before the forge-host deny, so `github.com` release downloads work.
+- The key covers the downloads, `path` and `verify`, so a change installs again. `env`, `allow` and `hosts` are
+  the operator's only.
+- A custom toolchain can not override a variable that agentdev or a preset sets, and a symlink out of the installed
+  tree is refused.
+
 ### D3. Toolchain cache
 
 Three layers. Each one is optional and falls back to the one below it.

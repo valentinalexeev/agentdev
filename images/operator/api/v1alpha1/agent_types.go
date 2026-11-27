@@ -118,11 +118,20 @@ type AgentRetries struct {
 
 // AgentToolchain is the agent's toolchain (#499, ADR 0010 D2). Only the administrator sets it (the Agent object).
 // The init container toolchain installs it into /state/toolchain/<key> on the agent's volume; the agent container mounts
-// /state/toolchain read-only. Free-form steps come later (ADR 0010 D4 step 3).
+// /state/toolchain read-only. Custom toolchains of the deployment (#598) are defined in the operator's configuration.
+// +kubebuilder:validation:XValidation:rule="(has(self.presets) && (has(self.presets.go) || has(self.presets.rust))) || (has(self.custom) && size(self.custom) > 0)",message="spec.toolchain needs at least one preset or custom toolchain"
 type AgentToolchain struct {
 	// Preset versions. The operator accepts only the versions of its catalogue (a changed catalogue is an agentdev
 	// release); another version makes the Agent invalid.
-	Presets ToolchainPresets `json:"presets"`
+	// +optional
+	Presets ToolchainPresets `json:"presets,omitempty"`
+	// Custom toolchains by name (#598), for example "shell-tools". The deployment defines them in the operator's
+	// configuration (instance config toolchains, operator environment TOOLCHAINS), never the repository or issue text.
+	// A name the operator does not know makes the Agent invalid.
+	// +optional
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`
+	Custom []string `json:"custom,omitempty"`
 	// PATH entries for the agent container, below $TOOLCHAIN, for example "$TOOLCHAIN/bin"; no segment starts with a
 	// dot. The presets add their own.
 	// +optional
@@ -137,7 +146,6 @@ type AgentToolchain struct {
 }
 
 // ToolchainPresets: one version per preset (#499). An empty version: the preset is not installed.
-// +kubebuilder:validation:XValidation:rule="has(self.go) || has(self.rust)",message="spec.toolchain.presets needs at least one preset"
 type ToolchainPresets struct {
 	// Go, for example "1.27.4" (go.dev archive, sha256 pinned in the operator).
 	// +optional
