@@ -814,7 +814,7 @@ sends traffic only to a ready pod.
 
 ### How agentdev limits the effect
 
-agentdev 1.3.0-rc.3 has these measures. They reduce the loss from a preemption. They do not prevent it.
+agentdev 1.3.0 has these measures. They reduce the loss from a preemption. They do not prevent it.
 
 1. **Drain before an upgrade.** The operator replaces an agent pod only when the agent has no running job, for at most
    `rollout.drain_max_minutes`. This protects jobs from an upgrade of agentdev. It does not protect them from a
@@ -865,7 +865,7 @@ agentdev 1.3.0-rc.3 has these measures. They reduce the loss from a preemption. 
 To record the memory use of the agent container during a job, set `spec.diagnostics.resources: true`. The interval is
 `spec.diagnostics.intervalSeconds` (default 60). It is off by default, and it adds no load when it is off.
 
-#### Upgrade to 1.3.0-rc.3
+#### Upgrade to 1.3.0
 
 The deployment playbook applies the new Agent field and a new ClusterRole `agentdev-operator-nodes`. The role has
 only `get` on `nodes`. Without it, the operator finds the reason from the pod condition alone. An Agent without

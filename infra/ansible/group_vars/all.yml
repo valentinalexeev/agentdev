@@ -76,7 +76,8 @@ poll_seconds: 60                    # webhooks wake agents; polling is the fallb
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
 max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
 # Claude model and reasoning effort of the agents' runs (#564): `claude --model`, `--effort`. Empty: the CLI's own
-# default, as before. claude_model: an alias (opus, sonnet) or a full model name; claude_effort: low, medium,
+# default, as before. claude_model: opus, sonnet, haiku, fable or a claude-<family>-... name
+# (optional [1m], at most 80 characters, #609); claude_effort: low, medium,
 # high, xhigh, max. Per-agent override: agents[].model, agents[].effort.
 claude_model: ""
 claude_effort: ""
