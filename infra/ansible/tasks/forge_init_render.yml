@@ -1,0 +1,81 @@
+---
+# Renders the ExternalSecret and the Job of tasks/forge_init.yml (#442) into facts, with no cluster access
+# (tests/forge_init.yml). Inputs: forge_url, agents, reviewer, forge_init (see group_vars/all.yml), operator_image,
+# platform_ns, agents_ns.
+- name: "Forge-init: configuration (no secret values)"
+  ansible.builtin.set_fact:
+    forge_init_config:
+      agents: "{{ agents | map('dict2items') | map('selectattr', 'key', 'in', ['name', 'user', 'repos']) | map('items2dict') | list }}"
+      api_user: "{{ forge_init.api_user | default('agentdev-api') }}"
+      router_user: "{{ forge_init.router_user | default('agentdev-router') }}"
+      reviewer: "{{ reviewer }}"
+      hook_url: "{{ forge_init.hook_url | default('http://webhook-router.' ~ agents_ns ~ '.svc.cluster.local:8080/') }}"
+      create_accounts: "{{ forge_init.create_accounts | default(false) | bool }}"
+      protect_branch: "{{ forge_init.protect_branch | default(true) | bool }}"
+
+# Same idea as db-init (#382): the name carries a hash of every input. Same inputs: same Job, a second apply changes
+# nothing; a changed agent list or image: a new Job (a Job's pod template is immutable).
+- name: "Forge-init: name with the hash of its inputs"
+  ansible.builtin.set_fact:
+    forge_init_full: >-
+      forge-init-{{ ((forge_init_config | to_json(sort_keys=true)) ~ forge_url ~ operator_image
+         ~ (forge_init.ca_configmap | default('')) ~ (forge_init.rerun | default(''))) | hash('sha256') | truncate(10, true, '') }}
+
+- name: "Forge-init: ExternalSecret and Job"
+  ansible.builtin.set_fact:
+    # ESO (#381): the admin token and the webhook secret from Secret Manager into the Secret forge-init, read only by
+    # this Job (secretKeyRef). Nothing else in the cluster gets the admin token.
+    forge_init_es:
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata: {name: forge-init, namespace: "{{ platform_ns }}"}
+      spec:
+        refreshInterval: 1h
+        secretStoreRef: {name: agentdev-platform-secrets, kind: SecretStore}
+        target: {name: forge-init, creationPolicy: Owner}
+        data:
+          - {secretKey: GITEA_ADMIN_TOKEN, remoteRef: {key: "{{ sm_gitea_admin_token }}"}}
+          - {secretKey: WEBHOOK_SECRET, remoteRef: {key: "{{ sm_forge_webhook_secret }}"}}
+    forge_init_job:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: "{{ forge_init_full }}"
+        namespace: "{{ platform_ns }}"
+        labels: {agentdev/forge-init: "true"}
+      spec:
+        backoffLimit: 6
+        activeDeadlineSeconds: 900
+        template:
+          metadata:
+            labels: {agentdev/forge-init: "true"}
+          spec:
+            restartPolicy: OnFailure
+            # Gitea API only: no Kubernetes API access, so no ServiceAccount token and no RBAC
+            automountServiceAccountToken: false
+            enableServiceLinks: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: forge-init
+                image: "{{ operator_image }}"
+                args: [forge-init]
+                env: >-
+                  {{ [{'name': 'FORGE_URL', 'value': forge_url},
+                      {'name': 'FORGE_INIT_CONFIG', 'value': forge_init_config | to_json(sort_keys=true)},
+                      {'name': 'GITEA_ADMIN_TOKEN', 'valueFrom': {'secretKeyRef': {'name': 'forge-init', 'key': 'GITEA_ADMIN_TOKEN'}}},
+                      {'name': 'WEBHOOK_SECRET', 'valueFrom': {'secretKeyRef': {'name': 'forge-init', 'key': 'WEBHOOK_SECRET', 'optional': true}}}]
+                     + ([{'name': 'SSL_CERT_FILE', 'value': '/etc/agentdev/forge-ca/ca.crt'}] if forge_init.ca_configmap | default('') else []) }}
+                securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+                resources:
+                  requests: {cpu: 10m, memory: 32Mi}
+                  limits: {memory: 128Mi}
+                volumeMounts: >-
+                  {{ [{'name': 'forge-ca', 'mountPath': '/etc/agentdev/forge-ca', 'readOnly': true}]
+                     if forge_init.ca_configmap | default('') else [] }}
+            volumes: >-
+              {{ [{'name': 'forge-ca', 'configMap': {'name': forge_init.ca_configmap, 'items': [{'key': 'ca.crt', 'path': 'ca.crt'}]}}]
+                 if forge_init.ca_configmap | default('') else [] }}

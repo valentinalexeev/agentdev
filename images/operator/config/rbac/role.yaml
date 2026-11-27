@@ -31,6 +31,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - agentdev-toolchains
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - agentdev-usage
   resources:
   - configmaps
@@ -43,6 +52,20 @@ rules:
   - agentdev-usage-settings
   resources:
   - configmaps
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods/log
   verbs:
   - get
 - apiGroups:
@@ -68,15 +91,27 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods/log
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+- apiGroups:
+  - ""
+  resourceNames:
+  - claude-proxy-signing
+  resources:
+  - secrets
   verbs:
   - get
 - apiGroups:
   - ""
+  resourceNames:
+  - egress-setup-proxy
   resources:
   - secrets
   verbs:
-  - create
   - get
 - apiGroups:
   - ""
@@ -87,6 +122,17 @@ rules:
   verbs:
   - get
   - update
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -104,6 +150,7 @@ rules:
   resources:
   - agents
   - agents/status
+  - mcpprojects
   verbs:
   - get
   - list
@@ -147,10 +194,17 @@ rules:
   - agentdev.dev
   resources:
   - executors/status
+  - mcpprojects/status
   - projectsecrets/status
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - agentdev.dev
+  resources:
+  - mcpprojects/finalizers
+  verbs:
   - update
 - apiGroups:
   - apps

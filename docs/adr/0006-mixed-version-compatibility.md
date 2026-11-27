@@ -75,11 +75,13 @@ but this rule covers them:
 
 - **CI compatibility job** (#178): on kind, deploy the platform of the PR head, then run the **previous release's**
   worker and forge images as the agent pod (`WORKER_IMAGE`/`FORGE_IMAGE` pinned to the previous tag) and do the
-  e2e pass: issue, PR, review, reply. A deliberately incompatible change fails it.
+  e2e pass: issue, PR, review, reply. A deliberately incompatible change fails it. This is
+  `scripts/e2e-compat.sh` in the `compat` workflow: with a stubbed Claude on each pull request, with the real model
+  nightly and on manual runs.
 - **Review:** a PR that changes an item of section 1 says in its description how the previous release keeps working
-  (reviewer checklist, if the owner agrees; see the issue).
-- **Operator unit tests** keep the rendered template additive: a test compares the env and mounts the previous
-  release rendered with the current ones and fails on a removed name.
+  (reviewer checklist item 7 in `CLAUDE.md`).
+- **Operator unit tests** (follow-up, not done yet) can keep the rendered template additive: a test compares the env
+  and mounts the previous release rendered with the current ones and fails on a removed name.
 
 ## Consequences
 

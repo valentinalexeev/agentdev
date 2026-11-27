@@ -94,7 +94,7 @@ check "run_claude: unparsable output is not printed and the run fails" "[[ -z \"
 printf '#!/bin/sh\necho "SECRET-STDERR tool output" >&2\nexit 3\n' > "${tmp}/bin/claude"
 # shellcheck disable=SC2034  # read by check (eval)
 logged=$( log() { printf '%s\n' "$*"; }; run_claude "${tmp}" "p" 2>&1 )
-check "run_claude: stderr of the CLI is never logged" "[[ \"\${logged}\" != *SECRET-STDERR* && \"\${logged}\" == *'claude exited 3'* ]]"
+check "run_claude: raw stderr of the CLI is never logged (exit_record, #593, is not sourced here)" "[[ \"\${logged}\" != *SECRET-STDERR* && \"\${logged}\" == *'claude exited 3'* ]]"
 
 # #336: the exit log line goes to stderr, so result=$(run_claude ...) stays empty and never becomes a PR body.
 # usage_post is silent here like the real one (it posts to the sidecar); the stub above prints for the usage checks.
@@ -106,7 +106,7 @@ printf '#!/bin/sh\necho %s\nexit 1\n' "'{\"type\":\"result\",\"subtype\":\"error
 exitf="${tmp}/exit"; rm -f "${exitf}"
 # shellcheck disable=SC2034  # read by check (eval)
 logged=$( log() { printf '%s\n' "$*"; }; CLAUDE_EXIT_FILE="${exitf}" run_claude "${tmp}" "p" 2>&1 >/dev/null )
-check "#336: max turns gives class max-turns" "[[ \"\$(cat \"\${exitf}\")\" == '1 max-turns' && \"\${logged}\" == *'(max-turns;'* ]]"
+check "#336: max turns gives class max-turns" "[[ \"\$(cat \"\${exitf}\")\" == '1 max-turns' && \"\${logged}\" == *'(max-turns)'* ]]"
 check "#336: the class never carries the result text" "[[ \"\${logged}\" != *SECRET-TRANSCRIPT* && \"\$(cat \"\${exitf}\")\" != *SECRET* ]]"
 # shellcheck disable=SC1090
 source <(sed -n '/^stopped_note() {/,/^}/p' "${here}/../agent-loop.sh")

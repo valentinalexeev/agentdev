@@ -10,9 +10,9 @@ NOTE: This guide is for GKE. The local evaluation on kind
 
 | Item | kind | GKE (this guide) |
 |---|---|---|
-| Instance values | `config.env` | `ansible/instance.yml` and `terraform/instance.tfvars` in the deployment repository |
-| Secret values | files in `.secrets/` | Secret Manager |
-| Install and upgrade | `./run.sh` | the playbook `deploy.yml`, from the deployment CI |
+| Instance values | `kind.vars.yml` | `ansible/instance.yml` and `terraform/instance.tfvars` in the deployment repository |
+| Secret values | `.env` and files in `.secrets/` | Secret Manager |
+| Install and upgrade | the playbook `infra/ansible/kind.yml` | the playbook `deploy.yml`, from the deployment CI |
 | Sandbox pool | one node with gVisor | a GKE Sandbox (gVisor) node pool with an autoscaler |
 | GitHub events | polling (no public URL) | webhook on `<public_url>/hook`, and polling |
 | Google Workspace sign-in | not available | the authentik Workspace source |
@@ -268,11 +268,14 @@ After `1.0.0`, only a MAJOR version can have changes that are not compatible.
 2. Make a backup (see "Make a backup").
 3. In one pull request, change `ref=vX.Y.Z` in `terraform/main.tf` and `agentdev_ref: vX.Y.Z` and `image_tag: "X.Y.Z"` in `ansible/instance.yml`.
 4. Add the input changes of the **BREAKING** entries to the same pull request.
-5. Examine the Terraform plan and the Ansible dry run in the CI.
-6. Merge the pull request.
-7. Do the steps of "Make sure that the instance operates".
-8. After an authentik upgrade, make sure that no prompt writes `attributes.forge_login`
-   (**Flows and Stages > Prompts**, search `forge_login`).
+5. Do the read-only checks of the new release (#314). In an agentdev checkout of tag `vX.Y.Z`, run
+   `bash scripts/upgrade-check.sh <deployment repo>/ansible/instance.yml`.
+6. Correct each problem that the check shows. Then do step 5 again.
+7. Examine the Terraform plan and the Ansible dry run in the CI.
+8. Merge the pull request. On `main`, the CI does the same checks before `terraform apply`.
+9. Do the steps of "Make sure that the instance operates".
+10. After an authentik upgrade, make sure that no prompt writes `attributes.forge_login`
+    (**Flows and Stages > Prompts**, search `forge_login`).
 
 NOTE: Do not deploy from a branch. Use only release tags.
 

@@ -3,7 +3,8 @@
 # location that sets its own.
 map $uri $csp {
   # tokens sit in sessionStorage: no inline or third-party script; the browser may only call this origin and authentik
-  default "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ${OIDC_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self' ${OIDC_ORIGIN}";
+  # font-src data: Vite inlines the smallest @fontsource subsets (under 4 KB) as data: URLs in the CSS (#423)
+  default "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ${OIDC_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self' ${OIDC_ORIGIN}";
 }
 
 server {

@@ -64,8 +64,8 @@ case "${1:-}" in
     chat_agent="${CHAT_AGENT:-$(yq -r '.agents[0].name // ""' "${spec}")}"
     [[ "${chat_agent}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || die "spec: no agent for the session (agents[0].name or CHAT_AGENT)"
     k -n "${AGENTS_NS}" get secret "agent-${chat_agent}-proxy" >/dev/null 2>&1 \
-      || die "no proxy key agent-${chat_agent}-proxy (run ./run.sh 06 first)"
-    claude_proxy_url="http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"   # same URLs as the operator (12-operator.sh)
+      || die "no proxy key agent-${chat_agent}-proxy (run ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags agents first)"
+    claude_proxy_url="http://claude-proxy.${AGENTS_NS}.svc.cluster.local:8080"   # same URLs as the operator (role operator)
     egress_proxy="http://egress-proxy.${AGENTS_NS}.svc.cluster.local:3128"
     session="chat-${project}-$(date +%H%M%S)"
     board_url="${BOTBOARD_URL:-}"   # report the session to botboard (#26) when it is deployed

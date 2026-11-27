@@ -10,6 +10,9 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 export FORGE_USER=alice REPO=o/r FORGE_URL=http://forge STATE="${tmp}/state" MY_LOGIN=alice-bot FORGE_KIND=github REVIEWER=owner
+# #577: never the real forge sidecar. Inside an agent pod FORGE_API is set (127.0.0.1:7070); the run log of the jobs
+# below (issue-5, issue-6, issue-7, pr-42, repo o/r) went there and was refused as run-events-invalid security events.
+export FORGE_API=http://127.0.0.1:1
 mkdir -p "${STATE}/seen"; WAKE_FILE="${tmp}/wake"; : > "${WAKE_FILE}"
 log() { echo "LOG $*" >> "${tmp}/log"; }
 loop="${here}/../agent-loop.sh"

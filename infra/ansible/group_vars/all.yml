@@ -27,7 +27,27 @@ credproxy_image: "{{ image_registry }}/agentdev-credproxy:{{ image_tag }}"   # C
 # Claude credential proxy (#66): the only holder of the Claude credentials; agent pods get a per-agent key.
 claude_proxy: true                  # false: credential in the agent pod (deprecated rollback, docs/security.md R11)
 claude_proxy_upstream_host: api.anthropic.com   # the only egress name of the proxy on GKE (FQDNNetworkPolicy)
-claude_budget_tokens: 0             # tokens per agent per 24 h (input, cache and output); 0 = no limit
+claude_budget_units: null           # #196: cost units per agent per 24 h (input-token equivalents, docs/admin.md); null/0 = no limit
+# claude_budget_tokens: deprecated in 1.2.0, removed in 2.0.0. Used as units (1:1) only when claude_budget_units is null.
+# The effective value is claude_budget_units_effective (tasks below).
+claude_prices: {}                   # #196: ConfigMap claude-proxy-prices (w_in, w_cw5, w_cw1h, w_cr, w_out, model.<prefix>,
+                                    # usd_per_million_units); {} = built-in weights, no USD estimate
+# Per job in cost units (#196 D6, #310), 0 = off. claude_job_budget_units: hard limit of one job id. claude_job_approval_units:
+# soft limit, lower than the hard one: the agent asks a person (approval source cost), each approval adds
+# claude_job_approval_step_units (0 = the soft limit). A rejection or no answer in time ends the job as failed.
+claude_job_budget_units: 0
+claude_job_approval_units: 0
+claude_job_approval_step_units: 0
+# Telemetry (#196, ADR 0002 D4/D5): claude-proxy and the operator serve metrics on 9464, reachable only from the
+# scraper namespace (Managed Service for Prometheus: gmp-system). otlp_url: https OTLP endpoint for metrics and spans.
+telemetry:
+  scraper_ns: gmp-system
+  scraper_selector: {app.kubernetes.io/name: collector}   # the GMP collector pods; only they reach 9464
+  otlp_url: ""
+  instance: agentdev   # label agentdev_instance on every metric (#278): one external Grafana for many instances
+# How agents prove who they are to the proxy (#352): key = HMAC key only (before 1.1), both = key or projected service
+# account token (TokenReview), token = token only. Set token after every agent runs a 1.1 worker (docs/admin.md).
+claude_proxy_auth: both
 
 # Egress allow-list (#65). Agent pods reach the outside only through the egress proxy, and it only these hosts
 # (Squid dstdomain: a leading dot = the domain and its subdomains). Add a project's build needs with egress_extra_hosts
@@ -39,7 +59,15 @@ egress_extra_hosts: []
 # forge hosts for the forge sidecar only: the proxy refuses them without the sidecar's credential (egress-forge-proxy).
 # api.anthropic.com in egress_hosts is dropped for agents while claude_proxy is true (docs/security.md R64).
 forge_egress_hosts: [api.github.com, github.com]
+# toolchain preset downloads (#499): only the init container toolchain, with the egress-setup-proxy credential. The
+# hosts of the operator's preset catalogue (images/operator/toolchain.go ToolchainHosts).
+setup_egress_hosts: [dl.google.com, static.rust-lang.org]
 egress_fqdn_policy: true
+# Read-only plan identity (#291, #421): set true together with Terraform create_plan_identity = true. The preflight
+# then checks that the apply account may create it. plan_identity_billing_account: Terraform billing_account_id, or
+# '' with create_budget = false (required with plan_identity). plan_identity_state_bucket: '' = <gcp_project>-tfstate.
+plan_identity: false
+plan_identity_state_bucket: ""
 egress_proxy_image: ubuntu/squid:6.6-24.04_beta@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
 
 forge_kind: github
@@ -47,16 +75,44 @@ forge_url: https://api.github.com
 poll_seconds: 60                    # webhooks wake agents; polling is the fallback
 max_concurrent: 2                   # items per agent in parallel (#20); per-agent override: agents[].max_concurrent
 max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
+# Claude model and reasoning effort of the agents' runs (#564): `claude --model`, `--effort`. Empty: the CLI's own
+# default, as before. claude_model: an alias (opus, sonnet) or a full model name; claude_effort: low, medium,
+# high, xhigh, max. Per-agent override: agents[].model, agents[].effort.
+claude_model: ""
+claude_effort: ""
+# Toolchain per agent only (#499): agents[].toolchain = {presets: {go: "1.27.4", rust: "1.100.0"}, path: [...],
+# refresh: 168h}. Versions from the operator's catalogue; installed read-only before the agent starts.
+# Tools added to the default allow-list per agent only (#496): agents[].tools = {allow: ["Bash(npm ci:*)"]}.
+# Claude Code permission mode per agent only (#500): agents[].permission = {mode: auto, autoMode: {allow: [...],
+# softDeny: [...], environment: [...]}}. Unset: dontAsk. In mode auto a classifier decides calls outside the allow-list.
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
 wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
 # webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
 # zero and wake_poll_seconds 0 the playbook refuses to run without them (agents would stop and never start again).
 webhooks_enabled: "{{ ((ingress | default({})).webhook_host | default((ingress | default({})).host | default(''))) | length > 0 }}"
 sm_router_poll_token: router-poll-forge-token   # forge_kind gitea only: read-only token of the wake poll (optional)
+# External Gitea (#442; forge_kind gitea, forge_url https://gitea.example.com). Default is secrets-only: the owner puts
+# the tokens (agent-<name>-forge-token, agentdev-api-forge-token, router-poll-forge-token) and the webhook secret in
+# Secret Manager. The host of forge_url is added to the forge sidecar's egress hosts by itself.
+# forge_init.enabled: true runs the Job forge-init-<hash> (tasks/forge_init.yml) with an admin token of that Gitea
+# (Secret Manager sm_gitea_admin_token, synced by ESO). It sets collaborators, agent:<name> labels, the router webhook
+# and branch protection through the Gitea API; it mints no tokens and creates no repository.
+# Keys: enabled, create_accounts (false), protect_branch (true), hook_url (in-cluster router; set the public webhook
+# URL when Gitea is outside the cluster), api_user (agentdev-api), router_user (agentdev-router), ca_configmap
+# (ConfigMap in platform_ns with ca.crt for a private CA), rerun (any new string runs the Job again).
+forge_init: {enabled: false}
+sm_gitea_admin_token: gitea-admin-token
+# the external Gitea host for the forge sidecar (Squid and FQDNNetworkPolicy); empty for GitHub
+forge_gitea_egress_hosts: "{{ [forge_url | urlsplit('hostname')] if forge_kind == 'gitea' else [] }}"
 # agent volume (#173): one PVC per agent on this StorageClass. deploy.yml creates it as pd-standard (cheapest GCE disk);
 # "" = the cluster default. Size: GCE bills at least 10 GB per disk, so 10Gi costs no more than less.
 agent_storage_class: agentdev-agent
 agent_state_storage: 10Gi
+# ephemeral-storage of agent pods (#251): past a limit the kubelet evicts the pod and the StatefulSet recreates it
+agent_ephemeral_request: 1Gi        # agent container request
+agent_ephemeral_limit: 8Gi          # agent container limit (/tmp, caches outside the state volume)
+forge_mirror_limit: 4Gi             # forge sidecar git mirror emptyDir
+forge_ephemeral_limit: 5Gi          # forge sidecar limit; at least forge_mirror_limit
 idle_seconds: 900                   # cluster-wide (the operator's); per-agent idle time is not in the Agent spec yet
 botboard_url: ""                    # agents report work to botboard (#26), e.g. http://botboard.<tailnet>; empty = off
 
@@ -68,6 +124,18 @@ sm_github_app_private_key: github-app-private-key   # PEM from scripts/github-ap
 sm_security_siem: security-siem          # optional: SIEM output secrets as KEY=VALUE lines (#70, #71)
 sm_claude_proxy_signing: claude-proxy-signing   # generated by the playbook on first run (#66)
 sm_egress_forge_proxy: egress-forge-proxy       # forge sidecar's egress proxy credential, generated on first run (#65)
+sm_egress_setup_proxy: egress-setup-proxy       # toolchain init containers' egress proxy credential, generated on first run (#499)
+
+# Platform secrets (#381). secrets_mode external: Terraform generates the generated secrets (infra/terraform/secrets.tf),
+# the External Secrets Operator syncs every platform Secret from Secret Manager, and Stakater Reloader restarts the
+# consumers. The playbook then reads no secret value and calls no `gcloud secrets` command (the GitOps install, #388).
+# secrets_mode playbook (default in 1.x, so an upgrade changes nothing until you switch): the 1.1 behaviour.
+secrets_mode: "{{ (external_secrets | default({})).mode | default('playbook') }}"
+external_secrets_store: agentdev-platform-secrets   # SecretStore and its service account, one per namespace
+external_secrets_refresh: 15m                       # how often ESO reads Secret Manager again
+# agents whose agent-<name>-claude exists in Secret Manager: agents[].own_claude: true (the playbook does not look)
+# Reloader (#381): a workload restarts when one of these Secrets changes; see docs/admin.md, Rotate a secret
+reloader_annotation: secret.reloader.stakater.com/reload
 
 # Required from the deployment (no defaults on purpose):
 #   gcp_project, gcp_zone, image_tag, reviewer,
@@ -85,7 +153,12 @@ security:
 usage:
   five_hour: 80                     # pause new runs at this use of the 5-hour window
   weekly: 90                        # and of the weekly window
-# MCP platform (#51): project specs with an `mcp:` section, synced by scripts/mcp-sync.sh after ContextForge is up.
+# notifications for each user (#347): channels on for the instance (webpush; Bark: #402), the VAPID contact and the
+# push services the API may call. Off by default. Users subscribe and mute in the console Settings.
+notifications:
+  channels: []
+  subject: ""                       # mailto:<address> or https://<url>; required with webpush
+# MCP platform (#51): project specs with an `mcp:` section; one McpProject each, synced by the operator (#383).
 # Paths on the operator machine (the deployment repo). Images and the Service range: roles/platform/defaults.
 mcp_projects: []
 # Allow-list of MCP server hosts (host or host:port) that project specs may register (docs/security.md R51).
@@ -108,7 +181,7 @@ obs_mcp:
   rate_burst: 10
 approvals:                          # #67: agents ask a project member on the forge (docs/security-model.md)
   enabled: true                     # default on GKE (the API is expected there); needs api.oidc_issuer (#115),
-                                    # deploy.yml checks it. kind keeps APPROVALS=false (config.env): no API by default
+                                    # deploy.yml checks it. kind keeps it false (kind.yml, kind.vars.yml): no API by default
   timeout_minutes: 30               # no decision in this time: denied (expired)
   retention_days: 90                # Approval objects; decisions stay in the audit log
 rollout:                            # #174: upgrades while agents work (docs/admin.md, Upgrade an instance)
@@ -140,3 +213,30 @@ authentik_default_discovery_url: >-
      if authentik_default_issuer | length > 0 else '' }}
 # the issuer the playbook uses (api role, approvals check, ingress UI route)
 api_effective_issuer: "{{ api.oidc_issuer | default(authentik_default_issuer) }}"
+# ESO template snippets (#381) for the ExternalSecret specs (templates/externalsecrets*.j2). !unsafe: Ansible passes
+# them to the cluster as written. eso.<x> is "{{ .<x> }}", the value of the data key <x> of the ExternalSecret.
+eso: !unsafe
+  webhook: "{{ .webhook }}"
+  register: "{{ .register }}"
+  wake: "{{ .wake }}"
+  forge: "{{ .forge }}"
+  appkey: "{{ .appkey }}"
+  key: "{{ .key }}"
+  token: "{{ .token }}"
+  password: "{{ .password }}"
+  forge_auth: '^Basic {{ printf "forge:%s" .password | b64enc }}$'
+  setup_auth: '^Basic {{ printf "setup:%s" .password | b64enc }}$'
+  admin: "{{ .admin }}"
+  cf: "{{ .cf }}"
+  agentdev: "{{ .agentdev }}"
+  authentik: "{{ .authentik }}"
+  jwt: "{{ .jwt }}"
+  enc: "{{ .enc }}"
+  user: "{{ .user }}"
+  basic: "{{ .basic }}"
+  pw: "{{ .pw }}"
+  # KEY=VALUE lines of .raw as Secret keys (empty values skipped)
+  env_lines: "{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (ne $kv._0 \"\") (ne (default \"\" $kv._1) \"\") }}{{ $kv._0 }}: {{ $kv._1 | toJson }}\n{{ end }}{{- end }}"  # noqa: jinja[invalid] yaml[line-length]
+  # only the two recognised Claude keys (#212), plus CREDENTIAL_FORMAT ok|invalid: the Claude proxy refuses an invalid
+  # claude-shared at start and reports every invalid one (images/credproxy/credcheck.go)
+  claude_lines: "{{- $ok := false }}{{- range $l := splitList \"\\n\" .raw }}{{- $kv := splitn \"=\" 2 (trim $l) }}{{- if and (has $kv._0 (list \"CLAUDE_CODE_OAUTH_TOKEN\" \"ANTHROPIC_API_KEY\")) (ne (trim (default \"\" $kv._1)) \"\") }}{{- $ok = true }}{{ $kv._0 }}: {{ trim $kv._1 | toJson }}\n{{ end }}{{- end }}CREDENTIAL_FORMAT: {{ if $ok }}ok{{ else }}invalid{{ end }}\n"  # noqa: jinja[invalid] yaml[line-length]

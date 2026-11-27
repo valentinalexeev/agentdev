@@ -8,8 +8,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -88,8 +90,8 @@ func decodeCursor(s string) (int64, error) {
 
 type pgStore struct{ db *pgxpool.Pool }
 
-// schema.sql creates the table, the append-only trigger and the prune function. In a deployment 10-api.sh applies it
-// as the owner role agentdev_owner and grants the API login (agentdev_api) only INSERT and SELECT plus EXECUTE on
+// schema.sql creates the table, the append-only trigger and the prune function. In a deployment the db-init Job (#382,
+// manifests/db-init) applies it as the owner role agentdev_owner and grants the API login (agentdev_api) only INSERT and SELECT plus EXECUTE on
 // security_events_prune(); the API then cannot UPDATE, DELETE, TRUNCATE, drop the trigger or change the retention.
 // Tests and a standalone API without that setup pass migrate=true and run it as their own login.
 //
@@ -120,6 +122,36 @@ func newPgStore(ctx context.Context, url string, migrate bool) (*pgStore, error)
 		}
 	}
 	return &pgStore{db: db}, nil
+}
+
+// schemaVersion is the version the db-init Job writes to schema_version (#382): the first 16 hex characters of the
+// sha256 of schema.sql followed by grants.sql. The role api computes the same value from the same files.
+func schemaVersion() string {
+	h := sha256.Sum256([]byte(schemaSQL + grantsSQL))
+	return hex.EncodeToString(h[:])[:16]
+}
+
+// schemaWait bounds how long the API waits for the db-init Job; the Deployment's startupProbe allows the same time.
+var schemaWait = 15 * time.Minute
+
+// waitSchema blocks until the db-init Job applied this API's schema.sql and grants.sql (#382): the API does not serve
+// (and its readiness fails) before that, so an upgrade never runs a new API on an old schema.
+func waitSchema(ctx context.Context, db *pgxpool.Pool, want string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	var got string
+	for logged := false; ; logged = true {
+		err := db.QueryRow(ctx, `SELECT version FROM schema_version WHERE id = 1`).Scan(&got)
+		if err == nil && got == want {
+			return nil
+		}
+		if !logged {
+			log.Printf("waiting for the db-init Job: schema version %q, want %q (err: %v)", got, want, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("schema version %q, want %q: the db-init Job did not apply this version (err: %v)", got, want, err)
+		}
+		time.Sleep(3 * time.Second)
+	}
 }
 
 // Insert reads the agent's last chain value and inserts the linked row in one transaction. A transaction-scoped
@@ -306,6 +338,15 @@ func listSecurityEvents(store eventStore, wr *writer) http.Handler {
 		if wr != nil {
 			id, _ := r.Context().Value(ctxIdentity{}).(*identity)
 			f.Agents = wr.visibleAgents(r.Context(), id)
+			// repo and scope=mine (#345) narrow to the agents of the matching repositories
+			sc, err := wr.scopeOf(r.Context(), id, q)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if sc.repoFilter != "" || sc.mine {
+				f.Agents = narrowAgents(r.Context(), wr, f.Agents, sc)
+			}
 		}
 		// one extra row tells whether another page exists
 		want := f.Limit
@@ -359,6 +400,25 @@ func (w *writer) visibleAgents(ctx context.Context, id *identity) []string {
 				out = append(out, a.Name)
 				break
 			}
+		}
+	}
+	return out
+}
+
+// narrowAgents keeps the names of visible (nil = all) that have a repository passing sc.
+func narrowAgents(ctx context.Context, wr *writer, visible []string, sc scope) []string {
+	out := []string{}
+	lister, ok := wr.store.(agentLister)
+	if !ok {
+		return out
+	}
+	list, err := lister.List(ctx)
+	if err != nil {
+		return out
+	}
+	for _, a := range list {
+		if (visible == nil || slices.Contains(visible, a.Name)) && sc.agent(a) {
+			out = append(out, a.Name)
 		}
 	}
 	return out

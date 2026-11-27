@@ -1,0 +1,77 @@
+---
+# VAPID key pair (#347): generated once, read into the fact api_vapid (not logged). Sources as secrets_<source>.yml:
+# Secret Manager api_sm_vapid (gcp) or the file api_secrets_dir/notify-vapid (files). Tested by tests/api_notify_keys.yml.
+# P-256 key pair in base64url (RFC 8292): the public key is the 65-byte point, the private key the 32-byte scalar.
+# The SEC1 DER of a P-256 key holds the scalar at bytes 8..39 and the point in the last 65 bytes.
+- name: VAPID key pair exists in Secret Manager (generated once)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    name="{{ api_sm_vapid }}"
+    p="{{ gcp_project }}"
+    if [ -z "$(gcloud secrets versions list "$name" --project "$p" --filter=state:enabled --limit=1 --format='value(name)' 2>/dev/null)" ]; then
+      gcloud secrets describe "$name" --project "$p" >/dev/null 2>&1 \
+        || gcloud secrets create "$name" --project "$p" --replication-policy automatic >/dev/null
+      der=$(openssl ecparam -name prime256v1 -genkey -noout | openssl ec -outform DER 2>/dev/null | base64 | tr -d '\n')
+      b64u() { base64 | tr -d '\n=' | tr '/+' '_-'; }
+      pub=$(printf '%s' "$der" | base64 -d | tail -c 65 | b64u)
+      priv=$(printf '%s' "$der" | base64 -d | head -c 39 | tail -c 32 | b64u)
+      printf 'publicKey=%s\nprivateKey=%s\n' "$pub" "$priv" | gcloud secrets versions add "$name" --project "$p" --data-file=- >/dev/null
+      echo created
+    fi
+  args: {executable: /bin/bash}
+  register: api_vapid_sm
+  changed_when: "'created' in api_vapid_sm.stdout"
+  no_log: true
+  when: "'webpush' in api_notify_channels and api_secret_source == 'gcp'"
+
+- name: VAPID key pair file exists (kind, generated once)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    f="{{ api_secrets_dir }}/notify-vapid"
+    if [ ! -s "$f" ]; then
+      umask 077
+      der=$(openssl ecparam -name prime256v1 -genkey -noout | openssl ec -outform DER 2>/dev/null | base64 | tr -d '\n')
+      b64u() { base64 | tr -d '\n=' | tr '/+' '_-'; }
+      pub=$(printf '%s' "$der" | base64 -d | tail -c 65 | b64u)
+      priv=$(printf '%s' "$der" | base64 -d | head -c 39 | tail -c 32 | b64u)
+      printf 'publicKey=%s\nprivateKey=%s\n' "$pub" "$priv" > "$f"
+      chmod 600 "$f"
+      echo created
+    fi
+  args: {executable: /bin/bash}
+  register: api_vapid_file
+  changed_when: "'created' in api_vapid_file.stdout"
+  no_log: true
+  when: "'webpush' in api_notify_channels and api_secret_source == 'files'"
+
+- name: Read the VAPID key pair
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {% if api_secret_source == 'gcp' %}
+    gcloud secrets versions access latest --secret "{{ api_sm_vapid }}" --project "{{ gcp_project }}"
+    {% else %}
+    cat "{{ api_secrets_dir }}/notify-vapid"
+    {% endif %}
+  args: {executable: /bin/bash}
+  register: api_vapid_raw
+  changed_when: false
+  check_mode: false
+  failed_when: api_vapid_raw.rc != 0 and not ansible_check_mode
+  no_log: true
+  when: "'webpush' in api_notify_channels"
+
+- name: Keep the VAPID key pair in facts (not logged)
+  ansible.builtin.set_fact:
+    api_vapid: "{{ dict((api_vapid_raw.stdout_lines | default([])) | select('search', '=') | map('split', '=', 1)) }}"
+  no_log: true
+  when: "'webpush' in api_notify_channels"
+
+- name: Check the VAPID key pair
+  ansible.builtin.assert:
+    that:
+      - api_vapid.publicKey | default('') is match('^B[A-Za-z0-9_-]{86}$')
+      - api_vapid.privateKey | default('') is match('^[A-Za-z0-9_-]{43}$')
+    fail_msg: "{{ api_sm_vapid if api_secret_source == 'gcp' else api_secrets_dir ~ '/notify-vapid' }} must hold publicKey= and privateKey= (base64url)"
+    quiet: true
+  no_log: true
+  when: "'webpush' in api_notify_channels and not ansible_check_mode"

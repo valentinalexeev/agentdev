@@ -1,0 +1,9 @@
+{# One McpProject per mcp_projects spec (#383): the same objects as roles/platform/tasks/main.yml applies. #}
+[
+{%- for item in platform_mcp_specs %}
+  {{ {'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'McpProject',
+      'metadata': {'name': item.project, 'namespace': agents_ns, 'labels': {'agentdev/mcp-source': 'ansible'}},
+      'spec': {'servers': (item.mcp | default({}, true)).servers | default([], true),
+               'agents': item.agents | default([], true) | map(attribute='name') | list}} | to_json }}{{ ',' if not loop.last }}
+{%- endfor %}
+]

@@ -1,13 +1,21 @@
 ---
-# kind (#106, was 08-mcp.sh): pull the platform images once and load them into the kind nodes. A local operator tag
-# (agentdev-operator:*) is built from images/operator first, as ./run.sh 12 does.
-- name: Platform images present locally
-  ansible.builtin.shell: >-
-    {{ platform_container_engine }} image inspect {{ item | quote }} >/dev/null 2>&1
-    || { {{ platform_container_engine }} pull -q {{ item | quote }} >/dev/null && echo pulled; }
+# kind (#106, was 08-mcp.sh): pull the platform images and load them into the kind nodes. A local operator tag
+# (agentdev-operator:*) is built from images/operator first, as the role operator does.
+# #558: a published image is pulled for the engine's platform and re-tagged through a one-line build (the #378 fix of
+# the role kind_agents, shared task files): with the containerd image store a plain pull keeps the multi-arch index,
+# and `kind load` fails on postgres with "content digest ... not found". Always pulled, so an image already present
+# with its index (an older run) is fixed too.
+- name: Platform of pulled images
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/kind_pull_platform.yml"
+  vars: {kind_pull_engine: "{{ platform_container_engine }}"}
+
+- name: Platform images, one platform each
+  ansible.builtin.include_tasks: "{{ repo_root }}/infra/ansible/tasks/kind_pull_image.yml"
+  vars:
+    kind_pull_engine: "{{ platform_container_engine }}"
+    kind_pull_ref: "{{ platform_img }}"
   loop: "{{ platform_kind_images }}"
-  register: platform_pull
-  changed_when: "'pulled' in platform_pull.stdout"
+  loop_control: {loop_var: platform_img}
 
 - name: Build the local operator image (obs-mcp)
   ansible.builtin.command:

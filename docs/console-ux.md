@@ -167,8 +167,10 @@ URLs stay hash-based so they work behind the strict nginx setup, and every view 
 
 ### Layout
 
-- **Desktop** (760 px and wider): left rail with the mark, the navigation and the counts; top bar with breadcrumbs,
-  search (`Ctrl+K`), connection state, theme and the user. Detail opens in a right drawer so the list keeps its
+- **Desktop** (760 px and wider): left rail with the mark, the navigation and the counts; top bar with the page
+  name, the project picker to its right, search (`Ctrl+K`), connection state, theme and the user. The page name
+  shows once, in the top bar, and is the page `h1`; the page body starts with the subtitle (#521). The rail marks
+  the current page. Detail opens in a right drawer so the list keeps its
   place.
 - **Phone** (below 760 px, #338): a bottom bar with Today, Work, Agents, Usage and More. Drawers become full-screen
   sheets. Tables become two-line rows. The board scrolls one column at a time.
@@ -188,14 +190,14 @@ empty lamp, never as an error.
 **Today.** Four KPI tiles (*Waiting for you* has the gate edge). The inbox. An *Overnight* strip. A short *Fleet*
 list of agents that need attention; healthy agents are counted, not listed.
 
-**Work.** Board of jobs by phase, one card per issue (the `ad-card` work card from botboard), filters by agent and
+**Work.** Board of jobs by phase, one card per issue (the `agd-card` work card from botboard), filters by agent and
 repository, and a list view for many items. A card links to the issue and the PR, and shows the outcome when done.
 
 **Agents.** Table: agent tag (lane colour), lifecycle lamp, attention chip, repositories, jobs now / max, tokens
 24 h against the budget, events 7 days. The row opens the agent drawer: an overview with a "waiting on" panel, recent
 jobs as a timeline, events, usage, settings (max. concurrent, scale to zero), and the generated harness guide.
 
-**Approval drawer.** Trusted facts first (`ad-dl`), then the untrusted block with its warning, then the decisions
+**Approval drawer.** Trusted facts first (`agd-dl`), then the untrusted block with its warning, then the decisions
 the request type allows. The confirm step states the effect in one sentence and that the name goes to the audit log.
 
 **Security.** Filter chips for severity and time, agent and repository filters, table, and an event drawer with
@@ -275,8 +277,9 @@ read code and write issues but never push. People reach it with `scripts/agent-c
 - **The session drafts, the person files.** Today the session posts issues itself with the chat account. In the
   console the draft is structured data shown as a card, and only a person's click creates it. So the issue has a
   human author, and a prompt injection in the repository cannot file issues by itself.
-- **Model text is untrusted.** Answers are Markdown rendered with raw HTML off, no remote images, and every link
-  shows its full address. Tool output uses the untrusted block. Nothing in a message is a button except the draft
+- **Model text is untrusted.** Answers are a safe Markdown subset (#492, `react-markdown` with `remark-gfm` and the options in `images/ui/src/markdown.ts`): raw HTML
+  shows as text, and images and links show their text and full address as text, never as an element that loads or
+  opens anything. A per-message toggle shows the exact text. Tool output uses the untrusted block. Nothing in a message is a button except the draft
   and permission cards, which the console builds from structured events, never from text.
 - **One session, many people.** Everyone with write access to the repository can open a live session of that
   project. The head shows who is here. Each message carries its author. A decision (allow, create, assign) records
