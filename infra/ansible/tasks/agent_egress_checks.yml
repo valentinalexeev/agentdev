@@ -1,0 +1,30 @@
+---
+# #599: agents[].egress_hosts become the Agent's spec.egressHosts and Squid rules for that agent only. Refuse before
+# render what the CRD and the operator refuse too: each entry a Squid dstdomain name ("x.org" or ".x.org"; no wildcard,
+# IP address, port, path, space or Squid syntax), and no agent named <x>-egress (agent-<x>-egress-proxy, the own
+# egress key of <x>, is the Claude proxy key Secret name of an agent <x>-egress). With the credential proxy on, no own
+# host may cover the Claude API (R64: only claude-proxy reaches it; the operator drops such an entry too).
+- name: Check the agents' own egress hosts
+  ansible.builtin.assert:
+    that:
+      - agents | map(attribute='name') | select('search', '-egress$') | list | length == 0
+      - agents | map(attribute='egress_hosts', default=[]) | reject('sequence') | list | length == 0
+      - agents | map(attribute='egress_hosts', default=[]) | select('string') | list | length == 0
+      - agents | map(attribute='egress_hosts', default=[]) | select('mapping') | list | length == 0
+      - _own | reject('string') | list | length == 0
+      # match's $ also matches before a final newline: refuse any whitespace explicitly
+      - _own | select('string') | select('search', '\s') | list | length == 0
+      - _own | select('string') | reject('match', '^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
+      - agents | map(attribute='egress_hosts', default=[]) | map('length') | select('gt', 64) | list | length == 0
+      - not (claude_proxy | default(true) | bool) or (_own | select('in', _claude_covers) | list | length == 0)
+    fail_msg: >-
+      agents[].egress_hosts: a list of at most 64 DNS names in Squid dstdomain form (example.org or .example.org, lower
+      case; no wildcard, IP, port or path), none covering the Claude API while claude_proxy is on; no agent name ends
+      with -egress (#599)
+    quiet: true
+  vars:
+    _own: "{{ agents | map(attribute='egress_hosts', default=[]) | select('sequence') | reject('string') | reject('mapping') | sum(start=[]) }}"
+    _claude: "{{ claude_proxy_upstream_host | default('api.anthropic.com') }}"
+    # api.anthropic.com is matched by itself, .api.anthropic.com, .anthropic.com and .com
+    _claude_covers: >-
+      {% set p = _claude.split('.') %}{% set o = [_claude] %}{% for i in range(p | length) %}{% set _ = o.append('.' ~ p[i:] | join('.')) %}{% endfor %}{{ o }}

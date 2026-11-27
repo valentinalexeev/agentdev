@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -195,8 +196,79 @@ func TestAgentEgressRulesFailClosed(t *testing.T) {
 		*agent("nokey", withHosts("a.example")), *agent("nohosts", withHosts("not a host"))}
 	keys := map[string]string{"ok": strings.Repeat("a", 48), "Bad_Name": strings.Repeat("b", 48), "nokey": "x\nhttp_access allow all",
 		"nohosts": strings.Repeat("c", 48)}
-	got := agentEgressRules(as, keys)
+	got := (&AgentReconciler{}).agentEgressRules(as, keys)
 	if strings.Count(got, "http_access") != 1 || !strings.Contains(got, "agent_ok_hosts") {
 		t.Errorf("rules:\n%s", got)
+	}
+}
+
+// #599: own hosts never reopen the Claude API around claude-proxy (R64) while the credential proxy is on, and an
+// agent named <x>-egress never gets an egress key (agent-<x>-egress-proxy would be agent <x>-egress's Claude proxy key).
+func TestAgentEgressNeverWidens(t *testing.T) {
+	r, c := setup(t, agent("alice", withHosts("api.anthropic.com", ".anthropic.com", ".com", "pypi.org")),
+		agent("eve", withHosts("api.anthropic.com")), agent("bob-egress", withHosts("pypi.org")))
+	r.D.EgressProxy = agentProxy
+	r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
+	for _, n := range []string{"alice", "eve", "bob-egress"} {
+		reconcile(t, r, n)
+	}
+	s := agentEgressSecretOf(t, c)
+	acl := string(s.Data[agentEgressACL])
+	if !strings.Contains(acl, "acl agent_alice_hosts dstdomain -n pypi.org\n") || strings.Contains(acl, "anthropic") ||
+		strings.Contains(acl, " .com") {
+		t.Errorf("alice's rule opens the Claude API:\n%s", acl)
+	}
+	if _, ok := s.Data["key-eve"]; ok || strings.Contains(acl, "eve") {
+		t.Errorf("eve (Claude API only) got a key or rule:\n%s", acl)
+	}
+	if _, ok := containerEnv(t, c, "eve", "agent")["AGENT_EGRESS_KEY"]; ok {
+		t.Error("eve's pod got an egress key")
+	}
+	if _, ok := s.Data["key-bob-egress"]; ok || strings.Contains(acl, "bob_egress") {
+		t.Errorf("bob-egress got a key or rule:\n%s", acl)
+	}
+	var sec corev1.Secret
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-bob-egress-egress-proxy"}, &sec); !apierrors.IsNotFound(err) {
+		t.Errorf("bob-egress got an egress key Secret: %v", err)
+	}
+
+	// without the credential proxy (deprecated rollback) the Claude API is on the list anyway: no reason to drop it
+	r.D.ClaudeProxyURL = ""
+	if hs := r.agentEgressHosts(agent("x", withHosts("api.anthropic.com"))); len(hs) != 1 {
+		t.Errorf("proxy off: %v", hs)
+	}
+}
+
+// #599: only Squid dstdomain names reach acl.conf: no wildcard, IP, port, path, space, newline or Squid syntax.
+func TestAgentEgressHostValidation(t *testing.T) {
+	r := &AgentReconciler{D: Defaults{EgressProxy: agentProxy}}
+	bad := []string{"*.example.org", "*", ".", "10.0.0.1", "169.254.169.254", "[::1]", "example.org:8443",
+		"example.org/path", "user@example.org", "a.example.org b.example.org", "a.example.org\nhttp_access allow all",
+		"all", "localhost", "-a.example.org", "a..example.org", "example.org.", "\"/etc/passwd\"", "a.example.1",
+		strings.Repeat("a", 250) + ".org", ""}
+	for _, h := range bad {
+		if hs := r.agentEgressHosts(agent("a", withHosts(h))); len(hs) != 0 {
+			t.Errorf("accepted %q: %v", h, hs)
+		}
+	}
+	if hs := r.agentEgressHosts(agent("a", withHosts(" Example.ORG ", ".example.org"))); len(hs) != 2 || hs[0] != ".example.org" || hs[1] != "example.org" {
+		t.Errorf("normalised: %v", hs)
+	}
+	got := r.agentEgressRules([]v1.Agent{*agent("a", withHosts(bad...))}, map[string]string{"a": strings.Repeat("a", 48)})
+	if strings.Contains(got, "http_access") {
+		t.Errorf("rules from invalid hosts:\n%s", got)
+	}
+}
+
+// #599: the CRD refuses names ending in -egress and holds the host pattern and limit.
+func TestCRDAgentEgress(t *testing.T) {
+	b, err := os.ReadFile("config/crd/agentdev.dev_agents.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"endsWith(''-egress'')", "egressHosts:", "maxItems: 64"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("CRD lacks %q (run controller-gen)", want)
+		}
 	}
 }

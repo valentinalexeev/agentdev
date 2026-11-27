@@ -101,7 +101,7 @@ func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
 	var hosts []string
 	var own []string // #599: the agent's own hosts (spec.egressHosts), only in this agent's guide
 	if r.hasOwnEgress(a) {
-		own = agentEgressHosts(a)
+		own = r.agentEgressHosts(a)
 	}
 	for _, h := range append(strings.Fields(r.D.AgentEgressHosts), own...) {
 		if guideHostRe.MatchString(h) && !slices.Contains(hosts, h) && len(hosts) < guideMaxHosts {

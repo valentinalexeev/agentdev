@@ -2400,6 +2400,9 @@ WARNING: Add only a host that you trust. The agent can send data to each host on
 NOTE: The forge hosts and the toolchain download hosts stay closed to the agent container, also when the list of the
 agent contains them.
 
+NOTE: The playbook refuses a host with a wildcard (`*`), an IP address, a port or a path, and, while the credential
+proxy is on, a host that covers the Claude API. Use the form `example.com` or `.example.com`.
+
 NOTE: A console chat session of the agent uses the list of the agent.
 
 NOTE: To remove the hosts, remove `egress_hosts` (or the entry in `kind_agents_agent_hosts`) and do step 3 again.

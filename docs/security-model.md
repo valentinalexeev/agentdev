@@ -166,7 +166,10 @@ Status: **implemented** in #65, pending an e2e pass on GKE. As built:
   and writes a Squid include (Secret `egress-agent-proxy`, `acl.conf`) that binds the credential `agent-<name>:<key>`
   to the agent's own hosts. The agent container's proxy URL carries the key from `agent-<name>-egress-proxy`; the
   forge sidecar and the init container keep their own credentials. The include sits after the forge and setup denies,
-  so it never opens those hosts. The proxy copies a changed `acl.conf` and runs `squid -k reconfigure` within 15
+  so it never opens those hosts, and with the credential proxy on an own host never covers the Claude API (R64; the
+  operator drops such an entry and the playbook refuses it). Hosts are Squid `dstdomain` names only (no wildcard, IP,
+  port or Squid syntax; CRD pattern, operator, playbook checks), and no agent name ends in `-egress` (its key Secret
+  name would be another agent's Claude proxy key). The proxy copies a changed `acl.conf` and runs `squid -k reconfigure` within 15
   seconds, without a restart. On GKE the proxy's FQDN policy holds the union of every agent's hosts; Squid keeps
   them apart. An agent without the field has no key, no rule and the pod it had before (R126).
 - Not yet: a caching registry proxy (the proxy passes registry traffic through, it does not cache), per-project

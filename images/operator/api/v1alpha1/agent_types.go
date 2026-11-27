@@ -71,7 +71,8 @@ type AgentSpec struct {
 	// EgressHosts: hosts this agent's own container may reach through the agents' egress proxy (#599), in addition
 	// to the instance-wide list (EGRESS_HOSTS). No other agent gets them. Squid dstdomain form: "example.com" is that
 	// name only, ".example.com" the domain and every subdomain. The forge and setup hosts stay closed to the agent
-	// container even when listed. Unset: the instance-wide list only, and the pod is as before.
+	// container even when listed, and so does the Claude API while the credential proxy is on (R64). Unset: the
+	// instance-wide list only, and the pod is as before.
 	// +optional
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:Pattern=`^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$`
@@ -253,6 +254,8 @@ type AgentStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 40",message="agent name must be at most 40 characters"
+// agent-<name>-egress-proxy (own egress key, #599) must never be the Claude proxy key of another agent (agent-<x>-proxy).
+// +kubebuilder:validation:XValidation:rule="!self.metadata.name.endsWith('-egress')",message="agent name must not end with -egress"
 // Secrets are bound to the agent: its own token Secret only, and its own Claude Secret or the shared one. Another
 // agent's credentials can never be named, whoever may write Agents.
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.forgeSecret) || self.spec.forgeSecret == 'agent-' + self.metadata.name",message="spec.forgeSecret must be agent-<agent name>"
