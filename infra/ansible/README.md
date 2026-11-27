@@ -114,7 +114,9 @@ a NetworkPolicy. Test: `tests/ingress_forwarder_deploy.yml`.
 
 ## Registry cache (#203)
 
-Role `registry_cache`, run by `deploy.yml` and `render.yml`, and on kind by `kind.yml` (tag `registry-cache`). Setting
+Role `registry_cache`, run by `deploy.yml`, and on kind by `kind.yml` (tag `registry-cache`). `render.yml` does not render it
+yet and refuses `registry_proxy` other than `off` (GitOps rendering: follow-up issue). With `platform.egress.fqdn: gke`
+the role refuses a cluster without the FQDNNetworkPolicy CRD. Setting
 `registry_proxy`: `off` (default), `cluster` (Verdaccio, devpi, Athens in the cluster) or `artifact_registry` (GKE, with
 `registry_proxy_artifact_registry` from `terraform output registry_proxy`). No Secret Manager entry: the GKE gateway
 reads Artifact Registry through Workload Identity. Procedure: `docs/admin.md`, "Configure the registry cache".

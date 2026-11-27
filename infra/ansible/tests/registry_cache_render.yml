@@ -61,6 +61,22 @@
           - ar_sa.metadata.annotations['iam.gke.io/gcp-service-account'] == ar.service_account
         quiet: true
 
+    - name: Athens environment
+      ansible.builtin.set_fact:
+        athens_env: >-
+          {{ (cl | selectattr('kind', 'equalto', 'Deployment') | map(attribute='spec.template.spec.containers')
+              | flatten | selectattr('image', 'equalto', registry_cache_athens_image) | first).env
+             | items2dict(key_name='name', value_name='value') }}
+
+    - name: Athens fetches from proxy.golang.org only, never direct from a module host (#203 review)
+      ansible.builtin.assert:
+        that:
+          - athens_env.ATHENS_GO_BINARY_ENV_VARS is search('(^|;)GOPROXY=https://proxy.golang.org(;|$)')
+          - athens_env | to_json is not search('direct')
+          - athens_env.ATHENS_GO_BINARY_ENV_VARS is not search('(GONOPROXY|GONOSUMDB|GOPRIVATE|GOINSECURE)=[^;]')
+          - athens_env.ATHENS_NETWORK_MODE == 'strict'
+        fail_msg: "{{ athens_env | to_json }}"
+
     - name: Agents' egress names with the cache off and on
       ansible.builtin.set_fact:
         names_off: "{{ lookup('ansible.builtin.template', '../egress_fqdn.j2', template_vars=v_off) | from_yaml | map(attribute='name') | list }}"
