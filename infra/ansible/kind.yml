@@ -141,6 +141,7 @@
         secrets_store_context: kind-{{ kind_cluster_name }}
         secrets_store_agents_ns: "{{ agents_ns }}"
         secrets_store_platform_ns: "{{ platform_ns }}"
+        secrets_store_broker_image: "{{ kind_agents_credproxy_image | default('agentdev/credproxy:mvp') }}"
       when: secrets_store_enabled | default(true) | bool
       tags: [secrets, never]
 
@@ -226,6 +227,7 @@
         api_oidc_issuer: https://localhost:9443/application/o/agentdev/
         api_oidc_discovery_url: http://authentik-server.{{ platform_ns }}.svc.cluster.local/application/o/agentdev/
         api_forge_url: http://gitea.{{ api_forge_ns }}.svc.cluster.local:3000
+        api_secrets_values_ns: agentdev-secret-values   # project secrets (#202): on once --tags secrets made it
       tags: [api, never]
 
     # Only the web UI tasks of the role api (tasks/ui.yml); GKE runs them in the same role after the API. After 10.

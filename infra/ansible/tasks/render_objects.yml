@@ -200,6 +200,7 @@
         # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
         SECRETS_STORE: ""
         SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
+        CREDENTIAL_BROKER_URL: ""   # #202 part 4 deploys the broker on GKE
         # MCP per project (#383): McpProject controller, admin login from Secret contextforge
         MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
