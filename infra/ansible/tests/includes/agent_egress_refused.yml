@@ -1,0 +1,16 @@
+---
+# One refused agents[] setting for tests/agent_egress.yml (included per case, so each one is checked).
+- name: Refuse agents {{ bad_agents | to_json }}
+  block:
+    - name: Try it
+      ansible.builtin.include_tasks: ../../tasks/agent_egress_checks.yml
+      vars:
+        agents: "{{ bad_agents }}"
+    - name: Not reached
+      ansible.builtin.fail:
+        msg: invalid agents[].egress_hosts accepted
+  rescue:
+    - name: Refused as expected
+      ansible.builtin.assert:
+        that: ansible_failed_task.name == 'Check the agents\' own egress hosts'
+        quiet: true

@@ -48,9 +48,12 @@
 
 - name: Egress hosts as FQDNNetworkPolicy matches (agents' proxy and executor proxy)
   ansible.builtin.set_fact:
+    # the agents' proxy reaches the instance-wide list, the forge and setup hosts and every agent's own hosts
+    # (agents[].egress_hosts, #599); Squid gives each agent only its own
     egress_fqdn_matches: >-
       {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2',
-         template_vars={'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts + setup_egress_hosts) | unique | list}) | from_yaml }}
+         template_vars={'egress_extra_hosts': (egress_extra_hosts + (agents | map(attribute='egress_hosts', default=[]) | flatten)) | unique | list,
+                        'forge_egress_hosts': (forge_egress_hosts + forge_gitea_egress_hosts + setup_egress_hosts) | unique | list}) | from_yaml }}
     exec_egress_fqdn_matches: >-
       {{ lookup('ansible.builtin.template', playbook_dir ~ '/egress_fqdn.j2', template_vars={'egress_hosts': executor_egress_all_hosts,
          'egress_extra_hosts': [], 'forge_egress_hosts': [], 'claude_proxy': false}) | from_yaml }}
@@ -223,6 +226,7 @@
         MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"
         CLAUDE_PROXY_URL: "{{ ('http://claude-proxy.' + agents_ns + '.svc.cluster.local:8080') if claude_proxy | bool else '' }}"
+        CLAUDE_UPSTREAM_HOST: "{{ claude_proxy_upstream_host }}"
       replace: []
     vars_proxy:
       src: "{{ repo_root }}/manifests/claude-proxy.yaml.tmpl"

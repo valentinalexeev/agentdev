@@ -7,13 +7,30 @@
       - kind_agents_forge_kind in ['gitea', 'github']
       - kind_agents_agents | length > 0
       - kind_agents_agents | reject('match', kind_agents_name_re) | list | length == 0
+      - kind_agents_agents | select('search', '-egress$') | list | length == 0
+      - kind_agents_agent_hosts is mapping
+      - kind_agents_agent_hosts.values() | reject('sequence') | list | length == 0
+      - kind_agents_agent_hosts.values() | select('string') | list | length == 0
+      - kind_agents_agent_hosts.values() | sum(start=[]) | reject('string') | list | length == 0
+      - kind_agents_agent_hosts.values() | sum(start=[]) | select('search', '\\s') | list | length == 0
+      - >-
+        kind_agents_agent_hosts.values() | sum(start=[])
+        | reject('match', '^\\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\\.)+[a-z]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
       - kind_agents_wake_poll_seconds | string is match('^[0-9]+$')
       - kind_agents_github_installation_id | string is match('^([1-9][0-9]{0,15})?$')
       - kind_agents_effort | string in ['', 'low', 'medium', 'high', 'xhigh', 'max']
     fail_msg: >-
-      FORGE_KIND must be gitea or github; AGENTS are DNS labels; WAKE_POLL_SECONDS is a number; GITHUB_INSTALLATION_ID is empty or a number;
+      FORGE_KIND must be gitea or github; AGENTS are DNS labels not ending in -egress;
+      kind_agents_agent_hosts is {agent: [DNS names]}; WAKE_POLL_SECONDS is a number; GITHUB_INSTALLATION_ID is empty or a number;
       kind_agents_effort is empty, low, medium, high, xhigh or max
     quiet: true
+
+# #599: the same own-host rules as GKE (64 per agent, none covering the Claude API while the credential proxy is on)
+- name: The agents' own egress hosts are valid (#599)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../tasks/agent_egress_checks.yml"
+  vars:
+    agents: "{{ kind_agents_agent_hosts | dict2items(key_name='name', value_name='egress_hosts') }}"
+    claude_proxy: "{{ kind_agents_claude_proxy }}"
 
 # #570: the same model rule as GKE (tasks/model_check.yml, #609), so a bad kind_agents_model fails before the CRD apply
 - name: The Claude model is valid (#609)

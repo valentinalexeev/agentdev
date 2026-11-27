@@ -159,6 +159,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | sidecar | a second container in the agent pod |
 | Claude proxy | the service `claude-proxy` that keeps the Claude credentials and sends the model requests of the agents to the Anthropic API |
 | proxy key | the value that identifies an agent to the Claude proxy (Secret `agent-<name>-proxy`) |
+| proxy credential | the user name and key with which the egress proxy identifies one agent and gives it its own hosts (Secret `agent-<name>-egress-proxy`, #599) |
 | billing budget | the monthly cost limit of the Google Cloud project; it sends alerts, it does not stop spending |
 | quota project | the Google Cloud project that a Google API charges for a request |
 | token budget | old name of the budget, before 1.2.0 it counted raw tokens; now the budget counts cost units |

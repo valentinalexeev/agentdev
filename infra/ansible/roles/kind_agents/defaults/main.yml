@@ -43,6 +43,9 @@ kind_agents_tools: {}
 # Versions must be in the operator's catalogue (images/operator/toolchain.go). custom (#598): names of
 # the toolchains of the operator role, for example {alice: {custom: [shell-tools]}}.
 kind_agents_toolchain: {}
+# own egress hosts per agent (#599): {alice: [objects.githubusercontent.com, .example.org]}, the Agent's
+# spec.egressHosts, on top of kind_agents_egress_hosts and for that agent only; an agent not named: the instance list only
+kind_agents_agent_hosts: {}
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true

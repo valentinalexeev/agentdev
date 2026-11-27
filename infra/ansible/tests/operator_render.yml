@@ -44,14 +44,18 @@
 
     # #381 acceptance 3 / review of #445, with #383 and #452: in the agents namespace the operator reads only
     # claude-proxy-signing by name; one unnamed rule create, patch, delete for agent-*-proxy and agent-*-mcp; no list or
-    # watch; the policy that limits writes and deletes to those names ships with the Role
+    # watch; the policy that limits writes and deletes to those names ships with the Role. #599: get and update on
+    # egress-agent-proxy by name (the agents' own egress rules), and the policy lets it be written
     - name: Operator Secret access in the agents namespace
       ansible.builtin.assert:
         that:
           - t_sec | rejectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['create', 'patch', 'delete']]
-          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list == [['claude-proxy-signing'], ['egress-setup-proxy']]
-          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['get'], ['get']]
-          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch', 'update']) | length == 0
+          - >-
+            t_sec | selectattr('resourceNames', 'defined') | map(attribute='resourceNames') | list
+            == [['claude-proxy-signing'], ['egress-setup-proxy'], ['egress-agent-proxy']]
+          - t_sec | selectattr('resourceNames', 'defined') | map(attribute='verbs') | list == [['get'], ['get'], ['get', 'update']]
+          - t_sec | map(attribute='verbs') | flatten | intersect(['list', 'watch']) | length == 0
+          - t_pol[0].spec.validations[0].expression is search("egress-agent-proxy")
           - t_pol | length == 1
           - t_pol[0].spec.validations[0].expression is search("-proxy")
           - t_pol[0].spec.validations[0].expression is search("-mcp")

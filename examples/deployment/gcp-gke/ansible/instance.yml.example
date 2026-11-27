@@ -14,6 +14,8 @@ reviewer: my-github-login
 agents:
   - {name: alice, user: alice, repos: my-org/my-repo}
   # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
+  # hosts only this agent may reach (agentdev #599), besides egress_hosts and egress_extra_hosts:
+  # - {name: carol, user: carol, repos: my-org/my-repo, egress_hosts: [objects.githubusercontent.com]}
   # an agent with a custom toolchain (agentdev #598): - {name: carol, user: carol, repos: my-org/my-repo,
   #   toolchain: {custom: [shell-tools]}}
 # Custom toolchains of this deployment (agentdev #598, docs/admin.md "Give an agent a custom toolchain"). Add every

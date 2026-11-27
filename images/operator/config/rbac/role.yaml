@@ -108,6 +108,15 @@ rules:
 - apiGroups:
   - ""
   resourceNames:
+  - egress-agent-proxy
+  resources:
+  - secrets
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resourceNames:
   - egress-setup-proxy
   resources:
   - secrets

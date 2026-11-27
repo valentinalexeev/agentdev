@@ -1,6 +1,6 @@
-# Render checks of templates/agents.j2 (#496, #499, #564): agents[].tools.allow becomes the Agent's spec.tools.allow;
-# an agent without it gets no spec.tools (no new env, no restart on upgrade). The same for the toolchain, the model and
-# the effort.
+# Render checks of templates/agents.j2 (#496, #499, #564, #599): agents[].tools.allow becomes the Agent's
+# spec.tools.allow; an agent without it gets no spec.tools (no new env, no restart on upgrade). The same for the
+# toolchain, the model, the effort and the own egress hosts.
 # Run: ansible-playbook infra/ansible/tests/agents_render.yml
 - name: Agent objects from agents[] (#496)
   hosts: localhost
@@ -18,6 +18,8 @@
       - {name: dave, repos: [o/d], toolchain: {presets: {go: "1.27.4"}, refresh: 168h}}
       - {name: erin, repos: [o/e], model: claude-opus-5-5, effort: high}
       - {name: frank, repos: [o/f], model: "", effort: ""}
+      - {name: gina, repos: [o/g], egress_hosts: [objects.githubusercontent.com, .example.org]}
+      - {name: hal, repos: [o/h], egress_hosts: []}
   tasks:
     - name: Render the Agent objects
       ansible.builtin.set_fact:
@@ -39,6 +41,13 @@
           - "'toolchain' not in t_agents.alice"
           - "'toolchain' not in t_agents.carol"
           - "t_agents.dave.toolchain == {'presets': {'go': '1.27.4'}, 'refresh': '168h'}"
+
+    - name: Only an agent with own egress hosts gets spec.egressHosts (#599)
+      ansible.builtin.assert:
+        that:
+          - "'egressHosts' not in t_agents.alice"
+          - "'egressHosts' not in t_agents.hal"
+          - "t_agents.gina.egressHosts == ['objects.githubusercontent.com', '.example.org']"
 
     - name: Only an agent or instance with a model or effort gets spec.model, spec.effort (#564)
       ansible.builtin.assert:

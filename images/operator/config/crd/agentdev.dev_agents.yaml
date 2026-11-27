@@ -34,6 +34,7 @@ spec:
       openAPIV3Schema:
         description: |-
           Name becomes agent-<name> (StatefulSet, Service) and state-agent-<name>-0 (PVC): keep it a short DNS label.
+          agent-<name>-egress-proxy (own egress key, #599) must never be the Claude proxy key of another agent (agent-<x>-proxy).
           Secrets are bound to the agent: its own token Secret only, and its own Claude Secret or the shared one. Another
           agent's credentials can never be named, whoever may write Agents.
         properties:
@@ -91,6 +92,19 @@ spec:
                 - xhigh
                 - max
                 type: string
+              egressHosts:
+                description: |-
+                  EgressHosts: hosts this agent's own container may reach through the agents' egress proxy (#599), in addition
+                  to the instance-wide list (EGRESS_HOSTS). No other agent gets them. Squid dstdomain form: "example.com" is that
+                  name only, ".example.com" the domain and every subdomain. The forge and setup hosts stay closed to the agent
+                  container even when listed, and so does the Claude API while the credential proxy is on (R64). Unset: the
+                  instance-wide list only, and the pod is as before.
+                items:
+                  maxLength: 253
+                  pattern: ^\.?([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)+[a-z]([-a-z0-9]*[a-z0-9])?$
+                  type: string
+                maxItems: 64
+                type: array
               forge:
                 default: gitea
                 description: Forge kind.
@@ -410,6 +424,8 @@ spec:
         x-kubernetes-validations:
         - message: agent name must be at most 40 characters
           rule: size(self.metadata.name) <= 40
+        - message: agent name must not end with -egress
+          rule: '!self.metadata.name.endsWith(''-egress'')'
         - message: spec.forgeSecret must be agent-<agent name>
           rule: '!has(self.spec.forgeSecret) || self.spec.forgeSecret == ''agent-''
             + self.metadata.name'

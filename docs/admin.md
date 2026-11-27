@@ -2708,6 +2708,39 @@ WARNING: Add only a host that you trust. An agent can send data to each host on 
    The proxy starts again with the new list.
    NOTE: During the restart of the proxy, the agents cannot connect to the internet for some seconds.
 
+### Add a host for one agent
+
+Do this task when only one agent needs a host, for example a download host for the tools of one project (#599). The
+other agents cannot connect to this host.
+
+WARNING: Add only a host that you trust. The agent can send data to each host on its list.
+
+1. Add the host to the list of the agent:
+   - On `kind`: set `kind_agents_agent_hosts` in `kind.vars.yml`, for example
+     `{alice: [objects.githubusercontent.com]}`.
+   - On GKE: add `egress_hosts` to the agent in `agents` of `instance.yml`, for example
+     `- {name: alice, repos: my-org/my-repo, egress_hosts: [objects.githubusercontent.com]}`.
+2. Write a dot before the name to also allow all subdomains: `.example.com`.
+3. Apply the change:
+   - On `kind`: run the playbook with the tag `agents`.
+   - On GKE: run the playbook (open a pull request in the deployment repository).
+   The proxy reads the new list in 15 seconds. The proxy does not start again.
+4. Make sure that the agent has its own proxy credential:
+   `kubectl -n coding-agents get secret agent-alice-egress-proxy`
+   The operator replaces the pod of the agent when its jobs are complete. The new pod uses the credential.
+
+NOTE: The forge hosts and the toolchain download hosts stay closed to the agent container, also when the list of the
+agent contains them.
+
+NOTE: The playbook refuses a host with a wildcard (`*`), an IP address, a port or a path, and, while the credential
+proxy is on, a host that covers the Claude API (`claude_proxy_upstream_host`, `api.anthropic.com` by default; the
+operator gets it as `CLAUDE_UPSTREAM_HOST` and drops such a host too). Kind applies the same checks to
+`kind_agents_agent_hosts`, including the limit of 64 hosts per agent. Use the form `example.com` or `.example.com`.
+
+NOTE: A console chat session of the agent uses the list of the agent.
+
+NOTE: To remove the hosts, remove `egress_hosts` (or the entry in `kind_agents_agent_hosts`) and do step 3 again.
+
 ### Find the connections that the proxy refused
 
 1. Run this command:
@@ -2728,7 +2761,9 @@ NOTE: The event shows only the method, the host and the port. The event does not
 | Forge hosts | `api.github.com`, `github.com`: the forge sidecar only (proxy credential in Secret `egress-forge-proxy`); refused for the agent container | `FORGE_EGRESS_HOSTS`; Ansible `forge_egress_hosts` |
 | Claude API | dropped from the agents' list while the credential proxy is on: agents call `claude-proxy` directly | `CLAUDE_PROXY`; Ansible `claude_proxy` |
 | Toolchain downloads | `dl.google.com`, `static.rust-lang.org`: the init container `toolchain` only (credential `egress-setup-proxy`); add the hosts of custom toolchains (#598) here | Ansible `setup_egress_hosts`; `kind`: `kind_setup_egress_hosts` |
-| More hosts | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
+| More hosts (all agents) | none | `EGRESS_EXTRA_HOSTS`; Ansible `egress_extra_hosts` |
+| Hosts for one agent (#599, maximum 64) | none: the agent has the list for all agents only | `Agent` `spec.egressHosts`; Ansible `agents[].egress_hosts`; kind `kind_agents_agent_hosts` |
+| Hosts for one executor | see "Deterministic executors" | `Executor` `spec.egressHosts`; Ansible `egress_hosts` of the executor |
 | Proxy image | `ubuntu/squid` `6.6-24.04_beta` (pinned digest; Canonical has no other tag for 24.04) | `EGRESS_PROXY_IMAGE`; Ansible `egress_proxy_image` |
 | Proxy address for the agents | `http://egress-proxy.coding-agents.svc.cluster.local:3128` | operator env `EGRESS_PROXY` (empty = no proxy) |
 | FQDN policy for the proxy (GKE) | on | Ansible `egress_fqdn_policy`; Terraform `enable_fqdn_network_policy`. If it is on and the cluster does not have it, the playbook stops |

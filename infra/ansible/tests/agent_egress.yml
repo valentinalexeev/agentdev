@@ -1,0 +1,44 @@
+# Validation of agents[].egress_hosts (#599, tasks/agent_egress_checks.yml): valid lists pass, everything that could
+# widen the proxy (wildcards, IPs, ports, Squid syntax) or collide with a Secret name is refused before render.
+# Run: ansible-playbook infra/ansible/tests/agent_egress.yml
+- name: Agents' own egress hosts (#599)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Valid settings pass
+      ansible.builtin.include_tasks: ../tasks/agent_egress_checks.yml
+      vars:
+        agents:
+          - {name: alice, repos: o/a}
+          - {name: bob, repos: o/b, egress_hosts: []}
+          - {name: carol, repos: o/c, egress_hosts: [objects.githubusercontent.com, .example.org]}
+
+    - name: The Claude API is allowed as an own host only with the credential proxy off (deprecated rollback)
+      ansible.builtin.include_tasks: ../tasks/agent_egress_checks.yml
+      vars:
+        claude_proxy: false
+        agents: [{name: alice, repos: o/a, egress_hosts: [api.anthropic.com]}]
+
+    - name: Refuse invalid settings
+      ansible.builtin.include_tasks: includes/agent_egress_refused.yml
+      loop:
+        - [{name: a, egress_hosts: ["*.example.org"]}]
+        - [{name: a, egress_hosts: ["10.0.0.1"]}]
+        - [{name: a, egress_hosts: ["169.254.169.254"]}]
+        - [{name: a, egress_hosts: ["example.org:8443"]}]
+        - [{name: a, egress_hosts: ["example.org/path"]}]
+        - [{name: a, egress_hosts: ["a.example.org b.example.org"]}]
+        - [{name: a, egress_hosts: ["a.example.org\nhttp_access allow all"]}]
+        - [{name: a, egress_hosts: ["example.org\n"]}]
+        - [{name: a, egress_hosts: ["all"]}]
+        - [{name: a, egress_hosts: ["Example.org"]}]
+        - [{name: a, egress_hosts: "example.org"}]
+        - [{name: a, egress_hosts: {example.org: 1}}]
+        - [{name: a, egress_hosts: [[example.org]]}]
+        - [{name: a, egress_hosts: [1]}]
+        - [{name: bob-egress, egress_hosts: []}]
+        - [{name: a, egress_hosts: [api.anthropic.com]}]
+        - [{name: a, egress_hosts: [.anthropic.com]}]
+        - [{name: a, egress_hosts: [.com]}]
+        - [{name: a, egress_hosts: "{{ range(65) | map('string') | map('regex_replace', '^', 'h') | map('regex_replace', '$', '.example.org') | list }}"}]
+      loop_control: {loop_var: bad_agents}

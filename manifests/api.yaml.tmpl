@@ -221,7 +221,8 @@ spec:
 # initContainer toolchain (worker image, only the agent's setup proxy key agent-<agent>-setup-proxy, read-only root, UID
 # 1000); then chat and forge mount /state/toolchain read-only. Each Secret of the agent stays in the
 # container that has it in the agent pod: the forge credential (agent-<agent>) and the egress proxy key
-# (egress-forge-proxy) only in forge, the Claude proxy key, the Claude Secret (proxy off) and the MCP Secret only in chat.
+# (egress-forge-proxy) only in forge, the Claude proxy key, the Claude Secret (proxy off), the MCP Secret and, for an
+# agent with own egress hosts (#599), its egress key agent-<agent>-egress-proxy only in chat.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: {name: agentdev-api-chat-jobs}
@@ -241,7 +242,7 @@ spec:
   - {name: workerRepo, expression: "'${CHAT_WORKER_IMAGE}'.lastIndexOf(':') > '${CHAT_WORKER_IMAGE}'.lastIndexOf('/') ? '${CHAT_WORKER_IMAGE}'.substring(0, '${CHAT_WORKER_IMAGE}'.lastIndexOf(':')) : '${CHAT_WORKER_IMAGE}'"}
   - {name: all, expression: "variables.pod.containers + variables.inits"}
   # Secret names each container may read (env secretKeyRef, envFrom secretRef); anything else is denied
-  - {name: chatSecrets, expression: "['agent-' + variables.agent + '-proxy', 'agent-' + variables.agent + '-mcp', 'claude-shared', 'claude-' + variables.agent]"}
+  - {name: chatSecrets, expression: "['agent-' + variables.agent + '-proxy', 'agent-' + variables.agent + '-mcp', 'agent-' + variables.agent + '-egress-proxy', 'claude-shared', 'claude-' + variables.agent]"}
   - {name: forgeSecrets, expression: "['agent-' + variables.agent, 'egress-forge-proxy']"}
   - {name: setupSecret, expression: "'agent-' + variables.agent + '-setup-proxy'"}
   - {name: toolchain, expression: "variables.inits.exists(c, c.name == 'toolchain')"}
@@ -290,7 +291,7 @@ spec:
   - expression: "variables.all.all(c, c.name == 'forge' || !has(c.volumeMounts) || c.volumeMounts.all(m, m.name != 'github-app'))"
     message: "only the forge container mounts the agent's GitHub App key"
   - expression: "variables.all.all(c, !has(c.env) || c.env.all(e, !has(e.valueFrom) || (has(e.valueFrom.secretKeyRef) && ((c.name == 'chat' && e.valueFrom.secretKeyRef.name in variables.chatSecrets) || (c.name == 'forge' && e.valueFrom.secretKeyRef.name in variables.forgeSecrets) || (c.name == 'toolchain' && e.valueFrom.secretKeyRef.name == variables.setupSecret))) || (c.name == 'chat' && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == 'agent-' + variables.agent + '-project') || (c.name == 'toolchain' && has(e.valueFrom.configMapKeyRef) && e.valueFrom.configMapKeyRef.name == 'agentdev-toolchains' && e.valueFrom.configMapKeyRef.key == variables.agent)))"
-    message: "chat pods read only the agent's Secrets, each in its container: forge token and egress key only in forge, the Claude and MCP Secrets only in chat, the setup proxy key only in toolchain"
+    message: "chat pods read only the agent's Secrets, each in its container: forge token and forge egress key only in forge, the Claude and MCP Secrets and the agent's own egress key (#599) only in chat, the setup proxy key only in toolchain"
   - expression: "variables.all.all(c, !has(c.envFrom) || (c.name == 'chat' && c.envFrom.all(f, (has(f.secretRef) && !has(f.configMapRef) && f.secretRef.name in variables.chatSecrets) || (has(f.configMapRef) && !has(f.secretRef) && f.configMapRef.name == 'registry-proxy'))))"
     message: "only the chat container takes envFrom, and only from the agent's MCP or Claude Secret or the registry cache URLs (ConfigMap registry-proxy, #203)"
   - expression: "variables.all.all(c, !has(c.securityContext) || ((!has(c.securityContext.privileged) || !c.securityContext.privileged) && (!has(c.securityContext.allowPrivilegeEscalation) || !c.securityContext.allowPrivilegeEscalation)))"

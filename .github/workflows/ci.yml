@@ -154,7 +154,10 @@ jobs:
             envsubst < manifests/egress.yaml.tmpl > egress.yaml
           ./kubeconform -strict -summary egress.yaml
           yq 'select(.kind == "ConfigMap") | .data["squid.conf"]' egress.yaml > squid.conf
-          docker run --rm -v "$PWD/squid.conf:/etc/squid/squid.conf:ro" --entrypoint squid "$EGRESS_PROXY_IMAGE" -k parse -f /etc/squid/squid.conf
+          # #599: squid.conf includes the per-agent ACL file the pod creates at start (empty with no agent hosts)
+          : > agent-acl.conf
+          docker run --rm -v "$PWD/squid.conf:/etc/squid/squid.conf:ro" -v "$PWD/agent-acl.conf:/tmp/agent-acl.conf:ro" \
+            --entrypoint squid "$EGRESS_PROXY_IMAGE" -k parse -f /etc/squid/squid.conf
       - name: ansible-lint, syntax check and tests (infra/ansible)
         if: needs.scope.outputs.shell == 'true'
         working-directory: infra/ansible

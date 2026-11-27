@@ -20,6 +20,10 @@
     fail_msg: "Missing instance values. Pass them with -e @instance.yml (see infra/ansible/example.vars.yml)."
     quiet: true
 
+# #599: agents[].egress_hosts and agent names (own egress key Secret names); a separate file for tests/agent_egress.yml
+- name: Agents' own egress hosts are valid (#599)
+  ansible.builtin.include_tasks: agent_egress_checks.yml
+
 # #459: the forge-init Job reads gitea-admin-token through the store agentdev-platform-secrets, which exists only with
 # secrets_mode external (Terraform: external_secrets = true and forge_init = true)
 - name: Forge-init needs external secrets (#459)

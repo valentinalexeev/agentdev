@@ -39,6 +39,9 @@ type Defaults struct {
 	// ANTHROPIC_BASE_URL with its per-agent key (Secret agent-<name>-proxy). Empty: the credential Secret is mounted
 	// as before (deprecated rollback path).
 	ClaudeProxyURL string
+	// ClaudeUpstreamHost: the Claude API host only claude-proxy reaches (CLAUDE_UPSTREAM_HOST, Ansible
+	// claude_proxy_upstream_host). Empty: api.anthropic.com. An agent's own egress hosts never cover it (#599, R64).
+	ClaudeUpstreamHost string
 	// CostLabels (#184): service/environment on the StatefulSet and the pod (COST_LABELS); never override own labels
 	CostLabels map[string]string
 	// agent volume (#173): StorageClass (empty: cluster default) and size of the one state claim
@@ -83,7 +86,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	l := log.FromContext(ctx)
 	var a v1.Agent
 	if err := r.Get(ctx, req.NamespacedName, &a); err != nil {
-		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206)
+		if apierrors.IsNotFound(err) { // deleted: drop its harness guide (#206) and its own egress rule (#599)
+			if err := r.syncAgentEgress(ctx, req.Namespace, nil); err != nil {
+				return ctrl.Result{}, err
+			}
 			return ctrl.Result{}, r.writeGuide(ctx, req.Namespace, req.Name, "")
 		}
 		return ctrl.Result{}, err
@@ -173,6 +179,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	// setup proxy credential (#499): agent-<name>-setup-proxy, before the pod whose init container reads it
 	if err := r.ensureSetupProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// own egress hosts (#599): the agent's key and Squid rule in egress-agent-proxy, and agent-<name>-egress-proxy,
+	// before the pod whose agent container reads it
+	if err := r.syncAgentEgress(ctx, a.Namespace, &a); err != nil {
 		return ctrl.Result{}, err
 	}
 

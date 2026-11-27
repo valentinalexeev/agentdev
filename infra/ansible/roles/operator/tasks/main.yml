@@ -132,6 +132,7 @@
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | default([]) | join(' ') }}"
         CLAUDE_PROXY_URL: >-
           {{ ('http://claude-proxy.' ~ operator_agents_ns ~ '.svc.cluster.local:8080') if operator_claude_proxy | bool else '' }}
+        CLAUDE_UPSTREAM_HOST: "{{ claude_proxy_upstream_host | default('api.anthropic.com') }}"
       replace: []
   register: operator_applied
 

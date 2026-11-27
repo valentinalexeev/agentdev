@@ -24,6 +24,8 @@ func TestAgentPodTemplateFixturesForChat(t *testing.T) {
 		{"agent-pod-toolchain.json", func(a *v1.Agent) {
 			a.Spec.Toolchain = &v1.AgentToolchain{Presets: v1.ToolchainPresets{Go: "1.27.4"}}
 		}},
+		// #599: an agent with its own egress hosts: the agent container's proxy URL carries agent-<name>-egress-proxy
+		{"agent-pod-egress.json", func(a *v1.Agent) { a.Spec.EgressHosts = []string{".example.org"} }},
 	} {
 		r, c := setup(t, agent("alice", tc.mut))
 		r.D.ForgeImage, r.D.WorkerImage, r.D.PullPolicy = "ghcr.io/example/agentdev-forge:v0.0.0", "ghcr.io/example/agentdev-worker:v0.0.0", "IfNotPresent"
