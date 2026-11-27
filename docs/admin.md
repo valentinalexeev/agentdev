@@ -887,6 +887,35 @@ Do this task when a job ends with exit code 137.
 NOTE: The Compute log keeps the preemptions of the project. The Kubernetes events stay for about 1 hour. Look for the
 cause soon after the job ends.
 
+### Get an e-mail for each preemption
+
+Do this task to get an e-mail when Google reclaims a Spot node or when the operator pauses an agent for a security
+event. Both stop running jobs with exit code 137. This task is optional and off by default.
+
+1. In the deployment repository, copy `terraform/monitoring.tf` from `examples/deployment/gcp-gke/` of the pinned
+   agentdev release.
+2. In `terraform/instance.tfvars`, set `enable_diagnostic_alerts = true`. Make sure that `budget_alert_emails` has
+   the e-mail addresses that get the alerts.
+3. Optional: to also record the exit code and the last terminated reason of each container (kube-state-metrics), set
+   `monitoring_components = ["SYSTEM_COMPONENTS", "POD", "STATEFULSET"]`. In `terraform/main.tf`, remove the comment
+   mark from the line `monitoring_components = var.monitoring_components` in the module block.
+4. Run `terraform plan` and `terraform apply`.
+
+Result:
+
+- Four log-based metrics: `agentdev_security_pause`, `agentdev_node_preempted`, `agentdev_node_scale_down` and
+  `agentdev_agent_pod_pending`.
+- Two alert policies, for Spot preemptions and for security auto-pauses. Each policy sends at most one e-mail per
+  hour to each address in `budget_alert_emails`. An incident closes after 30 minutes.
+- The automation account gets two more roles: `roles/logging.configWriter` (log-based metrics) and
+  `roles/monitoring.alertPolicyEditor` (alert policies).
+
+NOTE: The security auto-pause filter uses the namespace `agentdev-platform`. If the instance uses a different platform
+namespace, change the filter in `monitoring.tf`.
+
+To stop the e-mails, set `enable_diagnostic_alerts = false`, then plan and apply. This removes the metrics, the alert
+policies, the notification channels and the two roles.
+
 ### Reduce the effect of preemptions
 
 Choose the options that fit the cost target of the instance.
