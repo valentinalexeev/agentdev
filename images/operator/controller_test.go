@@ -618,6 +618,79 @@ func TestModelEffortInvalidRefused(t *testing.T) {
 	}
 }
 
+// #578: spec.merge gated reaches the forge sidecar and the worker (MERGE_MODE, MERGE_APPROVERS); never MERGE_METHOD (always a merge commit); off or
+// unset: no variable in either container (pod template unchanged).
+func TestMergeFromSpec(t *testing.T) {
+	r, c := setup(t, agent("alice", nil),
+		agent("bob", func(a *v1.Agent) {
+			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Approvers: []string{"owner"}}
+		}),
+		agent("carol", func(a *v1.Agent) { a.Spec.Merge = &v1.AgentMerge{Mode: "off"} }),
+		agent("dave", func(a *v1.Agent) {
+			a.Spec.Merge = &v1.AgentMerge{Mode: "gated", Approvers: []string{"owner", "co-owner"}}
+		}))
+	for _, n := range []string{"alice", "bob", "carol", "dave"} {
+		reconcile(t, r, n)
+	}
+	forgeEnv := func(s *appsv1.StatefulSet, k string) string {
+		for _, ct := range s.Spec.Template.Spec.Containers {
+			if ct.Name != "forge" {
+				continue
+			}
+			for _, e := range ct.Env {
+				if e.Name == k {
+					return e.Value
+				}
+			}
+		}
+		return "<unset>"
+	}
+	for _, tc := range []struct{ agent, worker, mode, method, approvers string }{
+		{"alice", "<unset>", "<unset>", "<unset>", "<unset>"}, {"bob", "gated", "gated", "<unset>", "owner"},
+		{"carol", "<unset>", "<unset>", "<unset>", "<unset>"}, {"dave", "gated", "gated", "<unset>", "owner,co-owner"},
+	} {
+		s := getSTS(t, c, tc.agent)
+		if got := envOf(s, "MERGE_MODE"); got != tc.worker {
+			t.Errorf("%s: worker MERGE_MODE = %q, want %q", tc.agent, got, tc.worker)
+		}
+		if got := envOf(s, "MERGE_METHOD"); got != "<unset>" {
+			t.Errorf("%s: worker has MERGE_METHOD %q", tc.agent, got)
+		}
+		if got := forgeEnv(s, "MERGE_MODE"); got != tc.mode {
+			t.Errorf("%s: forge MERGE_MODE = %q, want %q", tc.agent, got, tc.mode)
+		}
+		if got := forgeEnv(s, "MERGE_METHOD"); got != tc.method {
+			t.Errorf("%s: forge MERGE_METHOD = %q, want %q", tc.agent, got, tc.method)
+		}
+		if got := forgeEnv(s, "MERGE_APPROVERS"); got != tc.approvers {
+			t.Errorf("%s: forge MERGE_APPROVERS = %q, want %q", tc.agent, got, tc.approvers)
+		}
+		if got := envOf(s, "MERGE_APPROVERS"); got != tc.approvers {
+			t.Errorf("%s: worker MERGE_APPROVERS = %q, want %q", tc.agent, got, tc.approvers)
+		}
+	}
+}
+
+func TestMergeInvalidRefused(t *testing.T) {
+	for name, m := range map[string]*v1.AgentMerge{
+		"mode":            {Mode: "always"},
+		"gated, no owner": {Mode: "gated"},
+		"bad approver":    {Mode: "gated", Approvers: []string{"owner,mallory"}},
+	} {
+		r, c := setup(t, agent("mallory", func(a *v1.Agent) { a.Spec.Merge = m }))
+		reconcile(t, r, "mallory")
+		var s appsv1.StatefulSet
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "agent-mallory"}, &s); err == nil {
+			t.Errorf("%s: rendered a pod", name)
+		}
+		var a v1.Agent
+		_ = c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "mallory"}, &a)
+		if a.Status.Phase != "invalid" {
+			t.Errorf("%s: phase = %q, want invalid", name, a.Status.Phase)
+		}
+	}
+}
+
 // #500: spec.permission reaches the worker as CLAUDE_PERMISSION_MODE and CLAUDE_AUTO_MODE; dontAsk or unset: neither.
 func TestPermissionFromSpec(t *testing.T) {
 	r, c := setup(t, agent("alice", nil),

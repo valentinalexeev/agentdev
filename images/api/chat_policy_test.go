@@ -501,3 +501,29 @@ func TestChatStateSizedByAgentEphemeralLimit(t *testing.T) {
 		t.Errorf("state %+v", p.Volumes[0])
 	}
 }
+
+// #578: the chat pod of a gated agent gets no merge config, so its sidecar has no POST /merge (the sidecar also
+// refuses a merge with CHAT_SESSION set)
+func TestChatPodOfGatedAgentHasNoMerge(t *testing.T) {
+	for _, forge := range []string{"github", "gitea"} {
+		agent := agentFixture(t, forge)
+		for i := range agent.Spec.Containers {
+			if agent.Spec.Containers[i].Name == "forge" {
+				agent.Spec.Containers[i].Env = append(agent.Spec.Containers[i].Env,
+					corev1.EnvVar{Name: "MERGE_MODE", Value: "gated"}, corev1.EnvVar{Name: "MERGE_APPROVERS", Value: "owner"},
+					corev1.EnvVar{Name: "MERGE_METHOD", Value: "merge"})
+			}
+		}
+		p, err := chatPod(agent, chatSession{ID: "chat-alice-0000abcd", Agent: "alice", Repo: "owner/repo", StartedBy: "wendy"}, strings.Repeat("a", 64), 1800)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range p.Containers {
+			for _, e := range c.Env {
+				if strings.HasPrefix(e.Name, "MERGE_") {
+					t.Errorf("%s: chat pod container %s keeps %s", forge, c.Name, e.Name)
+				}
+			}
+		}
+	}
+}
