@@ -25,6 +25,13 @@
       kind_agents_effort is empty, low, medium, high, xhigh or max
     quiet: true
 
+# #599: the same own-host rules as GKE (64 per agent, none covering the Claude API while the credential proxy is on)
+- name: The agents' own egress hosts are valid (#599)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../tasks/agent_egress_checks.yml"
+  vars:
+    agents: "{{ kind_agents_agent_hosts | dict2items(key_name='name', value_name='egress_hosts') }}"
+    claude_proxy: "{{ kind_agents_claude_proxy }}"
+
 # #570: the same model rule as GKE (tasks/model_check.yml, #609), so a bad kind_agents_model fails before the CRD apply
 - name: The Claude model is valid (#609)
   ansible.builtin.include_tasks: "{{ role_path }}/../../tasks/model_check.yml"
