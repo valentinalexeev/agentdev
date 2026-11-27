@@ -120,9 +120,10 @@ func checkLabelAdd(s *server, ctx context.Context, m []string, body []byte) erro
 }
 
 // refuseChat: the loop-only #236 writes (label removal, comment edit, ready for review) have no console allow
-// (ADR 0011 gates only label adds), so a chat pod never makes them; same event as the other chat refusals.
+// (ADR 0011 gates only label adds), and neither has the gated merge (#578), so a chat pod never makes them. The
+// event is chat-not-allowed: chat-label-not-asked stays for a label add that no person allowed in the console.
 func refuseChat(s *server, what string) error {
-	return refuseAs("chat-label-not-asked", "medium", "%s: not allowed in the console chat %s", what, s.c.ChatSession)
+	return refuseAs("chat-not-allowed", "medium", "%s: not allowed in the console chat %s", what, s.c.ChatSession)
 }
 
 // checkLabelRemove: DELETE /issues/{n}/labels/{name} (GitHub) or /labels/{id} (Gitea, the id is resolved to its

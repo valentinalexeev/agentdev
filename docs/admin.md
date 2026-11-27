@@ -2400,6 +2400,44 @@ The test does not operate in check mode (`--check`).
 The objects are in `infra/ansible/roles/ingress/templates/gateway.yaml.j2`. Risks: `docs/security.md` R66 to R68.
 Cost: the forwarding rule costs approximately $18 each month; Cloud Armor adds approximately $7 each month.
 
+## Gated merge of the agent's own PRs
+
+Off by default: agents never merge. To let one agent merge its **own** PRs after you approve them (#578):
+
+```yaml
+spec:
+  merge:
+    mode: gated            # off (default) | gated
+    approvers: [your-login] # required with gated: whose approval counts
+```
+
+The forge sidecar (`POST /merge`, `images/forge/merge.go`) reads everything from GitHub with its own credential and
+merges only when all hold:
+
+1. The PR is open, not a draft, opened by the agent from `agent/<name>/*` of the same repository, into the default
+   branch (or another branch of the same agent).
+2. The latest deciding review of an `approvers` login is `APPROVED` on the exact head commit. A dismissed approval, an
+   approval of an earlier commit, or an approval by anyone else (other collaborators, bots, the agent) never counts.
+   No reviewer's latest review requests changes.
+3. Every check run and commit status on the head passed, and GitHub reports the PR mergeable under the branch rules.
+4. No approval request of the agent on the PR is open, and changes to protected paths have a person's approval.
+
+The merge call pins the head sha and always makes a merge commit (squash and rebase are not available: the repository rule is merge commits only); the agent sends only the PR number. Each merge prints
+an `AGENTDEV_AUDIT` line with `action: agent-merge` (PR, sha, approver, checks); a refusal is a `merge-refused`
+security event. A PR that is not ready (a check pending) is retried on the next loop pass without an event.
+
+Gitea: not supported. The sidecar logs that the endpoint stays off; the agent never merges there.
+
+WARNING: With `mode: gated`, the owner approval starts the merge. The sidecar does not look for the independent
+`Reviewer: OK at <sha>` line that `CLAUDE.md` §4 requires. On a repository that follows `CLAUDE.md`, approve a PR
+only after the reviewer line names its current head.
+
+A head commit with no check runs and no commit statuses passes the check step. Then only `mergeable_state` and
+branch protection stop a merge before the checks start. Thus, set required checks in branch protection.
+
+Keep branch protection on the default branch (required review, dismiss stale approvals, required checks). On kind and
+in `instance.yml` the field is not wired yet: set it on the `Agent` object (`kubectl edit agent <name>`).
+
 ## Security events
 
 A security event is a record of an action that a guardrail stopped. The forge sidecar and the agent loop write each
