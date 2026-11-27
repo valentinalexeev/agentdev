@@ -36,7 +36,7 @@ operator_egress_hosts: [api.anthropic.com, .github.com, .githubusercontent.com, 
                         files.pythonhosted.org, proxy.golang.org, sum.golang.org, index.crates.io, static.crates.io]
 operator_egress_extra_hosts: []
 # custom toolchains of the deployment (#598): name -> {files, path, verify, hosts, env, allow}; docs/admin.md "Give an
-# agent a toolchain". Agents name them in kind_agents_toolchain: {alice: {custom: [shell-tools]}}.
+# agent a toolchain". Agents name them in the kind_agents role's toolchain value: {alice: {custom: [shell-tools]}}.
 operator_toolchains: {}
 # the setup egress allow-list the operator checks custom toolchain hosts against: the same list as the
 # egress-setup-proxy ACL (kind.yml sets both from kind_setup_egress_hosts)
