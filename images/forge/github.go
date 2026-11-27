@@ -469,9 +469,23 @@ func (d *githubDriver) rules() []rule {
 		r("POST", repoRe+`/pulls/[0-9]+/requested_reviewers`, checkReviewRequest),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/check-runs`, nil),
 		r("GET", repoRe+`/commits/[0-9a-f]{40}/status`, nil),
-		// #236: labels from the allow-list (agent:<name> only on its own PR, #227), ready for review, own comment
-		// edits (signed again, so an edit keeps the agent's signature line), PR files
-	}, signEdits(ifaceRules(`[1-9][0-9]{0,15}`))...)
+		// #236: labels (agent:<name> only on its own PR, #227; in a chat pod the labels a person allowed, #571),
+		// ready for review, own comment edits (signed again, so an edit keeps the agent's signature line), PR files
+	}, append(releaseReadRules(r), signEdits(ifaceRules(`[1-9][0-9]{0,15}`))...)...)
+}
+
+// releaseReadRules (#571): read-only release state (tags, releases, milestones), for the loop and the chat. The same
+// paths on GitHub and Gitea.
+func releaseReadRules(r func(m, p string, chk func(*server, []byte) error) rule) []rule {
+	return []rule{
+		r("GET", repoRe+`/tags`, nil),
+		r("GET", repoRe+`/releases`, nil),
+		r("GET", repoRe+`/releases/latest`, nil),
+		r("GET", repoRe+`/releases/[0-9]+`, nil),
+		r("GET", repoRe+`/releases/tags/[A-Za-z0-9][A-Za-z0-9._+-]{0,99}`, nil),
+		r("GET", repoRe+`/milestones`, nil),
+		r("GET", repoRe+`/milestones/[0-9]+`, nil),
+	}
 }
 
 func signEdits(rs []rule) []rule {

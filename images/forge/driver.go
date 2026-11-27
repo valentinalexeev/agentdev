@@ -91,7 +91,7 @@ func (d *giteaDriver) rules() []rule {
 		// collaborator asking for another user's permission; the assignee list holds exactly the users with write.
 		r("GET", repoRe+`/issues/[0-9]+/timeline`, nil),
 		r("GET", repoRe+`/assignees`, nil),
-	}, ifaceRules(`[1-9][0-9]{0,15}`)...) // #236: labels, ready for review, own comment edits, PR files
+	}, append(releaseReadRules(r), ifaceRules(`[1-9][0-9]{0,15}`)...)...) // #571 release reads; #236 labels, ready for review, own comment edits, PR files
 }
 
 // giteaLoginRe: a Gitea user name (letters, digits, '-', '_', '.'; no leading or trailing '.' or '-')

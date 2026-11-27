@@ -82,6 +82,10 @@ func labelTarget(s *server, ctx context.Context, repo, n string) (isPR bool, err
 
 // checkLabelAdd: POST /issues/{n}/labels with {"labels":[names]} from the allow-list, on a target of this agent.
 func checkLabelAdd(s *server, ctx context.Context, m []string, body []byte) error {
+	// #571: a chat pod adds the labels a person allowed in the console (checkLabelWrite), never the agent allow-list
+	if s.c.ChatSession != "" {
+		return checkLabelWrite(s, ctx, m, body)
+	}
 	var rq map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rq); err != nil {
 		return refuse("bad label body")

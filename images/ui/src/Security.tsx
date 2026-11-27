@@ -1,7 +1,7 @@
 // Security page (#70): events of the guardrails, with filters. The filters live in the URL hash only for the agent.
 import { useCallback, useEffect, useState } from 'react'
 import { listSecurityEvents, Unauthorized, type EventFilter, type SecurityEvent } from './api'
-import { AgentTag, Empty, PageHead, SevTag } from './ui'
+import { AgentTag, Drawer, Empty, PageHead, SevTag, Untrusted } from './ui'
 import { useData } from './useData'
 
 const SINCE: [string, string][] = [['24h', '24 h'], ['168h', '7 days'], ['720h', '30 days'], ['', 'all']]
@@ -12,6 +12,7 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
   // the loaded page belongs to one filter; a result for an older filter is shown as loading
   const [result, setResult] = useState<{ for: EventFilter; events: SecurityEvent[]; next?: string } | null>(null)
   const [error, setError] = useState('')
+  const [open, setOpen] = useState<SecurityEvent | null>(null)
   const fail = useCallback((e: Error) => (e instanceof Unauthorized ? onExpired() : setError(e.message)), [onExpired])
 
   useEffect(() => {
@@ -54,7 +55,9 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
             <tbody>
               {events.map((e) => (
                 <tr key={e.id}>
-                  <td className="agd-num" style={{ textAlign: 'left' }}>{new Date(e.time).toLocaleString()}</td>
+                  <td className="agd-num" style={{ textAlign: 'left' }}>
+                    <button className="agd-row-btn" type="button" aria-haspopup="dialog" title="Show the event details"
+                      onClick={() => setOpen(e)}>{new Date(e.time).toLocaleString()}</button></td>
                   <td><AgentTag name={e.agent} /></td>
                   <td><SevTag severity={e.severity} /></td>
                   <td className="agd-code">{e.source} / {e.rule}</td>
@@ -66,7 +69,37 @@ export function SecurityPage({ token, onExpired, initialAgent }: { token: string
           </table>
         </div>
       )}
+      {open && <EventDrawer e={open} onClose={() => setOpen(null)} />}
       {next && <p><button className="agd-btn" type="button" onClick={more}>Load more</button></p>}
     </>
+  )
+}
+
+// The refused host of an egress event: "CONNECT host:443" or "GET http://host/path" (operator egressHostOf).
+function egressHost(action: string): string {
+  const t = action.trim().split(/\s+/)[1] ?? ''
+  if (t.includes('://')) { try { return new URL(t).hostname.toLowerCase() } catch { return '' } }
+  return t.split(':')[0].toLowerCase()
+}
+
+// Event drawer: every field of one event. The action is the guardrail's record of what was refused; parts of it can
+// come from the agent (a command line, a URL), so it is shown as untrusted plain text.
+function EventDrawer({ e, onClose }: { e: SecurityEvent; onClose: () => void }) {
+  const host = e.source.startsWith('egress') ? egressHost(e.action) : ''
+  const jobLink = e.job && /^(issue|pr)-[0-9]{1,10}$/.test(e.job) ? `#work?job=${encodeURIComponent(e.agent)}/${e.job}` : ''
+  return (
+    <Drawer title={<>Security event <span className="agd-code">#{e.id}</span></>} onClose={onClose}>
+      <dl className="agd-dl">
+        <dt>Time</dt><dd>{new Date(e.time).toLocaleString()} <span className="agd-muted agd-code">{e.time}</span></dd>
+        <dt>Agent</dt><dd><AgentTag name={e.agent} /></dd>
+        <dt>Severity</dt><dd><SevTag severity={e.severity} />{e.severity === 'high' && <span className="agd-muted"> pauses the agent</span>}</dd>
+        <dt>Source</dt><dd className="agd-code">{e.source}</dd>
+        <dt>Rule</dt><dd className="agd-code">{e.rule}</dd>
+        {host && <><dt>Host</dt><dd className="agd-code">{host}</dd></>}
+        <dt>Job</dt><dd>{jobLink ? <a className="agd-link agd-code" href={jobLink}>{e.job}</a> : <span className="agd-muted">{e.job || 'none (outside a job)'}</span>}</dd>
+        <dt>Schema</dt><dd className="agd-code">{e.schema}</dd>
+      </dl>
+      <Untrusted text={e.action} note="What the guardrail refused, as recorded." />
+    </Drawer>
   )
 }
