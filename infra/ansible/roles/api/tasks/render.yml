@@ -78,7 +78,9 @@
         CHAT_MAX_SESSIONS_PER_USER: "{{ api_chat_max_sessions_per_user }}"
         NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
         AGENTS_SOURCE: "{{ api_agents_source }}"
-        SECRETS_VALUES_NS: ""   # project secrets (#202): kind store only; GKE: part 4
+        SECRETS_GCP_PROJECT: "{{ gcp_project if project_secrets_enabled | default(false) | bool else '' }}"
+        SECRETS_API_GSA: "{{ project_secrets.api_gsa | default('') if project_secrets_enabled | default(false) | bool else '' }}"
+        SECRETS_VALUES_NS: ""   # project secrets (#202): kind store only; GKE uses SECRETS_GCP_PROJECT
       replace: []
     ui_render:
       src: "{{ repo_root }}/manifests/ui.yaml.tmpl"

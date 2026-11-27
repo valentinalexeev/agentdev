@@ -9,7 +9,7 @@
 #    SecretStore's Kubernetes service account in that namespace, each with an IAM condition that names only its own
 #    secrets. The agents namespace can never read a platform-* secret (acceptance 3 of #381): its account has no
 #    grant on them, and manifests/secrets-policy.yaml.tmpl pins its ExternalSecrets.
-#    The project secrets store of #202 (agentdev-ps-*) is separate and unchanged.
+#    The project secrets store of #202 (agentdev-ps-*) has its own two accounts, at the end of this file.
 # Opt-in (var.external_secrets, default false): an instance in the default playbook mode, where the playbook made these
 # secrets, gets no resource from this file, so a module upgrade with no new inputs plans no change (no 409).
 
@@ -110,5 +110,106 @@ resource "google_service_account_iam_member" "secrets_reader_wi" {
   service_account_id = google_service_account.secrets_reader[each.key].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${each.value.namespace}/agentdev-platform-secrets]"
+  depends_on         = [google_container_cluster.this]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Project secrets (#202 part 4, ADR 0003 D1): the values of ProjectSecrets are Secret Manager secrets agentdev-ps-*.
+# Two accounts, both limited by IAM condition to agentdev-ps-*; nothing above can reach them, and they reach nothing
+# above (the agents reader's agent-* prefix does not match agentdev-ps-*).
+#   agentdev-sm-projsecrets  External Secrets Operator's SecretStore agentdev-secrets (KSA <agents_ns>/agentdev-secrets-
+#                            reader): read the values, to sync them into ps-<name> next to the broker.
+#   agentdev-api-secrets     the agentdev API (KSA <platform_ns>/agentdev-api): create, add a version, destroy old
+#                            versions, delete. Custom roles without secretmanager.versions.access: write, never read.
+# On with external_secrets (ESO is installed by the role external_secrets) and project_secrets (default true).
+locals {
+  project_secrets = var.external_secrets && var.project_secrets
+  # IAM condition on the secret's resource name; versions are below it
+  ps_condition = "resource.name.startsWith(\"${local.sm_prefix}agentdev-ps-\")"
+  # secretmanager.secrets.create is checked on the parent, the project, before the secret exists, so the name condition
+  # alone would refuse every create (review of #274). The create role holds only secrets.create, so on the project it
+  # can create a secret but not read, version or delete one; the API always names it agentdev-ps-<name>.
+  ps_create_condition = "resource.type == \"cloudresourcemanager.googleapis.com/Project\" || ${local.ps_condition}"
+}
+
+resource "google_service_account" "project_secrets_reader" {
+  count        = local.project_secrets ? 1 : 0
+  account_id   = "agentdev-sm-projsecrets"
+  display_name = "agentdev project secrets: External Secrets Operator (read agentdev-ps-*, #202)"
+}
+
+resource "google_service_account" "api_secrets" {
+  count        = local.project_secrets ? 1 : 0
+  account_id   = "agentdev-api-secrets"
+  display_name = "agentdev project secrets: API (write-only agentdev-ps-*, #202)"
+}
+
+resource "google_project_iam_member" "project_secrets_reader" {
+  count   = local.project_secrets ? 1 : 0
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.project_secrets_reader[0].email}"
+  condition {
+    title      = "agentdev-ps only"
+    expression = local.ps_condition
+  }
+}
+
+resource "google_project_iam_custom_role" "api_secrets" {
+  count       = local.project_secrets ? 1 : 0
+  role_id     = "agentdevProjectSecretWriter"
+  title       = "agentdev project secret writer"
+  description = "Version, destroy old versions of and delete agentdev-ps-* secrets without reading them (#202)"
+  permissions = [
+    "secretmanager.secrets.delete",
+    "secretmanager.secrets.get",
+    "secretmanager.versions.add",
+    "secretmanager.versions.destroy",
+  ]
+}
+
+resource "google_project_iam_custom_role" "api_secrets_create" {
+  count       = local.project_secrets ? 1 : 0
+  role_id     = "agentdevProjectSecretCreator"
+  title       = "agentdev project secret creator"
+  description = "Create agentdev-ps-* secrets (checked on the project, #202)"
+  permissions = ["secretmanager.secrets.create"]
+}
+
+resource "google_project_iam_member" "api_secrets_create" {
+  count   = local.project_secrets ? 1 : 0
+  project = var.project_id
+  role    = google_project_iam_custom_role.api_secrets_create[0].id
+  member  = "serviceAccount:${google_service_account.api_secrets[0].email}"
+  condition {
+    title      = "agentdev-ps create"
+    expression = local.ps_create_condition
+  }
+}
+
+resource "google_project_iam_member" "api_secrets" {
+  count   = local.project_secrets ? 1 : 0
+  project = var.project_id
+  role    = google_project_iam_custom_role.api_secrets[0].id
+  member  = "serviceAccount:${google_service_account.api_secrets[0].email}"
+  condition {
+    title      = "agentdev-ps only"
+    expression = local.ps_condition
+  }
+}
+
+resource "google_service_account_iam_member" "project_secrets_reader_wi" {
+  count              = local.project_secrets ? 1 : 0
+  service_account_id = google_service_account.project_secrets_reader[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.agents_namespace}/agentdev-secrets-reader]"
+  depends_on         = [google_container_cluster.this]
+}
+
+resource "google_service_account_iam_member" "api_secrets_wi" {
+  count              = local.project_secrets ? 1 : 0
+  service_account_id = google_service_account.api_secrets[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.platform_namespace}/agentdev-api]"
   depends_on         = [google_container_cluster.this]
 }

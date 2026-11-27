@@ -106,7 +106,33 @@
                       'egress': [{'matches': [{'name': claude_proxy_upstream_host}], 'ports': [{'protocol': 'TCP', 'port': 443}]}]}}]
            if claude_proxy | bool and platform_fqdn == 'gke' else [] }}
       agents: "{{ lookup('ansible.builtin.template', 'templates/agents.j2') | from_yaml }}"
+      # project secrets (#202 part 4): Secret Manager store with its reader KSA, the no-pods policy, the broker
+      project_secrets: >-
+        {{ ((lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_ps_store) | from_yaml_all | list)
+            if project_secrets_enabled | bool else [])
+           + ((lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_broker) | from_yaml_all | list)
+              if project_secrets_broker | bool else []) }}
   vars:
+    vars_ps_store:
+      src: "{{ repo_root }}/manifests/secrets-store-gcp.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        SECRETS_GSA: "{{ project_secrets.reader_gsa | default('') }}"
+        GCP_PROJECT: "{{ gcp_project }}"
+        GKE_LOCATION: "{{ gcp_zone }}"
+        GKE_CLUSTER: "{{ cluster_name }}"
+      replace: []
+    vars_broker:
+      src: "{{ repo_root }}/manifests/credential-broker.yaml.tmpl"
+      values:
+        AGENTS_NS: "{{ agents_ns }}"
+        CLAUDE_PROXY_IMAGE: "{{ credproxy_image }}"
+        IMAGE_PULL_POLICY: IfNotPresent
+        CREDENTIAL_BROKER_URL: "http://credential-broker.{{ agents_ns }}.svc.cluster.local:8080"
+        KUBE_API_EGRESS: >-
+          {{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': platform_kube_api_ips})
+             | trim if project_secrets_broker | bool else '' }}
+      replace: []
     crd_paths: "{{ crd_files | map('regex_replace', '^', repo_root ~ '/images/operator/config/crd/') | list }}"
     crd_files: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
                 agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml,
@@ -197,10 +223,11 @@
           {{ (((ingress | default({})).forwarder | default({})).pod_selector | default({})).items()
              | map('join', '=') | join(',') }}
         FORWARDER_NOT_READY_MINUTES: "{{ (ingress | default({})).forwarder_not_ready_minutes | default(10) }}"
-        # scoped secrets store (#202): off until the External Secrets Operator tasks land (#202 part 4)
-        SECRETS_STORE: ""
+        # project secrets (#202 part 4): ProjectSecrets apply with the Secret Manager store, the broker serves them
+        SECRETS_STORE: "{{ 'agentdev-secrets' if project_secrets_enabled | bool else '' }}"
         SECRETS_REMOTE_PROPERTY: ""   # GCP Secret Manager: the payload is the value
-        CREDENTIAL_BROKER_URL: ""   # #202 part 4 deploys the broker on GKE
+        CREDENTIAL_BROKER_URL: >-
+          {{ ('http://credential-broker.' ~ agents_ns ~ '.svc.cluster.local:8080') if project_secrets_broker | bool else '' }}
         # MCP per project (#383): McpProject controller, admin login from Secret contextforge
         MCP_ADMIN_EMAIL: "{{ platform_cf_admin_email | default('admin@agentdev.dev') }}"
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | join(' ') }}"

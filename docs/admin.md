@@ -2657,8 +2657,8 @@ is in the secret store, never in the object.
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
 into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
 
-> **Status:** parts 1 to 3 of #202: the object, the store, the copy, the credential broker, and the write-only API
-> and web UI. The playbook tasks for GKE come in part 4. Until then, only kind has the store.
+The store is on kind (`kind.yml --tags secrets`) and on GKE (Terraform `project_secrets` with `external_secrets`, and the
+playbook, see below).
 
 ### Set up the secret store (kind)
 
@@ -2677,6 +2677,52 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
    The column `READY` shows `True`.
 
 To turn the store off, set `SECRETS_STORE_ENABLED` to `false` in `kind.vars.yml`.
+
+### Set up the secret store (GKE)
+
+The GKE store uses the platform secrets setup of #381: set `external_secrets = true` in Terraform and
+`external_secrets.mode: external` in `instance.yml` first (see "Platform secrets in Secret Manager").
+
+1. Apply Terraform with `project_secrets = true` (the default with `external_secrets`). It makes two Google service
+   accounts. Both can only use Secret Manager secrets whose names start with `agentdev-ps-`. External Secrets
+   Operator reads values with `agentdev-sm-projsecrets`. The API writes values with `agentdev-api-secrets`, and it
+   cannot read them.
+2. Copy the output into `instance.yml`:
+
+   ```bash
+   terraform output project_secrets
+   ```
+
+   ```yaml
+   project_secrets:
+     reader_gsa: agentdev-sm-projsecrets@my-project.iam.gserviceaccount.com
+     api_gsa: agentdev-api-secrets@my-project.iam.gserviceaccount.com
+   ```
+
+3. Run the playbook. The role `external_secrets` installs External Secrets Operator and the rules; the playbook adds
+   the store `agentdev-secrets` and the credential broker.
+4. Make sure that the store is ready:
+
+   ```bash
+   kubectl -n coding-agents get secretstore agentdev-secrets
+   ```
+
+5. Check the whole path once, as the owner (the GKE half of the acceptance of #202). Add a test project secret in
+   mode `broker` for a running agent in the web UI, wait until its phase is `ready`, then make sure that the value
+   is not in the agent container. Type the value at the prompt; it is not stored in the shell history:
+
+   ```bash
+   read -rs VAL && printf '%s' "$VAL" | kubectl -n coding-agents exec -i agent-<name>-0 -c agent -- sh -c \
+     'v=$(cat); { env; cat /proc/[0-9]*/environ; } 2>/dev/null | tr "\0" "\n" | grep -cF -- "$v"; grep -rIlF -- "$v" / --exclude-dir=proc --exclude-dir=sys 2>/dev/null | head -3'
+   ```
+
+   The output must be `0` and nothing else. Then delete the test secret.
+
+Rotation adds a new Secret Manager version and destroys the previous one, so an old credential is not readable any
+more. If the API logs `previous version ... not destroyed`, destroy it by hand:
+`gcloud secrets versions destroy <n> --secret agentdev-ps-<name>`.
+
+To turn the store off, remove `project_secrets` from `instance.yml`.
 
 ### Add a project secret in the web UI
 

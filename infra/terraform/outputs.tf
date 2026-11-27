@@ -71,3 +71,11 @@ output "platform" {
     ])
   }
 }
+
+output "project_secrets" {
+  description = "Google service accounts of the project secrets store (#202): copy into instance.yml `project_secrets`; null when off."
+  value = local.project_secrets ? {
+    reader_gsa = google_service_account.project_secrets_reader[0].email
+    api_gsa    = google_service_account.api_secrets[0].email
+  } : null
+}

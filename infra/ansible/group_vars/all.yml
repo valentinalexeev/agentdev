@@ -133,6 +133,12 @@ sm_egress_setup_proxy: egress-setup-proxy       # toolchain init containers' egr
 secrets_mode: "{{ (external_secrets | default({})).mode | default('playbook') }}"
 external_secrets_store: agentdev-platform-secrets   # SecretStore and its service account, one per namespace
 external_secrets_refresh: 15m                       # how often ESO reads Secret Manager again
+# Project secrets (#202 part 4): on with secrets_mode external and `project_secrets` from `terraform output
+# project_secrets` ({reader_gsa, api_gsa}). ESO (role external_secrets) syncs agentdev-ps-* into ps-<name>; the API
+# writes them with its write-only account; the credential broker serves mode broker. Values never pass through Ansible.
+project_secrets: {}
+project_secrets_enabled: "{{ secrets_mode == 'external' and (project_secrets.reader_gsa | default('')) | length > 0 }}"
+project_secrets_broker: "{{ project_secrets_enabled | bool and claude_proxy | bool }}"
 # agents whose agent-<name>-claude exists in Secret Manager: agents[].own_claude: true (the playbook does not look)
 # Reloader (#381): a workload restarts when one of these Secrets changes; see docs/admin.md, Rotate a secret
 reloader_annotation: secret.reloader.stakater.com/reload

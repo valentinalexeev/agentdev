@@ -580,6 +580,13 @@
         msg: "FQDNNetworkPolicy is off: claude-proxy may reach any public address on 443 (docs/security.md R63)"
       when: claude_proxy | bool and platform_fqdn != 'gke'
 
+    # project secrets (#202 part 4): after ESO (role external_secrets) and the operator, which writes the broker routes
+    - name: Project secrets store (Secret Manager) and credential broker
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.project_secrets }}"
+      when: agentdev_objects.project_secrets | length > 0 and not ansible_check_mode   # ESO types unknown in a dry run
+
     # blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0
     - name: "Agents (#57): one Agent object each; own Claude secret if present, else the shared one (#5)"
       kubernetes.core.k8s:
@@ -643,7 +650,8 @@
         kubectl --context {{ kube_context }} -n {{ item.ns }} rollout status deploy/{{ item.name }} --timeout=180s
       loop: "{{ [{'ns': platform_ns, 'name': 'agentdev-operator'}, {'ns': agents_ns, 'name': 'webhook-router'},
                  {'ns': agents_ns, 'name': 'egress-proxy'}, {'ns': exec_ns, 'name': 'executor-egress-proxy'}]
-                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else []) }}"
+                + ([{'ns': agents_ns, 'name': 'claude-proxy'}] if claude_proxy | bool else [])
+                + ([{'ns': agents_ns, 'name': 'credential-broker'}] if project_secrets_broker | bool else []) }}"
       loop_control: {label: "{{ item.name }}"}
       changed_when: false
       when: not ansible_check_mode

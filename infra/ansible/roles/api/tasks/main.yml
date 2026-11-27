@@ -92,6 +92,8 @@
         MAX_AGENTS: "{{ api_max_agents }}"
         MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
         # project secrets (#202): the kind store's value namespace, only when --tags secrets made it; GKE: part 4 (empty = off)
+        SECRETS_GCP_PROJECT: "{{ gcp_project if project_secrets_enabled | default(false) | bool else '' }}"
+        SECRETS_API_GSA: "{{ project_secrets.api_gsa | default('') if project_secrets_enabled | default(false) | bool else '' }}"
         SECRETS_VALUES_NS: >-
           {{ api_secrets_values_ns if api_secrets_values_ns | length > 0 and api_values_ns.resources | default([]) | length > 0 else '' }}
         AGENTS_SOURCE: "{{ api_agents_source }}"

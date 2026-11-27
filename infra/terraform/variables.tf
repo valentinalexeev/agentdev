@@ -265,6 +265,12 @@ variable "platform_extra_secret_ids" {
   default     = []
 }
 
+variable "project_secrets" {
+  description = "Project secrets (#202) with external_secrets: Google service accounts for External Secrets Operator (read) and the API (write-only), limited to Secret Manager secrets agentdev-ps-*. Copy `terraform output project_secrets` into instance.yml."
+  type        = bool
+  default     = true
+}
+
 variable "platform_namespace" {
   type    = string
   default = "agentdev-platform"

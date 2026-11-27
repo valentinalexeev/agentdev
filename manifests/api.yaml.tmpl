@@ -3,7 +3,8 @@
 # client ${OIDC_AUDIENCE}.
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}}
+# GKE project secrets (#202 part 4): acts as the write-only Google account (Workload Identity); empty = none
+metadata: {name: agentdev-api, namespace: ${PLATFORM_NS}, annotations: {iam.gke.io/gcp-service-account: "${SECRETS_API_GSA}"}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -92,6 +93,9 @@ spec:
         # project secrets (#202): namespace of the value Secrets (kind store); empty = the secrets endpoints are off.
         # The API may create, update and delete there, never read (manifests/secrets-api.yaml.tmpl)
         - {name: SECRETS_VALUES_NS, value: "${SECRETS_VALUES_NS}"}
+        # GKE: values in Secret Manager of this project, written with the write-only account agentdev-api-secrets
+        # (Workload Identity, infra/terraform/secrets.tf); empty = not GKE
+        - {name: SECRETS_GCP_PROJECT, value: "${SECRETS_GCP_PROJECT}"}
         # agents from Git (#58): api (default) or git; with git, Agents without agentdev/created-by are read-only
         # here except spec.paused (pause and resume)
         - {name: AGENTS_SOURCE, value: "${AGENTS_SOURCE}"}

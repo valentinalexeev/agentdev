@@ -42,6 +42,8 @@
             USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
             MAX_AGENTS: "{{ api_max_agents }}"
             MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+            SECRETS_GCP_PROJECT: ""
+            SECRETS_API_GSA: ""
             SECRETS_VALUES_NS: ""
             AGENTS_SOURCE: "{{ api_agents_source }}"
             CHAT_SESSIONS: "{{ api_chat | string | lower }}"
