@@ -2871,8 +2871,8 @@ is in the secret store, never in the object.
 Names: the value of the ProjectSecret `<n>` is the store key `agentdev-ps-<n>`. External Secrets Operator copies it
 into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*` Secrets.
 
-> **Status:** part 1 of #202. This part adds the object, the store and the copy. The broker, the write-only API and
-> the playbook tasks for GKE come in the next parts. Until then, only kind has the store.
+> **Status:** parts 1 to 3 of #202: the object, the store, the copy, the credential broker, and the write-only API
+> and web UI. The playbook tasks for GKE come in part 4. Until then, only kind has the store.
 
 ### Set up the secret store (kind)
 
@@ -2892,7 +2892,23 @@ into the Secret `ps-<n>` in the agents namespace. Agent pods do not mount `ps-*`
 
 To turn the store off, set `SECRETS_STORE_ENABLED` to `false` in `kind.vars.yml`.
 
-### Add a project secret (kind, before the API part)
+### Add a project secret in the web UI
+
+You must have admin access to the repository on the forge, or be in the group `agentdev-admins`. For scope `agent`,
+the repository of the agent counts.
+
+1. Open the web UI and select **Secrets**.
+2. Select **Add a secret**.
+3. Type the name, select the scope and the mode, and type the upstream (mode `broker`) or the variable (mode `env`).
+4. Type the value and select **Save**.
+
+You cannot read the value after you save it. To change it, select **Replace value**. To remove the secret and its
+value, select **Remove**. The audit log records each change with your name, never the value.
+
+The same operations are in the API: `GET /api/secrets`, `POST /api/secrets`, `PUT /api/secrets/<name>/value` and
+`DELETE /api/secrets/<name>`. The API has no read access to the values (RBAC: create, update and delete only).
+
+### Add a project secret with kubectl (kind)
 
 1. Apply the ProjectSecret object:
 
@@ -2926,12 +2942,106 @@ To turn the store off, set `SECRETS_STORE_ENABLED` to `false` in `kind.vars.yml`
 To rotate the value, replace the Secret in step 2. To remove the project secret, delete the ProjectSecret object and
 then the Secret `agentdev-ps-<n>`.
 
+### Use a secret through the broker
+
+The credential broker (`credential-broker` in the agents namespace) is the credential proxy image in mode broker.
+`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags secrets` starts it. The agent calls the broker in
+place of the upstream:
+
+| Upstream (`spec.broker.upstream`) | Base URL for the agent |
+|---|---|
+| `https://npm.pkg.github.com` | `$AGENTDEV_BROKER_URL/s/npm-registry/` |
+
+The agent authenticates with a projected token of its own service account `agent-<name>`, audience
+`credential-broker`. The kubelet writes it to the file `$AGENTDEV_BROKER_TOKEN_FILE` and renews it; it is valid for
+10 minutes, so read the file again for each call. The agent sends it as a Bearer token or as the password of basic
+auth. There is no long-lived key. The broker then does these steps:
+
+1. It checks the token with a TokenReview (audience `credential-broker`, namespace of the agents, service account
+   `agent-<name>`). A claude-proxy token or an expired token is refused with 401.
+2. It checks that the secret is in the scope of the agent. If not, it refuses with 403.
+3. It removes the credential headers of the agent and adds the value in `spec.broker.header` (default
+   `Authorization`), in the form `spec.broker.scheme` (`bearer`, `basic` or `raw`).
+4. It sends the request to the upstream, https only, and does not let the path leave the upstream base path.
+5. In text responses, it replaces the upstream base URL with its own, so that links in a registry index also go
+   through the broker.
+
+The harness guide of each agent lists the broker secrets that the agent can use. The broker records one
+SecurityEvent `broker-use` per agent, secret and hour, and one for each refusal (`broker-secret-denied`,
+`broker-token-invalid`, `broker-unknown-secret`, `broker-path`). The value is never in a log.
+
+Example for npm, in the project's `.npmrc` (the agent can write it). Set `AGENTDEV_BROKER_TOKEN` just before the
+call, because the token expires:
+
+```ini
+@myorg:registry=${AGENTDEV_BROKER_URL}/s/npm-registry/
+//credential-broker.coding-agents.svc.cluster.local:8080/s/npm-registry/:_authToken=${AGENTDEV_BROKER_TOKEN}
+```
+
+```bash
+AGENTDEV_BROKER_TOKEN=$(cat "$AGENTDEV_BROKER_TOKEN_FILE") npm ci
+```
+
+A new or removed broker secret restarts the broker once. A rotated value does not restart it.
+
+### Add a private npm registry for a project
+
+Use this procedure when the agents of one project must install packages from a private npm registry, for example
+GitHub Packages (#248). The agents of other projects cannot use the registry. No agent pod gets the registry token.
+
+1. Make a read-only token for the registry (for GitHub Packages: a token with `read:packages` only).
+2. Add a project secret in mode broker with `spec.broker.npmScope`, the npm scope of the private packages:
+
+   ```yaml
+   apiVersion: agentdev.dev/v1alpha1
+   kind: ProjectSecret
+   metadata: {name: acme-npm, namespace: coding-agents}
+   spec:
+     scope: project
+     project: acme/web            # the agents whose spec.repo is acme/web
+     mode: broker
+     broker: {upstream: "https://npm.pkg.github.com", npmScope: "@acme"}
+     description: GitHub Packages, read-only
+   ```
+
+3. Set the value as in "Add a project secret". Do not put the token in the YAML file.
+4. Make sure that each agent of the project is in the correct project (`spec.repo` of the Agent).
+
+The operator writes an npm configuration for each agent of the project (key `<agent>.npmrc` of the ConfigMap
+`agentdev-guides`). The agent pod mounts only its own key, as `/etc/agentdev/guide/npmrc`, and npm reads it as the
+global configuration (`NPM_CONFIG_GLOBALCONFIG`). For each scope, the file has two lines:
+
+```ini
+@acme:registry=http://credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/
+//credential-broker.coding-agents.svc.cluster.local:8080/s/acme-npm/:_authToken=${AGENTDEV_BROKER_TOKEN}
+```
+
+npm replaces `${AGENTDEV_BROKER_TOKEN}` with the agent's projected broker token. The agent sets it from the token file
+for each npm call, as in "Use a secret through the broker":
+`AGENTDEV_BROKER_TOKEN=$(cat "$AGENTDEV_BROKER_TOKEN_FILE") npm ci`. The file does not contain a credential. Without
+the variable npm sends the literal text and the broker refuses the request (401). Packages that are
+not in a private scope continue to come from the default registry, or from the registry cache when it is on.
+
+Check: in the agent pod, `npm view @acme/<package> version` shows a version. The SecurityEvents show `broker-use`
+for the agent and the secret. An agent of a different project gets 403 (`broker-secret-denied`).
+
+Notes:
+
+- If two secrets for the same agent have the same `npmScope`, the first by name is used.
+- A new or removed scope reaches a running agent in about one minute (the ConfigMap volume is updated). A rotated
+  token does not need a restart.
+- The private packages are not cached. Each install goes through the broker to the registry.
+- On kind, `scripts/e2e-private-registry.sh` tests this procedure.
+
 ### Mode env
 
 In mode `env`, the agent container gets the value as an environment variable. The model can read it and can write
 it into a comment or a commit. Use `env` only for a value that has no other path, for example the password of a test
 database. You must set `spec.env.riskAccepted: true`. Names such as `ANTHROPIC_*`, `GIT_*`, `PATH` and
-`HTTPS_PROXY` are not permitted.
+`HTTPS_PROXY` are not permitted. Only the agent container gets the variable. The forge sidecar gets the value as a read-only file and removes it
+from approval text (comments, the Approval object and the web UI), also after a rotation. A new or changed
+`env` secret restarts the agents in its scope. If two secrets set the same variable for an agent, the first by name
+is used.
 
 ### Rules in the cluster
 

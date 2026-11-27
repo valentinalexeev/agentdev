@@ -163,7 +163,8 @@ func TestGuideMountAndCleanup(t *testing.T) {
 		}
 	}
 	if vol == nil || vol.ConfigMap == nil || vol.ConfigMap.Name != guidesCM || !ptr.Deref(vol.ConfigMap.Optional, false) ||
-		len(vol.ConfigMap.Items) != 1 || vol.ConfigMap.Items[0].Key != "kim" || vol.ConfigMap.Items[0].Path != "guide.md" ||
+		len(vol.ConfigMap.Items) != 2 || vol.ConfigMap.Items[0].Key != "kim" || vol.ConfigMap.Items[0].Path != "guide.md" ||
+		vol.ConfigMap.Items[1].Key != "kim.npmrc" || vol.ConfigMap.Items[1].Path != "npmrc" || // own keys only (#248)
 		ptr.Deref(vol.ConfigMap.DefaultMode, 0) != 0o444 {
 		t.Fatalf("guide volume: %+v", vol)
 	}

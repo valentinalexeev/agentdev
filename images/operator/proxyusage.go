@@ -34,16 +34,22 @@ func (c *Collector) usageFromAgentPod(container string) bool {
 	return !c.ProxyUsage && container == forgeContainer
 }
 
-// scanProxy follows the log of every running claude-proxy pod.
+// scanProxy follows the log of every running claude-proxy pod, and of the credential broker (#202, same container
+// name and event lines; it prints no usage lines).
 func (c *Collector) scanProxy(ctx context.Context) {
-	if !c.ProxyUsage {
-		return
+	var all []corev1.Pod
+	for _, app := range []string{"claude-proxy", "credential-broker"} {
+		if app == "claude-proxy" && !c.ProxyUsage {
+			continue
+		}
+		var pods corev1.PodList
+		if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": app}); err != nil {
+			log.FromContext(ctx).Error(err, "list proxy pods", "app", app)
+			continue
+		}
+		all = append(all, pods.Items...)
 	}
-	var pods corev1.PodList
-	if err := c.List(ctx, &pods, client.InNamespace(c.NS), client.MatchingLabels{"app": "claude-proxy"}); err != nil {
-		log.FromContext(ctx).Error(err, "list claude-proxy pods")
-		return
-	}
+	pods := corev1.PodList{Items: all}
 	for i := range pods.Items {
 		p := pods.Items[i]
 		if p.Status.Phase != corev1.PodRunning {
@@ -135,11 +141,15 @@ func parseProxyLine(line string, p *corev1.Pod) (v1.SecurityEventSpec, bool) {
 	default:
 		e.Severity = "high"
 	}
+	source := "claude-proxy"
+	if p.Labels["app"] == "credential-broker" { // #202: the broker's lines carry its own source
+		source = "credential-broker"
+	}
 	if !agentNameRE.MatchString(e.Agent) {
-		e.Agent = "claude-proxy" // a refused request without a valid key names no agent
+		e.Agent = source // a refused request without a valid key names no agent
 	}
 	h := sha256.Sum256([]byte(string(p.UID) + "\x00" + proxyContainer + "\x00" + ts + "\x00" + rest))
-	return v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: "claude-proxy", Rule: clip(e.Rule, 80),
+	return v1.SecurityEventSpec{Schema: v1.SchemaV1, Source: source, Rule: clip(e.Rule, 80),
 		Severity: e.Severity, Agent: e.Agent, Action: clip(e.Action, 503),
 		Time: metav1.NewTime(t), Pod: p.Name, Container: proxyContainer, Hash: hex.EncodeToString(h[:])}, true
 }

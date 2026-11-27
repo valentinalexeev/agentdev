@@ -20,8 +20,9 @@ const (
 )
 
 var (
-	out   io.Writer = os.Stdout
-	outMu sync.Mutex
+	eventSource           = "claude-proxy" // credential-broker with MODE=broker
+	out         io.Writer = os.Stdout
+	outMu       sync.Mutex
 )
 
 type securityEvent struct {
@@ -43,5 +44,5 @@ func emitEvent(agent, rule, severity, action string) {
 	if len(action) > 500 {
 		action = action[:500] + "..."
 	}
-	emitLine(eventPrefix, securityEvent{"claude-proxy", rule, severity, agent, action})
+	emitLine(eventPrefix, securityEvent{eventSource, rule, severity, agent, action})
 }

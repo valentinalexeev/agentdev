@@ -65,6 +65,14 @@
     context: "{{ kube_context }}"
     definition: "{{ api_agents_ns_definition }}"
 
+- name: Value namespace of the project secrets (#202, kind store from --tags secrets)
+  kubernetes.core.k8s_info:
+    context: "{{ kube_context }}"
+    kind: Namespace
+    name: "{{ api_secrets_values_ns }}"
+  register: api_values_ns
+  when: api_secrets_values_ns | length > 0
+
 - name: API Deployment, Service, RBAC and NetworkPolicies
   kubernetes.core.k8s:
     context: "{{ kube_context }}"
@@ -88,6 +96,9 @@
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
         MAX_AGENTS: "{{ api_max_agents }}"
         MAX_AGENTS_PER_USER: "{{ api_max_agents_per_user }}"
+        # project secrets (#202): the kind store's value namespace, only when --tags secrets made it; GKE: part 4 (empty = off)
+        SECRETS_VALUES_NS: >-
+          {{ api_secrets_values_ns if api_secrets_values_ns | length > 0 and api_values_ns.resources | default([]) | length > 0 else '' }}
         AGENTS_SOURCE: "{{ api_agents_source }}"
         CHAT_SESSIONS: "{{ api_chat | string | lower }}"
         CHAT_WORKER_IMAGE: "{{ api_chat_worker_image }}"

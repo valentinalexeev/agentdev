@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	proxyAudience = "claude-proxy"
+	proxyAudience  = "claude-proxy"
+	brokerAudience = "credential-broker" // #202: the broker's own audience, so a claude-proxy token is refused there
 	posCacheMax   = 5 * time.Minute
 	negCacheTTL   = 10 * time.Second
 	cacheMaxSize  = 1024
@@ -50,6 +51,7 @@ type cacheEntry struct {
 type tokenReviewer struct {
 	url       string // https://<host>:<port>/apis/authentication.k8s.io/v1/tokenreviews
 	namespace string // namespace of the agent service accounts
+	audience  string // the one audience a token must carry (proxyAudience, or brokerAudience in the broker)
 	client    *http.Client
 	bearer    func() (string, error) // the proxy's own service account token (re-read: it is rotated too)
 	now       func() time.Time
@@ -61,7 +63,7 @@ type tokenReviewer struct {
 
 func newTokenReviewer(apiURL, namespace string, client *http.Client, bearer func() (string, error)) *tokenReviewer {
 	return &tokenReviewer{url: strings.TrimRight(apiURL, "/") + "/apis/authentication.k8s.io/v1/tokenreviews",
-		namespace: namespace, client: client, bearer: bearer, now: time.Now, cache: map[[32]byte]cacheEntry{}, cacheKey: randomKey()}
+		namespace: namespace, audience: proxyAudience, client: client, bearer: bearer, now: time.Now, cache: map[[32]byte]cacheEntry{}, cacheKey: randomKey()}
 }
 
 func randomKey() []byte {
@@ -195,7 +197,7 @@ func (t *tokenReviewer) verify(ctx context.Context, tok string) string {
 func (t *tokenReviewer) review(ctx context.Context, tok string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "authentication.k8s.io/v1", "kind": "TokenReview",
-		"spec": map[string]any{"token": tok, "audiences": []string{proxyAudience}},
+		"spec": map[string]any{"token": tok, "audiences": []string{t.audience}},
 	})
 	bearer, err := t.bearer()
 	if err != nil {
@@ -232,7 +234,7 @@ func (t *tokenReviewer) review(ctx context.Context, tok string) (string, error) 
 	}
 	aud := false
 	for _, a := range r.Status.Audiences {
-		aud = aud || a == proxyAudience
+		aud = aud || a == t.audience
 	}
 	if !aud {
 		return "", nil

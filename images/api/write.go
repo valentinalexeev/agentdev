@@ -152,7 +152,8 @@ type writer struct {
 	store      agentStore
 	perms      permChecker
 	adminGroup string
-	usage      usageStore // usage limits (#93); nil: the endpoints are not served
+	usage      usageStore  // usage limits (#93); nil: the endpoints are not served
+	secrets    *secretsAPI // project secrets (#202, secrets.go); nil: the endpoints are not served
 	limits     agentLimits
 	events     eventStore       // security event counts for the agent detail (#344); nil: 0
 	platform   *platformChecker // GET /api/platform (#344); nil: not served

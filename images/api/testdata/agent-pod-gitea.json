@@ -29,6 +29,10 @@
             {
               "key": "alice",
               "path": "guide.md"
+            },
+            {
+              "key": "alice.npmrc",
+              "path": "npmrc"
             }
           ],
           "defaultMode": 292,

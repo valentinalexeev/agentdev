@@ -45,6 +45,14 @@
     name: externalsecrets.external-secrets.io
   register: operator_eso_crd
 
+- name: Credential broker Deployment (#202, role secrets_store)
+  kubernetes.core.k8s_info:
+    context: "{{ operator_context }}"
+    kind: Deployment
+    namespace: "{{ operator_agents_ns }}"
+    name: credential-broker
+  register: operator_broker
+
 - name: Botboard Service (tag botboard)
   kubernetes.core.k8s_info:
     context: "{{ operator_context }}"
@@ -127,6 +135,10 @@
         SECRETS_STORE: "{{ operator_store }}"
         # the kind store's value Secrets have one key, value
         SECRETS_REMOTE_PROPERTY: "{{ 'value' if operator_store | length > 0 else '' }}"
+        # #202: the broker URL once the role secrets_store deployed it, and only with the store; empty = no broker
+        CREDENTIAL_BROKER_URL: >-
+          {{ ('http://credential-broker.' ~ operator_agents_ns ~ '.svc.cluster.local:8080')
+             if operator_store | length > 0 and operator_broker.resources | default([]) | length > 0 else '' }}
         # MCP per project (#383): allow-list mcp_allowed_hosts (kind.vars.yml, formerly MCP_ALLOWED_HOSTS)
         MCP_ADMIN_EMAIL: "{{ operator_mcp_admin_email }}"
         MCP_ALLOWED_HOSTS: "{{ mcp_allowed_hosts | default([]) | join(' ') }}"

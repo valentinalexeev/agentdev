@@ -23,7 +23,7 @@ func (d Defaults) approvals() string {
 
 // render fills the StatefulSet from the Agent. It is the only definition of an agent's pod (the shell template it
 // replaced is gone since #57); changes here reach every agent on the next reconcile.
-func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
+func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1.ProjectSecret) {
 	n, ns := a.Name, a.Namespace
 	forgeSecret := a.Spec.ForgeSecret
 	if forgeSecret == "" {
@@ -107,11 +107,11 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		// blocks the pod (the loop then runs with the security rules only)
 		{Name: "guide", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
 			LocalObjectReference: corev1.LocalObjectReference{Name: guidesCM}, Optional: ptr.To(true), DefaultMode: ptr.To[int32](0o444),
-			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}}}}},
+			Items: []corev1.KeyToPath{{Key: n, Path: "guide.md"}, {Key: npmrcKey(n), Path: "npmrc"}}}}},
 		// drain (#174): the pod's own annotations, where the operator (or an admin) sets agentdev/drain
 		{Name: "podinfo", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0o444),
 			Items: []corev1.DownwardAPIVolumeFile{{Path: "annotations", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations"}}}}}}}
-	p.Volumes = append(p.Volumes, r.proxyTokenVolumes()...)
+	p.Volumes = append(append(p.Volumes, r.proxyTokenVolumes()...), r.brokerTokenVolumes()...)
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -125,6 +125,13 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			secretKey("GITHUB_INSTALLATION_ID", forgeSecret, true)}
 	}
 	forgeMounts := []corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "forge", MountPath: "/forge"}}
+	// #202: mode-env secret values, for the sidecar's redaction of approval text only (never the agent container)
+	if src := redactSources(a, psecs); len(src) > 0 {
+		p.Volumes = append(p.Volumes, corev1.Volume{Name: "redact", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			DefaultMode: ptr.To[int32](0o440), Sources: src}}})
+		forgeMounts = append(forgeMounts, corev1.VolumeMount{Name: "redact", MountPath: redactDir, ReadOnly: true})
+		forgeCreds = append(forgeCreds, env("REDACT_DIR", redactDir))
+	}
 	if forge == "github" {
 		p.Volumes = append(p.Volumes, corev1.Volume{Name: "github-app", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName: forgeSecret, DefaultMode: ptr.To[int32](0o400),
@@ -153,6 +160,18 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 			Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("64Mi"),
 				corev1.ResourceEphemeralStorage: resource.MustParse("64Mi")}},
 	}}
+	agentEnv := append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
+		env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
+		env("ROUTER_URL", routerURL(ns)),
+		env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
+		env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
+		corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
+	), append(append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...), append(r.brokerEnv(n), r.npmrcEnv()...)...)...)
+	agentEnv = withCustomEnv(agentEnv, a, r.D.Toolchains)
+	// project secrets last, and never under a name rendered above: with duplicate names the kubelet uses the last
+	// entry, so a secret named like a platform variable (JOB_TIMEOUT, NO_PROXY) would override it (review of #272)
+	agentEnv = append(agentEnv, secretEnv(a, psecs, envNames(agentEnv))...)
 	if a.Spec.Toolchain != nil {
 		ps, _ := presetsOf(a.Spec.Toolchain)
 		p.InitContainers = append(p.InitContainers, r.toolchainInit(a, ps, r.toolchainDigest(s), r.toolchainWorkerImage(a, s)))
@@ -165,17 +184,10 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet) {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault, // API defaults: set so updates are no-ops
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		// no forge, wake or register token here: those are only in the forge container below (#64)
-		Env: withCustomEnv(append(append(append(append([]corev1.EnvVar{}, common...), r.proxyEnv(false)...),
-			env("POLL_SECONDS", r.D.PollSeconds), env("MAX_CONCURRENT", fmt.Sprint(maxc)), env("MAX_TURNS", fmt.Sprint(maxTurns)), env("REVIEWER", r.D.Reviewer),
-			env("ROUTER_URL", routerURL(ns)),
-			env("SCALE_TO_ZERO", strconv.FormatBool(a.Spec.ScalesToZero())), env("APPROVALS", r.D.approvals()),
-			env("IDLE_SECONDS", r.D.IdleSeconds), env("BOTBOARD_URL", r.D.BotboardURL), env("FORGE_PUBLIC_URL", publicURL),
-			corev1.EnvVar{Name: "READY_ISSUE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-project"}, Key: "READY_ISSUE", Optional: ptr.To(true)}}},
-		), append(append(append(append(append(append(r.claudeProxyEnv(n), permissionEnv(a)...), r.toolsEnv(a)...), toolchainAgentEnv(a, r.D.Toolchains)...), modelEnv(a)...), diagnosticsEnv(a)...), retriesEnv(a)...)...), a, r.D.Toolchains),
+		Env: agentEnv,
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
-			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), append(r.proxyTokenMounts(), r.brokerTokenMounts()...)...),
 		EnvFrom: append(r.claudeEnvFrom(a), registryProxyEnvFrom),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),

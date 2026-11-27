@@ -85,6 +85,7 @@
         CHAT_EFFORTS: "{{ api_chat_efforts | join(',') }}"
         NOTIFY_CHANNELS: "{{ api_notify_channels | join(',') }}"
         AGENTS_SOURCE: "{{ api_agents_source }}"
+        SECRETS_VALUES_NS: ""   # project secrets (#202): kind store only; GKE: part 4
       replace: []
     ui_render:
       src: "{{ repo_root }}/manifests/ui.yaml.tmpl"

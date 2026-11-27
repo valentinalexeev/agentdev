@@ -100,6 +100,8 @@ func main() {
 		ForgeEphemeralLimit:   os.Getenv("FORGE_EPHEMERAL_LIMIT"),
 		GraceSeconds:          env("AGENT_GRACE_SECONDS", "300"),
 		DrainMaxMinutes:       env("DRAIN_MAX_MINUTES", "60"),
+		Secrets:               os.Getenv("SECRETS_STORE") != "",
+		BrokerURL:             os.Getenv("CREDENTIAL_BROKER_URL"),
 	}, Drains: &DrainSignals{}, ns: ns}
 	// #251: a forge limit below its mirror evicts agent pods in a loop; refuse the configuration instead
 	if err := r.D.validateEphemeral(); err != nil {
@@ -208,6 +210,10 @@ func main() {
 			Property: os.Getenv("SECRETS_REMOTE_PROPERTY")}
 		if err := psr.SetupWithManager(mgr); err != nil {
 			log.Error(err, "projectsecret controller")
+			os.Exit(1)
+		}
+		if err := mgr.Add(&BrokerSync{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Every: 15 * time.Second}); err != nil {
+			log.Error(err, "credential broker sync")
 			os.Exit(1)
 		}
 		log.Info("scoped secrets store on", "store", store)
