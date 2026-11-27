@@ -15,6 +15,7 @@ import { SecurityPage } from './Security'
 import { SettingsPage } from './Settings'
 import { TodayPage } from './Today'
 import { UsagePage } from './Usage'
+import { Secrets } from './Secrets'
 import { WorkPage } from './Work'
 import { Banner, Icon, Mark, type IconName } from './ui'
 
@@ -99,6 +100,7 @@ function useTheme(): [boolean, () => void] {
 const NAV: [string, string, IconName][] = [
   ['today', 'Today', 'inbox'], ['projects', 'Projects', 'projects'], ['work', 'Work', 'board'], ['agents', 'Agents', 'agents'],
   ['approvals', 'Approvals', 'approval'], ['chat', 'Chat', 'chat'], ['security', 'Security', 'security'], ['usage', 'Usage', 'usage'],
+  ['secrets', 'Secrets', 'security'],
   ['settings', 'Settings', 'bell'],
 ]
 // Admin pages (#344): shown to agentdev-admins only; the API refuses everyone else with 403.
@@ -184,6 +186,7 @@ function Shell({ user, token, onExpired, onLogout, onSignIn }: {
         {page === 'chat' ? <ChatPage key={params.get('s') ?? ''} token={token} onExpired={onExpired} sid={params.get('s') ?? ''} agent={params.get('agent') ?? ''} context={params.get('context') ?? ''} />
           : page === 'approvals' ? <Approvals key={params.get('open') ?? ''} token={token} onExpired={onExpired} openName={params.get('open') ?? ''} />
           : page === 'usage' ? <UsagePage token={token} onExpired={onExpired} />
+          : page === 'secrets' ? <Secrets token={token} onExpired={onExpired} />
             : page === 'security' ? <SecurityPage key={params.get('agent') ?? ''} token={token} onExpired={onExpired} initialAgent={params.get('agent') ?? ''} />
               : page === 'work' ? <WorkPage token={token} onExpired={onExpired} agent={params.get('agent') ?? ''} repo={params.get('repo') ?? ''} />
               : base === 'agents' ? <AgentsPage token={token} onExpired={onExpired} />

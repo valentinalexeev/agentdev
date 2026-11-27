@@ -9,3 +9,7 @@ secrets_store_eso_sa: external-secrets           # ESO_SA: the policy lets only 
 secrets_store_values_ns: agentdev-secret-values  # SECRETS_VALUES_NS: the store's value Secrets
 secrets_store_agents_ns: coding-agents
 secrets_store_platform_ns: agentdev-platform
+# credential broker (#202 part 2): the credproxy image that the tag agents loads into kind; needs claude-proxy-signing
+secrets_store_broker_enabled: true
+secrets_store_broker_image: agentdev/credproxy:mvp   # CLAUDE_PROXY_IMAGE
+secrets_store_broker_pull_policy: Never

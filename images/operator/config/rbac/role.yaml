@@ -56,6 +56,15 @@ rules:
   - get
 - apiGroups:
   - ""
+  resourceNames:
+  - credential-broker-routes
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
   resources:
   - events
   verbs:
@@ -205,6 +214,16 @@ rules:
   resources:
   - mcpprojects/finalizers
   verbs:
+  - update
+- apiGroups:
+  - apps
+  resourceNames:
+  - credential-broker
+  resources:
+  - deployments
+  verbs:
+  - get
+  - patch
   - update
 - apiGroups:
   - apps

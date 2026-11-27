@@ -492,3 +492,43 @@ func TestChatStateSizedByAgentEphemeralLimit(t *testing.T) {
 		t.Errorf("state %+v", p.Volumes[0])
 	}
 }
+
+// #202: with the credential broker the agent pod has a second projected token, broker-token (audience
+// credential-broker). The policy admits exactly that shape, only in the chat container, and nothing that mixes it up
+// with the claude-proxy token (R128).
+func TestChatJobPolicyBrokerToken(t *testing.T) {
+	pol := chatPolicy(t)
+	j := chatJobFor(t, "broker")
+	if f := admit(t, pol, j); len(f) != 0 {
+		t.Fatalf("the broker agent's chat pod is refused: %v", f)
+	}
+	brokerTok := func(p *corev1.PodSpec) *corev1.ServiceAccountTokenProjection {
+		for _, v := range p.Volumes {
+			if v.Name == "broker-token" && v.Projected != nil && len(v.Projected.Sources) == 1 {
+				return v.Projected.Sources[0].ServiceAccountToken
+			}
+		}
+		t.Fatal("no broker-token volume")
+		return nil
+	}
+	cases := []struct {
+		name string
+		mut  func(p *corev1.PodSpec)
+	}{
+		{"broker-token with the claude-proxy audience", func(p *corev1.PodSpec) { brokerTok(p).Audience = "claude-proxy" }},
+		{"broker-token with another audience", func(p *corev1.PodSpec) { brokerTok(p).Audience = "api" }},
+		{"broker-token living longer", func(p *corev1.PodSpec) { brokerTok(p).ExpirationSeconds = ptr(int64(86400)) }},
+		{"broker-token under another path", func(p *corev1.PodSpec) { brokerTok(p).Path = "other" }},
+		{"broker-token in the forge container", func(p *corev1.PodSpec) {
+			c := containerNamed(*p, "forge")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "broker-token", MountPath: "/x"})
+		}},
+	}
+	for _, tc := range cases {
+		j := chatJobFor(t, "broker")
+		tc.mut(&j.Spec.Template.Spec)
+		if f := admit(t, pol, j); len(f) == 0 {
+			t.Errorf("admitted: %s", tc.name)
+		}
+	}
+}
