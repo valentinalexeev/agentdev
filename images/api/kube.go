@@ -107,7 +107,7 @@ func fromAgentObject(u unstructured.Unstructured) agent {
 	}
 	a := agent{Name: u.GetName(), Managed: true, Forge: str("spec", "forge"), Phase: str("status", "phase"),
 		MaxConcurrent: int32(num("spec", "maxConcurrent")), Paused: flag("spec", "paused"),
-		ScaleToZero: stz, Ready: int32(num("status", "ready"))}
+		ScaleToZero: stz, Ready: int32(num("status", "ready")), Model: str("spec", "model"), Effort: str("spec", "effort")}
 	if r := str("spec", "repo"); r != "" {
 		a.Repos = []string{r}
 	}

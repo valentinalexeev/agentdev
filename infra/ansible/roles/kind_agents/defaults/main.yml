@@ -31,7 +31,8 @@ kind_agents_forge_admin_password: "{{ lookup('ansible.builtin.env', 'FORGE_ADMIN
 kind_agents_max_concurrent: 2
 kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; formerly MAX_TURNS in config.env)
 # Claude model and reasoning effort of every agent's runs (#564): `claude --model`, `--effort`. Empty: the CLI's own
-# default. model: an alias (opus, sonnet) or a full model name; effort: low, medium, high, xhigh, max.
+# default. model: an alias (opus, sonnet, haiku, fable) or a claude-proxy price family name (claude-opus-...,
+# optional [1m]), the rule of spec.model (images/operator/render.go modelChars), checked by tasks/model_check.yml; effort: low, medium, high, xhigh, max.
 kind_agents_model: ""
 kind_agents_effort: ""
 # permission mode per agent (#500): {alice: {mode: auto, autoMode: {allow: ["..."]}}}; an agent not named: dontAsk
@@ -39,7 +40,8 @@ kind_agents_permission: {}
 # tools added to the default allow-list per agent (#496): {alice: ["Bash(npm ci:*)"]}; an agent not named: default only
 kind_agents_tools: {}
 # toolchain per agent (#499, ADR 0010 D2): {alice: {presets: {go: "1.27.4"}, refresh: 168h}}; an agent not named: none.
-# Versions must be in the operator's catalogue (images/operator/toolchain.go).
+# Versions must be in the operator's catalogue (images/operator/toolchain.go). custom (#598): names of
+# the toolchains of the operator role, for example {alice: {custom: [shell-tools]}}.
 kind_agents_toolchain: {}
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300

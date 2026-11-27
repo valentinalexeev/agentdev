@@ -102,6 +102,9 @@ spec:
         - {name: CHAT_RETENTION_DAYS, value: "${CHAT_RETENTION_DAYS}"}
         - {name: CHAT_MAX_SESSIONS, value: "${CHAT_MAX_SESSIONS}"}
         - {name: CHAT_MAX_SESSIONS_PER_USER, value: "${CHAT_MAX_SESSIONS_PER_USER}"}
+        # #570: chat model and effort choices besides the agent's own (comma-separated; the API refuses other values)
+        - {name: CHAT_MODELS, value: "${CHAT_MODELS}"}
+        - {name: CHAT_EFFORTS, value: "${CHAT_EFFORTS}"}
         - name: CHAT_TOKEN_KEY
           valueFrom: {secretKeyRef: {name: agentdev-api-chat, key: CHAT_TOKEN_KEY, optional: true}}
         - name: CHAT_ISSUE_TOKEN

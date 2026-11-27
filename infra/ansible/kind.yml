@@ -70,6 +70,10 @@
     kind_agents_worker_image: "{{ kind_worker_image }}"
     kind_agents_forge_image: "{{ kind_forge_image }}"
     kind_agents_egress_proxy_image: "{{ kind_egress_proxy_image }}"
+    # toolchain downloads (#499, #598): the egress-setup-proxy ACL and the operator's check of custom toolchain hosts
+    kind_setup_egress_hosts: [dl.google.com, static.rust-lang.org]
+    kind_agents_setup_egress_hosts: "{{ kind_setup_egress_hosts }}"
+    operator_setup_egress_hosts: "{{ kind_setup_egress_hosts }}"
     botboard_ns: "{{ kind_botboard_ns }}"
     platform_container_engine: "{{ kind_engine }}"
     api_container_engine: "{{ kind_engine }}"

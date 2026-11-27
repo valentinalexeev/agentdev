@@ -2,7 +2,7 @@
     (#5). Blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0.
     agents[].permission (#500): {mode: auto, autoMode: {allow, softDeny, environment}}, the Agent's spec.permission;
     unset keeps dontAsk. agents[].tools (#496): {allow: [...]}, the Agent's spec.tools, added to the default tool
-    allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, path, refresh}, the
+    allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, custom (#598), path, refresh}, the
     Agent's spec.toolchain; unset: no toolchain. agents[].model, agents[].effort (#564), else the instance's
     claude_model and claude_effort: the Agent's spec.model and spec.effort; unset or empty: no field, the CLI's own
     default. -#}

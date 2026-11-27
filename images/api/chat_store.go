@@ -27,6 +27,10 @@ type chatSession struct {
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
 	EndedReason string     `json:"endedReason,omitempty"`
 	LastSeq     int64      `json:"lastSeq"`
+	// Model and Effort (#570): the start values, passed to the session Job only (not stored; the session server's state
+	// and its "settings" events have the values in use)
+	Model  string `json:"-"`
+	Effort string `json:"-"`
 }
 
 // chatEvent is one event of a session. Seq > 0: from the session server (its order); seq 0: written by the API

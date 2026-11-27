@@ -9,7 +9,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 process.env.CHAT_LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-'));
-const { Session, parseDrafts, tokenOK, handler } = require('../chat-session-server.js');
+const { Session, parseDrafts, tokenOK, handler, startSettings } = require('../chat-session-server.js');
 
 const TOKEN = 'secret-token-1';
 const SHA = crypto.createHash('sha256').update(TOKEN).digest('hex');
@@ -124,4 +124,70 @@ test('http: token required, requests from the pod itself refused', async () => {
   srv2.close();
   assert.strictEqual(tokenOK(`Bearer ${TOKEN}`, SHA), true);
   assert.strictEqual(tokenOK(`Bearer ${TOKEN}`, ''), false);
+});
+
+// #570: model and effort. The message shapes are the stream-json control protocol of the pinned Claude Code (2.1.312):
+// set_model {model} answers {model: <effective>}; apply_flag_settings {settings: {effortLevel}} answers {}.
+test('settings: start flags from AGENT_MODEL and AGENT_EFFORT, bad values dropped', () => {
+  assert.deepStrictEqual(startSettings({ AGENT_MODEL: 'sonnet', AGENT_EFFORT: 'high' }),
+    { args: ['--model', 'sonnet', '--effort', 'high'], settings: { model: 'sonnet', effort: 'high' } });
+  assert.deepStrictEqual(startSettings({}), { args: [], settings: { model: '', effort: '' } });
+  for (const bad of [{ AGENT_MODEL: 'gpt-5' }, { AGENT_MODEL: '--dangerously-skip-permissions' }, { AGENT_EFFORT: 'ultra' }, { AGENT_MODEL: 'opus --verbose' }]) {
+    assert.deepStrictEqual(startSettings(bad).args, [], JSON.stringify(bad));
+  }
+});
+
+test('settings: set_model and effortLevel go to Claude; the state changes only when Claude confirms', () => {
+  const { s, writes } = newSession({ settings: { model: 'sonnet', effort: '' } });
+  s.onClaude(JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-sonnet-5-5', tools: [] }));
+  assert.strictEqual(s.state().settings.model, 'claude-sonnet-5-5', 'the effective model from init');
+  s.changeSettings('alice', 'opus', 'low');
+  assert.strictEqual(writes.length, 2);
+  assert.strictEqual(writes[0].type, 'control_request');
+  assert.deepStrictEqual(writes[0].request, { subtype: 'set_model', model: 'opus' });
+  assert.deepStrictEqual(writes[1].request, { subtype: 'apply_flag_settings', settings: { effortLevel: 'low' } });
+  assert.notStrictEqual(writes[0].request_id, writes[1].request_id);
+  assert.deepStrictEqual(s.state().settings, { model: 'claude-sonnet-5-5', effort: '' }, 'nothing changes before the answer');
+  s.onClaude(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: writes[0].request_id, response: { model: 'claude-opus-5-5' } } }));
+  s.onClaude(JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: writes[1].request_id, error: 'effortLevel not supported' } }));
+  assert.deepStrictEqual(s.state().settings, { model: 'claude-opus-5-5', effort: '' });
+  const evs = s.events.filter((e) => e.type === 'settings');
+  assert.deepStrictEqual(evs.map((e) => [e.data.kind, e.data.status, e.author]),
+    [['model', 'requested', 'alice'], ['effort', 'requested', 'alice'], ['model', 'applied', 'alice'], ['effort', 'refused', 'alice']]);
+  assert.strictEqual(evs[2].data.value, 'claude-opus-5-5');
+  // an answer nobody asked for, or a second answer, changes nothing
+  s.onClaude(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: writes[0].request_id, response: { model: 'claude-haiku-5-5' } } }));
+  assert.strictEqual(s.state().settings.model, 'claude-opus-5-5');
+});
+
+test('settings: invalid values and an ended session are refused, nothing is sent', () => {
+  const { s, writes } = newSession();
+  assert.throws(() => s.changeSettings('alice', 'gpt-5'), /model must be/);
+  assert.throws(() => s.changeSettings('alice', undefined, 'ultra'), /effort must be/);
+  assert.throws(() => s.changeSettings('alice'), /model or effort/);
+  assert.throws(() => s.changeSettings('', 'opus'), /author/);
+  s.end('test');
+  assert.throws(() => s.changeSettings('alice', 'opus'), /ended/);
+  assert.strictEqual(writes.length, 0);
+});
+
+test('settings: POST /settings, and a reconnect (GET /events, /state) sees the applied setting', async () => {
+  const { s, writes } = newSession();
+  const srv = http.createServer(handler(s, { tokenSha256: SHA, localAddresses: new Set(['10.9.9.9']) }));
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  const call = (method, p, body) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method, path: p, headers: { Authorization: `Bearer ${TOKEN}` } }, (res) => {
+      let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => resolve({ code: res.statusCode, body: JSON.parse(b) }));
+    });
+    req.on('error', reject); if (body) req.write(JSON.stringify(body)); req.end();
+  });
+  assert.strictEqual((await call('POST', '/settings', { author: 'alice', model: 'nope' })).code, 400);
+  assert.strictEqual((await call('POST', '/settings', { author: 'alice', effort: 'max' })).code, 200);
+  s.onClaude(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: writes[0].request_id, response: {} } }));
+  const ev = await call('GET', '/events?after=0');
+  assert.strictEqual(ev.body.state.settings.effort, 'max');
+  assert.deepStrictEqual(ev.body.events.filter((e) => e.type === 'settings').map((e) => e.data.status), ['requested', 'applied']);
+  assert.strictEqual((await call('GET', '/state')).body.settings.effort, 'max');
+  srv.close();
 });
