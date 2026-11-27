@@ -62,6 +62,23 @@
         that: "'api.anthropic.com' in kind_agents_agent_egress_hosts"
         quiet: true
 
+    - name: Turn the registry cache on (#203)
+      ansible.builtin.set_fact:
+        registry_proxy: cluster
+        registry_proxy_upstream_hosts: [registry.npmjs.org, pypi.org, files.pythonhosted.org, proxy.golang.org, sum.golang.org]
+
+    - name: With the registry cache the agents lose the public registries, crates.io stays
+      ansible.builtin.assert:
+        that:
+          - "'pypi.org' not in kind_agents_agent_egress_hosts"
+          - "'registry.npmjs.org' not in kind_agents_agent_egress_hosts"
+          - "'index.crates.io' in kind_agents_agent_egress_hosts"
+        quiet: true
+
+    - name: Turn the registry cache off again
+      ansible.builtin.set_fact:
+        registry_proxy: "off"
+
     - name: Render the router and egress manifests (the Claude proxy is in the next play) with the role's value names
       ansible.builtin.set_fact:
         kind_agents_t_docs: "{{ lookup('ansible.builtin.template', '../templates/render.j2', template_vars=item) | from_yaml_all | list }}"

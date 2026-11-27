@@ -76,8 +76,10 @@ kind_agents_shared_claude: >-
   {{ {'ANTHROPIC_API_KEY': lookup('ansible.builtin.env', 'ANTHROPIC_API_KEY'),
       'CLAUDE_CODE_OAUTH_TOKEN': lookup('ansible.builtin.env', 'CLAUDE_CODE_OAUTH_TOKEN')}
      | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
-# the agents' egress list: with the credential proxy only claude-proxy reaches the Claude API (docs/security.md R64)
+# the agents' egress list: with the credential proxy only claude-proxy reaches the Claude API (docs/security.md R64);
+# with the registry cache (#203, kind.yml registry_proxy cluster) the package registries leave it too
 kind_agents_agent_egress_hosts: >-
   {{ (kind_agents_egress_hosts + kind_agents_egress_extra_hosts)
-     | reject('in', ['api.anthropic.com'] if kind_agents_claude_proxy | bool else []) | list }}
+     | reject('in', ['api.anthropic.com'] if kind_agents_claude_proxy | bool else [])
+     | reject('in', registry_proxy_upstream_hosts | default([]) if registry_proxy | default('off') != 'off' else []) | list }}
 kind_agents_name_re: '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'

@@ -291,3 +291,13 @@ variable "forwarder_authkey_secret" {
   type        = string
   default     = "funnel-sidecar-authkey"
 }
+
+variable "registry_proxy" {
+  description = "Create Artifact Registry remote repositories (npm, PyPI, Go) as the agents' package cache (#203), a reader service account with IAM per repository, and its Workload Identity binding. Needs create_artifact_registry. Set the Ansible registry_proxy to artifact_registry to use them."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.registry_proxy || var.create_artifact_registry
+    error_message = "registry_proxy needs create_artifact_registry = true. Without Artifact Registry use the in-cluster caches (Ansible registry_proxy: cluster)."
+  }
+}
