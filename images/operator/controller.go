@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -121,6 +122,15 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
+	// same for the model and the effort (#564): a model name of safe characters, a known effort level (fail closed)
+	if msg := modelValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidModel", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidModel", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
 
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
@@ -173,6 +183,14 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 	tcDigest := r.toolchainPodDigest(ctx, &a) // #538: the worker image digest the toolchain install ran with
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	// #577: a security pause for many low or medium events keeps the pod until its running jobs have ended
+	if err := r.Get(ctx, client.ObjectKeyFromObject(sts), sts); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, fmt.Errorf("statefulset: %w", err)
+	}
+	holdPaused, pauseAfter, err := r.pauseDrain(ctx, &a, sts)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		r.noteToolchainDigest(&a, sts, tcDigest)
 		blocked := sts.Annotations["agentdev/blocked"] == "true"
@@ -186,6 +204,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			delete(sts.Annotations, "agentdev/paused")
 		}
 		switch {
+		case a.Spec.Paused && holdPaused && !blocked && current != nil:
+			sts.Spec.Replicas = current // drain first (#577): stopped by a later reconcile
 		case a.Spec.Paused || blocked:
 			sts.Spec.Replicas = ptr.To[int32](0)
 		case creating || wasPaused || !a.Spec.ScalesToZero() || current == nil:
@@ -214,6 +234,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if err := r.updateStatus(ctx, &a, sts, tc, updated); err != nil {
 		return ctrl.Result{}, err
+	}
+	if pauseAfter > 0 && (after == 0 || pauseAfter < after) {
+		after = pauseAfter
 	}
 	// refresh (#499): reconcile when the agent's epoch changes; the new template then waits for idle (drain)
 	if d := r.toolchainNextRefresh(&a); d > 0 && (after == 0 || d < after) {
@@ -296,8 +319,10 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	}
 	// a person resumed an agent the security collector paused (#70): keep the reason, mark it no longer in force
 	if c := meta.FindStatusCondition(s.Conditions, "SecurityPaused"); c != nil && c.Status == metav1.ConditionTrue && !a.Spec.Paused {
+		by := pausedBy(a)
 		meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "SecurityPaused", Status: metav1.ConditionFalse,
-			Reason: "Resumed", Message: "resumed after: " + c.Message, ObservedGeneration: a.Generation})
+			Reason: "Resumed", Message: clip("resumed by "+by+" after: "+c.Message, 32768), ObservedGeneration: a.Generation})
+		log.FromContext(ctx).Info("agent resumed after a security pause", "agent", a.Name, "by", by, "reason", c.Reason)
 	}
 	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionTrue,
 		Reason: "Applied", Message: "service and statefulset match the spec", ObservedGeneration: a.Generation})
@@ -313,6 +338,31 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 		return err // a conflict is retried by controller-runtime with backoff
 	}
 	return nil
+}
+
+// pausedBy names the writer of spec.paused (#577): the field manager that set it last, from managedFields, so the
+// Resumed condition and the operator log say who lifted a security pause (the API writes as agentdev-api, kubectl
+// as kubectl-edit or kubectl-patch). "unknown" when no manager owns the field.
+func pausedBy(a *v1.Agent) string {
+	by, at := "unknown", time.Time{}
+	for _, m := range a.ManagedFields {
+		if m.FieldsV1 == nil || m.Manager == "" {
+			continue
+		}
+		var f struct {
+			Spec map[string]json.RawMessage `json:"f:spec"`
+		}
+		if json.Unmarshal(m.FieldsV1.Raw, &f) != nil || f.Spec["f:paused"] == nil {
+			continue
+		}
+		if t := m.Time; by == "unknown" || t != nil && t.After(at) {
+			by = clip(m.Manager, 128)
+			if t != nil {
+				at = t.Time
+			}
+		}
+	}
+	return by
 }
 
 func equalStatus(x, y v1.AgentStatus) bool {

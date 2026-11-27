@@ -23,7 +23,7 @@ MAX_TURNS="${MAX_TURNS:-40}"
 WAKE_FILE="${WAKE_FILE:-/state/agent-wake}"   # appended by the sidecar's webhook listener on a router wake (#3)
 STATE="${STATE_DIR:-/state}"
 WORK="${STATE}/repo"
-# MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp from scripts/mcp-sync.sh) Claude gets the project's tools.
+# MCP (#14): with CF_URL/CF_TOKEN (Secret agent-<name>-mcp written by the operator's McpProject controller, #383) Claude gets the project's tools.
 # The file holds only a reference to the token; the token itself stays in the environment.
 MCP_CONFIG="${STATE}/mcp.json"
 if [[ -n "${CF_URL:-}" ]]; then
@@ -154,6 +154,12 @@ labeler_ok() {
 }
 # jq filter: my PRs. On GitHub every agent is the same App bot, so the agent's own branch prefix decides too.
 MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/")))'
+# jq filter (#573): open PRs handed to this agent that it did not open itself, whoever the author and whatever the
+# branch. GitHub: the label agent:<name>; Gitea: the agent is an assignee. As for issues, this alone gives no work:
+# labeler_ok checks who set it before each start. Needs --arg kind.
+ASSIGNED_PRS='.[] | select((.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/"))) | not)
+  | select(if $kind == "github" then any(.labels[]?; .name == "agent:" + $agent)
+           else any(.assignees[]?; .login == $agent) end)'
 # label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
 # is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
 # branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
@@ -297,13 +303,29 @@ start_job() {
   backing_off "${key}" && return 1
   (( $(running_jobs) >= MAX_CONCURRENT )) && return 1
   echo "$$" > "${JOBS}/${key}.lock"
+  echo "${key}" >> "${JOBS}/pass-started"   # #573: the main loop says when a wake started nothing
   (
     JOB=${key}   # for security events and the sidecar's X-Agentdev-Job header
     # #175: <key>.active outlives a killed pod (the lock does not): present at start means an earlier run of this job
     # was interrupted or failed, and this one continues it (worktree kept, Claude session resumed, finished steps
     # skipped). Removed when the job succeeds.
     RESUMING=0; [[ -e "${JOBS}/${key}.active" ]] && { RESUMING=1; log "${key}: continuing an interrupted job"; }
+    # #581: the drain time of a security pause ran out and stopped this job (save_work marked it); say so on its
+    # issue or PR, one time. The marker's content is never read (the agent container can write the state volume).
+    if (( RESUMING )) && [[ -e "${JOBS}/${key}.interrupted" ]]; then
+      log "${key}: this job was interrupted by a security pause"
+      comment "${key#*-}" "🤖 \`${FORGE_USER}\`: a security pause stopped this job before it ended. A person resumed the agent, and the job continues from its saved work in progress." \
+        && rm -f "${JOBS}/${key}.interrupted"
+    fi
+    # #588: why the earlier run stopped (SIGTERM), for the run log now and the job's comment at its end
+    STOPPED_BEFORE=""; (( RESUMING )) && STOPPED_BEFORE=$(stopped_before "${key}")
+    STOP_ATTEMPT=1 STOP_DECISION=""; [[ -n "${STOPPED_BEFORE}" ]] && stop_state "${key}"   # #593
+    [[ -n "${STOPPED_BEFORE}" ]] && log "${key}: the earlier run was stopped (reason ${STOPPED_BEFORE}, attempt ${STOP_ATTEMPT}, ${STOP_DECISION})"
     touch "${JOBS}/${key}.active"
+    [[ -s "${JOBS}/${key}.started" ]] || date +%s > "${JOBS}/${key}.started"   # #593: the job's wall time, across pods
+    # #593: only an infrastructure kill within spec.retries.infrastructure runs the job again; the job of any other stop
+    # ends here with a note (not_retried), and its state is cleared like a finished job's
+    if [[ -n "${STOPPED_BEFORE}" && "${STOP_DECISION}" != retry ]]; then set -- not_retried "${key}" "${STOPPED_BEFORE}"; fi
     # job-done also voids the job's open approval requests in the sidecar (#67); harmless when approvals are off
     trap 'rm -f "${JOBS}/${key}.lock"; echo "$(date +%s) job-done ${key}" >> "${WAKE_FILE}"
           [[ "${APPROVALS:-false}" == true ]] && curl -fsS -m 30 -X POST "${FORGE_API}/job-done?job=${key}" >/dev/null 2>&1 || true' EXIT
@@ -313,7 +335,7 @@ start_job() {
     if (( job_rc == 0 )); then
       # done: its resume state is spent. A failed job keeps it, so the retry continues too (no second Claude run when
       # only opening the PR failed).
-      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir}
+      rm -f "${JOBS}/${key}".{active,session,result,pushed,now,replying,before,dir,interrupted,stopped,attempts,started,killed,exit}
       rm -f "${JOBS}/${key}.retry"
     else
       local delay=60 _until
@@ -415,6 +437,23 @@ permission_mode() {
   esac
   echo dontAsk
 }
+# Model and effort (#564): the operator sets AGENT_MODEL and AGENT_EFFORT from the Agent's spec.model and spec.effort,
+# never from the repository or issue text. Unset: no flag, the CLI's own default. A value that does not pass the same
+# check as the operator gets no flag and a log line (a model name never starts with a dash, so it is never a flag).
+# model_args: prints one argument per line: --model <m> and --effort <e>, each only when set and valid.
+model_args() {
+  local re='^[A-Za-z0-9][]A-Za-z0-9._:@[-]*$'   # the operator's modelChars; "]" first and "-" last in the class
+  if [[ -n "${AGENT_MODEL:-}" ]]; then
+    if [[ ${#AGENT_MODEL} -le 100 && "${AGENT_MODEL}" =~ ${re} ]]; then
+      printf '%s\n' --model "${AGENT_MODEL}"
+    else log "AGENT_MODEL is not a model name: running with the CLI's default model" >&2; fi
+  fi
+  case "${AGENT_EFFORT:-}" in
+    "") ;;
+    low|medium|high|xhigh|max) printf '%s\n' --effort "${AGENT_EFFORT}";;
+    *) log "AGENT_EFFORT is not low, medium, high, xhigh or max: running with the CLI's default effort" >&2;;
+  esac
+}
 
 # Harness guide (#206): what agentdev gives this agent and what it does not, written by the operator from its own
 # configuration and mounted read-only (/etc/agentdev/guide/guide.md, this agent's key of ConfigMap agentdev-guides).
@@ -449,13 +488,319 @@ new_session_id() {
   u=${u,,}; [[ "${u}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && echo "${u}"
 }
 
-# stopped_note <rc> <class>: fixed text for a run where Claude exited non-zero (#336). Only the exit code and the fixed
-# class (error, max-turns, rate-limit); never the result text or stderr.
+# ---------- why a run stopped (#588) ----------
+# A job that is stopped gets a reason from a fixed list, for its comment and the run log of its job record:
+#   security-pause, node-preempted, evicted  the pod got SIGTERM, and the operator had marked it with this reason
+#                                            (pod annotation agentdev/stop-reason, read through the downward API file)
+#   pod-deleted   the pod got SIGTERM without such a mark (scale-down, node drain, autoscaler, an upgrade)
+#   oom           the container's cgroup counted an OOM kill during the run (memory.events oom_kill, when readable)
+#   unknown       none of these
+# On SIGTERM the loop kills its jobs before they can classify anything, so on_term writes the reason to
+# <jobs>/<key>.stopped of each running job (state volume). The job that continues on the next start posts it once as a
+# run event and names it in its comment (stopped_before). The other reasons come from the run that exited
+# (stop_reason). The reason only names a cause in a note: it never decides an action. The operator records what it
+# knows in the Agent's SecurityPaused condition and its Kubernetes Events.
+STOP_REASONS="security-pause pod-deleted node-preempted drain scale-down upgrade oom evicted deadline unknown"
+# ---------- retry of infrastructure kills (#593) ----------
+# A job stopped by SIGTERM continues on the next pod (#175). It is retried only when the infrastructure stopped it:
+# the reasons in INFRA_RETRY_REASONS (images/operator/retry.go infraRetryReasons holds the same list, a test keeps
+# them equal). A security pause, a deadline and the job's own errors never retry: the next pod ends the job with a
+# note instead. INFRA_RETRIES (the Agent's spec.retries.infrastructure, default 2) bounds the retries of one job; the
+# attempt count is kept in <jobs>/<key>.attempts, posted to the run log and named in the comment.
+INFRA_RETRY_REASONS="pod-deleted node-preempted drain scale-down upgrade"
+INFRA_RETRIES="${INFRA_RETRIES:-2}"
+[[ "${INFRA_RETRIES}" =~ ^[0-9]{1,2}$ ]] && (( 10#${INFRA_RETRIES} <= 10 )) || INFRA_RETRIES=2
+INFRA_RETRIES=$(( 10#${INFRA_RETRIES} ))
+# The operator records what it saw of the stopped pod (its pod conditions: node shutdown, eviction, its own upgrade) in
+# the ConfigMap agentdev-usage (already mounted at USAGE_DIR, so the pod template does not change), key
+# stop.<agent> = "<reason> <unix seconds>". It refines pod-deleted.
+STOPS_DIR="${STOPS_DIR:-${USAGE_DIR:-/etc/agentdev/usage}}"
+infra_retryable() { case " ${INFRA_RETRY_REASONS} " in *" $1 "*) [[ -n "$1" ]];; *) return 1;; esac; }
+# stop_words <reason>: the reason in words, for the comment
+stop_words() {
+  case "$1" in
+    node-preempted) echo "node preemption";; drain) echo "a node drain";; scale-down) echo "a scale-down";;
+    upgrade) echo "an upgrade";; pod-deleted) echo "a pod deletion";; security-pause) echo "a security pause";;
+    deadline) echo "the job's time limit";; evicted) echo "an eviction";; oom) echo "running out of memory";;
+    *) echo "an unknown cause";;
+  esac
+}
+# refine_reason <reason> <unix seconds of the stop>: pod-deleted becomes what the operator saw, when its record is
+# within two minutes of the stop
+refine_reason() {
+  local r=$1 t=$2 or="" ot="" f="${STOPS_DIR}/stop.${AGENT_NAME:-${FORGE_USER:-}}"
+  [[ "${r}" == pod-deleted && "${t}" =~ ^[0-9]{1,12}$ && -r "${f}" ]] || { echo "${r}"; return 0; }
+  read -r or ot < "${f}" 2>/dev/null
+  if [[ "${ot}" =~ ^[0-9]{1,12}$ ]] && (( ot - t <= 120 && t - ot <= 120 )) && case " ${STOP_REASONS} " in *" ${or} "*) [[ -n "${or}" ]];; *) false;; esac; then
+    echo "${or}"
+  else
+    echo "${r}"
+  fi
+}
+# job_attempt <key> [count]: the attempt of the job (1 when it never was stopped); with count, a stop is counted first
+job_attempt() {
+  local f="${JOBS}/$1.attempts" a=1
+  [[ -r "${f}" ]] && read -r a < "${f}"
+  [[ "${a}" =~ ^[0-9]{1,3}$ ]] || a=1
+  a=$(( 10#${a} ))
+  [[ "${2:-}" == count ]] && { a=$(( a + 1 )); echo "${a}" > "${f}"; }
+  echo "${a}"
+}
+# retry_decision <reason> <attempt>: retry when the reason is an infrastructure kill and the attempt is within the bound
+retry_decision() {
+  infra_retryable "$1" || { echo no-retry; return 0; }
+  (( $2 <= INFRA_RETRIES + 1 )) && echo retry || echo exhausted
+}
+# retry_note <reason> <attempt> <decision>: the fixed sentence of the comment, e.g.
+#   Interrupted by node preemption, retried (attempt 2 of 3).
+retry_note() {
+  local of=$(( INFRA_RETRIES + 1 ))
+  case "$3" in
+    retry) printf '%s' "Interrupted by $(stop_words "$1"), retried (attempt $2 of ${of}).";;
+    exhausted) printf '%s' "Interrupted by $(stop_words "$1") again, not retried: the job used all ${of} attempts (\`spec.retries.infrastructure\` is ${INFRA_RETRIES}).";;
+    *) printf '%s' "Interrupted by $(stop_words "$1"), not retried.";;
+  esac
+}
+# Push work early (#593): the job's commits go to the branch agent/<user>/wip/<key> before its Claude run (only when
+# the job has commits the forge does not have yet, so a fresh job pushes nothing) and on SIGTERM, with a short timeout,
+# after the reason is recorded. It is a separate branch: the job branch (and so a PR) only ever gets finished work. The
+# next pod resumes from it when its own state volume has no newer tree (issue_job, feedback_job).
+WIP_PUSH_TIMEOUT="${WIP_PUSH_TIMEOUT:-8}"
+[[ "${WIP_PUSH_TIMEOUT}" =~ ^[0-9]{1,3}$ ]] && (( 10#${WIP_PUSH_TIMEOUT} >= 1 )) || WIP_PUSH_TIMEOUT=8
+WIP_PUSH_TIMEOUT=$(( 10#${WIP_PUSH_TIMEOUT} ))
+wip_branch() { printf 'agent/%s/wip/%s' "${FORGE_USER}" "$1"; }
+# wip_push <dir> <key> [timeout]: push HEAD of the job's tree to its wip branch; 0 when pushed, 1 when nothing new or failed
+wip_push() {
+  local dir=$1 key=$2 to=${3:-${WIP_PUSH_TIMEOUT}} b bundle out
+  [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -d "${dir}" && -n "${FORGE_API:-}" ]] || return 1
+  b=$(wip_branch "${key}")
+  [[ -n "$(lgit -C "${dir}" log --oneline -1 HEAD --not --remotes 2>/dev/null)" ]] || return 1
+  bundle="${STATE}/jobs/wip-$$-${RANDOM}.bundle"
+  lgit -C "${dir}" bundle create -q "${bundle}" HEAD --not --remotes 2>/dev/null || { rm -f "${bundle}"; return 1; }
+  out=$(curl -sS -m "${to}" -w '\n%{http_code}' -X POST --data-binary "@${bundle}" -H 'Content-Type: application/octet-stream' \
+        -H "X-Agentdev-Job: ${key}" "${FORGE_API}/push?branch=${b}" 2>&1); rm -f "${bundle}"
+  if [[ "${out##*$'\n'}" != 200 ]]; then log "${key}: work in progress not pushed to ${b}: ${out%$'\n'*}"; return 1; fi
+  lgit -C "${dir}" update-ref "refs/remotes/origin/${b}" HEAD 2>/dev/null
+  log "${key}: work in progress pushed to ${b}"
+  return 0
+}
+# resume_from <key> <from>: where an interrupted job's tree starts when its local tree is gone: its wip branch, if pushed
+resume_from() {
+  local b; b=$(wip_branch "$1")
+  if [[ "${RESUMING:-0}" == 1 ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${b}" >/dev/null 2>&1; then
+    echo "origin/${b}"
+  else
+    echo "$2"
+  fi
+}
+# ---------- end retry of infrastructure kills ----------
+CGROUP_DIR="${CGROUP_DIR:-/sys/fs/cgroup}"
+# oom_kills: the container's OOM kill counter (cgroup v2 memory.events, else v1 memory.oom_control); empty if unreadable
+oom_kills() {
+  local f k v
+  for f in "${CGROUP_DIR}/memory.events" "${CGROUP_DIR}/memory/memory.oom_control"; do
+    [[ -r "${f}" ]] || continue
+    while read -r k v; do
+      [[ "${k}" == oom_kill && "${v}" =~ ^[0-9]{1,18}$ ]] && { echo "$(( 10#${v} ))"; return 0; }
+    done < "${f}"
+  done
+  return 0
+}
+# term_reason: why this pod got SIGTERM: the operator's mark when the downward API file already shows it, else pod-deleted
+term_reason() {
+  local r=""
+  [[ -r "${POD_ANNOTATIONS:-}" ]] && r=$(sed -n 's/^agentdev\/stop-reason="\([a-z-]\{1,32\}\)"$/\1/p' "${POD_ANNOTATIONS}" 2>/dev/null | head -n1)
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] && { echo "${r}"; return 0; };; esac
+  echo pod-deleted
+}
+# mark_stopped <reason>: on SIGTERM, before the jobs are killed: the reason for each running job, kept for its next run
+mark_stopped() {
+  local f t; t=$(date +%s)
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && echo "$1 new ${t}" > "${f%.lock}.stopped"; done
+  return 0
+}
+# stopped_before <key>: the reason an earlier run of this job was stopped (from mark_stopped), else nothing. The first
+# call posts it as a run event and marks it as posted; the file goes when the job succeeds.
+# #593: a new stop counts one attempt and is refined with the operator's record (refine_reason); the attempt and the
+# decision of retry_decision are kept with it (stop_state reads them).
+stopped_before() {
+  local f="${JOBS}/$1.stopped" r="" posted="" t="" a d
+  [[ -r "${f}" ]] && read -r r posted t < "${f}"
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] || return 0;; *) return 0;; esac
+  if [[ "${posted}" != posted ]]; then
+    r=$(refine_reason "${r}" "${t}")
+    a=$(job_attempt "$1" count); d=$(retry_decision "${r}" "${a}")
+    stop_event 137 "${r}" "${a}" "${d}" "$(killed_by "$1")"   # the loop stopped Claude with SIGKILL
+    echo "${r} posted ${a} ${d}" > "${f}"
+  fi
+  echo "${r}"
+}
+# stop_state <key>: sets STOP_ATTEMPT and STOP_DECISION from the job's .stopped file (stopped_before runs in $(...), so
+# its variables do not reach the caller)
+stop_state() {
+  local f="${JOBS}/$1.stopped" r="" a="" d=""
+  STOP_ATTEMPT=1 STOP_DECISION=""
+  [[ -r "${f}" ]] && read -r r _ a d < "${f}"
+  case " ${STOP_REASONS} " in *" ${r} "*) [[ -n "${r}" ]] || return 0;; *) return 0;; esac
+  [[ "${a}" =~ ^[0-9]{1,3}$ ]] && STOP_ATTEMPT=$(( 10#${a} ))
+  case "${d}" in retry|no-retry|exhausted) STOP_DECISION=${d};; *) STOP_DECISION=$(retry_decision "${r}" "${STOP_ATTEMPT}");; esac
+  return 0
+}
+# stop_reason <oom kills before the run>: the reason of a run of class error that just ended (not stopped by SIGTERM)
+stop_reason() {
+  local after
+  after=$(oom_kills)
+  [[ "$1" =~ ^[0-9]{1,18}$ && "${after}" =~ ^[0-9]{1,18}$ ]] && (( 10#${after} > 10#$1 )) && { echo oom; return 0; }
+  echo unknown
+}
+# stop_event <rc> <reason>: the reason in the job's run log (a result event, as when Claude ends with an error), so the
+# console's job record shows it. Best effort, like every run event.
+stop_event() {  # stop_event <rc> <reason> [attempt decision [killed by]] (#593: attempt, retry decision, who killed)
+  declare -F run_events_post >/dev/null || return 0
+  local sig; sig=$(signal_name "$1")
+  local t="exit code $1${sig:+ (${sig})}, reason $2"
+  [[ -n "${3:-}" ]] && t+=", next attempt $3, at most $(( INFRA_RETRIES + 1 )) attempts, ${4:-no-retry}"
+  [[ -n "${5:-}" ]] && t+=", ${5}"
+  run_events_post "$(jq -cn --arg s "stopped:$2" --arg t "${t}" \
+    '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
+}
+# ---------- resource samples (#588) ----------
+# With the Agent's spec.diagnostics.resources (DIAG_RESOURCES=true, set by the operator), each Claude run logs the
+# memory use of the agent container every DIAG_INTERVAL_SECONDS and once at its end. Off (the default): no sampler.
+DIAG_RESOURCES="${DIAG_RESOURCES:-false}"
+DIAG_INTERVAL_SECONDS="${DIAG_INTERVAL_SECONDS:-60}"
+[[ "${DIAG_INTERVAL_SECONDS}" =~ ^[0-9]{1,4}$ ]] && (( 10#${DIAG_INTERVAL_SECONDS} >= 5 && 10#${DIAG_INTERVAL_SECONDS} <= 3600 )) \
+  || DIAG_INTERVAL_SECONDS=60
+DIAG_INTERVAL_SECONDS=$(( 10#${DIAG_INTERVAL_SECONDS} ))
+# cg_value <file>...: the first readable cgroup file of the list that holds one number, else n/a
+cg_value() {
+  local f v
+  for f in "$@"; do
+    [[ -r "${CGROUP_DIR}/${f}" ]] && read -r v < "${CGROUP_DIR}/${f}" && [[ "${v}" =~ ^[0-9]{1,20}$ ]] && { echo "${v}"; return 0; }
+  done
+  echo n/a
+}
+# resource_sample <when>: one log line (on stderr: stdout of a run is its result)
+resource_sample() {
+  local disk oom; disk=$(df -kP / 2>/dev/null | awk 'NR == 2 {print $3}'); [[ "${disk}" =~ ^[0-9]+$ ]] || disk=n/a
+  oom=$(oom_kills); [[ -n "${oom}" ]] || oom=n/a
+  log "${JOB:-loop}: resources ($1): memory.current=$(cg_value memory.current memory/memory.usage_in_bytes)" \
+    "memory.peak=$(cg_value memory.peak memory/memory.max_usage_in_bytes) oom_kill=${oom} rootfs_used_kib=${disk}" >&2
+}
+# resource_sampler_start: prints the sampler's pid (nothing when off); resource_sampler_stop <pid> ends it
+resource_sampler_start() {
+  [[ "${DIAG_RESOURCES}" == true ]] || return 0
+  ( while sleep "${DIAG_INTERVAL_SECONDS}"; do resource_sample sample; done ) >/dev/null &
+  echo $!
+}
+resource_sampler_stop() {
+  [[ -n "${1:-}" ]] || return 0
+  pkill -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; wait "$1" 2>/dev/null
+  resource_sample end
+  return 0
+}
+# ---------- how the agent process ended (#593 addendum) ----------
+# Kills the worker causes itself: every place of this script that sends a signal to a job or to Claude first calls
+# mark_killed, which writes "<cause>" to <jobs>/<key>.killed (job state of #175, state volume). A non-zero exit then
+# reads it, so a SIGKILL the worker sent is told apart from one from outside (kernel OOM killer, runtime, a person).
+# mark_killed <cause> [key]: the cause for one job, else for each running job
+mark_killed() {
+  local f c=${1//[^A-Za-z0-9 ,.:_()\/-]/}
+  if [[ -n "${2:-}" ]]; then printf '%s %s\n' "$(date +%s)" "${c}" > "${JOBS}/$2.killed"; return 0; fi
+  for f in "${JOBS}"/*.lock; do [[ -e "${f}" ]] && printf '%s %s\n' "$(date +%s)" "${c}" > "${f%.lock}.killed"; done
+  return 0
+}
+# killed_by <key>: "killed by worker: <cause>" when mark_killed named one for the job, else nothing
+killed_by() {
+  local f="${JOBS}/$1.killed" t c
+  [[ -r "${f}" ]] && read -r t c < "${f}" && [[ "${t}" =~ ^[0-9]{1,12}$ && -n "${c}" ]] && printf 'killed by worker: %s' "${c:0:200}"
+  return 0
+}
+# signal_name <rc>: SIGKILL for 137, SIGTERM for 143 (any rc above 128), else nothing
+signal_name() {
+  [[ "$1" =~ ^[0-9]{1,3}$ ]] && (( $1 > 128 && $1 < 160 )) || return 0
+  local n; n=$(kill -l $(( $1 - 128 )) 2>/dev/null) || return 0
+  [[ -n "${n}" ]] && printf 'SIG%s' "${n#SIG}"
+}
+# STDERR_CAP: bytes of Claude's stderr kept in the per-job file while it runs; STDERR_TAIL: bytes reported at the end
+STDERR_CAP=65536 STDERR_TAIL=4096
+# stderr_tail <file>: the last STDERR_TAIL bytes (whole lines), redacted like the run log (REDACT_JQ), on one line
+STDERR_TAIL_JQ='(if (utf8bytelength) >= ($cap | tonumber) then (split("\n") | .[1:] | join("\n")) else . end)
+  | redact | rtrimstr("\n") | explode | map(select(. == 10 or (. >= 32 and . != 127))) | implode | gsub("\n"; " | ")
+  | until((utf8bytelength) <= ($cap | tonumber); .[((length / 8) | ceil):])'
+stderr_tail() {
+  [[ -s "$1" ]] || return 0
+  local secrets; secrets=$(jq -cn '[env | to_entries[] | select(.key | test("TOKEN|SECRET|KEY|PASSWORD")) | .value | strings]' 2>/dev/null) || secrets='[]'
+  tail -c "${STDERR_TAIL}" "$1" | jq -Rrs --argjson secrets "${secrets}" --arg cap "${STDERR_TAIL}" \
+    "${REDACT_JQ#$'\n'} ${STDERR_TAIL_JQ}" 2>/dev/null
+}
+# exit_record <rc> <class> <reason> <stderr file> <run start>: the evidence of a non-zero exit, in the job log line
+# (stderr, like the other log lines of a run), in <jobs>/<key>.exit (job state, survives the pod's log rotation) and
+# as a result run event (the console's job record). Memory figures are n/a where the cgroup is not readable (gVisor).
+exit_record() {
+  local rc=$1 now sig by peak oom wall job_wall="n/a" t0="" tail txt
+  now=$(date +%s); sig=$(signal_name "${rc}"); by=$(killed_by "${JOB:-none}")
+  [[ -n "${sig}" && -z "${by}" ]] && by="not by the worker"   # #593: no mark_killed before the signal
+  peak=$(cg_value memory.peak memory/memory.max_usage_in_bytes); oom=$(oom_kills); [[ -n "${oom}" ]] || oom=n/a
+  wall=$(( now - $5 ))
+  [[ -r "${JOBS}/${JOB:-none}.started" ]] && read -r t0 < "${JOBS}/${JOB}.started"
+  [[ "${t0}" =~ ^[0-9]{1,12}$ ]] && job_wall="$(( now - t0 ))s"
+  tail=$(stderr_tail "$4")
+  txt="exit ${rc}${sig:+ (${sig})}, class $2${3:+, reason $3}${by:+, ${by}}, run wall ${wall}s, job wall ${job_wall}, memory.peak=${peak}, oom_kill=${oom}"
+  log "claude exited ${txt#exit }; stderr tail: ${tail:-(empty)}" >&2
+  [[ "${JOB:-}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || return 0
+  jq -cn --argjson rc "${rc}" --arg sig "${sig}" --arg c "$2" --arg r "$3" --arg by "${by}" --argjson w "${wall}" \
+    --arg jw "${job_wall%s}" --arg p "${peak}" --arg o "${oom}" --arg e "${tail}" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{time: $t, exit: $rc, signal: $sig, class: $c, reason: $r, killed_by: $by, run_wall_seconds: $w,
+      job_wall_seconds: ($jw | tonumber? // null), memory_peak: $p, oom_kill: $o, stderr_tail: $e}' > "${JOBS}/${JOB}.exit" 2>/dev/null
+  declare -F run_events_post >/dev/null || return 0
+  run_events_post "$(jq -cn --arg s "exit:${sig:-rc${rc}}" --arg t "${txt}; stderr tail: ${tail:-(empty)}" \
+    '[{kind: "result", time: (now | todate), ok: false, subtype: $s, text: $t, turns: 0, input_tokens: 0, output_tokens: 0}]')"
+}
+# ---------- end how the agent process ended ----------
+
+# stopped_note <rc> <class> [reason]: fixed text for a run where Claude exited non-zero (#336). Only the exit code, the
+# fixed class (error, max-turns, rate-limit) and the fixed reason of #588; never the result text or stderr.
 stopped_note() {
-  local hint=""
+  local hint="" why=""
   [[ "$2" == max-turns ]] && hint=" The run used all ${MAX_TURNS} turns (\`max_turns\`). A larger value in \`instance.yml\` can help."
   [[ "$2" == cost-* ]] && hint=" The job reached its cost limit (\`CLAUDE_JOB_APPROVAL_UNITS\`) and more was not approved (${2#cost-})."
-  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`).${hint} Review the diff with care."
+  [[ -n "${3:-}" ]] && hint=$(stop_hint "$3")
+  [[ -n "${3:-}" ]] && why=", reason \`$3\`"
+  printf '%s' "The agent stopped before it wrote a summary (exit code $1, class \`$2\`${why}).${hint} Review the diff with care."
+}
+# stop_hint <reason>: one fixed sentence, with a leading space, on the cause
+stop_hint() {
+  local hint
+  case "$1" in
+    security-pause) hint=" The operator paused the agent for security events: the \`SecurityPaused\` condition of the Agent names the jobs and events.";;
+    pod-deleted) hint=" The pod was stopped (scale-down, node drain, autoscaler or upgrade): the Agent's Kubernetes Events and the cluster events name the cause.";;
+    node-preempted) hint=" The node of the pod was preempted or shut down.";;
+    evicted) hint=" The pod was evicted (node pressure or ephemeral storage).";;
+    oom) hint=" The agent container ran out of memory: the cgroup counted an OOM kill. A larger memory limit can help.";;
+    deadline) hint=" The job reached its time limit.";;
+    *) hint=" The cause is not known. With \`spec.diagnostics.resources\` on the Agent, the log shows the memory use of each run.";;
+  esac
+  printf '%s' "${hint}"
+}
+# interrupted_note <reason>: fixed text for a job that an earlier stop interrupted and that then continued (#588)
+interrupted_note() {
+  local retried=""
+  [[ "${STOP_DECISION:-}" == retry ]] && retried=" $(retry_note "$1" "${STOP_ATTEMPT:-2}" retry)"
+  printf '%s' "An earlier run of this job was stopped (reason \`$1\`).$(stop_hint "$1")${retried} The job continued from its saved work."
+}
+# not_retried <key> <reason>: #593, the job of a stop that is not retried ends here, with a note and without another
+# Claude run. Its work so far stays on the branch agent/<user>/wip/<key> (pushed at the stop); nothing half-done
+# becomes a PR or a summary. An issue is not picked up again (assign a new issue, or comment on the PR, to go on).
+not_retried() {
+  local key=$1 r=$2 n=${1#*-} d=${STOP_DECISION:-no-retry}
+  comment "${n}" "🤖 $(retry_note "${r}" "${STOP_ATTEMPT:-1}" "${d}")$(stop_hint "${r}") The work so far is on the branch \`agent/${FORGE_USER}/wip/${key}\` (when it could be pushed); no PR or summary was made from it."
+  case "${key}" in
+    issue-*) touch "${STATE}/seen/issue-${n}.done";;
+    pr-*) date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${n}";;
+  esac
+  log "${key}: stopped by ${r}, not retried (${d}, attempt ${STOP_ATTEMPT:-1})"
+  return 0
 }
 
 run_claude() {  # run_claude <dir> <prompt>  -> prints result text, returns claude's exit code (75: rate limited)
@@ -517,8 +862,10 @@ job_header_env() {
 }
 # ---------- end soft job cost limit ----------
 run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
-  local dir=$1 out rc err mcp=() prompt=$2; shift 2
-  err="${STATE}/jobs/claude-$$-${RANDOM}.stderr"   # outside the worktree, so `git add -A` can never pick it up
+  local dir=$1 out rc err mcp=() prompt=$2 oom0 sampler t_run; shift 2
+  # outside the worktree, so `git add -A` can never pick it up; per job, at most STDERR_CAP bytes (#593)
+  err="${STATE}/jobs/claude-${JOB:-$$-${RANDOM}}.stderr"; rm -f "${err}" "${err}.part"
+  t_run=$(date +%s); [[ -n "${JOB:-}" ]] && rm -f "${JOBS:-${STATE}/jobs}/${JOB}.killed"
   # the project's MCP tools through ContextForge (#14): the agent's token is scoped to its project's virtual server
   local pm settings=() cfg="${MCP_CONFIG}" runner=(claude) pflag=(-p "${prompt}")
   pm=$(permission_mode)
@@ -542,22 +889,28 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
   fi
   [[ -s "${cfg}" ]] && mcp=(--mcp-config "${cfg}" --strict-mcp-config)
   local jenv=(); [[ -n "$(job_header_env)" ]] && jenv=("$(job_header_env)")
+  local margs=(); mapfile -t margs < <(model_args)
+  oom0=$(oom_kills); sampler=$(resource_sampler_start)   # #588
   out=$(cd "${dir}" && env -u FORGE_TOKEN -u WAKE_TOKEN -u REGISTER_TOKEN -u GIT_ASKPASS \
           GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 "${jenv[@]}" \
           "${runner[@]}" "${CLAUDE_AUTH[@]}" "${pflag[@]}" "$@" --output-format stream-json --verbose --max-turns "${MAX_TURNS}" \
-          "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
+          "${margs[@]}" "${mode[@]}" "${settings[@]}" --allowedTools "${CLAUDE_TOOLS}" \
           --disallowedTools "Read(/state/**)" "Read(${STATE}/**)" "Read(/proc/**)" "Read(/etc/**)" "Read(~/.git-credentials)" "Read(~/.claude/.credentials.json)" "Read(~/.claude.json)" "Edit(/state/**)" "Edit(${STATE}/**)" "Bash(git push:*)" "Bash(git remote:*)" "Bash(git config:*)" "Bash(git fetch:*)" "Bash(git pull:*)" "Bash(git clone:*)" "Bash(git submodule:*)" "Bash(env:*)" "Bash(printenv:*)" "Bash(curl:*)" "Bash(wget:*)" \
           --append-system-prompt "$(system_prompt)" \
-          "${mcp[@]}" 2>"${err}" | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
+          "${mcp[@]}" 2> >(tail -c "${STDERR_CAP:-65536}" > "${err}.part"; mv -f "${err}.part" "${err}") | tee >({ declare -F run_events >/dev/null && run_events; } 2>/dev/null; cat >/dev/null)
           exit "${PIPESTATUS[0]}"); rc=$?   # #425 run log: the reader always drains (no SIGPIPE); rc is claude's own
+  resource_sampler_stop "${sampler}"
+  local _w; for _w in $(seq 30); do [[ -e "${err}.part" ]] || break; sleep 0.1; done   # the stderr tail is written
+  [[ -e "${err}" ]] || mv -f "${err}.part" "${err}" 2>/dev/null
   # stream-json: one event per line; the last one with a string result is the answer. Fail closed (review #102): on
   # a parse failure print nothing and fail the run; the raw transcript must never become a PR or issue comment.
   if ! jq -rs '[.[] | objects | select(has("result"))] | last | .result // empty | strings' <<<"${out}" 2>/dev/null; then
     log "claude output is not stream-json: nothing posted" >&2
     (( rc == 0 )) && rc=1
   fi
-  # stderr is never logged (review #102: with --verbose it can carry transcript or tool output); only the exit code and
-  # a fixed class. The stderr tail is still read below, only for the rate-limit check, and then deleted.
+  # stderr is never logged raw (review #102: with --verbose it can carry transcript or tool output). #593: on a non-zero
+  # exit, exit_record logs its last STDERR_TAIL bytes redacted like the run log, with the signal, wall time and memory
+  # figures; the class stays fixed. The file is then deleted.
   # The class goes to stderr: stdout of run_claude is the result text that becomes a PR body or comment (#336).
   # The caller gets "<rc> <class>" in ${CLAUDE_EXIT_FILE}, because result=$(run_claude ...) runs in a subshell.
   if [[ ${rc} -ne 0 ]]; then
@@ -575,8 +928,11 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
     # max turns: read only the subtype field of the result event, never its text (#336)
     [[ "$(jq -rs '[.[] | objects | select(.type == "result")] | last | .subtype // empty | strings' <<<"${out}" 2>/dev/null)" \
        == error_max_turns ]] && why="max-turns"
-    log "claude exited ${rc} (${why}; stderr not logged)" >&2
-    [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s\n' "${rc}" "${why}" > "${CLAUDE_EXIT_FILE}"
+    local reason=""
+    if [[ "${why}" == error ]]; then reason=$(stop_reason "${oom0}"); stop_event "${rc}" "${reason}"; fi   # #588
+    log "claude exited ${rc} (${why}${reason:+, reason ${reason}})" >&2
+    declare -F exit_record >/dev/null && JOBS="${JOBS:-${STATE}/jobs}" exit_record "${rc}" "${why}" "${reason}" "${err}" "${t_run}"   # #593 addendum
+    [[ -n "${CLAUDE_EXIT_FILE:-}" ]] && printf '%s %s%s\n' "${rc}" "${why}" "${reason:+ ${reason}}" > "${CLAUDE_EXIT_FILE}"
   fi
   report_usage "${out}" "$(tail -c 2000 "${err}")" || rc=75
   rm -f "${err}"
@@ -594,13 +950,17 @@ run_claude_once() {  # run_claude_once <dir> <prompt> [session args...]
 # the sidecar or the API is down, the events are dropped: the job goes on.
 RUN_EVENT_CLIP="${RUN_EVENT_CLIP:-2048}"
 RUN_LOG_MAX="${RUN_LOG_MAX:-2097152}"
-# jq: one stream-json line in, zero or more run events out (compact). The regex is the forge sidecar's secretRe.
-RUN_EVENTS_JQ='
+# jq: the redaction of run output, with $secrets (the token values of this environment). The regex is the forge
+# sidecar's secretRe. #593: the stderr tail of an abnormal exit goes through the same filter.
+REDACT_JQ='
 def redact: gsub("(?<s>(?i)(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----))"; "[redacted]")
   | gsub("(?<k>(?i)(password|passwd|secret|token|api[_-]?key|authorization)[\"'"'"']?\\s*[:=]\\s*[\"'"'"']?(bearer\\s+|token\\s+)?)[^\\s\"'"'"',}]{6,}"; "\(.k)[redacted]")
   | gsub("(?<b>(?i)bearer\\s+)[^\\s\"'"'"',}]{12,}"; "\(.b)[redacted]")
   | gsub("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*$"; "[redacted]")
   | reduce ($secrets[] | select(length >= 8)) as $t (.; split($t) | join("[redacted]"));
+'
+# jq: one stream-json line in, zero or more run events out (compact).
+RUN_EVENTS_JQ="${REDACT_JQ}"'
 def clip: if (utf8bytelength) > $clip then .[0:$clip] + " [clipped]" else . end;
 def txt: if type == "string" then . elif type == "array" then [.[] | objects | .text? // empty | strings] | join("\n") else tojson end;
 def now_s: now | todate;
@@ -751,6 +1111,7 @@ jobf() { printf '%s/jobs/%s.%s' "${STATE}" "${JOB:-none}" "$1"; }
 claude_step() {
   local f; f=$(jobf result)
   if [[ "${RESUMING:-0}" == 1 && -e "${f}" ]]; then log "${JOB}: Claude already finished before the restart"; cat "${f}"; return 0; fi
+  [[ -n "${JOB:-}" ]] && wip_push "$1" "${JOB}" >/dev/null 2>&1   # #593: before the long step; nothing new: no push
   local out rc=0; out=$(run_claude "$1" "$2") || rc=$?
   (( rc == 0 )) && [[ -n "${JOB:-}" ]] && printf '%s' "${out}" > "${f}"
   printf '%s' "${out}"; return ${rc}
@@ -863,6 +1224,7 @@ issue_job() {
   # #175: continue from the job branch when it exists (pushed before a kill), else from the base
   local from="origin/${base}"
   lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${branch}" >/dev/null 2>&1 && from="origin/${branch}"
+  from=$(resume_from "${JOB:-issue-${n}}" "${from}")   # #593: the work pushed at the stop, when the local tree is gone
   dir=$(worktree "${branch}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"   # #174: the SIGTERM handler saves work in progress here
   board_card "issue-${n}" "#${n} ${title}" build "Claude is working on it" "$(web_url "issues/${n}")"
@@ -874,10 +1236,11 @@ issue_job() {
   fi
   # Claude failed or stopped early (#336): the fixed note replaces the summary. The work tree may still have a change.
   if [[ ${claude_rc:-0} != 0 ]]; then
-    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
-    stopped=$(stopped_note "${erc}" "${ewhy}"); result=""
+    local erc=${claude_rc} ewhy=error ereason=""; [[ -r "${exitf}" ]] && read -r erc ewhy ereason < "${exitf}"
+    stopped=$(stopped_note "${erc}" "${ewhy}" "${ereason}"); result=""
   fi
   rm -f "${exitf}"
+  [[ -n "${STOPPED_BEFORE:-}" ]] && stopped="$(interrupted_note "${STOPPED_BEFORE}")${stopped:+ ${stopped}}"   # #588
   local status summary
   status=$(run_status "${result}"); summary=$(run_summary "${result}")
   # #234: a question or a blocker is answered on the issue and nothing is pushed, even if the tree has changes
@@ -949,7 +1312,8 @@ ${stopped:-${summary}}"
 #   blocked         the rules or the environment prevent it; explain, do not push
 RUN_CONTRACT="Rules for this task:
 - Read the repository's own instructions first if they exist (CLAUDE.md, AGENTS.md, CONTRIBUTING.md) and follow them.
-- Do only what the task asks. No unrelated refactoring, formatting or dependency changes.
+- Do only what the task asks. No unrelated refactoring, formatting or dependency changes. The docs, changelog entry
+  and other files that the repository's own instructions require for a change are part of the task.
 - Do not change CI workflow files (.github/workflows/, .gitea/workflows/, .forgejo/workflows/): a person must make
   those changes. If the task needs one, put the exact change in your summary instead.
 - Run the tests that cover your change. Report what you ran and the result; never claim a test passed that you did
@@ -1090,11 +1454,13 @@ feedback_background() {
   clip "${out}" "${cap}"
 }
 
-# feedback_prompt <pr> <title> <background> <new feedback> <thread ask> -> the prompt of a feedback run. Background
-# and new feedback are both fenced as untrusted; only the new feedback is to be answered.
+# feedback_prompt <pr> <title> <background> <new feedback> <thread ask> [intro] -> the prompt of a feedback run.
+# Background and new feedback are both fenced as untrusted; only the new feedback is to be answered. intro replaces
+# the first sentence for a PR assigned to the agent (#573).
 feedback_prompt() {
-  local pr=$1 title=$2 bg=$3 fb=$4 ask=$5
-  printf '%s' "You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}")."
+  local pr=$1 title=$2 bg=$3 fb=$4 ask=$5 intro=${6:-}
+  [[ -n "${intro}" ]] || intro="You are ${FORGE_USER}. You opened PR #${pr} from this branch; its title: $(untrusted "${title}")."
+  printf '%s' "${intro}"
   [[ -n "${bg}" ]] && printf '%s' "
 
 Background: the issue this PR resolves, the PR description and earlier review rounds. It is already handled and
@@ -1190,7 +1556,60 @@ handle_feedback() {
       log "PR #${pr}: new feedback, waiting for a free slot"
     fi
   done
+  handle_assigned "${prs}"
   board_finish "${prs}"
+}
+
+# ignored <pr> <key> <reason> [comment]: an assigned PR the agent does not work on leaves a trace (#573): always a log
+# line, and with "comment" also one comment on the PR, once per PR and reason key (a marker in state).
+ignored() {
+  log "ignored: PR #$1: $3"
+  [[ "${4:-}" == comment && "$2" =~ ^[a-z-]{1,40}$ ]] || return 0
+  local f="${STATE}/seen/pr-$1.ignored-$2"
+  [[ -e "${f}" ]] && return 0
+  comment "$1" "🤖 I cannot act on this: $3" && touch "${f}"
+}
+# safe_ref <name>: a branch name the loop may put into git refs and paths (from the forge JSON, never from the model)
+safe_ref() { [[ "$1" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && "$1" != *..* && "$1" != *//* && "$1" != */ && "$1" != *.lock ]]; }
+
+# PRs assigned to this agent by a person (#573): the label agent:<name> (GitHub) or an assignment (Gitea) on a PR the
+# agent did not open. Same job key, cursor, backoff and MAX_CONCURRENT as the agent's own PRs. The first pass after
+# the assignment starts a job even without comments (the assignment is the request); later passes start one on new
+# feedback, as for the agent's own PRs.
+handle_assigned() {
+  local pr branch upd created hrepo base title since last fb
+  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" --arg kind "${FORGE_KIND}" "${ASSIGNED_PRS}"' |
+    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, .title] | @tsv' <<<"$1" 2>/dev/null |
+  while IFS=$'\t' read -r pr branch upd created hrepo base title; do
+    [[ "${pr}" =~ ^[1-9][0-9]{0,15}$ ]] || continue
+    last=""; [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
+    [[ "${last}" == "${upd}" ]] && continue
+    is_running "pr-${pr}" && continue
+    backing_off "pr-${pr}" && continue
+    # nothing below is retried before the PR changes again (a new comment, label or push moves updated_at)
+    if ! labeler_ok "${pr}"; then
+      ignored "${pr}" not-writer "the assignment to \`${FORGE_USER}\` was not made by a person with write access to this repository." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    if [[ "${hrepo,,}" != "${REPO,,}" ]]; then
+      ignored "${pr}" fork "the head branch of this pull request is not in ${REPO} (a fork). I work only on branches of this repository." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    if ! safe_ref "${branch}" || ! safe_ref "${base}"; then
+      ignored "${pr}" bad-ref "the head or base branch name is not a plain branch name." comment
+      echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue
+    fi
+    since="${created}"; [[ -r "${STATE}/seen/pr-${pr}" ]] && read -r since < "${STATE}/seen/pr-${pr}"
+    if [[ -r "${STATE}/seen/pr-${pr}" ]]; then
+      fb=$(new_feedback "${pr}" "${since}")
+      if [[ -z "${fb}" ]]; then ignored "${pr}" none "no new feedback since the last run"; echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue; fi
+    fi
+    if start_job "pr-${pr}" feedback_job "${pr}" "${branch}" "${title}" "${since}" "${base}"; then
+      log "PR #${pr}: assigned to ${FORGE_USER} (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
+    else
+      log "PR #${pr}: assigned to ${FORGE_USER}, waiting for a free slot"
+    fi
+  done
 }
 
 # botboard: a PR of ours that left the open list was merged or closed -> its card goes to done (once).
@@ -1214,8 +1633,20 @@ board_finish() {
 }
 
 # address feedback on one PR, in that PR's own worktree (runs as a background job)
+# An assigned PR (#573, base given): the agent never pushes to another author's branch. A head under agent/<name>/ is
+# pushed as it is; any other head is copied to agent/<name>/pr-<n>, pushed there and offered as a stacked PR into the
+# head. A head that is the default branch is never pushed: the change is posted as a patch.
 feedback_job() {
-  local pr=$1 branch=$2 title=$3 since=$4 fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg exitf
+  local pr=$1 branch=$2 title=$3 since=$4 base=${5:-} fb now dir result claude_rc=0 threads checks thread_ask="" before after changed="" pull bg exitf
+  local work=$2 readonly=0 intro=""
+  if [[ -n "${base}" ]]; then
+    [[ "${branch}" == "agent/${FORGE_USER}/"* ]] || work="agent/${FORGE_USER}/pr-${pr}"
+    [[ "${branch}" == "$(default_branch)" ]] && readonly=1
+    intro="You are ${FORGE_USER}. PR #${pr} was assigned to you; you work on a copy of its head branch ${branch}, and it
+merges into ${base}. Its changes: git diff origin/${base}...HEAD. Its title: $(untrusted "${title}")."
+    (( readonly )) && intro+="
+Your changes are not pushed, because the head is the default branch: they are posted as a patch for the author."
+  fi
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   # #175: an interrupted job keeps its first cursor time, and does not reply twice
   if [[ "${RESUMING:-0}" == 1 && -r "$(jobf now)" ]]; then read -r now < "$(jobf now)"; [[ "${now}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || now=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
@@ -1224,6 +1655,9 @@ feedback_job() {
     log "PR #${pr}: replied before the restart; cursor moved"; echo "${now}" > "${STATE}/seen/pr-${pr}"; return 0
   fi
   fb=$(new_feedback "${pr}" "${since}")   # re-read: more feedback may have arrived since dispatch
+  # an assigned PR without a cursor was never worked: the assignment itself is the request (#573)
+  [[ -z "${fb}" && -n "${base}" && ! -r "${STATE}/seen/pr-${pr}" ]] \
+    && fb="- The pull request was assigned to you. Review it and fix what is wrong, failing checks first."
   [[ -z "${fb}" ]] && return
   threads=$(security_threads "${pr}" "${since}")
   pull=$(api GET "/repos/${REPO}/pulls/${pr}") || pull='{}'
@@ -1237,23 +1671,29 @@ THREAD <id> <fixed|accepted-risk|false-positive>: <one-sentence reason>
 before the STATUS line, for these ids: $(cut -f1 <<<"${threads}" | paste -sd' ' -)"
   fi
   sync_repo || return 1
-  dir=$(worktree "${branch}" "origin/${branch}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
+  local from="origin/${branch}"
+  [[ "${work}" != "${branch}" ]] && lgit -C "${WORK}" rev-parse -q --verify "refs/remotes/origin/${work}" >/dev/null 2>&1 && from="origin/${work}"
+  from=$(resume_from "${JOB:-pr-${pr}}" "${from}")   # #593
+  dir=$(worktree "${work}" "${from}" "${RESUMING:-0}") || { log "worktree failed"; return 1; }
   [[ -n "${JOB:-}" ]] && echo "${dir}" > "$(jobf dir)"
   # the PR's card is the issue's card; PRs without one (opened before botboard, or not by issue_job) get none
   local issue_n="" card_title="${title}"
   [[ -r "${STATE}/seen/pr-${pr}.board" ]] && read -r issue_n card_title < "${STATE}/seen/pr-${pr}.board"
   [[ -n "${issue_n}" ]] && board_card "issue-${issue_n}" "#${issue_n} ${card_title}" build "addressing review feedback on PR #${pr}" "$(pr_url "${pr}")"
   exitf="${STATE}/jobs/claude-exit-pr-${pr}"; rm -f "${exitf}"
-  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}")") || claude_rc=$?
+  result=$(CLAUDE_EXIT_FILE="${exitf}" claude_step "${dir}" "$(feedback_prompt "${pr}" "${title}" "${bg}" "${fb}" "${thread_ask}" "${intro}")") || claude_rc=$?
   [[ ${claude_rc:-0} == 75 ]] && { log "PR #${pr}: Claude usage limit reached, will retry"; return 1; }
   local status="done"
   if [[ ${claude_rc:-0} != 0 ]]; then   # failed or stopped early (#336): a fixed note, never a log line
-    local erc=${claude_rc} ewhy=error; [[ -r "${exitf}" ]] && read -r erc ewhy < "${exitf}"
-    result=$(stopped_note "${erc}" "${ewhy}")
+    local erc=${claude_rc} ewhy=error ereason=""; [[ -r "${exitf}" ]] && read -r erc ewhy ereason < "${exitf}"
+    result=$(stopped_note "${erc}" "${ewhy}" "${ereason}")
   else
     status=$(run_status "${result}"); result=$(run_summary "${result}")
   fi
   rm -f "${exitf}"
+  [[ -n "${STOPPED_BEFORE:-}" ]] && result="${result}
+
+> $(interrupted_note "${STOPPED_BEFORE}")"   # #588
   if [[ "${status}" == needs-decision || "${status}" == blocked ]]; then
     # #234: reply only; the working tree is not pushed. The reviewers' next comment starts a new run.
     reply_threads "${pr}" "${threads}" "${result}" "" ""
@@ -1265,19 +1705,36 @@ ${result}"
     log "PR #${pr}: ${status}, replied without a push"
     return 0
   fi
-  before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
+  if (( readonly )); then
+    local patch; patch=$(proposed_patch "${dir}" "${branch}")
+    reply_threads "${pr}" "${threads}" "${result}" "" ""
+    comment "${pr}" "🤖 I cannot push to \`${branch}\`: it is the default branch.${patch:+ My proposed change:
+
+~~~~diff
+${patch}
+~~~~}
+
+${result}"
+    [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"
+    echo "${now}" > "${STATE}/seen/pr-${pr}"
+    log "PR #${pr}: replied with a patch (head is the default branch)"
+    return 0
+  fi
+  before=$(lgit -C "${dir}" rev-parse -q --verify "origin/${work}" 2>/dev/null || lgit -C "${dir}" rev-parse -q --verify "origin/${branch}" 2>/dev/null)
   # an interrupted job that pushed already: the diff for the thread replies starts before that push
   [[ "${RESUMING:-0}" == 1 && -r "$(jobf before)" ]] && read -r before < "$(jobf before)"
   [[ -n "${JOB:-}" && "${before}" =~ ^[0-9a-f]{40}$ ]] && echo "${before}" > "$(jobf before)"
-  if push_step "${dir}" "${branch}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
+  if push_step "${dir}" "${work}" "fix: address review feedback on #${pr}" "$(default_branch)"; then
     after=$(lgit -C "${dir}" rev-parse HEAD 2>/dev/null)
     [[ "${before}" =~ ^[0-9a-f]{40}$ && "${after}" =~ ^[0-9a-f]{40}$ ]] && changed=$(lgit -C "${dir}" diff --name-only "${before}" "${after}")
     reply_threads "${pr}" "${threads}" "${result}" "${after}" "${changed}"
-    comment "${pr}" "🤖 Pushed an update.
+    local note="Pushed an update."
+    [[ "${work}" != "${branch}" ]] && note=$(stacked_pr "${pr}" "${work}" "${branch}")
+    comment "${pr}" "🤖 ${note}
 
 ${result}"
     [[ -n "${JOB:-}" ]] && touch "$(jobf replying)"   # #175: posted; a restart from here only moves the cursor
-    request_review "${pr}"   # ask the approver to look again
+    [[ -z "${base}" ]] && request_review "${pr}"   # ask the approver to look again (an assigned PR is not the agent's)
   else
     reply_threads "${pr}" "${threads}" "${result}" "" ""
     comment "${pr}" "🤖 ${result}"
@@ -1290,15 +1747,45 @@ ${result}"
   return 0
 }
 
+# stacked_pr <pr> <work branch> <head branch> -> the note for the assigned PR: the agent's PR from its own branch into
+# the head of the assigned PR (#573), opened once (a restart finds it by its head) and owned like an issue PR
+stacked_pr() {
+  local pr=$1 work=$2 head=$3 n
+  n=$(open_pr_for "${work}")
+  [[ "${n}" =~ ^[0-9]+$ ]] || n=$(api POST "/repos/${REPO}/pulls" "$(jq -n --arg t "fix: address review feedback on #${pr}" \
+      --arg h "${work}" --arg b "${head}" --arg d "Refs #${pr}
+
+The changes for PR #${pr}, which was assigned to agent \`${FORGE_USER}\`. Merge this PR into \`${head}\` to take them.
+
+---
+_Opened by agent \`${FORGE_USER}\`. Comment or review here and I will follow up._" '{title:$t, head:$h, base:$b, body:$d}')" | jq -r .number)
+  if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
+    log "PR #${pr}: could not open a PR from ${work} into ${head}"
+    echo "I pushed my changes to \`${work}\`, but could not open a pull request into \`${head}\`."; return 0
+  fi
+  [[ -e "${STATE}/seen/pr-${n}.reviewer" ]] || { request_review "${n}"; touch "${STATE}/seen/pr-${n}.reviewer"; }
+  label_own_pr "${n}"
+  [[ -r "${STATE}/seen/pr-${n}" ]] || date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE}/seen/pr-${n}"
+  log "PR #${pr}: changes in PR #${n} (${work} into ${head})"
+  echo "I pushed my changes to \`${work}\` and opened PR #${n} into \`${head}\`."
+}
+# proposed_patch <dir> <ref> -> the worktree's change against origin/<ref> (commits and uncommitted files), clipped
+proposed_patch() {
+  ( flock 9; scrub_git_config ) 9>"${STATE}/git.lock"
+  pin_worktree "$1" || return 0
+  lgit -C "$1" add -A >/dev/null 2>&1
+  clip "$(lgit -C "$1" diff --cached "origin/$2" 2>/dev/null)" 30000
+}
+
 # Sleep up to POLL_SECONDS, but return as soon as a webhook was delivered.
 # The listener appends one line per delivery; comparing the line count (not mtime, which has 1 s resolution)
 # means deliveries that arrive while the loop is working, or in the same second, are never lost.
-seen_wakes=0
+seen_wakes=0 woke=0
 wait_for_work() {
   local deadline=$(( $(date +%s) + POLL_SECONDS )) n
   while (( $(date +%s) < deadline )); do
     n=$(wc -l < "${WAKE_FILE}" 2>/dev/null || echo 0)
-    if (( n > seen_wakes )); then seen_wakes=$n; log "woken by webhook"; return; fi
+    if (( n > seen_wakes )); then seen_wakes=$n; woke=1; log "woken by webhook"; return; fi
     sleep 0.5
   done
 }
@@ -1387,15 +1874,24 @@ maybe_stop() {
 # annotation (the pod has no service account token).
 POD_ANNOTATIONS="${POD_ANNOTATIONS:-/etc/agentdev/pod/annotations}"
 draining() { [[ -r "${POD_ANNOTATIONS}" ]] && grep -q '^agentdev/drain=' "${POD_ANNOTATIONS}"; }
+# security_draining: the drain is for a security pause (#577), not a replacement. The operator sets
+# agentdev/drain-reason="security-pause" when the drain starts, so the file has it long before the drain time runs out.
+security_draining() { draining && grep -qx 'agentdev/drain-reason="security-pause"' "${POD_ANNOTATIONS}"; }
 # Graceful stop: on SIGTERM (pod deleted, node drained, Spot preemption) start nothing new, stop Claude, and save the
 # work in progress of each running job as a local commit on its job branch (never pushed here). The job state of #175
 # stays, so the job continues on the next pod: it resumes the Claude session and pushes the saved commit with its work.
+# #581: a job that a security pause stops (its drain time ran out) gets the marker <jobs>/<key>.interrupted; the job
+# says so on its issue or PR when it continues, and the saved commit names the reason.
+SAVED_DIRS=()
 save_work() {
-  local f key dir n=0
+  local f key dir n=0 why=""
+  security_draining && why=", interrupted by security pause"
   for f in "${JOBS}"/*.lock; do
     [[ -e "${f}" ]] || continue
     key=${f##*/}; key=${key%.lock}
-    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ && -r "${JOBS}/${key}.dir" ]] || continue
+    [[ "${key}" =~ ^(issue|pr)-[0-9]{1,12}$ ]] || continue
+    [[ -n "${why}" ]] && { : > "${JOBS}/${key}.interrupted"; log "${key}: interrupted by security pause"; }
+    [[ -r "${JOBS}/${key}.dir" ]] || continue
     read -r dir < "${JOBS}/${key}.dir"
     [[ "${dir}" == "${STATE}/work/"* && -d "${dir}" ]] || continue
     ( flock -w 10 9 && scrub_git_config ) 9>"${STATE}/git.lock"
@@ -1403,8 +1899,9 @@ save_work() {
     rm -f "${dir}/.git/index.lock" "$(lgit -C "${dir}" rev-parse --git-dir 2>/dev/null)/index.lock" 2>/dev/null
     lgit -C "${dir}" add -A >/dev/null 2>&1
     if ! lgit -C "${dir}" diff --cached --quiet 2>/dev/null; then
-      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key})" >/dev/null 2>&1 && n=$((n+1))
+      lgit -C "${dir}" commit -q --no-verify -m "wip: work in progress saved at shutdown (${key}${why})" >/dev/null 2>&1 && n=$((n+1))
     fi
+    SAVED_DIRS+=("${key} ${dir}")
   done
   log "shutdown: saved work in progress of ${n} job(s); interrupted jobs continue on the next start"
 }
@@ -1414,14 +1911,36 @@ kill_tree() {
   for c in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${c}"; done
   kill -KILL "$1" 2>/dev/null
 }
+# TERM_PUSH_SECONDS (#593): how long the SIGTERM handler may spend pushing work in progress, counted from the signal.
+# A Spot VM gets about 30 s: the reason is written first (instant), the pushes come last and stop at this deadline.
+TERM_PUSH_SECONDS="${TERM_PUSH_SECONDS:-20}"
+[[ "${TERM_PUSH_SECONDS}" =~ ^[0-9]{1,3}$ ]] || TERM_PUSH_SECONDS=20
+TERM_PUSH_SECONDS=$(( 10#${TERM_PUSH_SECONDS} ))
+# push_saved_work <deadline>: wip_push each job saved_work committed, while time is left
+push_saved_work() {
+  local e key dir left n=0
+  for e in "${SAVED_DIRS[@]}"; do
+    key=${e%% *}; dir=${e#* }
+    left=$(( $1 - $(date +%s) )); (( left >= 1 )) || { log "shutdown: no time left to push ${key}"; continue; }
+    (( left > WIP_PUSH_TIMEOUT )) && left=${WIP_PUSH_TIMEOUT}
+    wip_push "${dir}" "${key}" "${left}" && n=$((n+1))
+  done
+  log "shutdown: pushed work in progress of ${n} job(s)"
+}
 on_term() {
   trap '' TERM
+  local deadline=$(( $(date +%s) + TERM_PUSH_SECONDS ))
   log "SIGTERM: no new jobs; stopping the running jobs and saving their work in progress"
+  mark_stopped "$(term_reason)"   # #588: the jobs die below before they can name the cause; their next run does
+  mark_killed "SIGKILL from the SIGTERM handler (on_term, kill_tree)"   # #593: before any signal is sent
   # the jobs first, so none of them goes on to push or comment with the half-done work; then whatever is left of
   # Claude. The job state (#175) stays: the next pod continues each job.
   local p; for p in $(jobs -p); do kill_tree "${p}"; done
   pkill -KILL -x claude 2>/dev/null
   save_work
+  push_saved_work "${deadline}"   # #593: after the reason, with a short timeout
+  # #593: the forge sidecar keeps serving after its own SIGTERM until this line (or its own deadline)
+  echo "$(date +%s) loop-exit" >> "${WAKE_FILE}" 2>/dev/null
   exit 0
 }
 trap on_term TERM
@@ -1437,9 +1956,13 @@ while true; do
     (( usage_note )) || log "subscription usage limit: new runs paused"; usage_note=1
   else
     (( usage_note )) && log "subscription usage pause ended: resuming"; usage_note=0
+    : > "${JOBS}/pass-started"
     handle_issues
     handle_feedback
+    # #573: a wake never ends silently; the reasons per item are the "ignored:" and "skipped" lines above
+    (( woke )) && [[ ! -s "${JOBS}/pass-started" ]] && log "wake: no job started ($(running_jobs)/${MAX_CONCURRENT} running; nothing new assigned to ${FORGE_USER})"
   fi
+  woke=0
   maybe_stop
   wait_for_work
 done

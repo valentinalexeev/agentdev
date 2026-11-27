@@ -139,7 +139,7 @@ func main() {
 		}
 	}
 	col := &Collector{Client: mgr.GetClient(), Direct: mgr.GetAPIReader(), NS: ns, Logs: kubeLogs(cs), Now: time.Now, Usage: usage,
-		Drains: r.Drains, Requeue: r.requeueAgent,
+		Drains: r.Drains, Requeue: r.requeueAgent, Recorder: mgr.GetEventRecorderFor("agentdev-operator"), //nolint:staticcheck // core/v1 Events: the Role grants events in the core group only
 		ProxyUsage: os.Getenv("CLAUDE_PROXY_URL") != "",
 		C: SecurityConfig{
 			PauseAfter:        envInt("SECURITY_PAUSE_AFTER", 5),

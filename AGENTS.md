@@ -1,4 +1,22 @@
-# AGENTS.md: bootstrap an agentdev instance on GCP
+# AGENTS.md: rules for AI agents in agentdev
+
+## Definition of done (sandboxed agents)
+
+A sandboxed agent (agentdev harness, no `gh` login, no push) is done when all of these are true (#591):
+
+1. The change does what the task asks, and nothing unrelated.
+2. `docs/` and `README.md` describe the new behaviour (concepts, user guide, admin, troubleshooting as relevant).
+3. A behaviour change adds one fragment `changelog.d/<issue>-<slug>.md` (format: `changelog.d/README.md`).
+   Never edit `## [Unreleased]` in `CHANGELOG.md`. A breaking fragment has `breaking: true` and `## Upgrade`.
+4. Manuals (`user-guide.md`, `install.md`, `admin.md`, `troubleshooting.md`) follow STE (`docs/writing.md`).
+5. Each commit subject is Conventional Commits: `<type>(<scope>): <description>`, lower-case, with `Refs #NN`.
+6. No scratch files: no notes, logs, plans or test output left in the tree or the commits.
+7. Shell passes `shellcheck -S warning`; the tests that cover the change ran, and the summary gives their result.
+8. No em dashes in prose. No secrets in files, commits or the summary.
+
+The rest of `CLAUDE.md` is written for the bot on the owner's machine; its sections are marked for sandboxed agents.
+
+## Bootstrap an agentdev instance on GCP
 
 Instructions for an AI coding agent (Claude Code, jcode, ...) asked to stand up agentdev on Google Cloud.
 Read `CLAUDE.md` first for the working rules (bot identity, issues, PRs, owner approval). Requested in #11.
@@ -7,7 +25,7 @@ Read `CLAUDE.md` first for the working rules (bot identity, issues, PRs, owner a
 created from `examples/deployment/gcp-gke/`. That repository pins a **release** of this one (strict SemVer,
 `CLAUDE.md` §7) and holds every instance value. This repository stays generic.
 
-## Ground rules for this task
+### Ground rules for this task
 
 - **Money and irreversible actions belong to the owner.** Never run `terraform apply` for `bootstrap/`
   (it creates a project and links billing) and never change billing yourself. Prepare, explain, and hand
@@ -17,7 +35,7 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
 - **No instance values in this repository.** Project ids, regions, people and agent lists go into the
   deployment repo (`terraform/instance.tfvars`, `ansible/instance.yml`).
 
-## Checklist
+### Checklist
 
 1. **Deployment repository:** the owner creates a new private repo; copy `examples/deployment/gcp-gke/`
    into it, rename the `*.example` files and fill them in. Pin `ref=` and `image_tag` to the same agentdev
@@ -60,7 +78,7 @@ created from `examples/deployment/gcp-gke/`. That repository pins a **release** 
 11. **Report** in the deployment repo's bootstrap issue: what was created, the checks and their results, the
     monthly budget, and what's left (GitHub App and webhook DNS/TLS per #2).
 
-## When something fails
+### When something fails
 
 - `terraform` 403 or "API not enabled": the module enables APIs; re-run plan after a minute.
 - Agent pod Pending on GKE: check it tolerates `agentdev/pool=sandboxes` and `sandbox.gke.io/runtime=gvisor`

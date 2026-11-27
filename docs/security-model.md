@@ -629,8 +629,13 @@ It creates a `SecurityEvent` named `<agent>-<hash prefix>`, then pauses the Agen
 `SecurityPaused` with reason `HighSeverity` or `TooManyEvents`) on a high-severity event or when one run has more than
 `SECURITY_PAUSE_AFTER` (default 5) events. A run is the pod UID plus the job: a new pod (restart, new version) starts
 a new count, an earlier run of the same `issue-N` does not add up, and events without a job share one bucket per pod.
-The count includes the event just created, even when the operator's cache has not seen it yet. Resuming sets the
-condition to `False` (reason `Resumed`) and keeps the message. Objects are pruned hourly: older than 30 days, or beyond
+The count includes the event just created, even when the operator's cache has not seen it yet. Repeats of one
+`run-events-invalid` refusal from the forge sidecar count once per job (#577): one misconfigured sender repeats the
+same refusal for every batch. A `TooManyEvents` pause drains first (#577): the Agent gets the annotation
+`agentdev/pause-drain`, the reconciler keeps the pod and marks it for drain, the loop starts no new job, and the pod
+stops when the running jobs have ended or after `DRAIN_MAX_MINUTES`. A `HighSeverity` pause stops the pod at once,
+also during such a drain. Resuming sets the condition to `False` (reason `Resumed`), keeps the message and names
+the field manager that last wrote `spec.paused`. Objects are pruned hourly: older than 30 days, or beyond
 500 per agent. The API watches the objects and appends them to `security_events` (role separation below).
 Forge comments and notifications to people with write access are not part of #70 (they need #67 and #57).
 

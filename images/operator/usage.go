@@ -190,7 +190,8 @@ type Usage struct {
 	last   map[string]time.Time          // pod UID/container -> time of the last line taken (a log re-read counts once)
 	subs   map[string]*SubscriptionState // by Claude Secret name
 	loaded bool
-	paused map[string]Pause // by agent name, last written
+	paused map[string]Pause  // by agent name, last written
+	stops  map[string]string // #593: stop.<agent> values last written (retry.go noteStop)
 }
 
 // merge takes a new report of a window at time at; length is the window's length. A report can add a pause but
@@ -479,6 +480,11 @@ func (u *Usage) writeLocked(ctx context.Context, pauses map[string]Pause) error 
 	}
 	if err != nil {
 		return err
+	}
+	for k, v := range cm.Data { // #593: the stop records (retry.go) are not the usage state's: keep them
+		if strings.HasPrefix(k, stopKeyPrefix) {
+			data[k] = v
+		}
 	}
 	if equalData(cm.Data, data) {
 		return nil
