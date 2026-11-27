@@ -76,7 +76,7 @@ func main() {
 		go o.Run(ctx)
 	}
 	go watchSecurityEvents(ctx, agents.d, cfg.Namespace, s)
-	go watchPermissions(ctx, agents.d, cfg.Namespace) // #505: audit entry on a change of spec.permission
+	go watchPermissions(ctx, agents.d, cfg.Namespace) // #505, #570: audit entry on a change of spec.permission, spec.model or spec.effort
 	// FORGE_API_TOKEN (from the Secret agentdev-api-forge) only needs read access to the repositories. Without it every
 	// write that needs the forge is refused (fail closed); the admin group can still pause agents.
 	defaultFiveHour, defaultWeekly = envPct("USAGE_FIVE_HOUR", defaultFiveHour), envPct("USAGE_WEEKLY", defaultWeekly)
@@ -132,6 +132,8 @@ func main() {
 	go func() { log.Fatal(isrv.ListenAndServe()) }()
 	if os.Getenv("CHAT_SESSIONS") == "true" { // console chat sessions (#346, chat.go)
 		chatSvc = chatFromEnv(ctx, wr, agents, store, gh)
+		// #571: the sidecar of a chat pod asks who allowed a label call (chat_labels.go)
+		imux.Handle("POST /internal/chat/{id}/label-asked", chatSvc.labelAsked())
 	}
 	// notifications for each user (#347): NOTIFY_CHANNELS lists the channels on for this instance (webpush); the
 	// NotificationChannel object in PLATFORM_NS gives the VAPID key and the allowed push hosts
@@ -182,6 +184,32 @@ func envCount(k string) int {
 }
 
 var digitsRe = regexp.MustCompile(`^[0-9]{1,6}$`)
+
+// modelChoiceRe: a chat model choice (#570), the same rule as the operator's spec.model (images/operator/render.go
+// modelChars): an alias or a full name of a claude-proxy price family, optional [1m]. effortChoices: claude --effort.
+var (
+	modelChoiceRe = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`)
+	effortChoices = []string{"low", "medium", "high", "xhigh", "max"}
+)
+
+func modelChoiceOK(v string) bool  { return len(v) <= 80 && modelChoiceRe.MatchString(v) }
+func effortChoiceOK(v string) bool { return slices.Contains(effortChoices, v) }
+
+// envChoices reads a comma-separated allow-list (#570, CHAT_MODELS, CHAT_EFFORTS); empty: none beyond the agent's own
+// value. An entry that fails ok stops the API at start (fail closed: no arbitrary string reaches Claude or the proxy).
+func envChoices(k string, ok func(string) bool) []string {
+	out := []string{}
+	for _, v := range strings.Split(os.Getenv(k), ",") {
+		if v = strings.TrimSpace(v); v == "" || slices.Contains(out, v) {
+			continue
+		}
+		if !ok(v) || len(out) >= 20 {
+			log.Fatalf("%s: %q is not an allowed value (or more than 20 entries)", k, v)
+		}
+		out = append(out, v)
+	}
+	return out
+}
 
 func envInt(k string, def int) int {
 	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {
@@ -252,8 +280,12 @@ type agent struct {
 	Ready         int32    `json:"ready"`
 	Managed       bool     `json:"managed"` // an Agent object exists (#57); false: a StatefulSet from before the operator
 	MaxConcurrent int32    `json:"maxConcurrent,omitempty"`
-	ScaleToZero   bool     `json:"scaleToZero"`
-	Paused        bool     `json:"paused"`
+	// spec.model and spec.effort (#570): the Claude model and effort of the agent's runs and the default of its chat
+	// sessions; empty: Claude Code's default
+	Model       string `json:"model,omitempty"`
+	Effort      string `json:"effort,omitempty"`
+	ScaleToZero bool   `json:"scaleToZero"`
+	Paused      bool   `json:"paused"`
 	// api | git (#58): a Git-owned Agent is read-only in the API except pause and resume; empty for managed: false
 	Source string `json:"source,omitempty"`
 	// SecurityEvents in the last 7 days (#70)
@@ -408,7 +440,8 @@ func chatFromEnv(ctx context.Context, wr *writer, agents *kubeAgents, events eve
 	c := newChatAPI(ctx, wr, agents, store, &kubeChat{c: agents.c, cfg: jc},
 		newForgeIssues(os.Getenv("FORGE_URL"), os.Getenv("CHAT_ISSUE_TOKEN"), gh),
 		chatConfig{TokenKey: []byte(key), MaxTotal: envCount("CHAT_MAX_SESSIONS"), MaxPerUser: envCount("CHAT_MAX_SESSIONS_PER_USER"),
-			Retention: time.Duration(days) * 24 * time.Hour})
+			Retention: time.Duration(days) * 24 * time.Hour, Models: envChoices("CHAT_MODELS", modelChoiceOK),
+			Efforts: envChoices("CHAT_EFFORTS", effortChoiceOK)})
 	c.resume()
 	log.Printf("chat sessions on (idle end %ds, transcripts %d days)", jc.IdleSeconds, days)
 	return c

@@ -7,6 +7,7 @@ instance. The product (modules, playbook, images) stays in `valentinalexeev/agen
 ```
 terraform/main.tf                root module → agentdev//infra/terraform?ref=vX.Y.Z
 terraform/instance.tfvars        your project, region, zone, billing account, this repo's name
+terraform/monitoring.tf          optional: log-based metrics and alerts for killed agent jobs (enable_diagnostic_alerts, agentdev #588)
 ansible/instance.yml             your project, zone, agentdev_ref (vX.Y.Z, git tag the CI clones), image_tag (X.Y.Z of the same release), reviewer, agents
 .github/workflows/deploy.yml     PR: fmt, validate, syntax-check; plan comment (read-only identity)   main: plan, apply, deploy (Workload Identity)
 gitops/flux/                     optional Flux install (agentdev #385, DEPLOY_ENGINE=flux): GitRepository and three layers

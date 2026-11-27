@@ -48,6 +48,9 @@ type Config struct {
 	RegisterEvery                                   time.Duration
 	Git                                             string // git binary
 	Self                                            string // this binary, used as git credential helper
+	// ChatSession (#571): set only by the API on the sidecar of a console chat pod (CHAT_SESSION); it selects the
+	// chat label policy (chatlabels.go). Empty in agent pods.
+	ChatSession string
 }
 
 func getenv(k, def string) string {
@@ -83,7 +86,11 @@ func loadConfig() (*Config, error) {
 		GitHubAppID: os.Getenv("GITHUB_APP_ID"), GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
 		GitHubAppKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 		// #425: the API's internal listener (the operator sets APPROVALS_URL on every agent pod)
-		APIURL: getenv("API_INTERNAL_URL", os.Getenv("APPROVALS_URL")),
+		APIURL:      getenv("API_INTERNAL_URL", os.Getenv("APPROVALS_URL")),
+		ChatSession: os.Getenv("CHAT_SESSION"),
+	}
+	if c.ChatSession != "" && !chatSessionRe.MatchString(c.ChatSession) {
+		return nil, fmt.Errorf("CHAT_SESSION: %q is not a chat session id", c.ChatSession)
 	}
 	// preferred: the key as a file (a Secret volume mounted only into this container), so it is never in any
 	// process environment; /proc/<pid>/environ keeps the original environment even after os.Unsetenv

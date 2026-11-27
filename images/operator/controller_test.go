@@ -597,7 +597,11 @@ func TestModelEffortInvalidRefused(t *testing.T) {
 		"flag":    func(a *v1.Agent) { a.Spec.Model = "--dangerously-skip-permissions" },
 		"space":   func(a *v1.Agent) { a.Spec.Model = "opus --effort max" },
 		"newline": func(a *v1.Agent) { a.Spec.Model = "opus\nx" },
-		"long":    func(a *v1.Agent) { a.Spec.Model = strings.Repeat("a", 101) },
+		"long":    func(a *v1.Agent) { a.Spec.Model = "claude-opus-" + strings.Repeat("a", 80) },
+		"typo":    func(a *v1.Agent) { a.Spec.Model = "sonet" },    // #570: outside the price families
+		"other":   func(a *v1.Agent) { a.Spec.Model = "gpt-5" },    // #570
+		"upper":   func(a *v1.Agent) { a.Spec.Model = "Opus" },     // #570
+		"suffix":  func(a *v1.Agent) { a.Spec.Model = "opus[2m]" }, // #570: only [1m]
 		"effort":  func(a *v1.Agent) { a.Spec.Effort = "ultra" },
 	} {
 		r, c := setup(t, agent("mallory", mut))

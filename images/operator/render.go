@@ -289,17 +289,18 @@ func toolsValid(a *v1.Agent) string {
 	return ""
 }
 
-// modelChars: spec.model, as the CRD pattern (#564): an alias or a full model name; never starts with a dash, so the
-// value cannot become a flag of claude.
-var modelChars = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@\[\]-]*$`)
+// modelChars: spec.model, as the CRD pattern (#564, #570): an alias (opus, sonnet, haiku, fable) or a full name of one
+// of these claude-proxy price families (images/credproxy/prices.go), optionally with the context suffix [1m]. A typo
+// is refused instead of counted at the highest multiplier, and the value never starts with a dash (never a flag).
+var modelChars = regexp.MustCompile(`^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$`)
 
 // effortLevels: the levels of `claude --effort` in the pinned Claude Code CLI (#564), as the CRD enum.
 var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
 // modelValid is the operator's check behind the CRD rules (#564): "" when spec.model and spec.effort are unset or valid.
 func modelValid(a *v1.Agent) string {
-	if m := a.Spec.Model; m != "" && (len(m) > 100 || !modelChars.MatchString(m)) {
-		return "spec.model: longer than 100, or not a model name (letters, digits and ._:@[]-, not starting with -)"
+	if m := a.Spec.Model; m != "" && (len(m) > 80 || !modelChars.MatchString(m)) {
+		return "spec.model: longer than 80, or not opus, sonnet, haiku, fable or a claude-<family>-... name (optional [1m])"
 	}
 	if e := a.Spec.Effort; e != "" && !effortLevels[e] {
 		return "spec.effort: not one of low, medium, high, xhigh, max"

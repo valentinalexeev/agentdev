@@ -261,11 +261,15 @@ func TestCacheHeavyFixtureUnderTwentyPercent(t *testing.T) {
 	r, _ := http.Get(f.srv.URL + "/status")
 	var st struct {
 		Weights map[string]float64 `json:"weights"`
+		Models  map[string]float64 `json:"models"` // #570: the cost hint of the console's model choice
 		Jobs    []jobTotal         `json:"jobs"`
 	}
 	json.NewDecoder(r.Body).Decode(&st)
 	r.Body.Close()
 	if st.Weights["cache_read"] != 0.1 || st.Weights["output"] != 5 || len(st.Jobs) != 1 || st.Jobs[0].Units != 8550 {
 		t.Errorf("status %+v", st)
+	}
+	if st.Models["claude-sonnet"] != 1 || st.Models["claude-opus"] <= st.Models["claude-sonnet"] {
+		t.Errorf("status models %v", st.Models)
 	}
 }

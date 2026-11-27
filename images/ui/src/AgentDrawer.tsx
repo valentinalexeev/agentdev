@@ -114,6 +114,7 @@ function Overview({ a, now }: { a: AgentDetail; now: number }) {
       <dl className="agd-dl">
         <dt>Forge</dt><dd>{a.forge ?? '–'}</dd>
         <dt>Max. concurrent</dt><dd>{a.maxConcurrent ?? 2}</dd>
+        <dt>Model</dt><dd>{a.model || 'default'} · {a.effort ? `${a.effort} effort` : 'default effort'}</dd>
         <dt>Scale to zero</dt><dd>{a.scaleToZero ? 'yes' : 'no'}</dd>
         {a.permission && <><dt>Permission mode</dt><dd className="agd-code">{a.permission.mode}</dd></>}
         <dt>Events 7 d</dt><dd>{a.securityEvents
