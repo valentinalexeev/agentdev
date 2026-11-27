@@ -1,12 +1,7 @@
----
-issue: 588
-type: feature
-section: Added
-status: in-progress
-breaking: false
-title: Deployment example: optional log-based metrics and alerts for killed agent jobs
-components: [terraform, docs]
----
+# Deployment example: optional log-based metrics and alerts for killed agent jobs (#588)
+
+Released in 1.3.0 (2026-11-27). Type: feature. Section: Added. Components: terraform, docs.
+
 ## Summary
 
 `examples/deployment/gcp-gke/terraform/monitoring.tf` adds, behind `enable_diagnostic_alerts` (default `false`), log-based

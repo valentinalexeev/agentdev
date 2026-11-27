@@ -32,10 +32,9 @@ kind_agents_max_concurrent: 2
 kind_agents_max_turns: 40             # turn limit of one Claude run (#336, 1-500; formerly MAX_TURNS in config.env)
 # Claude model and reasoning effort of every agent's runs (#564): `claude --model`, `--effort`. Empty: the CLI's own
 # default. model: an alias (opus, sonnet, haiku, fable) or a claude-proxy price family name (claude-opus-...,
-# optional [1m]), the rule of spec.model (images/operator/render.go modelChars); effort: low, medium, high, xhigh, max.
+# optional [1m]), the rule of spec.model (images/operator/render.go modelChars), checked by tasks/model_check.yml; effort: low, medium, high, xhigh, max.
 kind_agents_model: ""
 kind_agents_effort: ""
-kind_agents_model_re: '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$'
 # permission mode per agent (#500): {alice: {mode: auto, autoMode: {allow: ["..."]}}}; an agent not named: dontAsk
 kind_agents_permission: {}
 # tools added to the default allow-list per agent (#496): {alice: ["Bash(npm ci:*)"]}; an agent not named: default only

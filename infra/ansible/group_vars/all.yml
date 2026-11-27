@@ -77,12 +77,11 @@ max_concurrent: 2                   # items per agent in parallel (#20); per-age
 max_turns: 40                       # turn limit of one Claude run (#336, 1-500); per-agent override: agents[].max_turns
 # Claude model and reasoning effort of the agents' runs (#564, #570): `claude --model`, `--effort`. Empty: the CLI's
 # own default, as before. claude_model: an alias (opus, sonnet, haiku, fable) or a claude-proxy price family name
-# (claude-opus-..., claude-sonnet-..., optional [1m]), checked against claude_model_re before rendering;
-# claude_effort: low, medium, high, xhigh, max. Per-agent override: agents[].model, agents[].effort.
+# (claude-opus-..., claude-sonnet-..., claude-haiku-..., claude-fable-..., optional [1m], at most 80 characters,
+# #609), checked by tasks/model_check.yml; claude_effort: low, medium, high, xhigh, max.
+# Per-agent override: agents[].model, agents[].effort.
 claude_model: ""
 claude_effort: ""
-# the rule of spec.model (images/operator/render.go modelChars, the CRD pattern, max. 80 characters)
-claude_model_re: '^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$'
 # Toolchain per agent only (#499): agents[].toolchain = {presets: {go: "1.27.4", rust: "1.100.0"}, path: [...],
 # refresh: 168h}. Versions from the operator's catalogue; installed read-only before the agent starts.
 # Tools added to the default allow-list per agent only (#496): agents[].tools = {allow: ["Bash(npm ci:*)"]}.

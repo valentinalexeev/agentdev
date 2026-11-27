@@ -13,18 +13,15 @@ pr: 576
 A chat session starts with the agent's `spec.model` and `spec.effort`. A person with write access can choose another
 model or effort on **Start session** or in the session header, from the agent's own values and the instance allow-list
 `api.chat.models`, `api.chat.efforts` (`CHAT_MODELS`, `CHAT_EFFORTS`). The menus show the `claude-proxy` multiplier
-as a cost hint. `spec.model` now accepts only `opus`, `sonnet`, `haiku`, `fable` or `claude-<family>-...` (optional
+as a cost hint. `spec.model` keeps the 1.3.0 rule: `opus`, `sonnet`, `haiku`, `fable` or `claude-<family>-...` (optional
 `[1m]`). The agent drawer shows the values; each change is an audit entry. Docs: `docs/admin.md`, "Set the model and
 effort of an agent".
 
 ## Upgrade
 
-1. The `Agent` CRD changes: `spec.model` has a stricter pattern and a maximum length of 80 (was 100). Apply the new
-   CRD with the operator (`deploy.yml` does it). Run
-   `kubectl get agents -A -o custom-columns=NAME:.metadata.name,MODEL:.spec.model` first: an agent with a model
-   outside the families (for example another vendor's name) gets the phase `invalid` until you fix `claude_model`,
-   `agents[].model` or `kind_agents_model`, and the API server refuses new writes of that value. `deploy.yml`,
-   `render.yml` and `kind.yml` (tag `agents`) now stop before they apply anything when one of these values is wrong.
+1. No action for `spec.model`: the stricter pattern (max 80) already shipped in 1.3.0 (#609, #610). `deploy.yml`,
+   `render.yml` and `kind.yml` (tag `agents`) check `claude_model`, `agents[].model` and `kind_agents_model` with the
+   same rule (`tasks/model_check.yml`) before they apply anything.
 2. Optional: set `api.chat.models` and `api.chat.efforts` in `ansible/instance.yml` to allow other values in chat.
    An invalid entry stops the Ansible run and the API (fail closed).
 
