@@ -8,27 +8,33 @@
 # it never pauses an agent: the only writes are
 #   - one refused egress request per container (a SecurityEvent, source egress, which never pauses: security-model.md),
 #   - at most one refused POST /usage (a medium event; skipped when the pod is close to SECURITY_PAUSE_AFTER),
-#   - with --github: a test issue, the agent's PR and one review comment; all closed and the branch deleted at the end.
+#   - with --github or --gitea: a test issue, the agent's PR and one change-request review; all closed and the branch
+#     deleted at the end.
 # Secret values are never printed: env checks compare names only.
 #
 # Usage:
 #   scripts/e2e-gke-security.sh [--kind] [--context CTX] [--agent NAME] [--host UI_HOST] [--webhook-host HOST]
 #                               [--auth-host HOST] [--ingress gateway|external]
-#                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]] [--only LIST]
+#                               [--github OWNER/REPO --owner LOGIN [--github-timeout MIN]]
+#                               [--gitea OWNER/REPO --owner LOGIN [--gitea-url URL]] [--only LIST]
 #   --ingress     gateway (default): the GKE Gateway of the role ingress. external (#160): your own reverse proxy
 #                 publishes the hosts (ingress.mode external); the Gateway-only checks (redirect, SSL policy) are MANUAL
 #   --auth-host   the authentik login host (ingress.auth_host): the sso section checks the issuer it publishes
-#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,sso,github
+#   --gitea-url   the Gitea base URL reachable from here (default FORGE_HOST_URL or http://localhost:3000; on kind run
+#                 `kubectl -n forge port-forward svc/gitea 3000:3000` first). --github-timeout also sets the Gitea wait
+#   --only LIST   comma list of sections: pods,creds,git,egress,claude,usage,approvals,executors,https,api,chat,sso,github,gitea
 # Environment (optional):
 #   E2E_READER_TOKEN  OIDC access token of a person WITHOUT write access to the agent's repo (API permission check)
 #   AGENTS_NS, PLATFORM_NS, EXEC_NS  namespaces (defaults as in config.env)
+#   E2E_GITEA_TOKEN   API token of the --owner account on Gitea (scopes write:issue, write:repository); without it
+#                     FORGE_ADMIN_USER / FORGE_ADMIN_PASSWORD (basic auth, the kind default owner account)
 #
 # shellcheck disable=SC2319,SC2181,SC2016
 #   SC2319/SC2181: `[ cond ]; check $? ...` is the intended pattern (check reads the condition's status).
 #   SC2016: single-quoted snippets expand inside the container, not here.
 set -uo pipefail
 
-KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GH_TIMEOUT=30 ONLY="" AUTH_HOST="" INGRESS=gateway
+KIND=false CTX="" AGENT="" HOST="" WEBHOOK_HOST="" GH_REPO="" GH_OWNER="" GT_REPO="" GT_URL="${FORGE_HOST_URL:-http://localhost:3000}" GH_TIMEOUT=30 ONLY="" AUTH_HOST="" INGRESS=gateway
 AGENTS_NS="${AGENTS_NS:-coding-agents}" PLATFORM_NS="${PLATFORM_NS:-agentdev-platform}" EXEC_NS="${EXEC_NS:-agentdev-executors}"
 PAUSE_AFTER="${SECURITY_PAUSE_AFTER:-5}"
 
@@ -45,6 +51,8 @@ while [ $# -gt 0 ]; do
     --github) GH_REPO="$2"; shift ;;
     --owner) GH_OWNER="$2"; shift ;;
     --github-timeout) GH_TIMEOUT="$2"; shift ;;
+    --gitea) GT_REPO="$2"; shift ;;
+    --gitea-url) GT_URL="${2%/}"; shift ;;
     --only) ONLY="$2"; shift ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
@@ -64,6 +72,11 @@ fail()   { FAILN=$((FAILN+1)); printf 'FAIL    %s\n' "$*"; }
 skip()   { SKIPN=$((SKIPN+1)); printf 'SKIP    %s\n' "$*"; }
 manual() { MANN=$((MANN+1));   printf 'MANUAL  %s\n' "$*"; }
 check()  { if [ "$1" = 0 ]; then pass "$2"; else fail "$2${3:+ ($3)}"; fi; }   # check <rc> <title> [detail]
+# cleanups of the forge sections run on exit, in order (each section adds its own)
+CLEANUPS=(); on_exit() { local c; for c in ${CLEANUPS[@]+"${CLEANUPS[@]}"}; do "$c"; done; }; trap on_exit EXIT
+# wait_until <minutes> <command...>: run the command every 20 s until it prints something; prints that output
+wait_until() { local end=$(( $(date +%s) + $1*60 )) out=""; shift
+  while [ -z "$out" ] && [ "$(date +%s)" -lt $end ]; do sleep 20; out=$("$@" 2>/dev/null); done; printf '%s' "$out"; }
 section() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 k() { kubectl --context "$CTX" "$@"; }
 kexec() { local c="$1"; shift; k -n "$AGENTS_NS" exec "agent-$AGENT-0" -c "$c" -- "$@"; }
@@ -227,6 +240,27 @@ if section claude; then
     case "$base" in *claude-proxy*) pass "agent uses claude-proxy (ANTHROPIC_BASE_URL)";; *) fail "ANTHROPIC_BASE_URL does not point to claude-proxy";; esac
     code=$(probe forge https://api.anthropic.com/)
     ! reached "$code" && [ "$code" != 404 ]; check $? "forge: api.anthropic.com is refused" "HTTP $code"
+    # workload identity (#352, R107): the proxy refuses a token of the agent's service account for another audience,
+    # and in mode token also the HMAC key. Each request goes from the agent container, with only the header changed.
+    pcall='curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $1" "$ANTHROPIC_BASE_URL/v1/messages"'
+    mode=$(k -n "$AGENTS_NS" get deploy claude-proxy -o json | jq -r '[.spec.template.spec.containers[0].env[]?|select(.name=="CLAUDE_PROXY_AUTH")|.value][0] // "key"')
+    if [ "$mode" = key ]; then skip "claude-proxy token auth is off (CLAUDE_PROXY_AUTH=key or a proxy before 1.1)"
+    else
+      other=$(k -n "$AGENTS_NS" create token "agent-$AGENT" --audience other --duration 10m 2>/dev/null)
+      if [ -n "$other" ]; then
+        code=$(kexec agent sh -c "$pcall" pcall "$other" 2>/dev/null)
+        [ "$code" = 401 ]; check $? "claude-proxy refuses a token of agent-$AGENT for another audience (R107)" "HTTP $code"
+      else fail "cannot create a token for service account agent-$AGENT (operator 1.1 creates it)"; fi
+      kexec agent test -s /var/run/secrets/agentdev/proxy/token 2>/dev/null
+      check $? "agent container has the projected claude-proxy token (#352)"
+      ! kexec forge test -e /var/run/secrets/agentdev/proxy/token 2>/dev/null; check $? "forge container has no claude-proxy token"
+      code=$(kexec agent sh -c 'curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $(cat /var/run/secrets/agentdev/proxy/token)" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" != 401 ] && [ -n "$code" ]; check $? "claude-proxy accepts the agent's projected token (TokenReview reaches the API server)" "HTTP $code"
+    fi
+    if [ "$mode" = token ]; then
+      code=$(kexec agent sh -c 'k="${ANTHROPIC_AUTH_TOKEN:-}"; [ -n "$k" ] || { echo none; exit; }; curl -s -o /dev/null -m 10 -w "%{http_code}" -X POST -H "Content-Type: application/json" -d "{}" -H "Authorization: Bearer $k" "$ANTHROPIC_BASE_URL/v1/messages"' 2>/dev/null)
+      [ "$code" = 401 ] || [ "$code" = none ]; check $? "claude-proxy in mode token refuses the HMAC key (R107)" "HTTP $code"
+    else skip "HMAC key refusal (CLAUDE_PROXY_AUTH=$mode, not token)"; fi
     # the Claude Secrets are mounted by claude-proxy only
     users=$(k -n "$AGENTS_NS" get pods -o json | jq -r '.items[]|select(.metadata.labels.app!="claude-proxy")|.metadata.name as $p|
       [(.spec.volumes[]?|.secret.secretName//empty),(.spec.containers[]|(.env[]?|.valueFrom.secretKeyRef.name//empty),(.envFrom[]?|.secretRef.name//empty))]|
@@ -377,6 +411,117 @@ if section api; then
   fi
 fi
 
+# ---------------------------------------------------------------- console chat boundaries (#346, R101)
+if section chat; then
+  if ! k -n "$PLATFORM_NS" get deploy agentdev-api >/dev/null 2>&1; then skip "console chat checks: agentdev-api is not deployed"
+  else
+    # the session server port 7681 accepts only the API (NetworkPolicy chat-session-server)
+    np=$(k -n "$AGENTS_NS" get networkpolicy chat-session-server -o json 2>/dev/null)
+    from=$(echo "$np" | jq -c '[.spec.ingress[]?|select(any(.ports[]?; .port==7681))|.from[]?]' 2>/dev/null)
+    [ "$from" = "[{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"$PLATFORM_NS\"}},\"podSelector\":{\"matchLabels\":{\"app\":\"agentdev-api\"}}}]" ]
+    check $? "NetworkPolicy chat-session-server: only agentdev-api may reach port 7681" "from: ${from:-no policy}"
+    cip=$(k -n "$AGENTS_NS" get pods -l app=agent-chat,agentdev/console=true --field-selector=status.phase=Running -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)
+    if $KIND; then skip "live 7681 probe: kind does not enforce NetworkPolicy (manifests/platform.yaml.tmpl)"
+    elif [ -n "$cip" ]; then
+      code=$(probe agent "http://$cip:7681/state" direct)
+      ! reached "$code" && [ "$code" != 401 ]; check $? "agent pod (not the API) cannot reach a console chat pod on 7681" "HTTP $code"
+    else manual "no console chat session runs: start one in the console and re-run --only chat for the live 7681 probe"; fi
+
+    # the admission policy holds Jobs from the API's service account to the chat shape (server dry run, nothing is created)
+    sa="system:serviceaccount:$PLATFORM_NS:agentdev-api"
+    img=$(k -n "$PLATFORM_NS" get deploy agentdev-api -o json | jq -r '.spec.template.spec.containers[]|select(.name=="api")|.env[]?|select(.name=="CHAT_WORKER_IMAGE")|.value')
+    # #424: a console chat Job is the agent's pod spec (the template of StatefulSet agent-$AGENT) with the interactive
+    # entry point, as images/api/chat_kube.go builds it: agent -> chat, the forge sidecar without wake/register, the
+    # chat labels, an emptyDir /state. job <jq filter on the pod spec> [jq filter on the Job]: that Job, mutated.
+    tmpl=$(k -n "$AGENTS_NS" get statefulset "agent-$AGENT" -o json 2>/dev/null | jq -c '.spec.template')
+    job() {
+      jq -n --arg ns "$AGENTS_NS" --arg a "$AGENT" --argjson t "$tmpl" '{apiVersion:"batch/v1",kind:"Job",
+        metadata:{name:"chat-e2e-admission",namespace:$ns,labels:{app:"agent-chat","agentdev/console":"true","agentdev/chat-agent":$a,session:"chat-e2e-admission"}},
+        spec:{backoffLimit:0,template:{metadata:{labels:{app:"agent-chat","agentdev/console":"true"}},
+          spec:($t.spec + {restartPolicy:"Never",enableServiceLinks:false}
+            | .volumes = ([{name:"state",emptyDir:{}}] + .volumes)
+            | .containers |= map(if .name=="agent" then .name="chat" | .command=["true"] else
+                (.env |= map(select(.name!="WAKE_TOKEN" and .name!="REGISTER_TOKEN" and .name!="SELF_URL")) | del(.ports)) end))}}}' \
+      | jq "(.spec.template.spec) |= (${1:-.}) | ${2:-.}"; }
+    try() { job "$@" | k create --dry-run=server --as="$sa" -f - -o name 2>&1; }
+    denied() { echo "$1" | grep -q 'agentdev-api-chat-jobs'; }
+    if [ -z "$img" ]; then skip "chat admission checks: CHAT_WORKER_IMAGE not set on agentdev-api"
+    elif [ -z "$tmpl" ] || [ "$tmpl" = null ]; then skip "chat admission checks: no StatefulSet agent-$AGENT"
+    else
+      out=$(try); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: the API may create a console chat Job that is agent $AGENT's pod plus the session (control)" "$(echo "$out" | head -1)"
+      sec() { echo "{name:\"$1\",valueFrom:{secretKeyRef:{name:\"$2\",key:\"$3\"}}}"; }
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec FORGE_TOKEN "agent-$AGENT" FORGE_TOKEN)]"); denied "$out"
+      check $? "admission: the chat container cannot hold the agent's forge token" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec EGRESS_FORGE_KEY egress-forge-proxy password)]"); denied "$out"
+      check $? "admission: the chat container cannot hold the egress forge key" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"forge\")|.env) += [$(sec FORGE_TOKEN agent-other-e2e FORGE_TOKEN)]"); denied "$out"
+      check $? "admission: a chat Job of $AGENT cannot read another agent's Secret" "$(echo "$out" | head -1)"
+      out=$(try "(.containers[]|select(.name==\"chat\")|.env) += [$(sec X agentdev-api-forge FORGE_API_TOKEN)]"); denied "$out"
+      check $? "admission: the API cannot create a chat Job that reads a platform Secret" "$(echo "$out" | head -1)"
+      out=$(try '.containers += [{name:"x",image:"busybox:latest",command:["true"]}]'); denied "$out"
+      check $? "admission: the API cannot add a container to a chat Job" "$(echo "$out" | head -1)"
+      out=$(try '(.containers[]|select(.name=="forge")|.image) = "busybox:latest"'); denied "$out"
+      check $? "admission: the API cannot create a chat Job with another image" "$(echo "$out" | head -1)"
+      out=$(try '(.containers[]|select(.name=="chat")|.securityContext) = {capabilities:{add:["NET_ADMIN"]}}'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that adds capabilities" "$(echo "$out" | head -1)"
+      # #400: only the service account of the Job's own agent, only audience claude-proxy, no other Secret volume
+      for other in default agentdev-api agentdev-operator "agent-$AGENT-x"; do
+        out=$(try ".serviceAccountName = \"$other\""); denied "$out"
+        check $? "admission: the API cannot create a chat Job of agent $AGENT with service account $other" "$(echo "$out" | head -1)"
+      done
+      out=$(try '.volumes += [{name:"x",secret:{secretName:"agentdev-api-forge"}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that mounts a Secret volume" "$(echo "$out" | head -1)"
+      out=$(try '.volumes += [{name:"x",projected:{sources:[{secret:{name:"agentdev-api-forge"}}]}}]'); denied "$out"
+      check $? "admission: the API cannot create a chat Job that projects a Secret" "$(echo "$out" | head -1)"
+      # #416: the projected claude-proxy token keeps its shape and its container. pt adds the token volume as the
+      # operator renders it (images/operator/render.go proxyTokenVolumes) when the agent runs without it.
+      pt='(if any(.volumes[]; .name=="proxy-token") then . else .volumes += [{name:"proxy-token",projected:{sources:[{serviceAccountToken:{audience:"claude-proxy",expirationSeconds:600,path:"token"}}]}}] end)'
+      out=$(try "$pt"); echo "$out" | grep -q 'job.batch/chat-e2e-admission'
+      check $? "admission: a chat Job with the projected claude-proxy token (600 s) is allowed (control)" "$(echo "$out" | head -1)"
+      # 601, not 599: Kubernetes itself refuses a token below 600 s before the policy runs (#556)
+      for exp in 3600 601; do
+        out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.expirationSeconds) = $exp"); denied "$out"
+        check $? "admission: the API cannot create a chat Job whose claude-proxy token lives ${exp} s (not 600)" "$(echo "$out" | head -1)"
+      done
+      # #550: the token keeps its file name (path token), so it cannot appear under another name in the chat container
+      out=$(try "$pt | (.volumes[]|select(.name==\"proxy-token\")|.projected.sources[0].serviceAccountToken.path) = \"other\""); denied "$out"
+      check $? "admission: the API cannot create a chat Job whose claude-proxy token has another path (not token)" "$(echo "$out" | head -1)"
+      out=$(try "$pt | (.containers[]|select(.name==\"forge\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"
+      check $? "admission: the forge container of a chat Job cannot mount the claude-proxy token" "$(echo "$out" | head -1)"
+      out=$(try "$pt | (.initContainers[]|select(.name==\"state-init\")|.volumeMounts) += [{name:\"proxy-token\",mountPath:\"/var/run/e2e\",readOnly:true}]"); denied "$out"
+      check $? "admission: the init container (state-init, the clone step) of a chat Job cannot mount the claude-proxy token" "$(echo "$out" | head -1)"
+      out=$(try . '.spec.template.metadata.labels.agent = "'"$AGENT"'"'); denied "$out"
+      check $? "admission: a chat pod cannot carry the agent label of agent pods" "$(echo "$out" | head -1)"
+    fi
+    # chat on the agent's paths (#424): a running console session got its repository from the forge sidecar (this
+    # works on GitHub only through the sidecar's egress key), and its chat container holds no forge credential
+    cpod=$(k -n "$AGENTS_NS" get pods -l app=agent-chat,agentdev/console=true --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$cpod" ]; then
+      out=$(k -n "$AGENTS_NS" exec "$cpod" -c chat -- git -C /state/repo rev-parse --verify -q HEAD 2>&1)
+      [[ "$out" =~ ^[0-9a-f]{40}$ ]]; check $? "console chat $cpod: the repository is there (synced through the forge sidecar)" "$(echo "$out" | head -1)"
+      envs=$(k -n "$AGENTS_NS" get pod "$cpod" -o json | jq -r '.spec.containers[]|select(.name=="chat")|.env[]?|(.valueFrom.secretKeyRef.name // empty)' | sort -u | tr '\n' ' ')
+      [[ " $envs " != *" egress-forge-proxy "* && " $envs " != *" agent-$AGENT "* ]]
+      check $? "console chat $cpod: the chat container holds no forge token and no egress key" "Secrets: ${envs:-none}"
+      code=$(k -n "$AGENTS_NS" exec "$cpod" -c chat -- curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:7070/healthz 2>/dev/null)
+      [ "$code" = 200 ]; check $? "console chat $cpod: the forge sidecar answers on 127.0.0.1:7070" "HTTP $code"
+    else manual "no console chat session runs: start one in the console (on GitHub too) and re-run --only chat for the repo and sidecar checks"; fi
+    # the delete policy needs an existing non-console Job: a suspended dummy (never runs a pod), made and removed by
+    # the operator of this script, so the check runs on every cluster (#389 review)
+    other=e2e-sec-nonconsole-$$
+    if k -n "$AGENTS_NS" create -f - >/dev/null 2>&1 <<EOF
+{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"$other","labels":{"app":"e2e-security"}},
+ "spec":{"suspend":true,"ttlSecondsAfterFinished":60,"template":{"spec":{"restartPolicy":"Never",
+ "containers":[{"name":"x","image":"busybox:latest","command":["true"]}]}}}}
+EOF
+    then
+      out=$(k -n "$AGENTS_NS" delete job "$other" --dry-run=server --as="$sa" 2>&1); echo "$out" | grep -q 'agentdev-api-chat-jobs-delete'
+      check $? "admission: the API cannot delete a Job that is not a console chat Job" "$(echo "$out" | head -1)"
+      k -n "$AGENTS_NS" delete job "$other" --wait=false >/dev/null 2>&1 || true
+    else skip "delete check: cannot create the dummy Job $other in $AGENTS_NS"; fi
+  fi
+fi
+
 # ---------------------------------------------------------------- SSO (#122, #134)
 if section sso; then
   if k -n "$PLATFORM_NS" get secret authentik-sso >/dev/null 2>&1; then pass "company SSO source is configured (Secret authentik-sso)"
@@ -409,7 +554,7 @@ if section github; then
       [ -n "${pr:-}" ] && gh pr close -R "$GH_REPO" "$pr" --delete-branch --comment "e2e done, closed by the script" >/dev/null 2>&1
       gh issue close -R "$GH_REPO" "$issue" --comment "e2e done, closed by the script" >/dev/null 2>&1
     }
-    trap cleanup_gh EXIT
+    CLEANUPS+=(cleanup_gh)
     echo "        issue #$issue created; waiting up to $GH_TIMEOUT min for the PR"
     pr="" end=$(( $(date +%s) + GH_TIMEOUT*60 ))
     while [ -z "$pr" ] && [ "$(date +%s)" -lt $end ]; do
@@ -422,7 +567,8 @@ if section github; then
       pass "agent picked the labelled issue #$issue and opened PR #$pr"
       revs=$(gh pr view -R "$GH_REPO" "$pr" --json reviewRequests -q '[.reviewRequests[].login]|join(" ")')
       [[ " $revs " == *" $GH_OWNER "* ]]; check $? "PR #$pr asks $GH_OWNER for review" "reviewers: $revs"
-      gh pr review -R "$GH_REPO" "$pr" --comment --body "Please also add a second line \`reviewed\` to E2E.md." >/dev/null
+      head0=$(gh pr view -R "$GH_REPO" "$pr" --json headRefOid -q .headRefOid)
+      gh pr review -R "$GH_REPO" "$pr" --request-changes --body "Please also add a second line \`reviewed\` to E2E.md." >/dev/null
       t0=$(date -u +%FT%TZ) reply="" end=$(( $(date +%s) + GH_TIMEOUT*60 ))
       while [ -z "$reply" ] && [ "$(date +%s)" -lt $end ]; do
         sleep 20
@@ -431,6 +577,63 @@ if section github; then
         [ "${reply:-0}" -gt 0 ] || reply=""
       done
       [ -n "$reply" ]; check $? "agent replied to the review on PR #$pr (comment or new commit)"
+      gh_head() { local h; h=$(gh pr view -R "$GH_REPO" "$pr" --json headRefOid -q .headRefOid) && [ "$h" != "$head0" ] && echo "$h"; }
+      head1=$(wait_until "$GH_TIMEOUT" gh_head)
+      [ -n "$head1" ]; check $? "agent pushed a new commit to PR #$pr after the change request (#216)" "head still ${head0:0:7}"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------- Gitea acceptance (#216): the same flow as github
+if section gitea; then
+  gt() {  # gt METHOD PATH [json]: the Gitea API as --owner
+    local auth=(-u "${FORGE_ADMIN_USER:-owner}:${FORGE_ADMIN_PASSWORD:-}")
+    [ -n "${E2E_GITEA_TOKEN:-}" ] && auth=(-H "Authorization: token ${E2E_GITEA_TOKEN}")
+    curl -fsS -m 30 "${auth[@]}" -X "$1" -H 'Content-Type: application/json' "${GT_URL}/api/v1$2" ${3:+-d "$3"}
+  }
+  if [ -z "$GT_REPO" ] || [ -z "$GH_OWNER" ]; then skip "Gitea acceptance (#216): use --gitea OWNER/REPO --owner LOGIN"
+  elif [ -z "${E2E_GITEA_TOKEN:-}" ] && [ -z "${FORGE_ADMIN_PASSWORD:-}" ]; then fail "Gitea acceptance: set E2E_GITEA_TOKEN (or FORGE_ADMIN_PASSWORD)"
+  elif [ "$(gt GET /user | jq -r .login 2>/dev/null)" != "$GH_OWNER" ]; then fail "Gitea acceptance: the credential is not --owner $GH_OWNER at $GT_URL"
+  else
+    title="agentdev e2e $(date -u +%Y%m%d%H%M%S): add a line to E2E.md"
+    gissue=$(gt POST "/repos/$GT_REPO/issues" "$(jq -cn --arg t "$title" --arg a "$AGENT" \
+      '{title:$t, assignees:[$a], body:"e2e check (#216). Add the line `e2e ok` to E2E.md and open a pull request. This issue is closed by the script."}')" | jq -r .number)
+    cleanup_gt() {
+      if [ -n "${gpr:-}" ]; then
+        gt POST "/repos/$GT_REPO/issues/$gpr/comments" '{"body":"e2e done, closed by the script"}' >/dev/null 2>&1
+        gt PATCH "/repos/$GT_REPO/pulls/$gpr" '{"state":"closed"}' >/dev/null 2>&1
+        [ -n "${gbranch:-}" ] && gt DELETE "/repos/$GT_REPO/branches/$(jq -rn --arg b "$gbranch" '$b|@uri')" >/dev/null 2>&1
+      fi
+      [[ "${gissue:-}" =~ ^[0-9]+$ ]] && gt PATCH "/repos/$GT_REPO/issues/$gissue" '{"state":"closed"}' >/dev/null 2>&1
+    }
+    CLEANUPS+=(cleanup_gt)
+    if ! [[ "$gissue" =~ ^[0-9]+$ ]]; then fail "Gitea: could not create the test issue in $GT_REPO"
+    else
+      echo "        issue #$gissue assigned to $AGENT; waiting up to $GH_TIMEOUT min for the PR"
+      gt_pr() { gt GET "/repos/$GT_REPO/pulls?state=open&limit=50" | jq -r --arg a "$AGENT" --arg i "#$gissue" \
+        '[.[]|select(.head.ref|startswith("agent/"+$a+"/"))|select((.body // "")|test($i+"\\b"))][0]|select(.)|"\(.number) \(.head.ref) \(.head.sha)"'; }
+      read -r gpr gbranch head0 <<<"$(wait_until "$GH_TIMEOUT" gt_pr)"
+      if [ -z "${gpr:-}" ]; then fail "Gitea: agent did not open a PR for issue #$gissue in $GH_TIMEOUT min"
+      else
+        pass "Gitea: agent picked the assigned issue #$gissue and opened PR #$gpr"
+        pull=$(gt GET "/repos/$GT_REPO/pulls/$gpr")
+        revs=$(jq -r '[.requested_reviewers[]?.login]|join(" ")' <<<"$pull")
+        [[ " $revs " == *" $GH_OWNER "* ]]; check $? "Gitea: PR #$gpr asks $GH_OWNER for review" "reviewers: $revs"
+        labels=$(jq -r '[.labels[]?.name]|join(" ")' <<<"$pull")
+        [[ " $labels " == *" agent:$AGENT "* ]]; check $? "Gitea: PR #$gpr has the label agent:$AGENT (#241)" "labels: $labels"
+        # comment ids only go up: a reply is a comment by someone else with a higher id than any before the review
+        c0=$(gt GET "/repos/$GT_REPO/issues/$gpr/comments" | jq '[.[].id]|max // 0')
+        gt_reply() { gt GET "/repos/$GT_REPO/issues/$gpr/comments" | jq -r --arg o "$GH_OWNER" --argjson c "${c0:-0}" \
+          '[.[]|select(.user.login!=$o and .id>$c)]|length|select(.>0)'; }
+        gt POST "/repos/$GT_REPO/pulls/$gpr/reviews" \
+          '{"event":"REQUEST_CHANGES","body":"Please also add a second line `reviewed` to E2E.md."}' >/dev/null \
+          || fail "Gitea: could not submit the change-request review"
+        reply=$(wait_until "$GH_TIMEOUT" gt_reply)
+        [ -n "$reply" ]; check $? "Gitea: agent replied to the review on PR #$gpr"
+        gt_head() { local h; h=$(gt GET "/repos/$GT_REPO/pulls/$gpr" | jq -r .head.sha) && [ "$h" != "$head0" ] && echo "$h"; }
+        head1=$(wait_until "$GH_TIMEOUT" gt_head)
+        [ -n "$head1" ]; check $? "Gitea: agent pushed a new commit to PR #$gpr after the change request" "head still ${head0:0:7}"
+      fi
     fi
   fi
 fi

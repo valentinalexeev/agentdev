@@ -1,0 +1,73 @@
+# The layers of an instance (agentdev #385). Order only between layers (dependsOn). All layers read the
+# GitRepository agentdev (sync/gotk-sync.yaml) (branch `gitops`, written by the deploy workflow).
+#   infrastructure  External Secrets Operator and the Helm repositories (gitops/flux/infrastructure)
+#   platform        render.yml output without the agents: namespaces, CRDs, router, operator, platform, authentik, API
+#   agents          Agent and Executor objects (#58), rendered/agents
+#   reloader        Stakater Reloader (rendered/reloader = gitops/flux/reloader + the rendered namespaces). Scoped mode
+#                   writes a Role in each watched namespace, so it must run after the platform layer made them.
+#                   Nothing depends on it: a Secret change before Reloader is ready only waits for the next restart.
+# prune: true removes an object that left Git. Drift correction: the kustomize-controller applies the full state at
+# each interval (server-side apply, force off), and the HelmReleases have driftDetection enabled.
+# No StatefulSet of an agent is in Git: the router owns its replicas (scale to zero), so it is never seen as drift.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentdev-infrastructure
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 10m
+  sourceRef: {kind: GitRepository, name: agentdev}
+  path: ./gitops/flux/infrastructure
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentdev-platform
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: agentdev-infrastructure
+  interval: 10m
+  retryInterval: 1m
+  timeout: 15m
+  sourceRef: {kind: GitRepository, name: agentdev}
+  path: ./rendered/platform
+  prune: true
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentdev-agents
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: agentdev-platform
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef: {kind: GitRepository, name: agentdev}
+  path: ./rendered/agents
+  prune: true
+  # Ready of Agent and Executor (#386): a stopped agent is Ready, so all agents stopped is a healthy instance
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentdev-reloader
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: agentdev-platform
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  sourceRef: {kind: GitRepository, name: agentdev}
+  path: ./rendered/reloader
+  prune: true
+  wait: true

@@ -7,8 +7,10 @@ instance. The product (modules, playbook, images) stays in `valentinalexeev/agen
 ```
 terraform/main.tf                root module → agentdev//infra/terraform?ref=vX.Y.Z
 terraform/instance.tfvars        your project, region, zone, billing account, this repo's name
-ansible/instance.yml             your project, zone, image_tag (X.Y.Z of the same release), reviewer, agents
-.github/workflows/deploy.yml     PR: fmt, validate, syntax-check (no credentials)   main: plan, apply, deploy (Workload Identity)
+terraform/monitoring.tf          optional: log-based metrics and alerts for killed agent jobs (enable_diagnostic_alerts, agentdev #588)
+ansible/instance.yml             your project, zone, agentdev_ref (vX.Y.Z, git tag the CI clones), image_tag (X.Y.Z of the same release), reviewer, agents
+.github/workflows/deploy.yml     PR: fmt, validate, syntax-check; plan comment (read-only identity)   main: plan, apply, deploy (Workload Identity)
+gitops/flux/                     optional Flux install (agentdev #385, DEPLOY_ENGINE=flux): GitRepository and three layers
 AGENTS.md / CLAUDE.md            how an agent operates this instance
 ```
 
@@ -17,10 +19,10 @@ AGENTS.md / CLAUDE.md            how an agent operates this instance
 2. Follow agentdev `AGENTS.md` steps 1 to 3 (logins, **you** run the bootstrap apply: project, billing, state bucket; for an existing project set `create_project = false` in `bootstrap.tfvars`).
 3. `cd terraform && terraform init -backend-config="bucket=<project>-tfstate" && terraform plan -var-file=instance.tfvars`
    → you apply once locally (creates the Workload Identity setup the CI needs).
-4. Set repository variables from `terraform output github_actions_auth`: `GCP_WIF_PROVIDER`, `GCP_SERVICE_ACCOUNT`, and `GCP_PROJECT`.
+4. Set repository variables from `terraform output github_actions_auth`: `GCP_WIF_PROVIDER`, `GCP_SERVICE_ACCOUNT`, and `GCP_PROJECT`. For the PR plan comment also `GCP_PLAN_WIF_PROVIDER` and `GCP_PLAN_SERVICE_ACCOUNT` (`plan_workload_identity_provider`, `plan_service_account`; agentdev #291).
 5. Fill Secret Manager values (agentdev `infra/ansible/README.md`).
 6. Protect `main`: require a PR, 1 approval, and the `deploy` checks. From now on every change is a PR here.
 
 ## Upgrading agentdev
-Change `ref=vX.Y.Z` in `terraform/main.tf` **and** `image_tag: "X.Y.Z"` in `ansible/instance.yml` together, in one PR (image tags have no `v`).
+Change `ref=vX.Y.Z` in `terraform/main.tf` **and** `agentdev_ref: vX.Y.Z` and `image_tag: "X.Y.Z"` in `ansible/instance.yml` together, in one PR (image tags have no `v`).
 Read the agentdev `CHANGELOG.md` first; a MAJOR bump (MINOR while `0.x`) can require input changes.

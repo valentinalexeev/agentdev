@@ -12,12 +12,13 @@ import (
 	"time"
 )
 
-// client is a minimal GitHub REST client (stdlib only). It reads, never writes.
+// client is a minimal GitHub or Gitea REST client (stdlib only). It reads, never writes.
 type client struct {
-	base  string // https://api.github.com
+	base  string // https://api.github.com, or https://gitea.example/api/v1
 	repo  string // owner/name
 	token string
 	http  *http.Client
+	gitea bool // Gitea (#241 P8): "token" auth, no GitHub headers
 }
 
 func (c *client) get(ctx context.Context, path string, q url.Values, out any) error {
@@ -29,16 +30,27 @@ func (c *client) get(ctx context.Context, path string, q url.Values, out any) er
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	switch {
+	case c.gitea:
+		req.Header.Set("Accept", "application/json")
+		if c.token != "" {
+			req.Header.Set("Authorization", "token "+c.token)
+		}
+	default:
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("GET %s: %w", path, errNotFound)
+	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
 		return fmt.Errorf("GET %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
@@ -54,14 +66,20 @@ func pages[T any](ctx context.Context, c *client, path string, q url.Values, max
 		for k, v := range q {
 			qq[k] = v
 		}
-		qq.Set("per_page", "100")
+		size := 100
+		if c.gitea { // Gitea pages with limit, at most 50 by default (MAX_RESPONSE_ITEMS)
+			size = 50
+			qq.Set("limit", "50")
+		} else {
+			qq.Set("per_page", "100")
+		}
 		qq.Set("page", strconv.Itoa(p))
 		var page []T
 		if err := c.get(ctx, path, qq, &page); err != nil {
 			return nil, err
 		}
 		all = append(all, page...)
-		if len(page) < 100 {
+		if len(page) < size {
 			break
 		}
 	}
@@ -116,6 +134,9 @@ type ghComment struct {
 // are harmless because the reducer is keyed by id), plus every open PR, because checks change without moving
 // the PR's updated_at.
 func fetch(ctx context.Context, c *client, cursor string, now time.Time) (Snapshot, error) {
+	if c.gitea {
+		return fetchGitea(ctx, c, cursor, now)
+	}
 	snap := Snapshot{At: now.UTC().Format(time.RFC3339)}
 	r := "/repos/" + c.repo
 

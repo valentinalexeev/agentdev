@@ -23,6 +23,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -60,6 +63,34 @@ spec:
                   Only claude-* names (claude-shared or claude-<agent>), for the same reason.
                 pattern: ^claude-[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
+              diagnostics:
+                description: 'Diagnostics of the agent''s jobs (#588). Unset: none,
+                  and the pod is as before.'
+                properties:
+                  intervalSeconds:
+                    description: Seconds between two samples. Default 60.
+                    format: int32
+                    maximum: 3600
+                    minimum: 5
+                    type: integer
+                  resources:
+                    description: |-
+                      Log the memory use (cgroup memory.current, memory.peak, OOM kills) and the root file system use of the agent
+                      container every intervalSeconds while Claude runs, and once at the end of each run, to help tell an OOM kill from
+                      a pause or a pod stop. Where the sandbox does not expose the cgroup files (for example some gVisor setups), the
+                      values show as n/a.
+                    type: boolean
+                type: object
+              effort:
+                description: 'Reasoning effort of the agent''s runs (`claude --effort`,
+                  #564). Unset: the CLI''s own default, as before.'
+                enum:
+                - low
+                - medium
+                - high
+                - xhigh
+                - max
+                type: string
               forge:
                 default: gitea
                 description: Forge kind.
@@ -90,20 +121,151 @@ spec:
                 maximum: 500
                 minimum: 1
                 type: integer
+              model:
+                description: |-
+                  Claude model of the agent's runs and the default of its chat sessions (`claude --model`, #564, #570): an alias
+                  (opus, sonnet, haiku, fable) or a full name of one of these families such as "claude-opus-5-5", optionally with
+                  the context suffix "[1m]", so the claude-proxy price table always has a multiplier for it. Unset: the Claude
+                  Code CLI's own default for the credential, as before.
+                maxLength: 80
+                pattern: ^(opus|sonnet|haiku|fable|claude-(opus|sonnet|haiku|fable)(-[a-z0-9]+)*)(\[1m\])?$
+                type: string
               paused:
                 description: 'Paused: no pod, state kept (day-2 pause/resume, #4).
                   Unlike agentdev/blocked it is the owner''s desired state.'
                 type: boolean
+              permission:
+                description: |-
+                  How Claude Code decides a tool call outside the allow-list (#500). Unset: dontAsk (refused, or asked through
+                  approvals).
+                properties:
+                  autoMode:
+                    description: |-
+                      Rules for the classifier of mode auto, the autoMode section of the Claude Code settings. Unset: Claude Code's
+                      defaults (`claude auto-mode defaults`).
+                    properties:
+                      allow:
+                        description: Actions the classifier allows (autoMode.allow).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                      environment:
+                        description: Facts about the environment for the classifier,
+                          for example trusted repositories (autoMode.environment).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                      softDeny:
+                        description: Actions the classifier blocks unless the task
+                          clearly asks for them (autoMode.soft_deny).
+                        items:
+                          maxLength: 500
+                          pattern: ^[^\x00-\x1f\x7f]+$
+                          type: string
+                        maxItems: 50
+                        type: array
+                    type: object
+                  mode:
+                    default: dontAsk
+                    description: |-
+                      dontAsk (default): a call outside the allow-list is refused, or asked through approvals. auto: Claude Code's
+                      classifier decides it; a call the classifier blocks is refused, or asked through approvals.
+                    enum:
+                    - dontAsk
+                    - auto
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: spec.permission.autoMode needs mode auto
+                  rule: '!has(self.autoMode) || (has(self.mode) && self.mode == ''auto'')'
               repo:
                 description: Repository the agent works on, owner/name.
                 pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
                 type: string
+              retries:
+                description: 'Retries of a job that the infrastructure stopped (#593).
+                  Unset: the defaults, and the pod is as before.'
+                properties:
+                  infrastructure:
+                    default: 2
+                    description: |-
+                      How many times one job is run again after its pod was stopped by the infrastructure (pod deleted, node
+                      preempted, node drain, scale-down, upgrade), resuming from the work pushed at the stop. A security pause, a
+                      deadline and the job's own errors never retry. Default 2 (at most 3 attempts); 0: never retry.
+                    format: int32
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
               scaleToZero:
                 default: true
                 description: |-
                   Stop when idle, woken by the router (#35). The router then owns replicas; resuming a paused agent starts it once.
                   Default true (#181): an Agent without the field scales to zero; set false to keep it running.
                 type: boolean
+              toolchain:
+                description: |-
+                  Toolchains installed before the agent starts (#499, ADR 0010 D2/D3): presets of agentdev with pinned checksums,
+                  read-only to the agent. Unset: none, and the pod is as before.
+                properties:
+                  path:
+                    description: |-
+                      PATH entries for the agent container, below $TOOLCHAIN, for example "$TOOLCHAIN/bin"; no segment starts with a
+                      dot. The presets add their own.
+                    items:
+                      maxLength: 200
+                      pattern: ^\$TOOLCHAIN(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$
+                      type: string
+                    maxItems: 10
+                    type: array
+                  presets:
+                    description: |-
+                      Preset versions. The operator accepts only the versions of its catalogue (a changed catalogue is an agentdev
+                      release); another version makes the Agent invalid.
+                    properties:
+                      go:
+                        description: Go, for example "1.27.4" (go.dev archive, sha256
+                          pinned in the operator).
+                        pattern: ^[0-9]+\.[0-9]+(\.[0-9]+)?$
+                        type: string
+                      rust:
+                        description: Rust, for example "1.100.0" (rustup with this
+                          toolchain, profile minimal; rustup-init sha256 pinned).
+                        pattern: ^[0-9]+\.[0-9]+\.[0-9]+$
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: spec.toolchain.presets needs at least one preset
+                      rule: has(self.go) || has(self.rust)
+                  refresh:
+                    description: |-
+                      Install again after this time, for example 168h (at least 1h). Each agent has its own offset, and the new install
+                      waits until the agent is idle (drain). Unset: only when the spec, the worker image or the catalogue changes.
+                    type: string
+                required:
+                - presets
+                type: object
+              tools:
+                description: 'Tools added to the worker''s default allow-list for
+                  this agent (#496, ADR 0010 D1). Unset: the default only.'
+                properties:
+                  allow:
+                    description: |-
+                      Claude Code permission rules added to the allow-list, for example "Bash(npm ci:*)". One rule per entry, no
+                      commas and no control characters.
+                    items:
+                      maxLength: 200
+                      pattern: ^[^\x00-\x1f\x7f,]+$
+                      type: string
+                    maxItems: 50
+                    type: array
+                type: object
             required:
             - claudeSecret
             - repo
@@ -112,6 +274,9 @@ spec:
             description: AgentStatus is observed state, written by the operator only.
             properties:
               conditions:
+                description: |-
+                  Reconciled, SecurityPaused and Ready. Ready is True for running, starting, stopped and paused (the router can
+                  wake the agent) and False for invalid and blocked (#386); Flux and Argo CD health checks read it.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -167,6 +332,11 @@ spec:
                   - type
                   type: object
                 type: array
+              image:
+                description: |-
+                  Worker image of the StatefulSet: the version the agent runs at its next wake. A stopped agent keeps running
+                  the old pod image until then.
+                type: string
               observedGeneration:
                 description: .metadata.generation last reconciled.
                 format: int64
@@ -178,6 +348,28 @@ spec:
                 description: Ready pods (0 or 1).
                 format: int32
                 type: integer
+              toolchain:
+                description: The toolchain init container's last report (#499); unset
+                  without spec.toolchain.
+                properties:
+                  hash:
+                    description: SHA-256 manifest of the installed directory (every
+                      path, mode and content hash); checked on the next start.
+                    type: string
+                  key:
+                    description: 'SHA-256 of the canonical toolchain spec and the
+                      architecture: the directory /state/toolchain/<key>.'
+                    type: string
+                  message:
+                    type: string
+                  pod:
+                    description: Pod that reported it.
+                    type: string
+                  reason:
+                    description: 'Installed, Verified, Reinstalled (the manifest had
+                      changed: a security event), StepFailed, Invalid.'
+                    type: string
+                type: object
             type: object
         type: object
         x-kubernetes-validations:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# kind e2e of SSH server enrolment (#204, docs/adr/0007). Needs a kind cluster with the operator (./run.sh 01 12).
+# kind e2e of SSH server enrolment (#204, docs/adr/0007). Needs a kind cluster with the operator (kind.yml --tags cluster,operator).
 #   scripts/e2e-ssh.sh [enrol]   CA ceremony, a test SSH server (tests/e2e/ssh-server), SSHTarget, enrolment, probe
-#   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (./run.sh 05): PR head without SSH,
+#   scripts/e2e-ssh.sh ansible   enrol, then an Ansible Executor on the forge repo (kind.yml --tags forge): PR head without SSH,
 #                                merge plan with the check certificate, apply after the approval, snapshot
 # Every check prints PASS or FAIL; the exit code is the number of failures. Idempotent: reuses the CA and server.
 set -uo pipefail

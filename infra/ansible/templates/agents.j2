@@ -1,0 +1,34 @@
+{#- Agent objects (#57, #384): own Claude Secret claude-<name> when agent_own_claude[name] is true, else claude-shared
+    (#5). Blocked agents (#27) stay stopped: the operator keeps agentdev/blocked StatefulSets at 0.
+    agents[].permission (#500): {mode: auto, autoMode: {allow, softDeny, environment}}, the Agent's spec.permission;
+    unset keeps dontAsk. agents[].tools (#496): {allow: [...]}, the Agent's spec.tools, added to the default tool
+    allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, path, refresh}, the
+    Agent's spec.toolchain; unset: no toolchain. agents[].model, agents[].effort (#564), else the instance's
+    claude_model and claude_effort: the Agent's spec.model and spec.effort; unset or empty: no field, the CLI's own
+    default. -#}
+{%- set out = [] -%}
+{%- for a in agents -%}
+{%-   set spec = {'repo': a.repos, 'forge': forge_kind,
+                 'claudeSecret': ('claude-' ~ a.name) if (agent_own_claude | default({}))[a.name] | default(false) | bool else 'claude-shared',
+                 'maxConcurrent': (a.max_concurrent | default(max_concurrent)) | int,
+                 'maxTurns': (a.max_turns | default(max_turns)) | int,
+                 'scaleToZero': (a.scale_to_zero | default(scale_to_zero)) | bool} -%}
+{%-   if a.model | default(claude_model | default('', true), true) -%}
+{%-     set _ = spec.update({'model': a.model | default(claude_model | default('', true), true) | string}) -%}
+{%-   endif -%}
+{%-   if a.effort | default(claude_effort | default('', true), true) -%}
+{%-     set _ = spec.update({'effort': a.effort | default(claude_effort | default('', true), true) | string}) -%}
+{%-   endif -%}
+{%-   if a.permission | default({}) -%}
+{%-     set _ = spec.update({'permission': a.permission}) -%}
+{%-   endif -%}
+{%-   if (a.tools | default({})).allow | default([]) -%}
+{%-     set _ = spec.update({'tools': {'allow': a.tools.allow}}) -%}
+{%-   endif -%}
+{%-   if a.toolchain | default({}) -%}
+{%-     set _ = spec.update({'toolchain': a.toolchain}) -%}
+{%-   endif -%}
+{%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
+        'metadata': {'name': a.name, 'namespace': agents_ns}, 'spec': spec}) -%}
+{%- endfor -%}
+{{ out | to_json }}

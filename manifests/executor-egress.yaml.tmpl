@@ -1,5 +1,5 @@
-# Egress allow-list for executor Jobs (#135, security model phase 5, R81). Rendered by 12-operator.sh (envsubst) and
-# infra/ansible/deploy.yml (same template), in the executors namespace.
+# Egress allow-list for executor Jobs (#135, security model phase 5, R81). Rendered by infra/ansible/kind.yml
+# (tag operator) and infra/ansible/deploy.yml (same template), in the executors namespace.
 #
 # - executor-egress: default deny for executor pods (app: agentdev-executor). They may open connections only to DNS,
 #   the executor egress proxy, the in-cluster forge (kind) and the GKE metadata server (Workload Identity: the pod

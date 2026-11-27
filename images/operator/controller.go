@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,14 +18,16 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	v1 "github.com/valentinalexeev/agentdev/images/operator/api/v1alpha1"
 )
 
-// Defaults is the cluster-wide part of an agent (what 06-agents.sh takes from config.env).
+// Defaults is the cluster-wide part of an agent (the operator env from kind.vars.yml or instance.yml).
 type Defaults struct {
 	WorkerImage, ForgeImage, PullPolicy, ForgeURL, ForgePublicURL, Reviewer, BotboardURL string
 	GitHubURL                                                                            string // FORGE_URL of forge: github agents (#2)
@@ -42,6 +46,12 @@ type Defaults struct {
 	// harness guide (#206): the hosts the agents' egress proxy allows (AGENT_EGRESS_HOSTS, space separated, for the text
 	// only; the proxy enforces its own list) and the executors' namespace (EXEC_NS, empty: executors off)
 	AgentEgressHosts, ExecNS string
+	// ephemeral-storage of agent pods (#251 part 3): agent request and limit, forge mirror emptyDir and forge limit;
+	// empty or invalid: the defaults in render.go
+	AgentEphemeralRequest, AgentEphemeralLimit, ForgeMirrorLimit, ForgeEphemeralLimit string
+	// drain before replace (#174): grace period of an agent pod in seconds (default 300) and the longest wait for
+	// running jobs before an outdated pod is replaced anyway, in minutes (default 60)
+	GraceSeconds, DrainMaxMinutes string
 }
 
 type AgentReconciler struct {
@@ -49,12 +59,19 @@ type AgentReconciler struct {
 	// Direct reads PVCs uncached (the cache holds PVCs of EXEC_NS only); nil: the client
 	Direct client.Reader
 	D      Defaults
+	// Drains: pods whose forge sidecar reported that their jobs ended (#174); nil: replace only on the timeout
+	Drains *DrainSignals
+	Now    func() time.Time
+	wake   chan event.GenericEvent
+	ns     string // agents namespace, for requeueAgent
 }
 
 // +kubebuilder:rbac:groups=agentdev.dev,resources=agents;agents/status,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
 
 // Reconcile makes the agent's Service and StatefulSet match its spec. Children carry an owner reference, so deleting
 // the Agent removes them (Kubernetes garbage collection); the state volume is kept (StatefulSet PVC retention) so a
@@ -74,6 +91,43 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("refusing agent", "agent", a.Name, "reason", msg)
 		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
 			Reason: "SecretNotBound", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "SecretNotBound", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the tool allow-list (#496): entries without commas or control characters (fail closed)
+	if msg := toolsValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidTools", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidTools", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the toolchain (#499): only catalogue versions, $TOOLCHAIN paths, refresh of at least 1h (fail closed)
+	if msg := toolchainValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidToolchain", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidToolchain", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the permission mode (#500): only dontAsk or auto, rules without control characters (fail closed)
+	if msg := permissionValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidPermission", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidPermission", msg, a.Generation))
+		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
+		return ctrl.Result{}, r.Status().Update(ctx, &a)
+	}
+	// same for the model and the effort (#564): a model name of safe characters, a known effort level (fail closed)
+	if msg := modelValid(&a); msg != "" {
+		l.Info("refusing agent", "agent", a.Name, "reason", msg)
+		meta.SetStatusCondition(&a.Status.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionFalse,
+			Reason: "InvalidModel", Message: msg, ObservedGeneration: a.Generation})
+		meta.SetStatusCondition(&a.Status.Conditions, agentReady("invalid", false, "InvalidModel", msg, a.Generation))
 		a.Status.Phase, a.Status.ObservedGeneration = "invalid", a.Generation
 		return ctrl.Result{}, r.Status().Update(ctx, &a)
 	}
@@ -85,6 +139,30 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return controllerutil.SetControllerReference(&a, svc, r.Scheme())
 	}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("service: %w", err)
+	}
+
+	// workload identity (#352): the agent's own service account, before the pod that names it. No token is mounted
+	// from it automatically; the pod gets only a projected token with audience claude-proxy (render.go).
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+		sa.AutomountServiceAccountToken = ptr.To(false)
+		if sa.Labels == nil {
+			sa.Labels = map[string]string{}
+		}
+		sa.Labels["app"], sa.Labels["agent"] = "coding-agent", a.Name
+		return controllerutil.SetControllerReference(&a, sa, r.Scheme())
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("service account: %w", err)
+	}
+
+	// proxy key (#381): agent-<name>-proxy from claude-proxy-signing, before the pod that reads it
+	if _, err := r.ensureProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// setup proxy credential (#499): agent-<name>-setup-proxy, before the pod whose init container reads it
+	if err := r.ensureSetupProxyKey(ctx, &a); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// harness guide (#206): written before the pod that mounts it. The mount is optional, so a failure here never blocks
@@ -103,8 +181,18 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
 
+	tcDigest := r.toolchainPodDigest(ctx, &a) // #538: the worker image digest the toolchain install ran with
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "agent-" + a.Name, Namespace: a.Namespace}}
+	// #577: a security pause for many low or medium events keeps the pod until its running jobs have ended
+	if err := r.Get(ctx, client.ObjectKeyFromObject(sts), sts); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{}, fmt.Errorf("statefulset: %w", err)
+	}
+	holdPaused, pauseAfter, err := r.pauseDrain(ctx, &a, sts)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+		r.noteToolchainDigest(&a, sts, tcDigest)
 		blocked := sts.Annotations["agentdev/blocked"] == "true"
 		creating := sts.ResourceVersion == "" // not yet in the API server
 		current := sts.Spec.Replicas          // what the router or a previous reconcile set
@@ -116,6 +204,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			delete(sts.Annotations, "agentdev/paused")
 		}
 		switch {
+		case a.Spec.Paused && holdPaused && !blocked && current != nil:
+			sts.Spec.Replicas = current // drain first (#577): stopped by a later reconcile
 		case a.Spec.Paused || blocked:
 			sts.Spec.Replicas = ptr.To[int32](0)
 		case creating || wasPaused || !a.Spec.ScalesToZero() || current == nil:
@@ -133,13 +223,32 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		l.Info("statefulset "+string(op), "agent", a.Name)
 	}
 
-	if err := r.updateStatus(ctx, &a, sts); err != nil {
+	// drain before replace (#174): an outdated pod is replaced by the operator once its jobs ended (OnDelete)
+	after, updated, err := r.rollout(ctx, &a, sts)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("rollout: %w", err)
+	}
+	tc, tcErr := r.observeToolchain(ctx, &a)
+	if tcErr != nil {
+		l.Error(tcErr, "toolchain report not recorded, will retry", "agent", a.Name)
+	}
+	if err := r.updateStatus(ctx, &a, sts, tc, updated); err != nil {
 		return ctrl.Result{}, err
 	}
-	if guideRetry {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	if pauseAfter > 0 && (after == 0 || pauseAfter < after) {
+		after = pauseAfter
 	}
-	return ctrl.Result{}, nil
+	// refresh (#499): reconcile when the agent's epoch changes; the new template then waits for idle (drain)
+	if d := r.toolchainNextRefresh(&a); d > 0 && (after == 0 || d < after) {
+		after = d
+	}
+	if tcErr != nil && (after == 0 || after > 30*time.Second) {
+		after = 30 * time.Second
+	}
+	if guideRetry && (after == 0 || after > 30*time.Second) {
+		after = 30 * time.Second
+	}
+	return ctrl.Result{RequeueAfter: after}, nil
 }
 
 // relayout moves an agent to the current volume layout (#173). volumeClaimTemplates are immutable, so a StatefulSet
@@ -185,12 +294,17 @@ func (r *AgentReconciler) relayout(ctx context.Context, a *v1.Agent) (wait bool,
 	return pvc.DeletionTimestamp != nil, nil
 }
 
-func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet) error {
+func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *appsv1.StatefulSet, tc *v1.AgentToolchainStatus, extra ...metav1.Condition) error {
 	want := int32(0)
 	if sts.Spec.Replicas != nil {
 		want = *sts.Spec.Replicas
 	}
-	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation, Conditions: a.Status.Conditions}
+	// a copy: equalStatus compares against a.Status, so the new conditions must not be written into it first
+	s := v1.AgentStatus{Ready: sts.Status.ReadyReplicas, ObservedGeneration: a.Generation,
+		Conditions: append([]metav1.Condition(nil), a.Status.Conditions...), Toolchain: tc}
+	for _, c := range extra {
+		meta.SetStatusCondition(&s.Conditions, c)
+	}
 	switch {
 	case sts.Annotations["agentdev/blocked"] == "true":
 		s.Phase = "blocked"
@@ -205,11 +319,17 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	}
 	// a person resumed an agent the security collector paused (#70): keep the reason, mark it no longer in force
 	if c := meta.FindStatusCondition(s.Conditions, "SecurityPaused"); c != nil && c.Status == metav1.ConditionTrue && !a.Spec.Paused {
+		by := pausedBy(a)
 		meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "SecurityPaused", Status: metav1.ConditionFalse,
-			Reason: "Resumed", Message: "resumed after: " + c.Message, ObservedGeneration: a.Generation})
+			Reason: "Resumed", Message: clip("resumed by "+by+" after: "+c.Message, 32768), ObservedGeneration: a.Generation})
+		log.FromContext(ctx).Info("agent resumed after a security pause", "agent", a.Name, "by", by, "reason", c.Reason)
 	}
 	meta.SetStatusCondition(&s.Conditions, metav1.Condition{Type: "Reconciled", Status: metav1.ConditionTrue,
 		Reason: "Applied", Message: "service and statefulset match the spec", ObservedGeneration: a.Generation})
+	meta.SetStatusCondition(&s.Conditions, agentReady(s.Phase, true, "", "", a.Generation))
+	if cs := sts.Spec.Template.Spec.Containers; len(cs) > 0 {
+		s.Image = cs[0].Image // the version the agent runs at its next wake (#386)
+	}
 	if equalStatus(a.Status, s) {
 		return nil
 	}
@@ -220,21 +340,62 @@ func (r *AgentReconciler) updateStatus(ctx context.Context, a *v1.Agent, sts *ap
 	return nil
 }
 
+// pausedBy names the writer of spec.paused (#577): the field manager that set it last, from managedFields, so the
+// Resumed condition and the operator log say who lifted a security pause (the API writes as agentdev-api, kubectl
+// as kubectl-edit or kubectl-patch). "unknown" when no manager owns the field.
+func pausedBy(a *v1.Agent) string {
+	by, at := "unknown", time.Time{}
+	for _, m := range a.ManagedFields {
+		if m.FieldsV1 == nil || m.Manager == "" {
+			continue
+		}
+		var f struct {
+			Spec map[string]json.RawMessage `json:"f:spec"`
+		}
+		if json.Unmarshal(m.FieldsV1.Raw, &f) != nil || f.Spec["f:paused"] == nil {
+			continue
+		}
+		if t := m.Time; by == "unknown" || t != nil && t.After(at) {
+			by = clip(m.Manager, 128)
+			if t != nil {
+				at = t.Time
+			}
+		}
+	}
+	return by
+}
+
 func equalStatus(x, y v1.AgentStatus) bool {
-	if x.Phase != y.Phase || x.Ready != y.Ready || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
+	if !equality.Semantic.DeepEqual(x.Toolchain, y.Toolchain) {
+		return false
+	}
+	if x.Phase != y.Phase || x.Ready != y.Ready || x.Image != y.Image || x.ObservedGeneration != y.ObservedGeneration || len(x.Conditions) != len(y.Conditions) {
 		return false
 	}
 	for _, c := range y.Conditions {
 		o := meta.FindStatusCondition(x.Conditions, c.Type)
-		if o == nil || o.Status != c.Status || o.Reason != c.Reason {
+		if o == nil || o.Status != c.Status || o.Reason != c.Reason || o.ObservedGeneration != c.ObservedGeneration {
 			return false
 		}
 	}
 	return true
 }
 
+// requeueAgent asks the controller to reconcile one agent now (the collector saw its drain report, #174).
+func (r *AgentReconciler) requeueAgent(agent string) {
+	if r.wake == nil {
+		return
+	}
+	select {
+	case r.wake <- event.GenericEvent{Object: &v1.Agent{ObjectMeta: metav1.ObjectMeta{Name: agent, Namespace: r.ns}}}:
+	default: // full: the periodic requeue of a draining agent picks it up
+	}
+}
+
 func (r *AgentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{})
+	r.wake = make(chan event.GenericEvent, 64)
+	b := ctrl.NewControllerManagedBy(mgr).For(&v1.Agent{}).Owns(&appsv1.StatefulSet{}).Owns(&corev1.Service{}).Owns(&corev1.ServiceAccount{}).
+		WatchesRawSource(source.Channel(r.wake, &handler.EnqueueRequestForObject{}))
 	if r.D.ExecNS != "" {
 		// an Executor changes the harness guide of the agents on its repository (#206)
 		b = b.Watches(&v1.Executor{}, handler.EnqueueRequestsFromMapFunc(r.agentsOfExecutor))

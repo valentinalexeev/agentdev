@@ -17,9 +17,20 @@ cloud_armor        = false
 # agent_disk_type     = "pd-standard"
 labels = { environment = "prod" }   # agentdev #184: dev, stage or prod; service = "agentdev" is added
 # system_pool_spot = true   # agentdev #171: cheaper system pool, ~1 minute platform gap when a node is reclaimed
+# system_pool_min_nodes = 0  # agentdev #313: only while stopped with scripts/cluster-stop.sh (docs/admin.md)
 # Cluster add-ons (agentdev #208): lean by default (Managed Prometheus, Filestore CSI and the extra monitoring
 # components are off; the load balancer is on only with public_hosts). Set one back to keep an older cluster as it was.
 # enable_managed_prometheus = true
 # enable_filestore_csi      = true
 # monitoring_components     = null   # the GKE default list
 # gateway_enabled           = true   # keep the load balancer without public_hosts
+# Secrets without the playbook (agentdev #381, with external_secrets.mode: external in ansible/instance.yml):
+# external_secrets = true   # opt-in; default false makes nothing
+# agent_names = ["alice"]   # the agents of ansible/instance.yml; Terraform makes agent-<name>-wake-token
+# keep_existing_secret_values = []   # upgrade from 1.1.x: the names of imports.tf.example, so the values stay
+# platform_extra_secret_ids   = []   # e.g. ["funnel-sidecar-authkey"]
+# forge_init                  = false   # true with forge_init.enabled (external Gitea): reads gitea-admin-token
+# Diagnostics for killed agent jobs, exit code 137 (agentdev #588): log-based metrics (security auto-pause, Spot preemption,
+# autoscaler scale-down, Pending agent pod) and e-mail alerts for the first two, see terraform/monitoring.tf. Off by default.
+# It also grants the automation account roles/logging.configWriter and roles/monitoring.alertPolicyEditor.
+# enable_diagnostic_alerts = true

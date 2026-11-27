@@ -90,3 +90,125 @@ SET search_path = pg_catalog, public AS $$
 	SELECT count(*) FROM d
 $$;
 REVOKE ALL ON FUNCTION api_audit_prune() FROM PUBLIC;
+
+-- chat sessions (#346): one row per console chat session, and its transcript. Kept chat_settings.retention_days
+-- (CHAT_RETENTION_DAYS, default 30), readable by people with read access to the repository (checked in the API).
+-- chat_events is append-only; chat_sessions may be updated (end, last event) but rows go only through chat_prune().
+CREATE TABLE IF NOT EXISTS chat_settings (
+	id             boolean PRIMARY KEY DEFAULT true CHECK (id),
+	retention_days int     NOT NULL DEFAULT 30 CHECK (retention_days >= 1)
+);
+INSERT INTO chat_settings DEFAULT VALUES ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+	id            text        PRIMARY KEY,
+	agent         text        NOT NULL,
+	repo          text        NOT NULL,
+	forge         text        NOT NULL DEFAULT 'gitea',
+	started_by    text        NOT NULL,
+	started_at    timestamptz NOT NULL,
+	ended_at      timestamptz,
+	ended_reason  text        NOT NULL DEFAULT '',
+	last_seq      bigint      NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS chat_sessions_started ON chat_sessions (started_at DESC);
+
+CREATE TABLE IF NOT EXISTS chat_events (
+	id        bigserial   PRIMARY KEY,
+	session   text        NOT NULL REFERENCES chat_sessions (id) ON DELETE CASCADE,
+	seq       bigint      NOT NULL,      -- order in the session server; 0 = written by the API
+	time      timestamptz NOT NULL,
+	type      text        NOT NULL,
+	author    text        NOT NULL DEFAULT '',
+	data      jsonb       NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS chat_events_seq ON chat_events (session, seq) WHERE seq > 0;
+CREATE INDEX IF NOT EXISTS chat_events_session_id ON chat_events (session, id);
+
+CREATE OR REPLACE FUNCTION chat_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' THEN
+		RAISE EXCEPTION 'chat_events is append-only';
+	END IF;
+	IF OLD.time > now() - (SELECT retention_days FROM chat_settings) * interval '1 day' THEN
+		RAISE EXCEPTION 'chat_events: row is inside the retention period';
+	END IF;
+	RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS chat_events_append_only ON chat_events;
+CREATE TRIGGER chat_events_append_only BEFORE UPDATE OR DELETE ON chat_events
+	FOR EACH ROW EXECUTE FUNCTION chat_events_append_only();
+
+-- removes sessions that started one day before the retention (a session lasts 8 h at most, so all its events are
+-- past the retention too); their events go with them (ON DELETE CASCADE)
+CREATE OR REPLACE FUNCTION chat_prune() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, public AS $$
+	WITH d AS (DELETE FROM public.chat_sessions
+		WHERE started_at < now() - ((SELECT retention_days FROM public.chat_settings) + 1) * interval '1 day' RETURNING 1)
+	SELECT count(*) FROM d
+$$;
+REVOKE ALL ON FUNCTION chat_prune() FROM PUBLIC;
+-- Notifications for each user (#347). Per-user data, edited by the user in the console Settings: push
+-- subscriptions (one row per browser), settings (project '' = the switch of a type for all projects; a project row
+-- with enabled=false is a mute; type '*' mutes every type of the project), the identity snapshot the sender uses for
+-- the visibility check, and the used nonces of notification action tokens (single-use, kept until they expire).
+CREATE TABLE IF NOT EXISTS notify_users (
+	subject  text        PRIMARY KEY CHECK (length(subject) <= 255),
+	snapshot jsonb       NOT NULL,
+	updated  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+	endpoint text        PRIMARY KEY CHECK (length(endpoint) <= 1024 AND endpoint LIKE 'https://%'),
+	subject  text        NOT NULL,
+	p256dh   text        NOT NULL CHECK (length(p256dh) <= 200),
+	auth     text        NOT NULL CHECK (length(auth) <= 200),
+	created  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS push_subscriptions_subject ON push_subscriptions (subject);
+CREATE TABLE IF NOT EXISTS notify_settings (
+	subject text    NOT NULL,
+	project text    NOT NULL DEFAULT '' CHECK (length(project) <= 201),
+	type    text    NOT NULL CHECK (type IN ('approvals','stopped','usage','*')),
+	enabled boolean NOT NULL,
+	PRIMARY KEY (subject, project, type)
+);
+CREATE TABLE IF NOT EXISTS push_action_nonces (
+	nonce   text        PRIMARY KEY CHECK (length(nonce) = 32),
+	expires timestamptz NOT NULL
+);
+-- Run log of agent jobs (#425): redacted, clipped run events (model output, untrusted) sent by the agents' forge
+-- sidecars to the internal listener. Append-only for the API login (INSERT, SELECT); rows older than 30 days go only
+-- through job_events_prune(). The size per job is capped by the worker (2 MB) and checked again by the API.
+CREATE TABLE IF NOT EXISTS job_events (
+	id     bigserial   PRIMARY KEY,
+	agent  text        NOT NULL CHECK (length(agent) <= 63),
+	repo   text        NOT NULL CHECK (length(repo) <= 201),
+	job    text        NOT NULL CHECK (length(job) <= 64),
+	time   timestamptz NOT NULL,
+	kind   text        NOT NULL CHECK (kind IN ('text','tool_use','tool_result','result','truncated')),
+	data   jsonb       NOT NULL CHECK (octet_length(data::text) <= 16384),
+	stored timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS job_events_job_id ON job_events (agent, repo, job, id);
+CREATE INDEX IF NOT EXISTS job_events_stored ON job_events (stored);
+
+CREATE OR REPLACE FUNCTION job_events_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF TG_OP = 'UPDATE' THEN
+		RAISE EXCEPTION 'job_events is append-only';
+	END IF;
+	IF OLD.stored > now() - interval '30 days' THEN
+		RAISE EXCEPTION 'job_events: row is inside the retention period';
+	END IF;
+	RETURN OLD;
+END $$;
+DROP TRIGGER IF EXISTS job_events_append_only ON job_events;
+CREATE TRIGGER job_events_append_only BEFORE UPDATE OR DELETE ON job_events
+	FOR EACH ROW EXECUTE FUNCTION job_events_append_only();
+
+CREATE OR REPLACE FUNCTION job_events_prune() RETURNS bigint LANGUAGE sql SECURITY DEFINER
+SET search_path = pg_catalog, public AS $$
+	WITH d AS (DELETE FROM public.job_events WHERE stored < now() - interval '30 days' RETURNING 1)
+	SELECT count(*) FROM d
+$$;
+REVOKE ALL ON FUNCTION job_events_prune() FROM PUBLIC;

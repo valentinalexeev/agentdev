@@ -1,0 +1,62 @@
+---
+# Render mode of the role (#384, render.yml): the objects of tasks/main.yml as the fact ingress_objects, with no cluster
+# or Secret Manager access. The Gateway needs platform.ingress.gateway_api (terraform output platform) in place of a
+# read of the cluster. The Secret funnel-sidecar of the deployed forwarder is not rendered (a credential).
+- name: Check the ingress settings (mode, hosts, forwarder)
+  ansible.builtin.include_tasks: checks.yml
+
+- name: Ingress mode gateway needs the Gateway API (platform.ingress.gateway_api)
+  ansible.builtin.assert:
+    that: ingress_mode != 'gateway' or platform_gateway_api | bool
+    fail_msg: >-
+      ingress.mode gateway needs the Gateway API, and platform.ingress.gateway_api is false. Set Terraform public_hosts,
+      apply infra/terraform and copy `terraform output platform`. Or use ingress.mode external.
+    quiet: true
+
+- name: Check the Gateway settings
+  ansible.builtin.assert:
+    that:
+      - ingress_certificate | length > 0
+      - ingress_hsts_max_age | string is match('^[0-9]+$')
+    fail_msg: ingress.certificate is the name from `terraform output ingress`; ingress.hsts_max_age is a whole number
+    quiet: true
+  when: ingress_mode == 'gateway'
+
+# the deploy reads the certificate with gcloud; the render takes the domains from terraform output platform
+- name: The certificate covers ingress.auth_host (platform.ingress.certificate_domains)
+  ansible.builtin.assert:
+    that: ingress_auth_host in ((platform | default({})).ingress | default({})).certificate_domains | default([ingress_auth_host])
+    fail_msg: >-
+      ingress.auth_host {{ ingress_auth_host }} is not in platform.ingress.certificate_domains: add it to Terraform
+      public_hosts, apply, and copy `terraform output platform`
+    quiet: true
+  when: ingress_mode == 'gateway' and ingress_auth | bool
+
+- name: Render the ingress objects
+  ansible.builtin.set_fact:
+    ingress_objects:
+      ingress_gateway: "{{ (lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml_all | list) if ingress_mode == 'gateway' else [] }}"
+      ingress_forwarder: >-
+        {{ (lookup('ansible.builtin.template', 'forwarder.yaml.j2') | from_yaml_all | list
+            | rejectattr('metadata.name', 'equalto', '' if ingress_auth | bool else 'authentik-from-forwarder') | list)
+           if ingress_forwarder_on | bool else [] }}
+      ingress_forwarder_watch: >-
+        {{ [{'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'Role',
+             'metadata': {'name': 'agentdev-operator-forwarder-watch', 'namespace': ingress_forwarder_watch_ns,
+                          'labels': {'app.kubernetes.io/part-of': 'agentdev'}},
+             'rules': [{'apiGroups': [''], 'resources': ['pods'], 'verbs': ['get', 'list']}]},
+            {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding',
+             'metadata': {'name': 'agentdev-operator-forwarder-watch', 'namespace': ingress_forwarder_watch_ns,
+                          'labels': {'app.kubernetes.io/part-of': 'agentdev'}},
+             'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'Role', 'name': 'agentdev-operator-forwarder-watch'},
+             'subjects': [{'kind': 'ServiceAccount', 'name': 'agentdev-operator', 'namespace': platform_ns}]}]
+           if ingress_forwarder_watch | bool else [] }}
+      ingress_forwarder_deploy: >-
+        {{ (lookup('ansible.builtin.template', 'forwarder_deploy.yaml.j2') | from_yaml_all | list) if ingress_fwd_deploy_on | bool else [] }}
+
+# secrets_mode external (#457): the ExternalSecret funnel-sidecar of tasks/forwarder.yml (deployed forwarder only)
+- name: Forwarder ExternalSecret spec (secrets_mode external)
+  ansible.builtin.set_fact:
+    ingress_es_specs:
+      - {name: funnel-sidecar, ns: "{{ ingress_forwarder.namespace }}", data: {authkey: "{{ ingress_fwd_authkey_secret }}"}}
+  when: secrets_mode | default('playbook') == 'external' and ingress_fwd_deploy_on | bool

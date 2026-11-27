@@ -1,0 +1,35 @@
+# Flux source and root sync of agentdev (agentdev #385, #472). Copy to gotk-sync.yaml and set the url of your deployment
+# repository. The deploy workflow (.github/workflows/deploy.yml, job render) writes the branch `gitops`: the tree of
+# `main` plus rendered/platform and rendered/agents. Flux reads only that branch. The Secret agentdev holds the
+# read-only deploy key; it is made by `flux create secret git` (docs/admin.md, "Install an instance with Flux"), never
+# in Git. The objects are named agentdev, not flux-system (the name `flux bootstrap` uses), so they never replace the
+# root sync of another tenant on a cluster that already runs Flux (#472).
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: agentdev
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: ssh://git@github.com/<owner>/<deployment-repository>
+  ref: {branch: gitops}
+  secretRef: {name: agentdev}
+  ignore: |
+    # only the GitOps tree and the rendered output, not terraform/ or ansible/
+    /*
+    !/gitops/flux/
+    !/rendered/
+---
+# Root sync: ../kustomization.yaml, that is the Flux controllers (../flux-system, only when agentdev installs Flux),
+# this directory and the four layers (../layers.yaml)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentdev
+  namespace: flux-system
+spec:
+  interval: 10m
+  sourceRef: {kind: GitRepository, name: agentdev}
+  path: ./gitops/flux/clusters/agentdev
+  prune: true
+  wait: false

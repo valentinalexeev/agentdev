@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Part 2 of scripts/e2e-ssh.sh (#204): an Ansible Executor against the enrolled test server. Sourced after the
-# enrolment checks (SSHTarget "e2e" is Ready). Needs the forge of ./run.sh 05 (repo owner/playground).
+# enrolment checks (SSHTarget "e2e" is Ready). Needs the forge of kind.yml --tags forge (repo owner/playground).
 #
 # Acceptance criterion of #204, checked here:
 #   - a PR-head run has no SSH credential, and a playbook task with check_mode: false on the PR head cannot reach the
@@ -122,7 +122,7 @@ log "Approval, then apply as agentdev"
 deadline=$(( $(date +%s) + 120 )); an=""
 until [[ -n "${an}" ]] || (( $(date +%s) > deadline )); do an=$(k -n "${EXEC_NS}" get executorrun "${mrun}" -o jsonpath='{.status.approval}'); sleep 3; done
 rc=1; [[ -n "${an}" ]] && rc=0; check "${rc}" "approval requested (${an:-none})"
-# stand-in for agentdev-api (not deployed by ./run.sh 12): decide as the owner would through the forge or the UI
+# stand-in for agentdev-api (not deployed by kind.yml --tags operator): decide as the owner would through the forge or the UI
 ch=$(k -n "${AGENTS_NS}" get approval "${an}" -o jsonpath='{.spec.contentHash}')
 k -n "${AGENTS_NS}" patch approval "${an}" --subresource=status --type=merge -p "$(jq -n --arg h "${ch}" --arg t "$(date -u +%FT%TZ)" \
   '{status: {state: "allowed", scope: "once", decidedBy: "owner", decidedVia: "forge", decidedAt: $t, contentHash: $h}}')" >/dev/null
