@@ -8,12 +8,13 @@ package main
 // Routes (bearer token, like every /api route):
 //
 //	GET    /api/sessions                          sessions of the last CHAT_RETENTION_DAYS the caller may read
-//	POST   /api/sessions                          {"agent", "context"?}: start a session (write access)
+//	POST   /api/sessions                          {"agent", "context"?, "model"?, "effort"?}: start a session (write access)
 //	GET    /api/sessions/{id}                     one session with its live state (read access)
 //	DELETE /api/sessions/{id}                     end it now (write access)
 //	GET    /api/sessions/{id}/events?after=N      SSE: the transcript after event id N, then live (read access)
 //	POST   /api/sessions/{id}/messages            {"text"}: a message as the caller (write access)
 //	POST   /api/sessions/{id}/permissions/{pid}   {"behavior": "allow"|"deny"}: answer once (write access)
+//	POST   /api/sessions/{id}/settings            {"model"?, "effort"?}: change the model or effort (write access, #570)
 //	POST   /api/sessions/{id}/drafts/{did}/create {"title"?, "body"?}: create the issue of a draft (write access)
 //
 // Rules:
@@ -22,6 +23,9 @@ package main
 //     and end every session; they need write access to send. A person without read access sees nothing (404).
 //   - The session never creates issues: drafts are events, and only POST .../create (a person's click) files one.
 //   - Every change is an audit entry (api_audit), with the person and the session.
+//   - Model and effort (#570): a session starts with the agent's spec.model and spec.effort. A person may choose another
+//     value at the start or during the session only from the agent's own values and the instance allow-list
+//     (CHAT_MODELS, CHAT_EFFORTS); GET /api/sessions lists the allow-list and the claude-proxy multipliers (cost hint).
 //   - The browser never reaches the session pod. The pod accepts only the API (NetworkPolicy) with a per-session
 //     token: HMAC-SHA256(CHAT_TOKEN_KEY, session id). The pod gets only its SHA-256.
 
@@ -39,6 +43,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +74,9 @@ type chatConfig struct {
 	MaxTotal   int // running sessions on the instance; 0 = no cap
 	MaxPerUser int
 	Retention  time.Duration
+	// Models and Efforts (#570): values a person may choose in addition to the agent's own spec.model and spec.effort
+	Models  []string
+	Efforts []string
 }
 
 type chatAPI struct {
@@ -123,6 +131,7 @@ func (c *chatAPI) routes(mux *http.ServeMux, verify verifier) {
 	mux.Handle("GET /api/sessions/{id}/events", h("", c.events))
 	mux.Handle("POST /api/sessions/{id}/messages", h("chat-message", c.message))
 	mux.Handle("POST /api/sessions/{id}/permissions/{pid}", h("chat-permission", c.permission))
+	mux.Handle("POST /api/sessions/{id}/settings", h("chat-settings", c.settings))
 	mux.Handle("POST /api/sessions/{id}/drafts/{did}/create", h("chat-create-issue", c.createIssue))
 }
 
@@ -277,7 +286,7 @@ func (c *chatAPI) list(rw http.ResponseWriter, r *http.Request) {
 			out = append(out, c.view(s, p))
 		}
 	}
-	writeJSON(rw, http.StatusOK, map[string]any{"sessions": out})
+	writeJSON(rw, http.StatusOK, map[string]any{"sessions": out, "options": c.options(r.Context())})
 }
 
 func (c *chatAPI) get(rw http.ResponseWriter, r *http.Request) {
@@ -305,8 +314,8 @@ func (c *chatAPI) start(rw http.ResponseWriter, r *http.Request) {
 		Context string `json:"context"`
 	}
 	for k := range m {
-		if k != "agent" && k != "context" {
-			c.fail(rw, r, action, nil, invalid(fmt.Sprintf("unknown field %q (allowed: agent, context)", k)), nil)
+		if k != "agent" && k != "context" && k != "model" && k != "effort" {
+			c.fail(rw, r, action, nil, invalid(fmt.Sprintf("unknown field %q (allowed: agent, context, model, effort)", k)), nil)
 			return
 		}
 	}
@@ -341,6 +350,19 @@ func (c *chatAPI) start(rw http.ResponseWriter, r *http.Request) {
 	if s.Forge == "" {
 		s.Forge = "gitea"
 	}
+	// #570: model and effort of the session; absent: the agent's own
+	set, err := c.chosen(m, *ag, true)
+	if err != nil {
+		c.fail(rw, r, action, &s, err, nil)
+		return
+	}
+	s.Model, s.Effort = ag.Model, ag.Effort
+	if set.Model != nil {
+		s.Model = *set.Model
+	}
+	if set.Effort != nil {
+		s.Effort = *set.Effort
+	}
 	// write access on the repository, checked live (admins too: a session acts in the project)
 	if _, err := c.w.authorize(r.Context(), id, s.Forge, s.Repo, permWrite, false); err != nil {
 		c.fail(rw, r, action, &s, err, nil)
@@ -372,7 +394,7 @@ func (c *chatAPI) start(rw http.ResponseWriter, r *http.Request) {
 		go c.sendWhenReady(s, "<untrusted-context>\n"+strings.ReplaceAll(req.Context, "</untrusted-context>", "")+"\n</untrusted-context>")
 	}
 	c.startPump(s.ID)
-	c.auditChat(r, action, &s, "ok", "", nil)
+	c.auditChat(r, action, &s, "ok", "", map[string]string{"model": s.Model, "effort": s.Effort})
 	writeJSON(rw, http.StatusCreated, c.view(s, permWrite))
 }
 
@@ -491,6 +513,129 @@ func (c *chatAPI) permission(rw http.ResponseWriter, r *http.Request) {
 	c.pumpOnce(s.ID)
 	c.auditChat(r, action, s, "ok", "", req)
 	writeJSON(rw, http.StatusOK, map[string]string{"status": body.Behavior})
+}
+
+// ---- model and effort (#570) ----
+
+// chatSettingsReq holds the fields of a model and effort choice; nil: not given.
+type chatSettingsReq struct {
+	Model  *string `json:"model,omitempty"`
+	Effort *string `json:"effort,omitempty"`
+}
+
+// allowedValues: the agent's own value ("" = Claude Code's default, only at the start) and the instance allow-list.
+func allowedValues(own string, extra []string, start bool) []string {
+	out := []string{}
+	if own != "" || start {
+		out = append(out, own)
+	}
+	for _, v := range extra {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// chosen reads "model" and "effort" from a request body and checks them against the allow-list of the agent. At the
+// start, the agent's own value may be "" (Claude Code's default); during a session only a named value can be sent.
+func (c *chatAPI) chosen(m map[string]json.RawMessage, ag agent, start bool) (chatSettingsReq, error) {
+	var out chatSettingsReq
+	for _, f := range []struct {
+		name  string
+		own   string
+		extra []string
+		dst   **string
+	}{{"model", ag.Model, c.cfg.Models, &out.Model}, {"effort", ag.Effort, c.cfg.Efforts, &out.Effort}} {
+		raw, ok := m[f.name]
+		if !ok {
+			continue
+		}
+		var v string
+		allowed := allowedValues(f.own, f.extra, start)
+		if json.Unmarshal(raw, &v) != nil || !slices.Contains(allowed, v) || (!start && v == "") {
+			names := []string{}
+			for _, a := range allowed {
+				if a == "" {
+					a = "(default)"
+				}
+				names = append(names, a)
+			}
+			return out, invalid(fmt.Sprintf("%s must be one of: %s (the agent's own value and the instance allow-list)", f.name, strings.Join(names, ", ")))
+		}
+		*f.dst = &v
+	}
+	return out, nil
+}
+
+// chatOptions is the "options" field of GET /api/sessions: the instance allow-list, and the claude-proxy multipliers by
+// model name prefix (longest prefix wins, the proxy's rule) for the cost hint; absent when the proxy does not answer.
+type chatOptions struct {
+	Models      []string           `json:"models"`
+	Efforts     []string           `json:"efforts"`
+	Multipliers map[string]float64 `json:"multipliers,omitempty"`
+}
+
+func (c *chatAPI) options(ctx context.Context) chatOptions {
+	o := chatOptions{Models: append([]string{}, c.cfg.Models...), Efforts: append([]string{}, c.cfg.Efforts...)}
+	if modelPrices != nil {
+		o.Multipliers = modelPrices(ctx)
+	}
+	return o
+}
+
+func (c *chatAPI) settings(rw http.ResponseWriter, r *http.Request) {
+	const action = "chat-settings"
+	s, ok := c.live(r, action, rw)
+	if !ok {
+		return
+	}
+	m, err := decodeObject(r)
+	if err != nil {
+		c.fail(rw, r, action, s, err, nil)
+		return
+	}
+	for k := range m {
+		if k != "model" && k != "effort" {
+			c.fail(rw, r, action, s, invalid(fmt.Sprintf("unknown field %q (allowed: model, effort)", k)), nil)
+			return
+		}
+	}
+	list, err := c.agents.List(r.Context())
+	if err != nil {
+		c.fail(rw, r, action, s, &httpErr{http.StatusBadGateway, "error", "cannot read agents"}, nil)
+		return
+	}
+	ag := agent{Name: s.Agent}
+	for _, a := range list {
+		if a.Name == s.Agent {
+			ag = a
+		}
+	}
+	set, err := c.chosen(m, ag, false)
+	if err == nil && set.Model == nil && set.Effort == nil {
+		err = invalid("model or effort is required")
+	}
+	if err != nil {
+		c.fail(rw, r, action, s, err, nil)
+		return
+	}
+	who := c.author(c.ident(r), s.Forge)
+	body := map[string]string{"author": who}
+	req := map[string]string{}
+	if set.Model != nil {
+		body["model"], req["model"] = *set.Model, *set.Model
+	}
+	if set.Effort != nil {
+		body["effort"], req["effort"] = *set.Effort, *set.Effort
+	}
+	if _, err := c.callSession(r.Context(), s.ID, http.MethodPost, "/settings", body); err != nil {
+		c.fail(rw, r, action, s, err, req)
+		return
+	}
+	c.pumpOnce(s.ID)
+	c.auditChat(r, action, s, "ok", "", req)
+	writeJSON(rw, http.StatusAccepted, map[string]string{"status": "requested"})
 }
 
 // ---- issue drafts ----
@@ -882,7 +1027,7 @@ func (c *chatAPI) pumpStep(ctx context.Context, sid string) (bool, error) {
 // chatEventTypes: the types the session server may write. Anything else is dropped. issue-created and start are
 // written by the API only (seq 0).
 var chatEventTypes = map[string]bool{"start": true, "ready": true, "user": true, "assistant": true, "tool": true,
-	"tool-result": true, "turn": true, "permission": true, "permission-answer": true, "draft": true, "presence": true, "end": true}
+	"tool-result": true, "turn": true, "permission": true, "permission-answer": true, "draft": true, "presence": true, "end": true, "settings": true}
 
 func (c *chatAPI) finish(sid, reason string) {
 	if err := c.store.EndSession(context.Background(), sid, reason, c.nowFn()); err != nil {

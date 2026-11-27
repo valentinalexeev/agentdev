@@ -194,7 +194,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				bs[i].UsedUSD = &usd
 			}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "budgets": bs, "jobs": s.jobs.snapshot(p),
+		// #570: "models" (multiplier by model name prefix) is the cost hint of the console's model choice
+		_ = json.NewEncoder(w).Encode(map[string]any{"unit": "units", "weights": p.weightsByName(), "models": p.models, "budgets": bs, "jobs": s.jobs.snapshot(p),
 			"approvalStepUnits": s.approval.step}) // #310: units one cost approval adds (0 = soft limit off)
 		return
 	}
