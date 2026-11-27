@@ -2731,31 +2731,41 @@ then the Secret `agentdev-ps-<n>`.
 ### Use a secret through the broker
 
 The credential broker (`credential-broker` in the agents namespace) is the credential proxy image in mode broker.
-`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags secrets` starts it when the Claude proxy is on. The agent calls the broker in place of the upstream:
+`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags secrets` starts it. The agent calls the broker in
+place of the upstream:
 
 | Upstream (`spec.broker.upstream`) | Base URL for the agent |
 |---|---|
 | `https://npm.pkg.github.com` | `$AGENTDEV_BROKER_URL/s/npm-registry/` |
 
-The agent authenticates with `$AGENTDEV_BROKER_KEY`, as a Bearer token or as the password of basic auth. The broker
-then does these steps:
+The agent authenticates with a projected token of its own service account `agent-<name>`, audience
+`credential-broker`. The kubelet writes it to the file `$AGENTDEV_BROKER_TOKEN_FILE` and renews it; it is valid for
+10 minutes, so read the file again for each call. The agent sends it as a Bearer token or as the password of basic
+auth. There is no long-lived key. The broker then does these steps:
 
-1. It checks that the secret is in the scope of the agent. If not, it refuses with 403.
-2. It removes the credential headers of the agent and adds the value in `spec.broker.header` (default
+1. It checks the token with a TokenReview (audience `credential-broker`, namespace of the agents, service account
+   `agent-<name>`). A claude-proxy token or an expired token is refused with 401.
+2. It checks that the secret is in the scope of the agent. If not, it refuses with 403.
+3. It removes the credential headers of the agent and adds the value in `spec.broker.header` (default
    `Authorization`), in the form `spec.broker.scheme` (`bearer`, `basic` or `raw`).
-3. It sends the request to the upstream, https only, and does not let the path leave the upstream base path.
-4. In text responses, it replaces the upstream base URL with its own, so that links in a registry index also go
+4. It sends the request to the upstream, https only, and does not let the path leave the upstream base path.
+5. In text responses, it replaces the upstream base URL with its own, so that links in a registry index also go
    through the broker.
 
 The harness guide of each agent lists the broker secrets that the agent can use. The broker records one
 SecurityEvent `broker-use` per agent, secret and hour, and one for each refusal (`broker-secret-denied`,
-`broker-key-invalid`, `broker-unknown-secret`, `broker-path`). The value is never in a log.
+`broker-token-invalid`, `broker-unknown-secret`, `broker-path`). The value is never in a log.
 
-Example for npm, in the project's `.npmrc` (the agent can write it):
+Example for npm, in the project's `.npmrc` (the agent can write it). Set `AGENTDEV_BROKER_TOKEN` just before the
+call, because the token expires:
 
 ```ini
 @myorg:registry=${AGENTDEV_BROKER_URL}/s/npm-registry/
-//credential-broker.coding-agents.svc.cluster.local:8080/s/npm-registry/:_authToken=${AGENTDEV_BROKER_KEY}
+//credential-broker.coding-agents.svc.cluster.local:8080/s/npm-registry/:_authToken=${AGENTDEV_BROKER_TOKEN}
+```
+
+```bash
+AGENTDEV_BROKER_TOKEN=$(cat "$AGENTDEV_BROKER_TOKEN_FILE") npm ci
 ```
 
 A new or removed broker secret restarts the broker once. A rotated value does not restart it.

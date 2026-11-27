@@ -24,6 +24,8 @@ func TestAgentPodTemplateFixturesForChat(t *testing.T) {
 		{"agent-pod-toolchain.json", func(a *v1.Agent) {
 			a.Spec.Toolchain = &v1.AgentToolchain{Presets: v1.ToolchainPresets{Go: "1.27.4"}}
 		}},
+		// #202: the credential broker URL and its projected token broker-token (chat Job admission policy)
+		{"agent-pod-broker.json", nil},
 	} {
 		r, c := setup(t, agent("alice", tc.mut))
 		r.D.ForgeImage, r.D.WorkerImage, r.D.PullPolicy = "ghcr.io/example/agentdev-forge:v0.0.0", "ghcr.io/example/agentdev-worker:v0.0.0", "IfNotPresent"
@@ -31,6 +33,9 @@ func TestAgentPodTemplateFixturesForChat(t *testing.T) {
 		r.D.EgressProxy = "http://egress-proxy.coding-agents.svc.cluster.local:3128"
 		r.D.ClaudeProxyURL = "http://claude-proxy.coding-agents.svc.cluster.local:8080"
 		r.D.Approvals, r.D.ApprovalsURL, r.D.ApprovalTimeout = "true", "http://agentdev-api-internal.agentdev-platform.svc.cluster.local:8081", "30"
+		if tc.file == "agent-pod-broker.json" {
+			r.D.BrokerURL = "http://credential-broker.coding-agents.svc.cluster.local:8080"
+		}
 		reconcile(t, r, "alice")
 		s := getSTS(t, c, "alice")
 		got, err := json.MarshalIndent(s.Spec.Template, "", "  ")

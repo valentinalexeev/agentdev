@@ -111,7 +111,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 		// drain (#174): the pod's own annotations, where the operator (or an admin) sets agentdev/drain
 		{Name: "podinfo", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{DefaultMode: ptr.To[int32](0o444),
 			Items: []corev1.DownwardAPIVolumeFile{{Path: "annotations", FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.annotations"}}}}}}}
-	p.Volumes = append(p.Volumes, r.proxyTokenVolumes()...)
+	p.Volumes = append(append(p.Volumes, r.proxyTokenVolumes()...), r.brokerTokenVolumes()...)
 	forgeURL, publicURL := r.D.ForgeURL, r.D.ForgePublicURL
 	// forge credentials, only for the forge container: a Gitea token, or the GitHub App (#2) from the same per-agent
 	// Secret agent-<name> (so the CEL binding of R21 still holds)
@@ -186,7 +186,7 @@ func (r *AgentReconciler) render(a *v1.Agent, s *appsv1.StatefulSet, psecs ...v1
 		Env: agentEnv,
 		VolumeMounts: append(append([]corev1.VolumeMount{{Name: "state", MountPath: "/state"}, {Name: "state", MountPath: "/home/node/.claude", SubPath: "claude"},
 			{Name: "usage", MountPath: "/etc/agentdev/usage", ReadOnly: true}, {Name: "guide", MountPath: "/etc/agentdev/guide", ReadOnly: true},
-			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), r.proxyTokenMounts()...),
+			{Name: "podinfo", MountPath: "/etc/agentdev/pod", ReadOnly: true}}, tcMounts...), append(r.proxyTokenMounts(), r.brokerTokenMounts()...)...),
 		EnvFrom: r.claudeEnvFrom(a),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("512Mi"),

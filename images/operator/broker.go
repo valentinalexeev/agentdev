@@ -190,15 +190,39 @@ func (s *BrokerSync) Sync(ctx context.Context) error {
 	return nil
 }
 
-// brokerEnv: the agent container calls the broker with its proxy key (the same per-agent key as for claude-proxy;
-// worth nothing outside the cluster). Nothing without a broker URL.
-func (r *AgentReconciler) brokerEnv(n string) []corev1.EnvVar {
+// brokerEnv: the agent container calls the broker with a projected token of its own service account (audience
+// credential-broker, 10 minutes, renewed by the kubelet), read from AGENTDEV_BROKER_TOKEN_FILE on each call. No key:
+// the broker checks the token with TokenReview (#202, R128). Nothing without a broker URL.
+func (r *AgentReconciler) brokerEnv(string) []corev1.EnvVar {
 	if r.D.BrokerURL == "" {
 		return nil
 	}
 	return []corev1.EnvVar{{Name: "AGENTDEV_BROKER_URL", Value: r.D.BrokerURL},
-		{Name: "AGENTDEV_BROKER_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: "agent-" + n + "-proxy"}, Key: "ANTHROPIC_AUTH_TOKEN", Optional: ptr.To(true)}}}}
+		{Name: "AGENTDEV_BROKER_TOKEN_FILE", Value: BrokerTokenDir + "/token"}}
+}
+
+const (
+	brokerTokenVolume   = "broker-token"
+	BrokerTokenDir      = "/var/run/secrets/agentdev/broker"
+	brokerTokenAudience = "credential-broker"
+)
+
+// brokerTokenVolumes: the projected token for the broker, only with a broker URL; only the agent container mounts it.
+func (r *AgentReconciler) brokerTokenVolumes() []corev1.Volume {
+	if r.D.BrokerURL == "" {
+		return nil
+	}
+	return []corev1.Volume{{Name: brokerTokenVolume, VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+		DefaultMode: ptr.To[int32](0o444),
+		Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+			Audience: brokerTokenAudience, ExpirationSeconds: ptr.To[int64](proxyTokenSeconds), Path: "token"}}}}}}}
+}
+
+func (r *AgentReconciler) brokerTokenMounts() []corev1.VolumeMount {
+	if r.D.BrokerURL == "" {
+		return nil
+	}
+	return []corev1.VolumeMount{{Name: brokerTokenVolume, MountPath: BrokerTokenDir, ReadOnly: true}}
 }
 
 // secretEnv: ProjectSecrets in mode env for this agent become variables of the agent container (explicit opt-in,
@@ -334,8 +358,8 @@ func (r *AgentReconciler) secretsGuide(ctx context.Context, a *v1.Agent) string 
 	if len(lines) > guideMaxExecs {
 		lines = lines[:guideMaxExecs]
 	}
-	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with $AGENTDEV_BROKER_KEY " +
-		"(Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
+	return "- Credentials: use these base URLs; the broker adds the credential. Authenticate with the token in the file " +
+		"$AGENTDEV_BROKER_TOKEN_FILE, read it again for each call (Bearer token, or the password of basic auth). You never see the credential itself:\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // redactDir: where the forge sidecar finds the mode-env values it removes from approval text (#202).

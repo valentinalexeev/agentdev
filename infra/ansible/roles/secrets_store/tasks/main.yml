@@ -105,24 +105,30 @@
   changed_when: "'updated' in secrets_store_api_env.stdout"
   when: secrets_store_api_dep.resources | length > 0 and not ansible_check_mode
 
-# Credential broker (#202 part 2, mode broker): the credproxy image with MODE=broker. It verifies the agents' proxy keys
-# with claude-proxy-signing, so it needs the Claude proxy (tag agents with the Claude proxy on).
-- name: Signing key of the Claude proxy (names only, the value is not read)
+# Credential broker (#202 part 2, mode broker): the credproxy image with MODE=broker. It authenticates agents by their
+# projected service account token (audience credential-broker) with TokenReview, so its NetworkPolicy allows the API
+# server addresses (Service default/kubernetes), as for claude-proxy (#352).
+- name: API server addresses (Service default/kubernetes) for the broker egress
   kubernetes.core.k8s_info:
     context: "{{ secrets_store_context }}"
-    kind: Secret
-    namespace: "{{ secrets_store_agents_ns }}"
-    name: claude-proxy-signing
-  register: secrets_store_signing
-  no_log: true
+    kind: "{{ item }}"
+    namespace: default
+    name: kubernetes
+  loop: [Service, Endpoints]
+  register: secrets_store_kube_api
+  when: secrets_store_broker_enabled | bool
 
-- name: Credential broker Deployment, Service and NetworkPolicy
+- name: Credential broker ServiceAccount, TokenReview RBAC, Deployment, Service and NetworkPolicy
   kubernetes.core.k8s:
     context: "{{ secrets_store_context }}"
     definition: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=secrets_store_broker) | from_yaml_all | list }}"
     wait: true
     wait_timeout: 120
   vars:
+    secrets_store_kube_api_ips: >-
+      {{ ([secrets_store_kube_api.results[0].resources[0].spec.clusterIP] if secrets_store_kube_api.results[0].resources else [])
+         + (secrets_store_kube_api.results[1].resources | map(attribute='subsets', default=[]) | flatten
+            | map(attribute='addresses', default=[]) | flatten | map(attribute='ip') | list) }}
     secrets_store_broker:
       src: "{{ repo_root }}/manifests/credential-broker.yaml.tmpl"
       values:
@@ -130,10 +136,7 @@
         CLAUDE_PROXY_IMAGE: "{{ secrets_store_broker_image }}"
         IMAGE_PULL_POLICY: "{{ secrets_store_broker_pull_policy }}"
         CREDENTIAL_BROKER_URL: "http://credential-broker.{{ secrets_store_agents_ns }}.svc.cluster.local:8080"
+        KUBE_API_EGRESS: >-
+          {{ lookup('ansible.builtin.template', 'templates/kube-api-egress.j2', template_vars={'kube_api_ips': secrets_store_kube_api_ips}) | trim }}
       replace: []
-  when: secrets_store_broker_enabled | bool and secrets_store_signing.resources | length > 0
-
-- name: Credential broker skipped
-  ansible.builtin.debug:
-    msg: "credential broker skipped: it needs the Claude proxy (run --tags agents with the Claude proxy on first)"
-  when: secrets_store_broker_enabled | bool and secrets_store_signing.resources | length == 0
+  when: secrets_store_broker_enabled | bool and not ansible_check_mode

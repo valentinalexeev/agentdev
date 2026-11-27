@@ -11,11 +11,10 @@ pr: 272
 ## Summary
 
 Project secrets reach agents (#202 parts 2 and 3). Mode `broker`: the credproxy image with `MODE=broker`
-(Deployment `credential-broker`) adds the secret to requests for its https upstream
-(`$AGENTDEV_BROKER_URL/s/<secret>/`), so the agent never holds the value; uses and refusals are SecurityEvents
-(source `credential-broker`). Mode `env` (opt-in, `riskAccepted`) puts the value into the agent container, never
-under a variable agentdev sets. Write-only API (`/api/secrets`) and a **Secrets** page in the console. kind:
-`ansible-playbook infra/ansible/kind.yml -e @kind.vars.yml --tags secrets`. Docs: `docs/admin.md`, risks R128, R129.
+(Deployment `credential-broker`) adds the secret to requests for its https upstream (`$AGENTDEV_BROKER_URL/s/<secret>/`);
+the agent never holds the value and authenticates with a projected token (audience `credential-broker`), not a key.
+Mode `env` (opt-in, `riskAccepted`) puts the value into the agent container, never under a variable agentdev sets.
+Write-only API (`/api/secrets`) and a **Secrets** page. kind: `kind.yml --tags secrets`. Docs: `docs/admin.md`, R128, R129.
 
 ## Upgrade
 
@@ -24,6 +23,8 @@ under a variable agentdev sets. Write-only API (`/api/secrets`) and a **Secrets*
 
 ## Description
 
+- The broker has `tokenreviews create` only and no signing key. The chat Job policy admits the `broker-token`
+  projection only with audience `credential-broker`, 600 s, path `token`, and only in the chat container.
 - The broker checks the scope (project or agent, matched with the forge and the agent's repository) on each request,
   removes the agent's credential headers, redacts the value from response bodies (also binary), refuses encodings it
   did not ask for and dials public addresses only.

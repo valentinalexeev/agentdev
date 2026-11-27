@@ -42,7 +42,7 @@ func fakeAPIServer(t *testing.T, answers map[string]reviewAnswer, calls *int32) 
 			} `json:"spec"`
 		}
 		_ = json.Unmarshal(b, &req)
-		if len(req.Spec.Audiences) != 1 || req.Spec.Audiences[0] != "claude-proxy" {
+		if len(req.Spec.Audiences) != 1 || (req.Spec.Audiences[0] != "claude-proxy" && req.Spec.Audiences[0] != "credential-broker") {
 			t.Errorf("review audiences %v", req.Spec.Audiences)
 		}
 		p := strings.Split(req.Spec.Token, ".")

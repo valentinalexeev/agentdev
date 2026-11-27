@@ -110,9 +110,12 @@ metadata: {name: e2e-web}
 spec: {scope: agent, agent: e2e-brk, project: owner/repo, mode: broker, broker: {upstream: "https://example.com"}}
 EOF
   printf '%s' "$val1" | k -n "$vns" create secret generic agentdev-ps-e2e-web --from-file=value=/dev/stdin >/dev/null 2>&1
-  signing=$(k -n "$ns" get secret claude-proxy-signing -o jsonpath='{.data.key}' | base64 -d)
-  key_of() { printf '%s.%s' "$1" "$(printf 'agentdev-claude-proxy/v1:%s' "$1" | openssl dgst -sha256 -hmac "$signing" -r | cut -d' ' -f1)"; }
-  good=$(key_of e2e-brk) other=$(key_of e2e-other)
+  # R128: agents authenticate with a projected token (audience credential-broker); the operator makes agent-e2e-brk
+  k -n "$ns" create serviceaccount agent-e2e-other >/dev/null 2>&1 || true
+  for _ in $(seq 30); do k -n "$ns" get sa agent-e2e-brk >/dev/null 2>&1 && break; sleep 2; done
+  good=$(k -n "$ns" create token agent-e2e-brk --audience credential-broker --duration 10m)
+  other=$(k -n "$ns" create token agent-e2e-other --audience credential-broker --duration 10m)
+  proxyaud=$(k -n "$ns" create token agent-e2e-brk --audience claude-proxy --duration 10m)
   for _ in $(seq 60); do
     k -n "$ns" get configmap credential-broker-routes -o jsonpath='{.data.routes\.json}' 2>/dev/null | grep -q '"e2e-web".*"e2e-brk"' \
       && [[ "$(k -n "$ns" get projectsecret e2e-web -o jsonpath='{.status.phase}')" == ready ]] && break
@@ -122,12 +125,13 @@ EOF
   sleep 5   # the projected volume follows the new Secret
   burl="http://credential-broker.$ns.svc.cluster.local:8080/s/e2e-web/"
   codes=$(k -n "$ns" run e2e-brk-curl --rm -i --restart=Never --quiet --image=curlimages/curl:8.11.1 \
-    --labels=app=coding-agent,agent=e2e-brk --env="G=$good" --env="O=$other" --command -- sh -c \
-    "for a in \"Bearer \$G\" \"Bearer \$O\" 'Bearer e2e-brk.00'; do curl -s -o /dev/null -w '%{http_code} ' -H \"Authorization: \$a\" $burl; done" 2>/dev/null)
-  read -r c_good c_other c_bad <<<"$codes"
-  [[ "$c_good" == 200 ]] && ok "broker forwards with the agent's key (via https://example.com)" || no "broker forward: $c_good"
+    --labels=app=coding-agent,agent=e2e-brk --env="G=$good" --env="O=$other" --env="P=$proxyaud" --command -- sh -c \
+    "for a in \"Bearer \$G\" \"Bearer \$O\" \"Bearer \$P\" 'Bearer e2e-brk.00'; do curl -s -o /dev/null -w '%{http_code} ' -H \"Authorization: \$a\" $burl; done" 2>/dev/null)
+  read -r c_good c_other c_paud c_bad <<<"$codes"
+  [[ "$c_good" == 200 ]] && ok "broker forwards with the agent's token (via https://example.com)" || no "broker forward: $c_good"
   [[ "$c_other" == 403 ]] && ok "broker refuses an agent outside the secret's scope" || no "out-of-scope agent: $c_other"
-  [[ "$c_bad" == 401 ]] && ok "broker refuses a wrong key" || no "wrong key: $c_bad"
+  [[ "$c_paud" == 401 ]] && ok "broker refuses a claude-proxy token (R128)" || no "claude-proxy token: $c_paud"
+  [[ "$c_bad" == 401 ]] && ok "broker refuses a wrong token" || no "wrong token: $c_bad"
   for _ in $(seq 30); do
     k -n "$ns" get securityevents -o jsonpath='{range .items[*]}{.spec.source}/{.spec.rule} {end}' | grep -q 'credential-broker/broker-secret-denied' && break
     sleep 2
@@ -149,7 +153,8 @@ EOF
   fi
   k -n "$ns" delete projectsecret e2e-web --ignore-not-found >/dev/null; k -n "$ns" delete agent e2e-brk --ignore-not-found >/dev/null
   k -n "$vns" delete secret agentdev-ps-e2e-web --ignore-not-found >/dev/null
-  unset signing good other
+  k -n "$ns" delete serviceaccount agent-e2e-other --ignore-not-found >/dev/null
+  unset good other proxyaud
 else
   echo "  SKIP credential broker not deployed"
 fi

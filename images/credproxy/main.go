@@ -316,6 +316,24 @@ func clip(s string, n int) string {
 }
 
 func main() {
+	if os.Getenv("MODE") == "broker" { // credential broker for project secrets (#202, broker.go)
+		eventSource = "credential-broker"
+		ns := envOr("AGENTS_NAMESPACE", os.Getenv("POD_NAMESPACE"))
+		if !agentRe.MatchString(ns) {
+			log.Fatal("AGENTS_NAMESPACE (or POD_NAMESPACE) must name the namespace of the agent service accounts")
+		}
+		rv, err := inClusterReviewer(ns) // fail closed: without TokenReview no agent can be authenticated
+		if err != nil {
+			log.Fatalf("the credential broker needs the in-cluster API for TokenReview: %v", err)
+		}
+		rv.audience = brokerAudience
+		bk := newBroker(rv, envOr("ROUTES_FILE", "/etc/credential-broker/routes/routes.json"),
+			envOr("VALUES_DIR", "/etc/credential-broker/values"), os.Getenv("SELF_URL"), brokerTransport())
+		srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: bk, ReadHeaderTimeout: 10 * time.Second}
+		log.Printf("credential-broker listening on %s, agents in %s", srv.Addr, ns)
+		serve(srv, nil)
+		return
+	}
 	signing, err := os.ReadFile(envOr("SIGNING_KEY_FILE", "/etc/claude-proxy/signing/key"))
 	if err != nil || len(strings.TrimSpace(string(signing))) < 32 {
 		log.Fatal("signing key missing or shorter than 32 bytes")
@@ -326,15 +344,6 @@ func main() {
 			log.Fatal("bad agent name")
 		}
 		os.Stdout.WriteString(agentKey(signing, os.Args[2]))
-		return
-	}
-	if os.Getenv("MODE") == "broker" { // credential broker for project secrets (#202, broker.go)
-		eventSource = "credential-broker"
-		bk := newBroker(signing, envOr("ROUTES_FILE", "/etc/credential-broker/routes/routes.json"),
-			envOr("VALUES_DIR", "/etc/credential-broker/values"), os.Getenv("SELF_URL"), brokerTransport())
-		srv := &http.Server{Addr: envOr("LISTEN", ":8080"), Handler: bk, ReadHeaderTimeout: 10 * time.Second}
-		log.Printf("credential-broker listening on %s", srv.Addr)
-		serve(srv, nil)
 		return
 	}
 	up, err := url.Parse(envOr("UPSTREAM", "https://api.anthropic.com"))

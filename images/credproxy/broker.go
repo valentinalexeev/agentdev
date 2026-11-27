@@ -12,6 +12,7 @@ package main
 // without a restart.
 
 import (
+	"context"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -54,7 +55,9 @@ var strippedHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie",
 const maxRewrite = 32 << 20
 
 type broker struct {
-	signing   []byte
+	reviewer  interface {
+		verify(ctx context.Context, tok string) string
+	} // TokenReview of the agent's projected token, audience credential-broker (#202)
 	routes    string // routes file
 	values    string // values directory
 	self      string // the broker's own base URL as agents see it, for rewriting absolute links
@@ -65,8 +68,10 @@ type broker struct {
 	used map[string]int64 // agent/secret -> unix hour of the last broker-use event (one per hour)
 }
 
-func newBroker(signing []byte, routes, values, self string, transport http.RoundTripper) *broker {
-	return &broker{signing: signing, routes: routes, values: values, self: strings.TrimRight(self, "/"),
+func newBroker(reviewer interface {
+	verify(ctx context.Context, tok string) string
+}, routes, values, self string, transport http.RoundTripper) *broker {
+	return &broker{reviewer: reviewer, routes: routes, values: values, self: strings.TrimRight(self, "/"),
 		transport: transport, now: time.Now, used: map[string]int64{}}
 }
 
@@ -82,8 +87,8 @@ func (b *broker) loadRoutes() map[string]route {
 	return m
 }
 
-// brokerKey takes the agent key from Authorization: Bearer <key> or Basic <user:key>.
-func brokerKey(auth string) string {
+// brokerToken takes the agent's token from Authorization: Bearer <token> or Basic <user:token>.
+func brokerToken(auth string) string {
 	if k, ok := strings.CutPrefix(auth, "Bearer "); ok {
 		return strings.TrimSpace(k)
 	}
@@ -145,11 +150,16 @@ func (b *broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, rest, _ := strings.Cut(rest, "/")
-	agent := verifyKey(b.signing, brokerKey(r.Header.Get("Authorization")))
+	// the agent's projected service account token (audience credential-broker), checked with TokenReview; never a
+	// key the model could keep: the kubelet renews the token and it expires after 10 minutes (R128)
+	agent := ""
+	if tok := brokerToken(r.Header.Get("Authorization")); looksLikeJWT(tok) {
+		agent = b.reviewer.verify(r.Context(), tok)
+	}
 	if agent == "" {
-		emitEvent("", "broker-key-invalid", "medium", r.Method+" /s/"+clip(name, 60)+": missing or wrong agent key")
+		emitEvent("", "broker-token-invalid", "medium", r.Method+" /s/"+clip(name, 60)+": missing or wrong agent token")
 		w.Header().Set("WWW-Authenticate", `Basic realm="agentdev credential broker"`)
-		b.fail(w, http.StatusUnauthorized, "missing or wrong agent key")
+		b.fail(w, http.StatusUnauthorized, "missing or wrong agent token")
 		return
 	}
 	rt, found := b.loadRoutes()[name]
