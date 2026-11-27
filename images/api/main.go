@@ -132,6 +132,8 @@ func main() {
 	go func() { log.Fatal(isrv.ListenAndServe()) }()
 	if os.Getenv("CHAT_SESSIONS") == "true" { // console chat sessions (#346, chat.go)
 		chatSvc = chatFromEnv(ctx, wr, agents, store, gh)
+		// #571: the sidecar of a chat pod asks who allowed a label call (chat_labels.go)
+		imux.Handle("POST /internal/chat/{id}/label-asked", chatSvc.labelAsked())
 	}
 	// notifications for each user (#347): NOTIFY_CHANNELS lists the channels on for this instance (webpush); the
 	// NotificationChannel object in PLATFORM_NS gives the VAPID key and the allowed push hosts

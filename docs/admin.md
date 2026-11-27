@@ -2998,6 +2998,18 @@ Tool permissions: the session asks in the console (**Allow once** or **Deny**), 
 comments. The agent's approval path needs an issue or a pull request of the agent to comment on, and a session has
 none. A push to a protected path is refused by the sidecar at once (as for an agent with approvals off).
 
+Labels (#571, [ADR 0011](adr/0011-chat-label-writes.md)): the API sets `CHAT_SESSION` on the sidecar of a session
+pod. With it, the sidecar adds labels to an issue or a pull request of the repository, `agent:*` labels too. It does
+this only when the API confirms that a person allowed that exact command in the console. The command must contain
+the labels path of the issue and each label. One **Allow once** gives one label write, in the next 5 minutes. The
+agent pod does not have `CHAT_SESSION`, so the autonomous loop keeps its rule: only `agent:<name>` on its own pull
+request. Each label write is an audit entry `chat-label` with the person. A refused write is a security event
+`chat-label-not-asked`. The NetworkPolicy `agentdev-api-internal` lets session pods reach port 8081 of the API for
+this check. On GitHub, a label that a session adds does not start work: the agent starts only when a person with
+write access added `agent:<name>`.
+
+Sessions and agents can read tags, releases and milestones through the sidecar. They cannot change them.
+
 The admission policy `agentdev-api-chat-jobs` allows only this shape: the containers `chat` (worker image) and
 `forge` (forge image), the init container `state-init`, the service account `agent-<name>`, and only the Secrets of
 the agent in the Job label, each in the container that has it in the agent pod. The API reads no Secret; its Role is
@@ -3020,7 +3032,7 @@ Optional secret, on Gitea: `agentdev-chat-issue-token` (site admin, `write:issue
 author is the person). Since #424 there is no clone token: the Secret Manager entry `agentdev-chat-clone-token` is
 not read any more (you can delete it), and the playbook removes the Secret `agentdev-chat-clone`.
 
-Every start, message, permission answer, end and issue is an entry in the audit log (`GET /api/audit`).
+Every start, message, permission answer, end, issue and label write is an entry in the audit log (`GET /api/audit`).
 
 Notes:
 

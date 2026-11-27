@@ -93,6 +93,7 @@ type chatAPI struct {
 	viewers map[string]map[string]time.Time // session -> person -> last seen (zero while a stream is open)
 	open    map[string]map[string]int       // session -> person -> open streams
 	states  map[string]json.RawMessage      // last state from the session server
+	allows  map[string][]*chatAllow         // session -> recent "allow" answers (chat_labels.go, #571)
 	startMu sync.Mutex
 	ctx     context.Context
 	newID   func(agent string) string
@@ -501,7 +502,11 @@ func (c *chatAPI) permission(rw http.ResponseWriter, r *http.Request) {
 	}
 	req := map[string]string{"permission": pid, "behavior": body.Behavior}
 	who := c.author(c.ident(r), s.Forge)
+	if body.Behavior == "allow" { // #571: the person who allowed a label call (chat_labels.go)
+		c.noteAllow(s.ID, pid, c.w.who(c.ident(r)), who)
+	}
 	if _, err := c.callSession(r.Context(), s.ID, http.MethodPost, "/permissions/"+pid, map[string]string{"author": who, "behavior": body.Behavior}); err != nil {
+		c.forgetAllow(s.ID, pid)
 		c.fail(rw, r, action, s, err, req)
 		return
 	}

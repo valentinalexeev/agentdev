@@ -153,6 +153,20 @@ You can also use a session in the web console. The console and the terminal show
     Refer to [Give an issue to an agent](#give-an-issue-to-an-agent).
 13. To stop the session for all people, select **End**, then **End for everyone**.
 
+To add a label to an issue or a pull request from a session (#571):
+
+1. Ask Claude to add the label, for example "add the label `bug` to issue 570".
+2. Read the command in the permission request.
+   The command must contain `/repos/<owner>/<repository>/issues/<number>/labels` and each label.
+3. Select **Allow once**.
+   The agent's sidecar adds the labels. The audit log records your name with the label write.
+
+NOTE: One **Allow once** gives one label write. The sidecar refuses the label write if nobody allowed that command
+in the last 5 minutes.
+
+NOTE: On GitHub, an `agent:<name>` label that the session adds does not give the issue to the agent. The agent
+starts only when a person with write access adds the label. To give the issue to an agent, add the label yourself.
+
 CAUTION: The text, the tool output and the drafts of the session come from the model. They can contain a prompt
 injection. Decide on a permission request from the tool and its input, not from what the text asks.
 

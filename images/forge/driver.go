@@ -71,7 +71,7 @@ func (d *giteaDriver) rules() []rule {
 	r := func(m, p string, chk func(*server, []byte) error) rule {
 		return mkRule(m, strings.ReplaceAll(p, "[0-9]+", "[1-9][0-9]{0,15}"), chk)
 	}
-	return []rule{
+	return append([]rule{
 		r("GET", `/user`, nil),
 		r("GET", repoRe, nil),
 		r("GET", repoRe+`/issues`, nil),
@@ -92,7 +92,7 @@ func (d *giteaDriver) rules() []rule {
 		r("GET", repoRe+`/issues/[0-9]+/timeline`, nil),
 		r("GET", repoRe+`/assignees`, nil),
 		giteaOwnPRLabelRule(),
-	}
+	}, releaseReadRules(r)...)
 }
 
 // giteaOwnPRLabelRule (#241 P5): the loop labels its own PR agent:<name> on Gitea too, as on GitHub (#227). The
@@ -100,7 +100,7 @@ func (d *giteaDriver) rules() []rule {
 // Gitea accepts label names in the body (labels: ["agent:alice"]).
 func giteaOwnPRLabelRule() rule {
 	ru := mkRule("POST", repoRe+`/issues/([1-9][0-9]{0,15})/labels`, nil) // m[2] = the PR number
-	ru.checkPath = checkOwnPRLabel
+	ru.checkPath = checkLabelWrite
 	return ru
 }
 

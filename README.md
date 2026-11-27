@@ -68,6 +68,8 @@ merge, deploys the agents and waits until each one posts a readiness report (for
 **Chat in a project (#38).** `scripts/agent-chat.sh start examples/project.yaml` opens an interactive Claude Code
 session with a fresh clone of the project; detach with Ctrl-b d and `scripts/agent-chat.sh attach` re-attaches from any
 terminal with cluster access. The session can read and file issues but not push; it ends after 30 min unattended.
+A console chat session (Chat page) acts as the agent; it can add labels to an issue only when a person allows that
+exact call in the console, and the audit log names that person (#571, `docs/adr/0011-chat-label-writes.md`).
 
 **Scale to zero (default, #181).** An agent with no work for 15 minutes stops; on GKE its node goes away too. The router
 starts it again on a webhook, or when its wake poll (every 5 minutes) finds new work on the forge. Set
