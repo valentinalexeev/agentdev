@@ -237,7 +237,7 @@ spec:
       'env': {'DEVPISERVER_SERVERDIR': '/devpi/server', 'HOME': '/tmp'}, 'args': []},
      {'id': 'go', 'port': 3000, 'image': registry_cache_athens_image, 'uid': 1000, 'mount': '/var/lib/athens',
       'env': {'ATHENS_STORAGE_TYPE': 'disk', 'ATHENS_DISK_STORAGE_ROOT': '/var/lib/athens', 'ATHENS_PORT': ':3000',
-              'ATHENS_GO_BINARY_ENV_VARS': 'GOPROXY=https://proxy.golang.org,direct', 'ATHENS_SUM_DBS': 'https://sum.golang.org',
+              'ATHENS_GO_BINARY_ENV_VARS': 'GOPROXY=https://proxy.golang.org;GONOPROXY=;GONOSUMDB=;GOPRIVATE=;GOINSECURE=', 'ATHENS_SUM_DBS': 'https://sum.golang.org',
               'ATHENS_NETWORK_MODE': 'strict', 'HOME': '/tmp', 'GOPATH': '/tmp/go', 'GOCACHE': '/tmp/go-cache',
               'GOFLAGS': '-mod=mod'}, 'args': []},
    ] %}

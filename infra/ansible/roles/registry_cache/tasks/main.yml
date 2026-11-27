@@ -51,6 +51,14 @@
   register: registry_cache_fqdn_crd
   when: registry_cache_mode != 'off' and registry_cache_fqdn_policy | bool
 
+- name: Refuse FQDN egress without the FQDNNetworkPolicy CRD (the caches would get no egress at all)
+  ansible.builtin.assert:
+    that: registry_cache_fqdn_crd.resources | default([]) | length > 0
+    fail_msg: >-
+      registry_proxy {{ registry_cache_mode }} needs the CRD fqdnnetworkpolicies.networking.gke.io for the egress of
+      the caches. Apply infra/terraform (enable_fqdn_network_policy), or set platform.egress.fqdn: none.
+  when: registry_cache_mode != 'off' and registry_cache_fqdn_policy | bool
+
 - name: Egress of the caches and the gateway by name (GKE FQDNNetworkPolicy)
   kubernetes.core.k8s:
     context: "{{ registry_cache_context }}"
