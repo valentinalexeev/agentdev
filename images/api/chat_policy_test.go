@@ -268,6 +268,15 @@ func TestChatJobAdmission(t *testing.T) {
 			c := containerNamed(*p, "chat")
 			c.Env = append(c.Env, secretEnv("X", "agentdev-api-forge"))
 		}},
+		// #203: the chat container may read the registry cache URLs (ConfigMap registry-proxy), no other ConfigMap
+		{"another ConfigMap as envFrom", func(p *corev1.PodSpec, _ *batchv1.Job) {
+			c := containerNamed(*p, "chat")
+			c.EnvFrom = append(c.EnvFrom, corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "agentdev-api"}}})
+		}},
+		{"the registry-proxy ConfigMap in the forge sidecar", func(p *corev1.PodSpec, _ *batchv1.Job) {
+			c := containerNamed(*p, "forge")
+			c.EnvFrom = append(c.EnvFrom, corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "registry-proxy"}}})
+		}},
 		{"an extra container", func(p *corev1.PodSpec, _ *batchv1.Job) {
 			p.Containers = append(p.Containers, corev1.Container{Name: "x", Image: testWorkerImage})
 		}},
