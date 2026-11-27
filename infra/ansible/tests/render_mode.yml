@@ -55,7 +55,8 @@
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
           # the CRD refuses an empty path, so an executor without executors[].path has no path key
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='spec') | selectattr('path', 'defined') | list | length == 0
-          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 9   # 8 of the operator (SSHTarget, #204) + NotificationChannel (role api)
+          # 8 of the operator (#204 SSHTarget) + NotificationChannel (role api)
+          - docs.gke | selectattr('kind', 'equalto', 'CustomResourceDefinition') | list | length == 9
           - docs.gke | selectattr('kind', 'equalto', 'Deployment') | selectattr('metadata.name', 'equalto', 'step-ca') | list | length == 1
           # #447: platform, authentik (helm template), API, UI, NotificationChannel and the database Job
           - docs.gke | selectattr('kind', 'equalto', 'StatefulSet') | map(attribute='metadata.name') | list == ['platform-db']
