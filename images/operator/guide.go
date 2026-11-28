@@ -31,9 +31,10 @@ const (
 	// guideMaxBytes caps the guide: it is in the context of every run. Lists are cut before this is reached. With the
 	// defaults a guide is about 2 KB, so the one ConfigMap (1 MiB limit) holds several hundred agents; at the cap, about
 	// 170. Beyond that, split into one ConfigMap per agent (tracked in the docs, admin "See the harness guide").
-	guideMaxBytes = 6000
-	guideMaxHosts = 40
-	guideMaxExecs = 20
+	guideMaxBytes  = 6000
+	guideMaxHosts  = 40
+	guideMaxExecs  = 20 // executor lines
+	guideMaxChecks = 20 // probe (server check) lines, over all executors
 )
 
 // guideStatic is the same for every agent. It is versioned with the operator image; admins cannot edit it, so no
@@ -164,8 +165,8 @@ func (r *AgentReconciler) guideText(a *v1.Agent, execs []v1.Executor) string {
 		}
 	}
 	sort.Strings(checks)
-	if len(checks) > guideMaxExecs {
-		checks = checks[:guideMaxExecs]
+	if len(checks) > guideMaxChecks {
+		checks = checks[:guideMaxChecks]
 	}
 	if len(checks) > 0 {
 		b.WriteString("- Server facts: use the MCP tools server_checks (list) and server_check (run) of obs-mcp. " +
