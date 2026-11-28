@@ -16,6 +16,9 @@ agents:
   # an agent that must always run: - {name: bob, user: bob, repos: my-org/my-repo, scale_to_zero: false}
   # an agent with a custom toolchain (agentdev #598): - {name: carol, user: carol, repos: my-org/my-repo,
   #   toolchain: {custom: [shell-tools]}}
+  # an agent on Spot VMs with more retries and resource samples (agentdev #593, #588, #616): - {name: dave, user: dave,
+  #   repos: my-org/my-repo, retries: {infrastructure: 4}, diagnostics: {resources: true, intervalSeconds: 60}}
+# for all agents (an agent's own keys win): agent_retries: {infrastructure: 4}, agent_diagnostics: {resources: true}
 # Custom toolchains of this deployment (agentdev #598, docs/admin.md "Give an agent a custom toolchain"). Add every
 # download host to setup_egress_hosts too:
 # setup_egress_hosts: [dl.google.com, static.rust-lang.org, github.com, objects.githubusercontent.com]

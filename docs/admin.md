@@ -75,7 +75,7 @@ Each field has one owner:
 
 | Field | Owner |
 |---|---|
-| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.model`, `spec.effort`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.scaleToZero` | Git (Flux) |
+| `spec.repo`, `spec.forge`, `spec.claudeSecret`, `spec.maxConcurrent`, `spec.maxTurns`, `spec.model`, `spec.effort`, `spec.permission`, `spec.tools`, `spec.toolchain`, `spec.retries`, `spec.diagnostics`, `spec.scaleToZero` | Git (Flux) |
 | `spec.paused` | the API (field manager `agentdev-api`) and the security pause (field manager `agentdev-operator`) |
 | replicas of the StatefulSet | the router. The StatefulSets are not in Git. |
 | `status` | the operator |
@@ -540,6 +540,8 @@ All guides are in one ConfigMap. A ConfigMap can contain 1 MiB. A guide with the
 | Concurrency | `MAX_CONCURRENT` (default 2) | `max_concurrent`, `agents[].max_concurrent` |
 | Turn limit of one Claude run (#336) | `MAX_TURNS` (default 40) | `max_turns`, `agents[].max_turns` |
 | Model and effort of the Claude runs (#564) | `kind_agents_model`, `kind_agents_effort` (default empty: the CLI default) | `claude_model`, `claude_effort`, `agents[].model`, `agents[].effort` |
+| Retries after an infrastructure stop (#593, #616) | `kind_agents_retries` (per agent; default empty: 2 retries) | `agent_retries`, `agents[].retries` |
+| Memory use records of the agent container (#588, #616) | `kind_agents_diagnostics` (per agent; default empty: off) | `agent_diagnostics`, `agents[].diagnostics` |
 | Poll interval (when webhooks do not operate) | `POLL_SECONDS` | `poll_seconds` |
 | Cost labels on namespaces, agent and executor pods (#184) | `COST_LABELS` (default `service=agentdev,environment=dev`) | `agentdev_labels` (plus `service: agentdev`) |
 | Agent StorageClass | `AGENT_STORAGE_CLASS` (empty: cluster default) | `agent_storage_class` (default `agentdev-agent`, `pd-standard`) |
@@ -1064,6 +1066,12 @@ agentdev 1.3.0 has these measures. They reduce the loss from a preemption. They 
 
    WARNING: A job that a security pause stopped never starts again. Set the limit with care: a job that stops again
    and again can use the budget of the agent.
+
+   To set the limit, use these keys (#616):
+   - On GKE: `agents[].retries` in `ansible/instance.yml`, for example `{infrastructure: 4}`. The instance-wide
+     default is `agent_retries`. The keys of the agent have priority over the keys of `agent_retries`.
+   - On `kind`: `kind_agents_retries` in `kind.vars.yml`, for example `{alice: {infrastructure: 4}}`.
+   - In Git mode: `spec.retries` in the `Agent` manifest.
 5. **The end of the agent process is recorded.** When the agent process ends with an error, the worker writes one log
    line, the file `jobs/<job>.exit` (JSON) and a run event for the job record. They have:
    - the exit status and the signal, for example `137 (SIGKILL)`
@@ -1077,13 +1085,23 @@ agentdev 1.3.0 has these measures. They reduce the loss from a preemption. They 
    run. If the kernel kills the whole container, the loop dies too. No record is written in this case.
 
 To record the memory use of the agent container during a job, set `spec.diagnostics.resources: true`. The interval is
-`spec.diagnostics.intervalSeconds` (default 60). It is off by default, and it adds no load when it is off.
+`spec.diagnostics.intervalSeconds` (default 60, range 5 to 3600). It is off by default, and it adds no load when it
+is off.
+
+1. On GKE: set `agents[].diagnostics` in `ansible/instance.yml`, for example `{resources: true, intervalSeconds: 60}`.
+   To set it for all agents, set `agent_diagnostics`. The keys of the agent have priority over the keys of
+   `agent_diagnostics`.
+   On `kind`: set `kind_agents_diagnostics` in `kind.vars.yml`, for example `{alice: {resources: true}}`.
+   In Git mode: set `spec.diagnostics` in the `Agent` manifest.
+2. Deploy again. The operator replaces the agent pod after the running jobs end.
 
 #### Upgrade to 1.3.0
 
 The deployment playbook applies the new Agent field and a new ClusterRole `agentdev-operator-nodes`. The role has
 only `get` on `nodes`. Without it, the operator finds the reason from the pod condition alone. An Agent without
-`spec.retries` keeps its pod template and gets 2 retries.
+`spec.retries` keeps its pod template and gets 2 retries. The playbooks set `spec.retries` and `spec.diagnostics` only
+when `agents[].retries`, `agents[].diagnostics`, `agent_retries`, `agent_diagnostics` (GKE) or `kind_agents_retries`,
+`kind_agents_diagnostics` (`kind`) have a value (#616).
 
 ### Find out if a preemption stopped a job
 
@@ -1139,7 +1157,8 @@ Choose the options that fit the cost target of the instance.
 - Run the agent pool on normal VMs. Set `agent_pool_spot = false`. Jobs are no longer stopped by a preemption, and
   agents do not wait for Spot capacity. The cost of each agent hour increases.
 - Make the system nodes larger with `system_machine_type`, if the nodes have too little memory (`kubectl top nodes`).
-- Keep `spec.retries.infrastructure` at its default of 2, or set it higher for an agent on Spot VMs.
+- Keep `spec.retries.infrastructure` at its default of 2, or set it higher for an agent on Spot VMs
+  (`agents[].retries` in `ansible/instance.yml`).
 - Give each issue a task of a size that a job can finish in a short time. A short job loses less in a preemption.
 
 CAUTION: A change of `system_pool_spot` or `agent_pool_spot` replaces the node pool. The platform, or the agents

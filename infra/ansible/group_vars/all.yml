@@ -104,6 +104,12 @@ claude_effort: ""
 # Tools added to the default allow-list per agent only (#496): agents[].tools = {allow: ["Bash(npm ci:*)"]}.
 # Claude Code permission mode per agent only (#500): agents[].permission = {mode: auto, autoMode: {allow: [...],
 # softDeny: [...], environment: [...]}}. Unset: dontAsk. In mode auto a classifier decides calls outside the allow-list.
+# Retries of a job stopped by the infrastructure (#593, #616): agent_retries = {infrastructure: 4} (0-10, operator
+# default 2), the Agent's spec.retries. Diagnostics (#588, #616): agent_diagnostics = {resources: true,
+# intervalSeconds: 60}, the Agent's spec.diagnostics. Per-agent override: agents[].retries, agents[].diagnostics (the
+# agent's keys win). Empty: no field, the pod template stays as before.
+agent_retries: {}
+agent_diagnostics: {}
 scale_to_zero: true                 # stop idle agents, start on events (#35, default since #181); per agent: agents[].scale_to_zero
 wake_poll_seconds: 300              # the router checks the forge for work of stopped agents (#181); 0 = webhooks only
 # webhooks reach the router: GitHub through the public ingress (ingress.webhook_host or ingress.host). With scale to
