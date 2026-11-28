@@ -119,7 +119,8 @@ func sshStage(e *v1.Executor, r *v1.ExecutorRun, t *v1.SSHTarget) (principal, us
 	case !e.Spec.SSH || r.Spec.Stage == "pr":
 		return "", "", false
 	case r.Spec.Stage == "merge" && r.Spec.Action == "plan",
-		r.Spec.Stage == "snapshot" && r.Spec.Action == "snapshot": // read-only: the check user, never sudo
+		r.Spec.Stage == "snapshot" && r.Spec.Action == "snapshot", // read-only: the check user, never sudo
+		r.Spec.Stage == "drift" && r.Spec.Action == "plan":
 		return "agentdev-" + e.Name + "-check", checkUser(t), true
 	case r.Spec.Stage == "apply" && r.Spec.Action == "apply":
 		return "agentdev-" + e.Name + "-apply", applyUser(t), true
@@ -168,6 +169,9 @@ func (p *ExecutorPoller) ensureRunSSH(ctx context.Context, e *v1.Executor, r *v1
 	keyID := "executor/" + r.Name + "/" + r.Spec.Commit
 	if r.Spec.Stage == "snapshot" {
 		keyID = "snapshot/" + r.Name
+	}
+	if r.Spec.Stage == "probe" {
+		return false, errors.New("probe runs get no Job")
 	}
 	priv, _, cert, err := newCertKey(ctx, ca, SSHCertRequest{Type: "user", KeyID: keyID,
 		Principals: []string{principal}, Validity: sshCertTTL})

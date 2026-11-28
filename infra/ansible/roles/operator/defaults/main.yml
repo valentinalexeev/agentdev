@@ -46,6 +46,8 @@ operator_toolchains: {}
 operator_setup_egress_hosts: [dl.google.com, static.rust-lang.org]
 operator_claude_proxy: true
 operator_usage: {five_hour: 80, weekly: 90}
+# probe catalogue (#205): server_check calls per minute, all agents together (one server gets half), and burst
+operator_probes: {rate_per_min: 20, rate_burst: 5}
 operator_rollout: {grace_seconds: 300, drain_max_minutes: 60}   # #174, formerly AGENT_GRACE_SECONDS and DRAIN_MAX_MINUTES
 # telemetry (#196 D4): by default a Prometheus server in monitoring
 operator_telemetry:

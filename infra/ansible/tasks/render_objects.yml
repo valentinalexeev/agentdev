@@ -210,6 +210,8 @@
         EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+        PROBE_RATE_PER_MIN: "{{ probes.rate_per_min | default(20) }}"   # #205 probe catalogue
+        PROBE_RATE_BURST: "{{ probes.rate_burst | default(5) }}"
         TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
         TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
         TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"

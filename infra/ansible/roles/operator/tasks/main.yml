@@ -116,6 +116,8 @@
         EXECUTOR_EGRESS_HOSTS: "{{ operator_executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ operator_usage.five_hour }}"
         USAGE_WEEKLY: "{{ operator_usage.weekly }}"
+        PROBE_RATE_PER_MIN: "{{ operator_probes.rate_per_min }}"   # #205 probe catalogue
+        PROBE_RATE_BURST: "{{ operator_probes.rate_burst }}"
         # telemetry (#196 D4): /metrics on 9464, NetworkPolicy from the scraper pods only
         TELEMETRY_OTLP_URL: "{{ operator_telemetry.otlp_url }}"
         TELEMETRY_INSTANCE: "{{ operator_telemetry.instance }}"

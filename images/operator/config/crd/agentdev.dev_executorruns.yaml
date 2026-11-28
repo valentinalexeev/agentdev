@@ -61,15 +61,27 @@ spec:
               operator only; immutable.
             properties:
               action:
-                description: plan | apply | snapshot
+                description: plan | apply | snapshot | probe
                 enum:
                 - plan
                 - apply
                 - snapshot
+                - probe
                 type: string
               approval:
                 description: 'apply: the Approval that allowed it.'
                 maxLength: 63
+                type: string
+              args:
+                description: 'probe: argument values, checked against the patterns.'
+                items:
+                  maxLength: 128
+                  type: string
+                maxItems: 4
+                type: array
+              check:
+                description: 'probe: check name (spec.probes[].name).'
+                maxLength: 40
                 type: string
               commit:
                 description: Commit, 40 hex characters (from the forge API, checked
@@ -106,12 +118,19 @@ spec:
                 description: |-
                   pr: plan of a pull request head (unreviewed code, result informative only). merge: plan of a merge commit of
                   the protected branch (the only plan that can be applied). apply: apply of an approved merge plan. snapshot:
-                  scheduled fact gathering (no commit, no PR, #205).
+                  scheduled fact gathering (no commit, no PR, #205). drift: scheduled plan of the branch head (commit, no PR).
+                  probe: one catalogue check on one server (no commit, no PR), run by the operator itself; a record.
                 enum:
                 - pr
                 - merge
                 - apply
                 - snapshot
+                - drift
+                - probe
+                type: string
+              target:
+                description: 'probe: SSHTarget name.'
+                maxLength: 63
                 type: string
             required:
             - action
@@ -153,11 +172,14 @@ spec:
         x-kubernetes-validations:
         - message: ExecutorRun spec is immutable
           rule: self.spec == oldSelf.spec
-        - message: snapshot runs have no commit and no PR; other runs need both
-          rule: 'self.spec.stage == ''snapshot'' ? (self.spec.action == ''snapshot''
-            && !has(self.spec.commit) && !has(self.spec.pr)) : (self.spec.action !=
-            ''snapshot'' && has(self.spec.commit) && size(self.spec.commit) == 40
-            && has(self.spec.pr) && self.spec.pr >= 1)'
+        - message: snapshot and probe runs have no commit and no PR, drift runs a
+            commit and no PR, other runs need both
+          rule: 'self.spec.stage in [''snapshot'', ''probe''] ? (self.spec.action
+            == self.spec.stage && !has(self.spec.commit) && !has(self.spec.pr)) :
+            self.spec.stage == ''drift'' ? (self.spec.action == ''plan'' && has(self.spec.commit)
+            && size(self.spec.commit) == 40 && !has(self.spec.pr)) : (!(self.spec.action
+            in [''snapshot'', ''probe'']) && has(self.spec.commit) && size(self.spec.commit)
+            == 40 && has(self.spec.pr) && self.spec.pr >= 1)'
     served: true
     storage: true
     subresources:

@@ -17,6 +17,10 @@
                  | combine({'path': e.path} if e.path | default('') | length > 0 else {})
                  | combine({'prPlan': {'command': e.pr_plan}} if e.pr_plan is defined else {})
                  | combine({'snapshot': {'command': e.snapshot, 'intervalHours': e.snapshot_hours | default(24) | int}}
-                           if e.snapshot is defined else {})}) -%}
+                           if e.snapshot is defined else {})
+                 | combine({'drift': {'changedPattern': e.drift.changed_pattern, 'intervalHours': e.drift.hours | default(24) | int}
+                                     | combine({'command': e.drift.command} if e.drift.command is defined else {})}
+                           if e.drift is defined else {})
+                 | combine({'probes': e.probes} if e.probes is defined else {})}) -%}
 {%- endfor -%}
 {{ out | to_json }}

@@ -105,6 +105,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | ContextForge | the MCP gateway in the platform namespace |
 | cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
+| drift | a difference between the servers and the protected branch, found by the scheduled drift check of an executor |
 | fingerprint | the SHA-256 value of an SSH key, as `ssh-keygen -l` shows it |
 | effort | the reasoning effort level of a Claude run (`claude --effort`): `low`, `medium`, `high`, `xhigh` or `max` (#564) |
 | forge | the git hosting service (Gitea or GitHub) |
@@ -114,7 +115,9 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
 | host certificate | the certificate of a server SSH key, signed by the host CA |
 | principal | a name in an SSH certificate that sshd compares with the principals file of a local user |
-| probe | a short SSH connection of the operator that checks that a server is enrolled |
+| probe | a short SSH connection of the operator that checks that a server is enrolled, or runs one server check |
+| probe catalogue | the list of server checks of an executor (`spec.probes`) that agents can run with `server_check` |
+| server check | one entry of the probe catalogue: a fixed command with argument patterns |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |

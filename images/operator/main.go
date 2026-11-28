@@ -201,6 +201,17 @@ func main() {
 			log.Error(err, "executor poller")
 			os.Exit(1)
 		}
+		// probe catalogue (#205): server_check of obs-mcp, only with PROBE_LISTEN and a token file
+		ex.Forge = ex.defaultForge
+		if ps, listen, err := probeServerFromEnv(ex); err != nil {
+			log.Error(err, "probe server")
+		} else if ps != nil {
+			if err := mgr.Add(probeRunnable{s: ps, listen: listen}); err != nil {
+				log.Error(err, "probe server")
+				os.Exit(1)
+			}
+			log.Info("probe catalogue on", "listen", listen)
+		}
 		log.Info("deterministic executors on", "namespace", execNS)
 		if sshCANS == execNS || sshCANS == ns {
 			log.Error(nil, "SSH_CA_NS must be its own namespace: the operator may read Secrets in EXEC_NS and the agents namespace")
