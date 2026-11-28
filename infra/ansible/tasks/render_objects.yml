@@ -108,6 +108,11 @@
       exec_egress_web: >-
         {{ (lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/executor-egress-web.yaml.tmpl',
            'values': {'EXEC_NS': exec_ns}, 'replace': []}) | from_yaml_all | list) if platform_fqdn == 'none' else [] }}
+      # SSH certificate authority (#204, ADR 0007): step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+      step_ca: >-
+        {{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars={'src': repo_root ~ '/manifests/step-ca.yaml.tmpl',
+           'values': {'SSH_CA_NS': ssh_ca_ns, 'PLATFORM_NS': platform_ns, 'STEP_CA_IMAGE': step_ca_image}, 'replace': []})
+           | from_yaml_all | list }}
       exec_service_accounts: "{{ lookup('ansible.builtin.template', 'templates/executor-accounts.j2') | from_yaml }}"
       executors: "{{ lookup('ansible.builtin.template', 'templates/executors.j2') | from_yaml }}"
       claude_proxy: >-
@@ -123,8 +128,8 @@
   vars:
     crd_paths: "{{ crd_files | map('regex_replace', '^', repo_root ~ '/images/operator/config/crd/') | list }}"
     crd_files: [agentdev.dev_agents.yaml, agentdev.dev_securityevents.yaml, agentdev.dev_approvals.yaml,
-                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_projectsecrets.yaml,
-                agentdev.dev_mcpprojects.yaml]
+                agentdev.dev_executors.yaml, agentdev.dev_executorruns.yaml, agentdev.dev_sshtargets.yaml,
+                agentdev.dev_projectsecrets.yaml, agentdev.dev_mcpprojects.yaml]
     router_docs: "{{ lookup('ansible.builtin.template', 'templates/render.j2', template_vars=vars_router) | from_yaml_all | list }}"
     vars_router:
       src: "{{ repo_root }}/manifests/router.yaml.tmpl"
@@ -198,12 +203,15 @@
         AGENT_GRACE_SECONDS: "{{ rollout.grace_seconds | default(300) }}"
         DRAIN_MAX_MINUTES: "{{ rollout.drain_max_minutes | default(60) }}"
         EXEC_NS: "{{ exec_ns }}"
+        SSH_CA_NS: "{{ ssh_ca_ns }}"
         EXECUTOR_POLL_SECONDS: "{{ executor_poll_seconds }}"
         EXECUTOR_RETENTION_DAYS: "{{ executor_retention_days }}"
         EXECUTOR_APPLY_START_MINUTES: "{{ executor_apply_start_minutes }}"
         EXECUTOR_EGRESS_HOSTS: "{{ executor_egress_hosts | join(' ') }}"
         USAGE_FIVE_HOUR: "{{ usage.five_hour | default(80) }}"
         USAGE_WEEKLY: "{{ usage.weekly | default(90) }}"
+        PROBE_RATE_PER_MIN: "{{ probes.rate_per_min | default(20) }}"   # #205 probe catalogue
+        PROBE_RATE_BURST: "{{ probes.rate_burst | default(5) }}"
         TELEMETRY_OTLP_URL: "{{ telemetry.otlp_url | default('') }}"
         TELEMETRY_INSTANCE: "{{ telemetry.instance | default('agentdev') }}"
         TELEMETRY_SCRAPER_NS: "{{ telemetry.scraper_ns | default('gmp-system') }}"

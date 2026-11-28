@@ -402,7 +402,7 @@
       vars:
         registry_cache_fqdn_policy: "{{ platform_fqdn == 'gke' }}"
 
-    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #202, #383)"
+    - name: "Agent, SecurityEvent, Approval, Executor, ExecutorRun, SSHTarget, ProjectSecret and McpProject CRDs (#47, #70, #67, #69, #204, #202, #383)"
       kubernetes.core.k8s:
         <<: *k8s
         definition: "{{ agentdev_objects.crds }}"
@@ -472,6 +472,11 @@
         <<: *k8s
         definition: "{{ agentdev_objects.exec_egress_fqdn }}"
       when: platform_fqdn == 'gke'
+
+    - name: SSH certificate authority (#204) - step-ca, idle until scripts/ssh-ca-init.sh made Secret step-ca
+      kubernetes.core.k8s:
+        <<: *k8s
+        definition: "{{ agentdev_objects.step_ca }}"
 
     - name: Remove the web policy of the executor egress proxy (the FQDN policy is on)
       kubernetes.core.k8s:

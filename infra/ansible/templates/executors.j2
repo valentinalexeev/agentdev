@@ -1,5 +1,5 @@
 {#- Executor objects (#69, #384). Rendered by tasks/render_objects.yml. No path key without executors[].path: the CRD
-    refuses an empty path. -#}
+    refuses an empty path. SSHTargets (#204) are written by admins, not here. -#}
 {%- set out = [] -%}
 {%- for e in executors -%}
 {%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Executor',
@@ -12,7 +12,15 @@
                  'forgeSecret': 'exec-' ~ e.name ~ '-forge',
                  'approvalHours': e.approval_hours | default(24) | int,
                  'allowForkPRs': e.allow_fork_prs | default(false) | bool,
-                 'egressHosts': e.egress_hosts | default([])}
-                 | combine({'path': e.path} if e.path | default('') | length > 0 else {})}) -%}
+                 'egressHosts': e.egress_hosts | default([]),
+                 'ssh': e.ssh | default(false) | bool}
+                 | combine({'path': e.path} if e.path | default('') | length > 0 else {})
+                 | combine({'prPlan': {'command': e.pr_plan}} if e.pr_plan is defined else {})
+                 | combine({'snapshot': {'command': e.snapshot, 'intervalHours': e.snapshot_hours | default(24) | int}}
+                           if e.snapshot is defined else {})
+                 | combine({'drift': {'changedPattern': e.drift.changed_pattern, 'intervalHours': e.drift.hours | default(24) | int}
+                                     | combine({'command': e.drift.command} if e.drift.command is defined else {})}
+                           if e.drift is defined else {})
+                 | combine({'probes': e.probes} if e.probes is defined else {})}) -%}
 {%- endfor -%}
 {{ out | to_json }}

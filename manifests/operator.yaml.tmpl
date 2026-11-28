@@ -33,6 +33,10 @@ rules:   # same rules as the generated images/operator/config/rbac/role.yaml, sc
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-usage-settings], verbs: [get]}
 # harness guide (#206): one key per agent, written by the operator only; agent pods mount their own key read-only
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-guides], verbs: [get, update]}
+# server snapshots (#205, #204): one key per executor, written by the operator only, read by the agents' tools
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-snapshots], verbs: [get, update]}
+# drift reports (#205): one key per executor, written by the operator only
+- {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-drift], verbs: [get, update]}
 # toolchains (#499): the last good "<key>:<manifest hash>" per agent, read by the init container toolchain at pod start
 - {apiGroups: [""], resources: [configmaps], resourceNames: [agentdev-toolchains], verbs: [get, update]}
 # scoped secrets store (#202): one ExternalSecret ps-<name> per ProjectSecret (manifests/secrets-policy.yaml.tmpl pins
@@ -131,12 +135,17 @@ metadata: {name: agentdev-operator, namespace: ${EXEC_NS}}
 rules:   # same rules as the generated images/operator/config/rbac/role.yaml (executor.go), scoped to this namespace
 - {apiGroups: [agentdev.dev], resources: [executors], verbs: [get, list, watch]}
 - {apiGroups: [agentdev.dev], resources: [executors/status], verbs: [get, update, patch]}
+# SSH server enrolment (#204): admins write SSHTargets; the operator only reads them and writes their status
+- {apiGroups: [agentdev.dev], resources: [sshtargets], verbs: [get, list, watch]}
+- {apiGroups: [agentdev.dev], resources: [sshtargets/status], verbs: [get, update, patch]}
 - {apiGroups: [agentdev.dev], resources: [executorruns, executorruns/status], verbs: [get, list, watch, create, update, patch, delete]}
 - {apiGroups: [batch], resources: [jobs], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [persistentvolumeclaims], verbs: [get, list, watch, create, delete]}
 - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
 - {apiGroups: [""], resources: [pods/log], verbs: [get]}
-- {apiGroups: [""], resources: [secrets], verbs: [get]}   # exec-<name>-forge only by name (no list or watch)
+# exec-<name>-forge and the runs' Secrets, by name (no list or watch). Unnamed, so no CA key may live in this namespace:
+# step-ca runs in SSH_CA_NS (R133, manifests/step-ca.yaml.tmpl)
+- {apiGroups: [""], resources: [secrets], verbs: [get]}
 # executor egress (#135): the operator writes the per-executor proxy credentials and Squid rules
 - {apiGroups: [""], resources: [secrets], verbs: [create]}   # create cannot be narrowed by name
 - {apiGroups: [""], resources: [secrets], resourceNames: [executor-egress-proxy], verbs: [get, update]}
@@ -167,7 +176,8 @@ spec:
     metadata: {labels: {app: agentdev-operator}}
     spec:
       serviceAccountName: agentdev-operator
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      # fsGroup: the probe token (#205) is mounted 0440 for this group
+      securityContext: {runAsNonRoot: true, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: operator
         image: ${OPERATOR_IMAGE}
@@ -209,6 +219,7 @@ spec:
         - {name: APPROVAL_RETENTION_DAYS, value: "${APPROVAL_RETENTION_DAYS}"}  # Approval objects (#67)
         # deterministic executors (#69); OPERATOR_IMAGE is also the plan hash/verify helper in executor Jobs
         - {name: EXEC_NS, value: "${EXEC_NS}"}
+        - {name: SSH_CA_NS, value: "${SSH_CA_NS}"}   # #204 (R133): step-ca and its keys, never in EXEC_NS
         - {name: OPERATOR_IMAGE, value: "${OPERATOR_IMAGE}"}
         - {name: EXECUTOR_POLL_SECONDS, value: "${EXECUTOR_POLL_SECONDS}"}
         - {name: EXECUTOR_RETENTION_DAYS, value: "${EXECUTOR_RETENTION_DAYS}"}
@@ -218,6 +229,11 @@ spec:
         - {name: EXECUTOR_EGRESS_HOSTS, value: "${EXECUTOR_EGRESS_HOSTS}"}
         - {name: USAGE_FIVE_HOUR, value: "${USAGE_FIVE_HOUR}"}   # default global usage limits in % (#93); the web UI overrides
         - {name: USAGE_WEEKLY, value: "${USAGE_WEEKLY}"}
+        # probe catalogue (#205): server_check of obs-mcp; off without Secret agentdev-probe-token
+        - {name: PROBE_LISTEN, value: ":8090"}
+        - {name: PROBE_TOKEN_FILE, value: /var/run/agentdev-probe/token}
+        - {name: PROBE_RATE_PER_MIN, value: "${PROBE_RATE_PER_MIN}"}
+        - {name: PROBE_RATE_BURST, value: "${PROBE_RATE_BURST}"}
         - {name: TELEMETRY_INSTANCE, value: "${TELEMETRY_INSTANCE}"}   # #278: label agentdev_instance on every metric
         - {name: TELEMETRY_OTLP_URL, value: "${TELEMETRY_OTLP_URL}"}   # #196: https OTLP endpoint; empty = Prometheus only
         # external forwarder watch (#213): empty FORWARDER_NS = off. Role in that namespace: roles/ingress (forwarder-watch)
@@ -231,14 +247,27 @@ spec:
         - {name: MCP_ADMIN_EMAIL, value: "${MCP_ADMIN_EMAIL}"}
         - {name: MCP_ALLOWED_HOSTS, value: "${MCP_ALLOWED_HOSTS}"}   # trusted MCP hosts (host or host:port); others: Ready=False
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-        ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}]
+        ports: [{name: health, containerPort: 8081}, {name: metrics, containerPort: 9464}, {name: probe, containerPort: 8090}]
+        volumeMounts: [{name: probe-token, mountPath: /var/run/agentdev-probe, readOnly: true}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, periodSeconds: 10}
         livenessProbe: {httpGet: {path: /healthz, port: health}, periodSeconds: 20}
         resources:
           requests: {cpu: 20m, memory: 64Mi}
           limits: {memory: 256Mi}
+      volumes:
+      # shared with obs-mcp only (#205); optional: without it the probe server stays off
+      - name: probe-token
+        secret: {secretName: agentdev-probe-token, optional: true, defaultMode: 0440}
 ---
-# no inbound traffic except the metrics scraper (it only calls the Kubernetes API)
+apiVersion: v1
+kind: Service
+metadata: {name: agentdev-probe, namespace: ${PLATFORM_NS}}
+spec:
+  selector: {app: agentdev-operator}
+  ports: [{name: probe, port: 8090, targetPort: probe}]
+---
+# inbound only to the probe server (#205) from obs-mcp and to /metrics from the scraper; the agents never reach
+# the operator
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: agentdev-operator, namespace: ${PLATFORM_NS}}
@@ -246,6 +275,8 @@ spec:
   podSelector: {matchLabels: {app: agentdev-operator}}
   policyTypes: [Ingress]
   ingress:
+  - from: [{podSelector: {matchLabels: {app: obs-mcp}}}]
+    ports: [{port: 8090}]
   # #196 (ADR 0002 D4): /metrics on 9464 only from the metrics scraper pods (TELEMETRY_SCRAPER_SELECTOR) in its
   # namespace (kind: Prometheus in monitoring, GKE Managed Prometheus: the collector in gmp-system); not from other
   # pods of that namespace (Grafana, the OTLP collector), and never from agent pods

@@ -98,18 +98,26 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | bootstrap | the script `scripts/bootstrap-project.sh` that connects a project, or the Terraform bootstrap that makes a GCP project |
 | botboard | the optional dashboard that shows the work of the agents as cards |
 | branch | a git branch |
+| certificate authority (CA) | the step-ca service that signs the SSH certificates of the executors |
 | cluster | a Kubernetes cluster |
 | concurrency | the number of items that one agent works on at the same time (`MAX_CONCURRENT`) |
 | config.env | the file with the default settings of the helper scripts in `scripts/`. Since 1.3.0 the `kind` playbook does not read it |
 | ContextForge | the MCP gateway in the platform namespace |
 | cost unit | the price of one input token of the reference model (Sonnet); the Claude budget counts cost units (#196) |
 | deployment repository | the private repository that contains the values of one production instance |
+| drift | a difference between the servers and the protected branch, found by the scheduled drift check of an executor |
+| fingerprint | the SHA-256 value of an SSH key, as `ssh-keygen -l` shows it |
 | effort | the reasoning effort level of a Claude run (`claude --effort`): `low`, `medium`, `high`, `xhigh` or `max` (#564) |
 | forge | the git hosting service (Gitea or GitHub) |
 | forge token | the credential that lets an agent use its forge account |
 | GitOps engine | a program in the cluster (Argo CD, Flux) that applies the manifests of a git repository or OCI artifact (#384) |
 | guardrail | a check in the agent loop or the forge sidecar that stops a dangerous action |
 | harness guide | the text that the operator writes for each agent: what agentdev gives the agent and what it does not give (#206) |
+| host certificate | the certificate of a server SSH key, signed by the host CA |
+| principal | a name in an SSH certificate that sshd compares with the principals file of a local user |
+| probe | a short SSH connection of the operator that checks that a server is enrolled, or runs one server check |
+| probe catalogue | the list of server checks of an executor (`spec.probes`) that agents can run with `server_check` |
+| server check | one entry of the probe catalogue: a fixed command with argument patterns |
 | reconcile | one pass of the operator over an Agent object, when it makes the agent pod and its files match the configuration |
 | Job, Secret, Service, StatefulSet, Role, ResourceQuota | the Kubernetes objects with these names |
 | instance | one installation of agentdev |
@@ -143,6 +151,7 @@ the meaning given here, and only that meaning. Add a word in the same PR that us
 | run.sh step | one numbered script of the old installation, for example `./run.sh 11`. Removed in 1.3.0; use only in history and upgrade notes |
 | scale to zero | the function of the router that stops an agent with no work and starts it when an event occurs |
 | security finding | a possible security problem that code scanning (for example GitHub Advanced Security) shows in a thread of a pull request |
+| SSHTarget object | the Kubernetes object (`agentdev.dev/v1alpha1`, kind `SSHTarget`) that defines one server of an executor |
 | thread | a comment on a line of a pull request, with its replies |
 | commit | one saved change of a git repository, identified by its sha |
 | draft pull request | a pull request that is not ready for review or merge (on Gitea: a title that starts with `WIP:`) |
@@ -219,6 +228,7 @@ authentik page. A label is not a word of the text, so a label does not break the
 | render | write the manifests of an instance to files, with no change to the cluster (`infra/ansible/render.yml`, #384) |
 | drain | tell an agent to start no new job and let its running jobs finish (#174) |
 | edit | change the text of a forge comment after you wrote it |
+| enrol | prepare a server so that an executor can connect to it with SSH certificates |
 | log in | start a session on authentik, on Gitea or on Google Cloud (`gcloud auth login`). The authentik and Gitea label is **Log in**. Do not use "sign in" for these. Use "sign in" only for the web UI |
 | mute | stop the notifications of a project or a type (#347) |
 | merge | add the changes of a pull request to the main branch |

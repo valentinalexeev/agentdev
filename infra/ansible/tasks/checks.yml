@@ -59,9 +59,17 @@
       - "'..' not in (item.branch | default('main')) and not (item.branch | default('main')).startswith('-')"
       - executors | selectattr('environment', 'equalto', item.environment) | list | length == 1
       - executors | selectattr('name', 'equalto', item.name) | list | length == 1
+      - >-
+        not (item.ssh | default(false) | bool)
+        or (item.pr_plan is defined and item.pr_plan is sequence and item.pr_plan is not string and item.pr_plan | length > 0)
+      - item.snapshot is not defined or ((item.ssh | default(false) | bool) and item.snapshot is sequence and item.snapshot is not string)
+      - item.drift is not defined or (item.drift is mapping and (item.drift.changed_pattern | default('')) | length > 0)
+      - item.probes is not defined or ((item.ssh | default(false) | bool) and item.probes is sequence and item.probes is not string)
+      - (item.probes | default([])) | rejectattr('name', 'match', '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') | list | length == 0
     fail_msg: >-
       executor {{ item.name | default('?') }}: invalid (name ^[a-z0-9-]{1,40}$, image by @sha256 digest,
-      plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names)
+      plan/apply argv lists, no '..', one executor per environment, egress_hosts DNS names, ssh needs a pr_plan
+      argv list, snapshot and probes need ssh, drift needs changed_pattern, probe names [a-z0-9-])
     quiet: true
   loop: "{{ executors }}"
   loop_control: {label: "{{ item.name | default('?') }}"}

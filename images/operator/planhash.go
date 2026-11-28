@@ -38,6 +38,18 @@ func planHelper(args []string, out io.Writer) (code int, ok bool) {
 		return 0, false
 	}
 	switch args[0] {
+	case "connect-proxy": // ssh ProxyCommand of executor Jobs (#204)
+		return connectProxy(args[1:], os.Stdin, os.Stdout, os.Stderr), true
+	case "install-helper": // copy this binary into the Job's shared volume (#204)
+		if len(args) != 2 {
+			fmt.Fprintln(out, "usage: install-helper <path>")
+			return 2, true
+		}
+		if err := copySelf(args[1]); err != nil {
+			fmt.Fprintln(out, "install-helper:", err)
+			return 1, true
+		}
+		return 0, true
 	case "hash-plan":
 		if len(args) != 2 {
 			fmt.Fprintln(out, "usage: hash-plan <file>")

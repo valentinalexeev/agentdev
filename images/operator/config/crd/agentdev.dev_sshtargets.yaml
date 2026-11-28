@@ -1,0 +1,196 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: sshtargets.agentdev.dev
+spec:
+  group: agentdev.dev
+  names:
+    kind: SSHTarget
+    listKind: SSHTargetList
+    plural: sshtargets
+    shortNames:
+    - sst
+    singular: sshtarget
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.host
+      name: Host
+      type: string
+    - jsonPath: .spec.executor
+      name: Executor
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.lastProbe
+      name: Probe
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SSHTargetSpec is written by cluster admins only.
+            properties:
+              applyUser:
+                default: agentdev
+                description: Local user of the apply stage (principal agentdev-<executor>-apply;
+                  the only user with sudo).
+                pattern: ^[a-z_][a-z0-9_-]{0,31}$
+                type: string
+              checkUser:
+                default: agentdev-check
+                description: Local user of the check stage and the probe (principals
+                  agentdev-<executor>-check and agentdev-probe; no sudo).
+                pattern: ^[a-z_][a-z0-9_-]{0,31}$
+                type: string
+              executor:
+                description: Executor that may use this server (merge plan with the
+                  check principal, apply with the apply principal).
+                maxLength: 40
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              host:
+                description: Host name or IP address the operator and the executor
+                  Jobs connect to. Also the host certificate's principal.
+                maxLength: 253
+                pattern: ^(([a-z0-9]([-a-z0-9]*[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]*[a-z0-9])?|[0-9]{1,3}(\.[0-9]{1,3}){3})$
+                type: string
+              hostKeyFingerprint:
+                description: |-
+                  SHA-256 fingerprint of the server's host key as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints it
+                  (SHA256:...), read on the server by a person. The operator signs the host key only if it matches: this is the
+                  admin's decision that the server is the right one.
+                pattern: ^SHA256:[A-Za-z0-9+/]{43}$
+                type: string
+              port:
+                default: 22
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+            required:
+            - executor
+            - host
+            - hostKeyFingerprint
+            type: object
+          status:
+            description: SSHTargetStatus is written by the operator only.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              hostCAKey:
+                description: Host CA public key, for the @cert-authority line of the
+                  executors.
+                type: string
+              hostCertificate:
+                description: Host certificate (OpenSSH authorized_keys form) for /etc/ssh/ssh_host_ed25519_key-cert.pub.
+                type: string
+              hostCertificateNotAfter:
+                format: date-time
+                type: string
+              lastProbe:
+                format: date-time
+                type: string
+              message:
+                type: string
+              observedFingerprint:
+                description: Fingerprint of the host key the server presented at the
+                  last connection.
+                type: string
+              phase:
+                description: Pending | HostKeyMismatch | Enrolling | Ready | NotReady
+                type: string
+              userCAKeys:
+                description: User CA public keys for TrustedUserCAKeys (several during
+                  a rotation).
+                items:
+                  type: string
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: applyUser and checkUser must differ
+          rule: '!has(self.spec.applyUser) || !has(self.spec.checkUser) || self.spec.applyUser
+            != self.spec.checkUser'
+    served: true
+    storage: true
+    subresources:
+      status: {}
