@@ -21,8 +21,9 @@ fail=0; check() { if eval "$2"; then echo "ok   - $1"; else echo "FAIL - $1"; fa
 cat > "${tmp}/run.sh" <<EOF
 set -uo pipefail
 c=\$1 phase=\$2
-export FORGE_USER=alice AGENT_NAME=alice REPO=o/r FORGE_URL=http://forge FORGE_API=http://sidecar STATE="${tmp}/\${c}/state"
+export FORGE_USER=alice AGENT_NAME=alice REPO=o/r FORGE_URL=http://forge FORGE_API=http://127.0.0.1:1 STATE="${tmp}/\${c}/state"
 export WAKE_FILE="${tmp}/\${c}/wake" WORK="\${STATE}/repo" POD_ANNOTATIONS="${tmp}/\${c}/annotations" USAGE_DIR="${tmp}/\${c}/usage"
+unset APPROVALS   # an agent pod sets it: start_job's job-done call would add a line to the pushes record
 mkdir -p "\${STATE}/seen" "\${USAGE_DIR}"; [[ -e "\${WAKE_FILE}" ]] || : > "\${WAKE_FILE}"
 log() { echo "LOG \$*" >> "${tmp}/\${c}/log"; }
 comment() { printf '%s %s\n' "\$1" "\$2" >> "${tmp}/\${c}/comments"; }
@@ -37,6 +38,8 @@ curl() {
   echo "\${b} \$(git bundle list-heads "\${f}" 2>/dev/null | awk '{print \$1}' | head -n1)" >> "${tmp}/\${c}/pushes"
   printf '{}\n200'
 }
+# #621: on_term kills every process named claude; inside an agent pod that was the agent's own Claude run
+pkill() { echo "pkill \$*" >> "${tmp}/\${c}/pkill"; }
 source <(sed -n '/^clone_url()/p; /^lgit()/p; /^security_event() {/,/^}/p; /^scrub_git_config() {/,/^}/p; /^pin_worktree() {/,/^}/p' "${loop}")
 source <(sed -n '/^# ---------- concurrency (#20)/,/^default_branch()/p' "${loop}" | sed '\$d')
 source <(sed -n '/^# ---------- why a run stopped (#588)/,/^run_claude() {/p' "${loop}" | sed '\$d')
@@ -90,6 +93,7 @@ check "${c}: the pushed tip is the saved commit" \
 check "${c}: the reason was written before the push (log order)" \
   "[[ \$(grep -n 'SIGTERM: no new jobs' '${tmp}/${c}/log' | cut -d: -f1) -lt \$(grep -n 'work in progress pushed' '${tmp}/${c}/log' | cut -d: -f1) ]]"
 check "${c}: the loop tells the sidecar it is done" "grep -q ' loop-exit\$' '${tmp}/${c}/wake'"
+check "${c}: the claude kill goes to the pkill stub (#621)" "grep -q '^-KILL -x claude\$' <(sed 's/^pkill //' '${tmp}/${c}/pkill')"
 check "${c}: no comment yet" "[[ ! -e '${tmp}/${c}/comments' ]]"
 echo "node-preempted $(date +%s)" > "${tmp}/${c}/usage/stop.alice"   # the operator saw the Spot preemption
 bash "${tmp}/run.sh" "${c}" resume

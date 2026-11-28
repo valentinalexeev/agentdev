@@ -3,6 +3,7 @@
 # wake on job completion. Runs the real start_job/running_jobs/is_running from agent-loop.sh with stub work.
 #   bash images/worker/test/jobs.test.sh      (Linux, bash >= 4, flock: e.g. inside the worker image)
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 # start_job pipes the job output through `sed -u` (GNU sed, as in the worker image). BusyBox sed (Alpine,
 # bash:5 image) has no -u: every job then fails and the backoff case fails for that reason only (#281).
 sed -u q </dev/null >/dev/null 2>&1 || { echo "FAIL - prerequisite: GNU sed with -u (Alpine: apk add sed)"; exit 1; }

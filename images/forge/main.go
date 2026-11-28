@@ -6,6 +6,7 @@
 //	POST /push    body = a git bundle; pushed to agent/<FORGE_USER>/* only, protected paths refused, size-limited
 //	POST /usage   the loop's usage report after a Claude run, printed as the AGENTDEV_USAGE line (#93)
 //	POST /idle    ask the router to stop this agent (scale to zero), with the wake token held here
+//	POST /merge   merge the agent's own PR once a person approved its head (MERGE_MODE=gated only, merge.go, #578)
 //
 // and it receives the router's wake calls on the pod port (webhook listener, formerly webhook-listener.js).
 // The localhost API has no auth: the pod is one trust unit, and the policy holds even when Claude calls it directly.
@@ -42,6 +43,9 @@ type Config struct {
 	WakeToken, RegisterToken string
 	APIURL                   string // agentdev-api internal listener (#425 run log); empty: run events are dropped
 	AgentName, ForgeKind     string
+	// #578: MERGE_MODE off (default) | gated, MERGE_APPROVERS owner logins (merge.go); always a merge commit
+	MergeMode      string
+	MergeApprovers []string
 	// GitHub App (FORGE_KIND=github, #2): only in this container
 	GitHubAppID, GitHubInstallationID, GitHubAppKey string
 	RegisterEvery                                   time.Duration
@@ -111,6 +115,9 @@ func loadConfig() (*Config, error) {
 		return nil, fmt.Errorf("REGISTER_EVERY: %q", os.Getenv("REGISTER_EVERY"))
 	}
 	c.RegisterEvery = time.Duration(every) * time.Second
+	if c.MergeMode, c.MergeApprovers, err = mergeConfig(getenv); err != nil {
+		return nil, err
+	}
 	if c.ForgeKind == "github" {
 		// the App's key replaces FORGE_TOKEN; the driver checks the App values (github.go)
 		if c.ForgeURL == "" || c.ForgeUser == "" || len(c.Repos) == 0 {
@@ -149,6 +156,11 @@ func main() {
 		// #310: cost approvals read the job state from claude-proxy (CLAUDE_PROXY_URL, set by the operator)
 		s.appr.proxyURL = strings.TrimRight(os.Getenv("CLAUDE_PROXY_URL"), "/")
 		s.logf("approvals on: %s, timeout %s", apiURL, timeout)
+	}
+	if c.MergeMode == "gated" && !s.mergeOn() {
+		s.logf("MERGE_MODE=gated is supported on GitHub only: the merge endpoint stays off on %s", drv.kind())
+	} else if s.mergeOn() {
+		s.logf("merge mode gated: the agent may merge its own PRs once an owner (%s) approved the head, as a merge commit", strings.Join(c.MergeApprovers, ", "))
 	}
 	if err := s.git.init(); err != nil {
 		log.Fatalf("forge: mirror: %v", err)

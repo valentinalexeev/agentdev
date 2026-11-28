@@ -164,6 +164,11 @@ pull request**; files the repo already has are left alone.
 Agents push branches and open PRs; they never merge and never push to the default branch. Branch protection
 requires an approval by the owner, and a new push dismisses an earlier approval. Merging is a human decision.
 
+Opt-in exception (#578): with `spec.merge.mode: gated` an agent may merge its **own** PR once an owner listed in
+`spec.merge.approvers` approved the exact head commit and every check passed. The forge sidecar checks this from the
+forge, not from the agent. Approving stays the human decision; only the click is automated. Off by default, GitHub
+only. See [admin](admin.md#gated-merge-of-the-agents-own-prs).
+
 ## Webhook router
 
 The **router** is the cluster's single webhook endpoint. It verifies the forge's signature, works out who an
@@ -175,6 +180,11 @@ GitHub every agent is the same App bot and a comment webhook carries no branch, 
 `agent:<name>` (the forge sidecar allows only that one label, only on a PR from the agent's own branch), and the router
 routes by the label. For an older PR without the label, the router reads the PR's head branch with its read-only App
 credential (the wake poll's). The same routing starts a stopped agent (scale to zero).
+
+People steer agents with native forge actions, not with commands in comments (#619,
+[ADR 0012](adr/0012-steer-agents-with-forge-actions.md)): assign or label to start, unassign to stop, the label `hold`
+to hold one issue or PR, **Request changes** for rework, a draft PR to prevent a merge. Because the router only wakes,
+the loop checks who made each state change, from the forge's own record, before it acts on it.
 
 ## Scale to zero
 

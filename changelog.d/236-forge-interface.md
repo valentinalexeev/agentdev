@@ -19,5 +19,5 @@ Gitea `WIP:` title) and adds `needs-decision` when it asks a question. New secur
 
 ## Description
 
-A console chat pod cannot remove labels, edit comments or mark a PR ready (refused with `chat-label-not-asked`);
+A console chat pod cannot remove labels, edit comments or mark a PR ready (refused with `chat-not-allowed`);
 `agent:<name>` is only accepted alone, through the #227 rule.

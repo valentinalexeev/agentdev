@@ -160,6 +160,19 @@ MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $
 ASSIGNED_PRS='.[] | select((.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/"))) | not)
   | select(if $kind == "github" then any(.labels[]?; .name == "agent:" + $agent)
            else any(.assignees[]?; .login == $agent) end)'
+# on_hold <key> <held>: 0 while a person holds the issue or PR <key> (issue-N, pr-N) with the label hold (#619,
+# ADR 0012). The loop starts no job on it and merges nothing; the cursor stays, so removing the label resumes the work.
+# Only people with triage access or more can change labels, and the label only stops work, so no actor check.
+# One log line when the hold starts and one when it ends (a marker in state), not one per pass.
+on_hold() {
+  local f="${STATE}/seen/$1.hold"
+  if [[ "$2" == true ]]; then
+    [[ -e "${f}" ]] || { log "${1/-/ #}: on hold (label hold), no new work"; touch "${f}"; }
+    return 0
+  fi
+  [[ -e "${f}" ]] && { rm -f "${f}"; log "${1/-/ #}: hold removed, work resumes"; }
+  return 1
+}
 # label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
 # is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
 # branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
@@ -1159,12 +1172,14 @@ handle_issues() {
   local base; base=$(default_branch)
   # one PR list for the whole pass: an issue whose branch already has a PR (open or closed) is not new work
   local branches; branches=$(api GET "/repos/${REPO}/pulls?state=all&$(per_page 50)" | jq -r '.[].head.ref') || return
-  local n title branch
-  jq -r '.[] | [.number, .title] | @tsv' <<<"[${todo//$'\n'/,}]" | while IFS=$'\t' read -r n title; do
+  local n held title branch
+  jq -r '.[] | [.number, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"[${todo//$'\n'/,}]" |
+  while IFS=$'\t' read -r n held title; do
     branch="agent/${FORGE_USER}/issue-${n}"
     if grep -qxF "${branch}" <<<"${branches}"; then
       touch "${STATE}/seen/issue-${n}.done"; continue
     fi
+    on_hold "issue-${n}" "${held}" && continue   # #619: a person holds the issue
     is_running "issue-${n}" && continue
     backing_off "issue-${n}" && continue   # failed recently; retried after its backoff
     awaiting_answer "${n}" && continue    # #234: asked a question; resumes after a reply by someone else
@@ -1552,23 +1567,61 @@ failed_checks() {
      | "- check \(.context // "status"): \($st)\(if (.description // "") != "" then " (\(.description))" else "" end)"' 2>/dev/null
 }
 
+# merge_own_pr <pr> (#578): with MERGE_MODE=gated (the operator sets it from the Agent's spec.merge, never from the
+# repository or issue text) the loop asks the sidecar to merge its own PR. It asks only when the forge shows an
+# approval of the current head commit by an owner (MERGE_APPROVERS) and no request for changes, so a PR that waits for review is not a
+# security event; the sidecar checks everything again from the forge (images/forge/merge.go) and decides. 0: merged.
+# A PR that is not ready (HTTP 409: a check is pending, an approval request is open) gets seen/pr-N.merge-retry and is
+# asked again on each pass, also when nothing on the PR changed.
+merge_own_pr() {
+  [[ "${MERGE_MODE:-off}" == gated && "${FORGE_KIND}" == github && "$1" =~ ^[1-9][0-9]{0,15}$ ]] || return 1
+  local pr=$1 retry="${STATE}/seen/pr-$1.merge-retry" sha n code out
+  sha=$(api GET "/repos/${REPO}/pulls/${pr}" | jq -r '.head.sha // ""' 2>/dev/null)
+  [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  n=$(api GET "/repos/${REPO}/pulls/${pr}/reviews?per_page=100" | jq --arg sha "${sha}" --arg me "${MY_LOGIN}" \
+      --arg owners "${MERGE_APPROVERS:-}" '
+      [.[]? | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")]
+      | group_by(.user.login | ascii_downcase) | map(last)
+      | if any(.[]; .state == "CHANGES_REQUESTED") then 0
+        else [.[] | select(.state == "APPROVED" and .commit_id == $sha and .user.type == "User" and .user.login != $me
+          and ((.user.login | ascii_downcase) as $l | $owners | ascii_downcase | split(",") | index($l)))] | length end' 2>/dev/null)
+  if ! [[ "${n}" =~ ^[1-9][0-9]*$ ]]; then rm -f "${retry}"; return 1; fi
+  out=$(mktemp) || return 1
+  code=$(curl -sS -m 180 -o "${out}" -w '%{http_code}' -X POST -H "X-Agentdev-Job: pr-${pr}" "${FORGE_API}/merge?pr=${pr}" 2>/dev/null)
+  local why; why=$(head -c 300 "${out}" | tr -d '\r\n'); rm -f "${out}"
+  case "${code}" in
+    200) log "PR #${pr}: merged at ${sha:0:12} (a person approved this head, checks passed)"; rm -f "${retry}"; return 0 ;;
+    409) log "PR #${pr}: approved, the merge waits: ${why}"; touch "${retry}" ;;
+    404) log "PR #${pr}: approved, but the sidecar has no merge endpoint (merge mode off there)"; rm -f "${retry}" ;;
+    *)   log "PR #${pr}: merge refused (HTTP ${code}): ${why}"; rm -f "${retry}" ;;
+  esac
+  return 1
+}
+
 handle_feedback() {
   local prs; prs=$(api GET "/repos/${REPO}/pulls?state=open&$(per_page 50)") || return
   # Skip PRs that did not change since we last handled them: one list call instead of ~3 calls per PR (#3).
   # updated_at moves on comments, reviews and pushes, so nothing is missed. Fields come from one jq call and the
   # comparison uses shell builtins: under gVisor each extra process per PR costs ~1 s.
-  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "${MY_PRS}"' | [.number, .head.ref, .updated_at, .created_at, .title] | @tsv' <<<"${prs}" |
-  while IFS=$'\t' read -r pr branch upd created title; do
+  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "${MY_PRS}"' | [.number, .head.ref, .updated_at, .created_at, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"${prs}" |
+  while IFS=$'\t' read -r pr branch upd created held title; do
     local since fb last=""
+    on_hold "pr-${pr}" "${held}" && continue   # #619: no job and no merge while a person holds the PR
     [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
-    [[ "${last}" == "${upd}" ]] && continue
+    if [[ "${last}" == "${upd}" ]]; then
+      # #578: an approved PR whose merge waited (a check was pending) is asked again, though nothing on it changed
+      [[ -e "${STATE}/seen/pr-${pr}.merge-retry" ]] && ! is_running "pr-${pr}" && merge_own_pr "${pr}"
+      continue
+    fi
     # PRs opened before reviewer requests existed: request once (marker in state)
     [[ -e "${STATE}/seen/pr-${pr}.reviewer" ]] || { request_review "${pr}"; touch "${STATE}/seen/pr-${pr}.reviewer"; }
     since="${created}"; [[ -r "${STATE}/seen/pr-${pr}" ]] && read -r since < "${STATE}/seen/pr-${pr}"
     is_running "pr-${pr}" && continue   # its job will see this feedback on the next pass
     backing_off "pr-${pr}" && continue   # failed recently; retried after its backoff
     fb=$(new_feedback "${pr}" "${since}")
-    if [[ -z "${fb}" ]]; then echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; continue; fi
+    if [[ -z "${fb}" ]]; then echo "${upd}" > "${STATE}/seen/pr-${pr}.updated"; merge_own_pr "${pr}"; continue; fi
+    # #578: feedback first; the merge is asked after the job (a push in the job makes the approval stale)
+    [[ "${MERGE_MODE:-off}" == gated ]] && touch "${STATE}/seen/pr-${pr}.merge-retry"
     if start_job "pr-${pr}" feedback_job "${pr}" "${branch}" "${title}" "${since}"; then
       log "PR #${pr}: new feedback (job started, $(running_jobs)/${MAX_CONCURRENT} running)"
     else
@@ -1596,11 +1649,12 @@ safe_ref() { [[ "$1" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && "$1" != *..* &&
 # the assignment starts a job even without comments (the assignment is the request); later passes start one on new
 # feedback, as for the agent's own PRs.
 handle_assigned() {
-  local pr branch upd created hrepo base title since last fb
+  local pr branch upd created hrepo base held title since last fb
   jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" --arg kind "${FORGE_KIND}" "${ASSIGNED_PRS}"' |
-    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, .title] | @tsv' <<<"$1" 2>/dev/null |
-  while IFS=$'\t' read -r pr branch upd created hrepo base title; do
+    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"$1" 2>/dev/null |
+  while IFS=$'\t' read -r pr branch upd created hrepo base held title; do
     [[ "${pr}" =~ ^[1-9][0-9]{0,15}$ ]] || continue
+    on_hold "pr-${pr}" "${held}" && continue   # #619
     last=""; [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
     [[ "${last}" == "${upd}" ]] && continue
     is_running "pr-${pr}" && continue
