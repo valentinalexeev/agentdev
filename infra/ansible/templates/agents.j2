@@ -5,7 +5,9 @@
     allow-list; unset or empty: the default only. agents[].toolchain (#499): {presets: {go, rust}, custom (#598), path, refresh}, the
     Agent's spec.toolchain; unset: no toolchain. agents[].model, agents[].effort (#564), else the instance's
     claude_model and claude_effort: the Agent's spec.model and spec.effort; unset or empty: no field, the CLI's own
-    default. -#}
+    default. agents[].retries (#593, #616): {infrastructure}, agents[].diagnostics (#588, #616): {resources,
+    intervalSeconds}, each merged over the instance's agent_retries and agent_diagnostics (the agent's keys win): the
+    Agent's spec.retries and spec.diagnostics; unset or empty: no field, the pod template stays as before. -#}
 {%- set out = [] -%}
 {%- for a in agents -%}
 {%-   set spec = {'repo': a.repos, 'forge': forge_kind,
@@ -27,6 +29,14 @@
 {%-   endif -%}
 {%-   if a.toolchain | default({}) -%}
 {%-     set _ = spec.update({'toolchain': a.toolchain}) -%}
+{%-   endif -%}
+{%-   set retries = (agent_retries | default({}, true)) | combine(a.retries | default({}, true)) -%}
+{%-   if retries -%}
+{%-     set _ = spec.update({'retries': retries}) -%}
+{%-   endif -%}
+{%-   set diagnostics = (agent_diagnostics | default({}, true)) | combine(a.diagnostics | default({}, true)) -%}
+{%-   if diagnostics -%}
+{%-     set _ = spec.update({'diagnostics': diagnostics}) -%}
 {%-   endif -%}
 {%-   set _ = out.append({'apiVersion': 'agentdev.dev/v1alpha1', 'kind': 'Agent',
         'metadata': {'name': a.name, 'namespace': agents_ns}, 'spec': spec}) -%}
