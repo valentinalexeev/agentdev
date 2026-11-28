@@ -12,7 +12,8 @@
 # as `helm template` output (needs helm), the database and break-glass steps as the Jobs of tasks/db_init_render.yml
 # (#382), one McpProject per mcp_projects spec (#383). Not rendered: the Secrets. secrets_mode playbook: their names
 # are in SECRETS.md. secrets_mode external (#457): the output has the SecretStores, the CEL policies and the
-# ExternalSecrets (Secret Manager ids only) in place of SECRETS.md; ESO and Reloader are prerequisites.
+# ExternalSecrets (Secret Manager ids only) in place of SECRETS.md; ESO and Reloader are prerequisites. The role
+# registry_cache renders with its tasks/render.yml too (#615): gateway, caches, egress policies, ConfigMap registry-proxy.
 - name: Render agentdev manifests (no cluster access)
   hosts: localhost
   gather_facts: false
@@ -45,15 +46,6 @@
         fail_msg: "external_secrets.mode must be playbook or external (example.vars.yml)"
         quiet: true
 
-    # #203: the registry cache role applies its objects directly (and generates the devpi password), so render mode
-    # cannot produce them yet. A rendered instance with the cache on would drop the registries from the egress list
-    # without a cache, so refuse it.
-    - name: The registry cache is off (not in render mode yet)
-      ansible.builtin.assert:
-        that: registry_proxy | default('off') == 'off'
-        fail_msg: "registry_proxy {{ registry_proxy }} is not supported by render.yml yet (#203): use deploy.yml, or set registry_proxy: off"
-        quiet: true
-
     - name: Render the objects (tasks/render_objects.yml, the same as deploy.yml)
       ansible.builtin.include_tasks: tasks/render_objects.yml
       vars:
@@ -79,6 +71,12 @@
                           | flatten | map(attribute='image') | first }}"
       when: api_effective_issuer | length > 0
 
+    # #615: gateway, caches, egress policies and the ConfigMap registry-proxy of the role registry_cache (#203)
+    - name: Registry cache objects (role registry_cache, render only)
+      ansible.builtin.include_role: {name: registry_cache, tasks_from: render.yml}
+      vars:
+        registry_cache_fqdn_policy: "{{ platform_fqdn == 'gke' }}"
+
     - name: Ingress objects (role ingress, render only)
       ansible.builtin.include_role:
         name: ingress
@@ -101,7 +99,7 @@
         render_es_specs: >-
           {{ (lookup('ansible.builtin.template', 'templates/externalsecrets-agents.j2') | from_yaml)
              + (platform_es_specs | default([])) + (authentik_es_specs | default([])) + (authentik_sso_es_specs | default([]))
-             + (api_es_specs | default([])) + (ingress_es_specs | default([])) }}
+             + (api_es_specs | default([])) + (ingress_es_specs | default([])) + (registry_cache_es_specs | default([])) }}
       when: secrets_mode == 'external'
 
     # External Gitea (#442), opt-in: the ExternalSecret forge-init and the Job forge-init-<hash> of tasks/forge_init.yml
@@ -136,6 +134,7 @@
       loop: >-
         {{ ((agentdev_objects | dict2items)[:1] + (platform_objects | default({}) | dict2items)
             + (authentik_objects | default({}) | dict2items) + (api_objects | default({}) | dict2items)
+            + (registry_cache_objects | default({}) | dict2items)
             + (agentdev_objects | dict2items)[1:] + (ingress_objects | default({}) | dict2items)
             + (external_secrets_objects | default({}) | dict2items)
             + ([{'key': 'forge_init', 'value': [forge_init_es, forge_init_job]}] if forge_init_job is defined else []))
@@ -170,6 +169,7 @@
              + ([[agents_ns, 'webhook-router-poll']] if (wake_poll_seconds | int) > 0 else [])
              + (platform_secret_names | default([])) + (authentik_secret_names | default([]))
              + (authentik_sso_secret_names | default([])) + (api_secret_names | default([]))
+             + (registry_cache_secret_names | default([]))
              + ([exec_ns] | product(executors | map(attribute='name') | product(['forge', 'plan', 'apply'])
                 | map('join', '-') | map('regex_replace', '^', 'exec-')) | list) }}
 

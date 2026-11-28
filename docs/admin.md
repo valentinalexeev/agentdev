@@ -932,8 +932,8 @@ read access to the three repositories only.
 
 NOTE: Private registries for each project are not in this release (#248).
 
-NOTE: `render.yml` (GitOps render mode) does not render the registry cache yet. It stops when `registry_proxy` is
-not `off`.
+NOTE: `render.yml` (GitOps render mode) renders the registry cache too (#615). Refer to "Render the manifests for a
+GitOps engine".
 
 ## Labels
 
@@ -3520,6 +3520,17 @@ The render also writes the platform (Postgres, ContextForge, `obs-mcp`), authent
   CAUTION: The GitOps engine must install the External Secrets Operator and Stakater Reloader before these files.
   Use the chart versions of `infra/ansible/roles/external_secrets/defaults/main.yml`, with the same values as the role.
   The render does not write the two charts.
+- With `registry_proxy` set to `cluster` or `artifact_registry` (#615), the render writes the registry cache in
+  `registry-cache.yaml`. These are the same objects that `deploy.yml` applies: the gateway, the caches, the
+  NetworkPolicies and the ConfigMap `registry-proxy`. With `registry_proxy: off`, the render writes no registry cache
+  object. The GitOps engine removes the old objects when it prunes.
+  - With `platform.egress.fqdn: gke`, the egress of the caches is the FQDNNetworkPolicy `registry-cache`. The cluster
+    must serve the FQDNNetworkPolicy CRD (Terraform `enable_fqdn_network_policy`). With `none`, it is the
+    NetworkPolicy `registry-cache-web`.
+  - With `registry_proxy: cluster`, devpi reads its root password from the Secret `registry-cache-pypi`. With
+    `external_secrets.mode: playbook`, `SECRETS.md` lists it. With `external_secrets.mode: external`, the render
+    writes its ExternalSecret. The ExternalSecret reads the Secret Manager entry `registry-cache-pypi`, which
+    `infra/terraform` makes (#615). Apply `infra/terraform` before you give the output to the GitOps engine.
 
 NOTE: Without `platform`, `deploy.yml` operates as before: `egress_fqdn_policy` sets `platform.egress.fqdn`, and
 `deploy.yml` reads the API server addresses from the cluster. `deploy.yml` does not read the cluster to select a

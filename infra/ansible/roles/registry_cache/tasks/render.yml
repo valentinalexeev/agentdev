@@ -1,0 +1,26 @@
+---
+# Render mode of the role (#615, render.yml): the objects of tasks/main.yml as the fact registry_cache_objects, with no
+# cluster or Secret Manager access. registry_proxy off renders nothing (the GitOps engine prunes the old objects).
+# The FQDN policy follows platform.egress.fqdn (terraform output platform) in place of the read of the CRD.
+# Not rendered: the Secret registry-cache-pypi (devpi root password, registry_proxy cluster). secrets_mode playbook: its
+# name is in SECRETS.md (registry_cache_secret_names). secrets_mode external: an ExternalSecret from the Secret Manager
+# entry registry_cache_sm_pypi, which infra/terraform/secrets.tf generates (registry_cache_es_specs).
+- name: Check the registry cache settings
+  ansible.builtin.include_tasks: checks.yml
+
+- name: Render the registry cache objects
+  ansible.builtin.set_fact:
+    registry_cache_objects:
+      registry_cache: >-
+        {{ ((lookup('ansible.builtin.template', 'registry-cache.yaml.j2') | from_yaml_all | list)
+            + [lookup('ansible.builtin.template', 'fqdn-policy.yaml.j2' if registry_cache_fqdn_policy | bool
+                      else 'web-policy.yaml.j2') | from_yaml])
+           if registry_cache_mode != 'off' else [] }}
+    registry_cache_secret_names: "{{ [[registry_cache_ns, 'registry-cache-pypi']] if registry_cache_mode == 'cluster' else [] }}"
+
+# secrets_mode external (#457): the ExternalSecret of the devpi root password, for templates/externalsecrets.j2
+- name: Devpi root password ExternalSecret spec (secrets_mode external)
+  ansible.builtin.set_fact:
+    registry_cache_es_specs:
+      - {name: registry-cache-pypi, ns: "{{ registry_cache_ns }}", data: {password: "{{ registry_cache_sm_pypi }}"}}
+  when: secrets_mode | default('playbook') == 'external' and registry_cache_mode == 'cluster'

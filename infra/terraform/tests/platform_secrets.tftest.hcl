@@ -58,6 +58,11 @@ run "generated_and_scoped" {
     condition     = google_service_account_iam_member.secrets_reader_wi["agents"].member == "serviceAccount:test-project.svc.id.goog[coding-agents/agentdev-platform-secrets]"
     error_message = "Workload Identity binds the store's service account in its own namespace only"
   }
+  # #615: the devpi root password of the rendered registry cache (Ansible registry_proxy cluster), agents reader only
+  assert {
+    condition     = contains(keys(google_secret_manager_secret.generated), "registry-cache-pypi") && strcontains(google_project_iam_member.secrets_reader["agents"].condition[0].expression, "/secrets/registry-cache-pypi\"") && !strcontains(google_project_iam_member.secrets_reader["platform"].condition[0].expression, "registry-cache-pypi")
+    error_message = "registry-cache-pypi is generated and read by the agents reader only"
+  }
 }
 
 run "upgrade_keeps_values" {
