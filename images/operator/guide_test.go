@@ -259,4 +259,18 @@ func TestGuideRegistryCacheAndProbes(t *testing.T) {
 	if strings.Contains(g2, "registry cache") || strings.Contains(g2, "server_check") {
 		t.Errorf("cache off and no probes, but the guide names them:\n%s", g2)
 	}
+
+	// the check list has its own cap (guideMaxChecks), separate from the executor lines
+	many := make([]v1.ExecutorProbe, 30)
+	for i := range many {
+		many[i] = v1.ExecutorProbe{Name: "check-" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Command: []string{"true"}}
+	}
+	r3, c3 := setup(t, agent("gina", nil),
+		guideExec("srv", "prod", "owner/repo", "", func(e *v1.Executor) { e.Spec.SSH = true; e.Spec.Probes = many }))
+	r3.D.ExecNS = execNS
+	reconcile(t, r3, "gina")
+	g3, _ := guideOf(t, c3, "gina")
+	if n := strings.Count(g3, " (executor srv)."); n != guideMaxChecks {
+		t.Errorf("%d check lines, want the cap %d:\n%s", n, guideMaxChecks, g3)
+	}
 }
