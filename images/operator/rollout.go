@@ -90,12 +90,19 @@ func (c RolloutConfig) canaryOf(agents []v1.Agent) string {
 }
 
 // mayMove decides whether agent a (whose StatefulSet renders an older version) may take the current version now.
-// It reads the rollout status of all agents, which this operator wrote (the only writer of Agent status).
+// It reads the rollout status of all agents, which this operator wrote (the only writer of Agent status). The read
+// is uncached (Direct): the cache can lag behind the Updating status that the previous reconcile wrote, and then two
+// agents would move with ROLLOUT_MAX_UNAVAILABLE=1. Reconciles run one at a time (MaxConcurrentReconciles 1), so the
+// API server already has the status of every agent moved before.
 func (r *AgentReconciler) mayMove(ctx context.Context, a *v1.Agent, hasPod bool) (bool, string, string, error) {
 	cfg := r.Rollout.withDefaults()
 	ver := r.D.templateVersion()
+	reader := r.Direct
+	if reader == nil {
+		reader = r.Client
+	}
 	var list v1.AgentList
-	if err := r.List(ctx, &list, client.InNamespace(a.Namespace)); err != nil {
+	if err := reader.List(ctx, &list, client.InNamespace(a.Namespace)); err != nil {
 		return false, "", "", err
 	}
 	canary := cfg.canaryOf(list.Items)
