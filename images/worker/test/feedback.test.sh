@@ -6,6 +6,7 @@
 # the Gitea and the GitHub forge kinds.
 #   bash images/worker/test/feedback.test.sh      (bash >= 4, jq)
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 export FORGE_USER=alice REPO=o/r FORGE_URL=http://forge STATE="${tmp}/state"; mkdir -p "${STATE}/seen"

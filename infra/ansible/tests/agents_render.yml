@@ -1,6 +1,6 @@
 # Render checks of templates/agents.j2 (#496, #499, #564): agents[].tools.allow becomes the Agent's spec.tools.allow;
 # an agent without it gets no spec.tools (no new env, no restart on upgrade). The same for the toolchain, the model and
-# the effort.
+# the effort, the retries and the diagnostics (#616).
 # Run: ansible-playbook infra/ansible/tests/agents_render.yml
 - name: Agent objects from agents[] (#496)
   hosts: localhost
@@ -18,6 +18,9 @@
       - {name: dave, repos: [o/d], toolchain: {presets: {go: "1.27.4"}, refresh: 168h}}
       - {name: erin, repos: [o/e], model: claude-opus-5-5, effort: high}
       - {name: frank, repos: [o/f], model: "", effort: ""}
+      - {name: gina, repos: [o/g], retries: {infrastructure: 4}, diagnostics: {resources: true, intervalSeconds: 30}}
+      - {name: hank, repos: [o/h], retries: {}, diagnostics: {}}
+      - {name: ivy, repos: [o/i], retries: {infrastructure: 0}}
   tasks:
     - name: Render the Agent objects
       ansible.builtin.set_fact:
@@ -48,12 +51,24 @@
           - t_agents.erin.model == 'claude-opus-5-5'
           - t_agents.erin.effort == 'high'
 
+    - name: Only an agent with retries or diagnostics gets spec.retries, spec.diagnostics (#616)
+      ansible.builtin.assert:
+        that:
+          - "'retries' not in t_agents.alice and 'diagnostics' not in t_agents.alice"
+          - "'retries' not in t_agents.hank and 'diagnostics' not in t_agents.hank"
+          - "t_agents.gina.retries == {'infrastructure': 4}"
+          - "t_agents.gina.diagnostics == {'resources': true, 'intervalSeconds': 30}"
+          - "t_agents.ivy.retries == {'infrastructure': 0}"
+          - "'diagnostics' not in t_agents.ivy"
+
     - name: Render with an instance-wide model and effort (#564)
       ansible.builtin.set_fact:
         t_agents2: "{{ dict(t_list | map(attribute='metadata.name') | zip(t_list | map(attribute='spec'))) }}"
       vars:
         claude_model: sonnet
         claude_effort: medium
+        agent_retries: {infrastructure: 3}
+        agent_diagnostics: {resources: true}
         t_list: "{{ lookup('ansible.builtin.template', '../templates/agents.j2') | from_yaml }}"
 
     - name: The instance-wide values apply, agents[].model and agents[].effort win (#564)
@@ -64,3 +79,13 @@
           - t_agents2.frank.model == 'sonnet'
           - t_agents2.erin.model == 'claude-opus-5-5'
           - t_agents2.erin.effort == 'high'
+
+    - name: The instance-wide retries and diagnostics apply, the agent's keys win (#616)
+      ansible.builtin.assert:
+        that:
+          - "t_agents2.alice.retries == {'infrastructure': 3}"
+          - "t_agents2.alice.diagnostics == {'resources': true}"
+          - "t_agents2.hank.retries == {'infrastructure': 3}"
+          - "t_agents2.gina.retries == {'infrastructure': 4}"
+          - "t_agents2.gina.diagnostics == {'resources': true, 'intervalSeconds': 30}"
+          - "t_agents2.ivy.retries == {'infrastructure': 0}"

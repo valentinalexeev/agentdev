@@ -48,3 +48,4 @@ volume forge
 volume guide
 volume podinfo
 volume usage
+volumeClaimTemplate state

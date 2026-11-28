@@ -13,4 +13,4 @@ The egress proxy allows the preset download hosts (`setup_egress_hosts`, `SETUP_
 credential `egress-setup-proxy`, which the operator gives only to the `toolchain` init container. The playbook generates
 it in Secret Manager (playbook mode), Terraform generates it with `external_secrets`, and kind keeps it in a file. The
 chat Job admission policy allows the `toolchain` init container with the agent's own setup key, and requires
-`/state/toolchain` read-only in chat and forge. docs/security.md R121 to R124.
+`/state/toolchain` read-only in chat and forge. docs/security.md R138 and R122 to R124 (R138 was first numbered R121).

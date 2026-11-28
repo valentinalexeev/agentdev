@@ -38,6 +38,8 @@ approvals: {enabled: false}                   # APPROVALS
 # kind_agents_max_turns: 40                   # MAX_TURNS
 # kind_agents_model: ""                       # claude --model (#564); empty: the CLI's default
 # kind_agents_effort: ""                      # claude --effort: low|medium|high|xhigh|max; empty: the CLI's default
+# kind_agents_retries: {}                    # per agent (#593, #616): {alice: {infrastructure: 4}}; empty: 2 retries
+# kind_agents_diagnostics: {}                # per agent (#588, #616): {alice: {resources: true, intervalSeconds: 60}}
 # kind_agents_scale_to_zero: true             # SCALE_TO_ZERO
 # kind_agents_wake_poll_seconds: 300          # WAKE_POLL_SECONDS
 # kind_agents_claude_proxy: true              # CLAUDE_PROXY (also operator_claude_proxy)

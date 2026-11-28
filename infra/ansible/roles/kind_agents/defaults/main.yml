@@ -43,6 +43,10 @@ kind_agents_tools: {}
 # Versions must be in the operator's catalogue (images/operator/toolchain.go). custom (#598): names of
 # the toolchains of the operator role, for example {alice: {custom: [shell-tools]}}.
 kind_agents_toolchain: {}
+# retries of a job stopped by the infrastructure per agent (#593, #616): {alice: {infrastructure: 4}}; diagnostics per
+# agent (#588, #616): {alice: {resources: true, intervalSeconds: 60}}; an agent not named: no field (operator defaults)
+kind_agents_retries: {}
+kind_agents_diagnostics: {}
 kind_agents_scale_to_zero: true
 kind_agents_wake_poll_seconds: 300
 kind_agents_claude_proxy: true

@@ -5,6 +5,7 @@
 # default. drain.test.sh checks that the reason outlives the real SIGTERM handler.
 #   bash images/worker/test/stopreason.test.sh
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 unset DIAG_RESOURCES DIAG_INTERVAL_SECONDS
