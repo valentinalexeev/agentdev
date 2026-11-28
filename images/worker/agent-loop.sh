@@ -160,6 +160,19 @@ MY_PRS='.[] | select(.user.login == $me and (.head.ref | startswith("agent/" + $
 ASSIGNED_PRS='.[] | select((.user.login == $me and (.head.ref | startswith("agent/" + $agent + "/"))) | not)
   | select(if $kind == "github" then any(.labels[]?; .name == "agent:" + $agent)
            else any(.assignees[]?; .login == $agent) end)'
+# on_hold <key> <held>: 0 while a person holds the issue or PR <key> (issue-N, pr-N) with the label hold (#619,
+# ADR 0012). The loop starts no job on it and merges nothing; the cursor stays, so removing the label resumes the work.
+# Only people with triage access or more can change labels, and the label only stops work, so no actor check.
+# One log line when the hold starts and one when it ends (a marker in state), not one per pass.
+on_hold() {
+  local f="${STATE}/seen/$1.hold"
+  if [[ "$2" == true ]]; then
+    [[ -e "${f}" ]] || { log "${1/-/ #}: on hold (label hold), no new work"; touch "${f}"; }
+    return 0
+  fi
+  [[ -e "${f}" ]] && { rm -f "${f}"; log "${1/-/ #}: hold removed, work resumes"; }
+  return 1
+}
 # label_own_pr <pr>: the label agent:<name> on the PR this agent opened, on both forges. GitHub (#227): every agent
 # is the same App bot, so the router finds the agent of a PR comment by this label (a comment webhook has no head
 # branch). Gitea (#241 P5): the same label, so people and tools see which agent owns a PR. Gitea does not create a
@@ -1159,12 +1172,14 @@ handle_issues() {
   local base; base=$(default_branch)
   # one PR list for the whole pass: an issue whose branch already has a PR (open or closed) is not new work
   local branches; branches=$(api GET "/repos/${REPO}/pulls?state=all&$(per_page 50)" | jq -r '.[].head.ref') || return
-  local n title branch
-  jq -r '.[] | [.number, .title] | @tsv' <<<"[${todo//$'\n'/,}]" | while IFS=$'\t' read -r n title; do
+  local n held title branch
+  jq -r '.[] | [.number, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"[${todo//$'\n'/,}]" |
+  while IFS=$'\t' read -r n held title; do
     branch="agent/${FORGE_USER}/issue-${n}"
     if grep -qxF "${branch}" <<<"${branches}"; then
       touch "${STATE}/seen/issue-${n}.done"; continue
     fi
+    on_hold "issue-${n}" "${held}" && continue   # #619: a person holds the issue
     is_running "issue-${n}" && continue
     backing_off "issue-${n}" && continue   # failed recently; retried after its backoff
     awaiting_answer "${n}" && continue    # #234: asked a question; resumes after a reply by someone else
@@ -1588,9 +1603,10 @@ handle_feedback() {
   # Skip PRs that did not change since we last handled them: one list call instead of ~3 calls per PR (#3).
   # updated_at moves on comments, reviews and pushes, so nothing is missed. Fields come from one jq call and the
   # comparison uses shell builtins: under gVisor each extra process per PR costs ~1 s.
-  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "${MY_PRS}"' | [.number, .head.ref, .updated_at, .created_at, .title] | @tsv' <<<"${prs}" |
-  while IFS=$'\t' read -r pr branch upd created title; do
+  jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" "${MY_PRS}"' | [.number, .head.ref, .updated_at, .created_at, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"${prs}" |
+  while IFS=$'\t' read -r pr branch upd created held title; do
     local since fb last=""
+    on_hold "pr-${pr}" "${held}" && continue   # #619: no job and no merge while a person holds the PR
     [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
     if [[ "${last}" == "${upd}" ]]; then
       # #578: an approved PR whose merge waited (a check was pending) is asked again, though nothing on it changed
@@ -1633,11 +1649,12 @@ safe_ref() { [[ "$1" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && "$1" != *..* &&
 # the assignment starts a job even without comments (the assignment is the request); later passes start one on new
 # feedback, as for the agent's own PRs.
 handle_assigned() {
-  local pr branch upd created hrepo base title since last fb
+  local pr branch upd created hrepo base held title since last fb
   jq -r --arg me "${MY_LOGIN}" --arg agent "${FORGE_USER}" --arg kind "${FORGE_KIND}" "${ASSIGNED_PRS}"' |
-    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, .title] | @tsv' <<<"$1" 2>/dev/null |
-  while IFS=$'\t' read -r pr branch upd created hrepo base title; do
+    [.number, .head.ref, .updated_at, .created_at, (.head.repo.full_name // ""), .base.ref, any(.labels[]?; .name == "hold"), .title] | @tsv' <<<"$1" 2>/dev/null |
+  while IFS=$'\t' read -r pr branch upd created hrepo base held title; do
     [[ "${pr}" =~ ^[1-9][0-9]{0,15}$ ]] || continue
+    on_hold "pr-${pr}" "${held}" && continue   # #619
     last=""; [[ -r "${STATE}/seen/pr-${pr}.updated" ]] && read -r last < "${STATE}/seen/pr-${pr}.updated"
     [[ "${last}" == "${upd}" ]] && continue
     is_running "pr-${pr}" && continue
