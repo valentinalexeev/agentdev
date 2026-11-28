@@ -2102,6 +2102,10 @@ and starts again. Agent jobs wait for it (#177).
 An upgrade moves the canary agent first, then the other agents one at a time (#176). If the canary or an agent fails
 its health check, the rollout stops. The other agents keep the previous version.
 
+NOTE: Each change to an operator setting of the agents starts a full rollout, not only a change of an image. For
+example, a change to `DRAIN_MAX_MINUTES` or to the text of `AGENT_EGRESS_HOSTS` moves all agents through the canary
+and the health check.
+
 1. Look at the rollout: `kubectl -n coding-agents get agents`. The column **Rollout** shows `Current`, `Updating`,
    `Waiting`, `Failed` or `Halted`.
 2. Wait for the end of the rollout: `scripts/rollout-wait.sh --namespace coding-agents`. On GKE, the playbook does

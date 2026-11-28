@@ -135,6 +135,46 @@ func TestRolloutCanaryThenOneAtATime(t *testing.T) {
 	}
 }
 
+// staleAgents plays a lagging controller cache: List of Agents returns a snapshot taken earlier.
+type staleAgents struct {
+	client.Client
+	snap v1.AgentList
+}
+
+func (s *staleAgents) List(ctx context.Context, l client.ObjectList, opts ...client.ListOption) error {
+	if al, ok := l.(*v1.AgentList); ok {
+		s.snap.DeepCopyInto(al)
+		return nil
+	}
+	return s.Client.List(ctx, l, opts...)
+}
+
+func TestRolloutSlotIgnoresStaleCache(t *testing.T) {
+	r, c, now := rolloutSetup(t)
+	r.Rollout.Canary = "bob"
+	reconcileAll(t, r)
+	fakeNewPod(t, c, "bob", *now, 0)
+	*now = now.Add(3 * time.Minute)
+	reconcile(t, r, "bob")
+	if rolloutOf(t, c, "bob").Phase != RolloutCurrent {
+		t.Fatalf("canary: %+v", rolloutOf(t, c, "bob"))
+	}
+	// the cache keeps this state: ann and cid Waiting, so it never shows the Updating status of the first one to move
+	stale := &staleAgents{Client: c}
+	if err := c.List(context.Background(), &stale.snap); err != nil {
+		t.Fatal(err)
+	}
+	r.Client, r.Direct = stale, c
+	reconcile(t, r, "ann")
+	reconcile(t, r, "cid")
+	if imageOf(t, c, "ann") != "worker:B" || imageOf(t, c, "cid") != "worker:dev" {
+		t.Fatalf("batch of 1 with a stale cache: ann %s, cid %s", imageOf(t, c, "ann"), imageOf(t, c, "cid"))
+	}
+	if p := rolloutOf(t, c, "cid"); p.Phase != RolloutWaiting {
+		t.Fatalf("cid: %+v, want Waiting for a slot", p)
+	}
+}
+
 func TestRolloutStopsOnFailedCanary(t *testing.T) {
 	r, c, now := rolloutSetup(t) // canary: first by name, ann
 	reconcileAll(t, r)
