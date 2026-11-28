@@ -24,6 +24,7 @@ locals {
       "egress-setup-proxy"          = 32 # toolchain init containers (#499)
       "claude-proxy-signing"        = 32
       "agentdev-api-chat-token-key" = 32
+      "registry-cache-pypi"         = 24 # devpi root password of the registry cache, Ansible registry_proxy cluster (#615)
     },
     { for a in var.agent_names : "agent-${a}-wake-token" => 32 },
   )
@@ -44,7 +45,8 @@ locals {
     agents = {
       namespace = var.agents_namespace
       ids = ["claude-shared", "router-register-token", "github-app-webhook-secret", "github-app-private-key",
-      "router-poll-forge-token", "egress-forge-proxy", "egress-setup-proxy", "claude-proxy-signing", "agent-*"]
+      "router-poll-forge-token", "egress-forge-proxy", "egress-setup-proxy", "claude-proxy-signing", "agent-*",
+      "registry-cache-pypi"]
     }
     executors = {
       namespace = var.executors_namespace

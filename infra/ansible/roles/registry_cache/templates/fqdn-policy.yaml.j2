@@ -1,0 +1,9 @@
+{#- egress of the caches and the gateway by name on 443 (GKE FQDNNetworkPolicy, #203); tasks/main.yml and render.yml -#}
+apiVersion: networking.gke.io/v1alpha1
+kind: FQDNNetworkPolicy
+metadata: {name: registry-cache, namespace: {{ registry_cache_ns }}}
+spec:
+  podSelector: {matchLabels: {agentdev/registry-cache-egress: "true"}}
+  egress:
+  - matches: {{ lookup('ansible.builtin.template', 'fqdn_matches.j2') | from_yaml | to_json }}
+    ports: [{protocol: TCP, port: 443}]

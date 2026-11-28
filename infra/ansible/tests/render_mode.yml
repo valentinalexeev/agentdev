@@ -51,6 +51,8 @@
           - docs.none | selectattr('metadata.name', 'equalto', 'executor-egress-proxy-web') | list | length == 1
           - docs.gke | selectattr('metadata.name', 'equalto', 'egress-proxy-web') | list | length == 0
           - docs.gke | selectattr('kind', 'equalto', 'Gateway') | list | length == 1
+          # #615: registry_proxy off renders no registry cache object
+          - docs.gke | map(attribute='metadata.name') | select('match', '^registry-(cache|proxy)') | list | length == 0
           - docs.gke | selectattr('kind', 'equalto', 'Agent') | map(attribute='spec.claudeSecret') | list == ['claude-shared', 'claude-bob']
           - docs.gke | selectattr('kind', 'equalto', 'Executor') | map(attribute='metadata.name') | list == ['tf-prod']
           # the CRD refuses an empty path, so an executor without executors[].path has no path key
@@ -284,6 +286,103 @@
         argv: [docker, run, --rm, -v, "{{ out }}/{{ item }}:/w:ro", "{{ gitleaks_image }}", dir, /w, --no-banner, --exit-code, "1"]
       changed_when: false
       loop: [ext, gitea]
+
+# #615: the registry cache (#203) in render mode. cluster with the FQDN policy (gke), artifact_registry without it
+# (none), and cluster with secrets_mode external (the devpi password as an ExternalSecret). Valid for kubeconform.
+- name: Render mode with the registry cache
+  hosts: localhost
+  gather_facts: false
+  vars:
+    out: "{{ lookup('env', 'RENDER_TEST_DIR') | default('/tmp/agentdev-render-test', true) }}"
+    kubeconform_image: ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+    ar:
+      service_account: agentdev-registry-cache@my-agentdev.iam.gserviceaccount.com
+      npm: https://europe-west4-npm.pkg.dev/my-agentdev/agentdev-npm/
+      pypi: https://europe-west4-python.pkg.dev/my-agentdev/agentdev-pypi/
+      go: https://europe-west4-go.pkg.dev/my-agentdev/agentdev-go/
+    upstreams: [registry.npmjs.org, pypi.org, files.pythonhosted.org, proxy.golang.org, sum.golang.org]
+    cases:
+      rc_cluster: {registry_proxy: cluster}
+      rc_ar:
+        registry_proxy: artifact_registry
+        registry_proxy_artifact_registry: "{{ ar }}"
+        platform: {egress: {fqdn: none}, ingress: {gateway_api: true}, kube_api_ips: [10.30.0.1]}
+      rc_ext: {registry_proxy: cluster, external_secrets: {mode: external}}
+  tasks:
+    - name: Render with the registry cache on
+      ansible.builtin.command:
+        argv: [ansible-playbook, "{{ playbook_dir }}/../render.yml", -e, "@{{ playbook_dir }}/files/render_instance.yml",
+               -e, "render_dir={{ out }}/{{ item.key }}", -e, "{{ item.value | to_json }}"]
+      changed_when: false
+      loop: "{{ cases | dict2items }}"
+      loop_control: {label: "{{ item.key }}"}
+
+    - name: Read the output
+      ansible.builtin.find: {paths: "{{ out }}/{{ item }}", patterns: "*.yaml"}
+      loop: "{{ cases.keys() | list }}"
+      register: files
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        docs: >-
+          {{ docs | default({}) | combine({item.item: item.files | map(attribute='path') | sort
+             | map('ansible.builtin.extract', texts) | map('from_yaml_all') | map('list') | flatten}) }}
+      loop: "{{ files.results }}"
+      loop_control: {label: "{{ item.item }}"}
+      vars:
+        texts: "{{ dict(item.files | map(attribute='path') | zip(query('ansible.builtin.file', *(item.files | map(attribute='path'))))) }}"
+
+    - name: Check the registry cache objects
+      vars:
+        cl_fqdn: "{{ docs.rc_cluster | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | selectattr('metadata.name', 'equalto', 'registry-cache') | list }}"
+        cl_egress_names: >-
+          {{ docs.rc_cluster | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | selectattr('metadata.name', 'equalto', 'egress-proxy')
+             | map(attribute='spec.egress') | flatten | map(attribute='matches') | flatten | map(attribute='name', default='') | list }}
+        ar_sa: "{{ docs.rc_ar | selectattr('kind', 'equalto', 'ServiceAccount') | selectattr('metadata.name', 'equalto', 'registry-cache') | list }}"
+        ext_es: "{{ docs.rc_ext | selectattr('kind', 'equalto', 'ExternalSecret') | selectattr('metadata.name', 'equalto', 'registry-cache-pypi') | list }}"
+        secrets_md: "{{ lookup('ansible.builtin.file', out ~ '/rc_cluster/SECRETS.md') }}"
+      ansible.builtin.assert:
+        that:
+          - docs.rc_cluster | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.rc_ar | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          - docs.rc_ext | selectattr('kind', 'equalto', 'Secret') | list | length == 0
+          # cluster: gateway and the three caches with their volumes, the agents' ConfigMap, the FQDN policy (gke)
+          - docs.rc_cluster | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.name') | select('match', '^registry-cache')
+            | sort == ['registry-cache', 'registry-cache-go', 'registry-cache-npm', 'registry-cache-pypi']
+          - docs.rc_cluster | selectattr('kind', 'equalto', 'PersistentVolumeClaim') | list | length == 3
+          - docs.rc_cluster | selectattr('kind', 'equalto', 'ConfigMap') | selectattr('metadata.name', 'equalto', 'registry-proxy')
+            | map(attribute='data.GOPROXY') | list == ['http://registry-cache.coding-agents.svc.cluster.local:3000']
+          - cl_fqdn | length == 1
+          - cl_fqdn[0].spec.egress[0].matches | map(attribute='name') | list == upstreams
+          - docs.rc_cluster | selectattr('metadata.name', 'equalto', 'registry-cache-web') | list | length == 0
+          - docs.rc_cluster | selectattr('kind', 'equalto', 'NetworkPolicy') | map(attribute='metadata.name') | select('match', '^registry-cache')
+            | sort == ['registry-cache', 'registry-cache-backends', 'registry-cache-egress']
+          # with the cache on, the registries leave the agents' egress list
+          - cl_egress_names | length > 0
+          - cl_egress_names | select('in', upstreams) | list | length == 0
+          # playbook mode: the devpi password Secret is listed, not rendered
+          - secrets_md is search('coding-agents \\| registry-cache-pypi')
+          # artifact_registry: the gateway only, Workload Identity, any public 443 without the FQDN policy (none)
+          - docs.rc_ar | selectattr('kind', 'equalto', 'Deployment') | map(attribute='metadata.name') | select('match', '^registry-cache')
+            | list == ['registry-cache']
+          - ar_sa | length == 1
+          - ar_sa[0].metadata.annotations['iam.gke.io/gcp-service-account'] == ar.service_account
+          - docs.rc_ar | selectattr('kind', 'equalto', 'FQDNNetworkPolicy') | list | length == 0
+          - docs.rc_ar | selectattr('kind', 'equalto', 'NetworkPolicy') | selectattr('metadata.name', 'equalto', 'registry-cache-web') | list | length == 1
+          - lookup('ansible.builtin.file', out ~ '/rc_ar/SECRETS.md') is not search('registry-cache-pypi')
+          # external: the devpi password from Secret Manager through the agents' store, as the CEL policy wants
+          - ext_es | length == 1
+          - ext_es[0].metadata.namespace == 'coding-agents'
+          - ext_es[0].spec.secretStoreRef.name == 'agentdev-platform-secrets'
+          - ext_es[0].spec.data | map(attribute='secretKey') | list == ['password']
+          - ext_es[0].spec.data | map(attribute='remoteRef.key') | list == ['registry-cache-pypi']
+        quiet: true
+
+    - name: Kubeconform (strict; CRD types without a schema are skipped)
+      ansible.builtin.command:
+        argv: [docker, run, --rm, -v, "{{ out }}/{{ item }}:/w:ro", "{{ kubeconform_image }}", -strict, -summary, -ignore-missing-schemas, /w]
+      changed_when: false
+      loop: "{{ cases.keys() | list }}"
 
 # acceptance criterion 1 of #384: the render output of examples/deployment/gcp-gke passes kubeconform and gitleaks.
 # Both from pinned container images (the kubeconform image is the one of .github/workflows/ci.yml).
