@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # variables are read inside the check strings (eval)
 # Unit test for drain and graceful stop (#174): the drain annotation stops new jobs; on SIGTERM the loop stops its
-# running jobs, saves their work in progress as a local commit on the job branch (no push), keeps the job state of
-# #175 so the job continues on the next pod, and exits within the grace period.
+# running jobs, saves their work in progress as a local commit on the job branch (its wip push, #593, goes to a
+# stub), keeps the job state of #175 so the job continues on the next pod, and exits within the grace period.
 #   bash images/worker/test/drain.test.sh      (Linux, bash >= 4, flock, git, pgrep: e.g. inside the worker image)
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "${tmp}"' EXIT
 loop="${here}/../agent-loop.sh"
@@ -29,6 +30,10 @@ set -uo pipefail
 export FORGE_USER=alice REPO=o/r FORGE_URL=http://forge STATE="${STATE}" WAKE_FILE="${tmp}/wake" WORK="${STATE}/repo"
 : > "\${WAKE_FILE}"
 log() { echo "LOG \$*" >> "${tmp}/log"; }
+# #621: on_term pushes the work in progress (#593) and kills every process named claude. Inside an agent pod the real
+# curl reached the pod's forge sidecar and pkill killed the agent's own Claude run. Both are stubs here: they record.
+curl() { echo "curl \$*" >> "${tmp}/calls"; return 7; }
+pkill() { echo "pkill \$*" >> "${tmp}/calls"; }
 source <(sed -n '/^clone_url()/p; /^lgit()/p; /^security_event() {/,/^}/p; /^scrub_git_config() {/,/^}/p; /^pin_worktree() {/,/^}/p' "${loop}")
 source <(sed -n '/^# ---------- concurrency (#20)/,/^default_branch()/p' "${loop}" | sed '\$d')
 source <(sed -n '/^# ---------- resume state of a job (#175)/,/^open_pr_for() {/p' "${loop}" | sed '\$d')
@@ -63,6 +68,9 @@ check "SIGTERM: logged" "grep -q 'saved work in progress of 1 job' '${tmp}/log'"
 check "SIGTERM: the stop reason outlives the killed job, for its next run (#588)" \
   "[[ \$(cut -d' ' -f1 '${STATE}/jobs/issue-7.stopped' 2>/dev/null) == security-pause ]]"
 
+check "SIGTERM: the wip push goes to the curl stub, at the closed port (#621)" \
+  "grep -q '^curl .* http://127.0.0.1:1/push?branch=agent/alice/wip/issue-7\$' '${tmp}/calls'"
+check "SIGTERM: the claude kill goes to the pkill stub (#621)" "grep -q '^pkill -KILL -x claude\$' '${tmp}/calls'"
 check "SIGTERM outside a security pause: the job is not marked interrupted by it (#581)" "[[ ! -e '${STATE}/jobs/issue-7.interrupted' ]]"
 
 # ---- #581: SIGTERM during the drain of a security pause marks the stopped job, and the saved commit names the reason

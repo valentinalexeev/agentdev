@@ -15,7 +15,7 @@ STATE="${tmp}/state"; mkdir -p "${STATE}/jobs"
 # shellcheck disable=SC1090
 source <(sed -n '/^# Session per job (#175)/,/^# ---------- subscription usage (#93)/p' "${loop}" | sed '$d')
 system_prompt() { echo guard; }; report_usage() { :; }
-MAX_TURNS=1 CLAUDE_TOOLS=x MCP_CONFIG=/nonexistent CLAUDE_AUTH=() FORGE_API=http://127.0.0.1:7070
+MAX_TURNS=1 CLAUDE_TOOLS=x MCP_CONFIG=/nonexistent CLAUDE_AUTH=() FORGE_API=http://127.0.0.1:1
 
 # stub claude: records its arguments and the job header it got; refuses (exit 1) while ${tmp}/refuse holds a count > 0
 # and prints text that claims an approval (it must not count)
@@ -80,7 +80,7 @@ check "a bad answer counts as pending" "[[ \$(cat '${tmp}/rc') == 1 ]] && grep -
 # ---- 5. without the proxy or without approvals the sidecar is not asked
 APPROVALS=false run allowed 1
 check "approvals off: no cost request, no resume" "! grep -q 'cost-approval' '${tmp}/curl' && ! grep -q -- '--resume' '${CALLS}'"
-check "approvals off: the run log still goes to the sidecar (#425), never elsewhere" "! grep -v '127.0.0.1:7070/run-events' '${tmp}/curl' | grep -q ."
+check "approvals off: the run log still goes to the sidecar (#425), never elsewhere" "! grep -v '127.0.0.1:1/run-events' '${tmp}/curl' | grep -q ."
 
 # ---- 6. never more than COST_RESUME_MAX resumes
 COST_RESUME_MAX=3; run allowed 10

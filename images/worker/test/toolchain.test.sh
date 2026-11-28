@@ -9,6 +9,7 @@
 # mismatch, a failing verify, an http URL, or a path or a symlink out of the toolchain.
 #   bash images/worker/test/toolchain.test.sh
 set -uo pipefail
+export FORGE_API=http://127.0.0.1:1   # #621: a closed port, never the forge sidecar of the pod this test may run in
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'chmod -R u+w "${tmp}" 2>/dev/null; rm -rf "${tmp}"' EXIT
 mkdir -p "${tmp}/bin" "${tmp}/src/go/bin" "${tmp}/bad/go/bin" "${tmp}/t"
