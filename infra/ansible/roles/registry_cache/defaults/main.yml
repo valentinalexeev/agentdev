@@ -20,6 +20,11 @@ registry_cache_upstream_hosts: >-
      | default(['registry.npmjs.org', 'pypi.org', 'files.pythonhosted.org', 'proxy.golang.org', 'sum.golang.org']) }}
 # FQDNNetworkPolicy for the caches and the gateway (GKE). false: they may reach any public address on 443 (kind).
 registry_cache_fqdn_policy: "{{ egress_fqdn_policy | default(false) }}"
+# host names of the FQDN policy (templates/fqdn-policy.yaml.j2): the upstreams, or the Artifact Registry hosts
+registry_cache_egress_names: >-
+  {{ registry_cache_upstream_hosts if registry_cache_mode == 'cluster' else
+     (['npm', 'pypi', 'go'] | map('extract', registry_cache_ar) | map('urlsplit', 'hostname') | unique | list)
+     + ['sum.golang.org'] }}
 
 # artifact_registry: `terraform output registry_proxy` of infra/terraform
 registry_cache_ar: "{{ registry_proxy_artifact_registry | default({}) }}"   # {service_account, npm, pypi, go}
